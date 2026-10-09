@@ -1,3 +1,4 @@
+use crate::gateway_control_auth::{Challenge, NativeControlSession};
 use crate::gateway_device_identity::{
     GatewayAuth, GatewayDeviceIdentity, GatewayDeviceIdentityStore, CLIENT_DEVICE_FAMILY,
     CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
@@ -7,37 +8,38 @@ use crate::gateway_sleep::GatewaySleepRoute;
 #[cfg(any(target_os = "linux", test))]
 use crate::gateway_sleep::SleepPrepareOutcome;
 use crate::quickchat::QUICKCHAT_LABEL;
-use futures_util::{Sink, SinkExt, StreamExt};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, WebPkiSupportedAlgorithms};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme};
+#[cfg(test)]
+use futures_util::{SinkExt, StreamExt};
+#[cfg(test)]
+use openclaw_gateway_client::AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE;
+use openclaw_gateway_client::{
+    reconnect_backoff as shared_reconnect_backoff, tls_trust, ClientError as SharedClientError,
+    ConnectErrorDetails, DispatchContext as SharedDispatchContext, DispatchRejection,
+    Event as GatewayEvent, GatewayClient as SharedGatewayClient,
+    GatewayClientConfig as SharedGatewayClientConfig, GatewaySession as SharedGatewaySession,
+    TlsTrust,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fmt;
-use std::io::ErrorKind;
+use std::future::Future;
 #[cfg(any(target_os = "linux", test))]
 use std::net::IpAddr;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use subtle::ConstantTimeEq;
-#[cfg(any(target_os = "linux", test))]
 use tauri::Url;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
-use tokio_tungstenite::{
-    connect_async, connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
-};
+#[cfg(test)]
+use tokio_tungstenite::tungstenite::Message;
+#[cfg(test)]
 use uuid::Uuid;
 
 const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
+const SEND_PREPARED_EVENT: &str = "quickchat:send-prepared";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
 const AGENTS_CACHE_TTL: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -51,8 +53,8 @@ const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
 const AUTH_TOKEN_MISSING_DETAIL_CODE: &str = "AUTH_TOKEN_MISSING";
 const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
-const AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE: &str = "AUTH_DEVICE_TOKEN_MISMATCH";
-const TLS_PIN_MISMATCH_ERROR: &str = "Gateway TLS certificate fingerprint mismatch";
+const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 // Mirrors packages/gateway-protocol/src/version.ts. The Gateway rejects other ranges.
 const MIN_PROTOCOL_VERSION: u32 = 4;
@@ -67,10 +69,11 @@ pub enum GatewayOwnership {
 
 #[derive(Clone)]
 pub struct GatewayWsConfig {
-    ws_url: String,
-    token: Option<String>,
-    password: Option<String>,
-    tls_fingerprint: Option<String>,
+    pub(crate) ws_url: String,
+    pub(crate) token: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) tls_fingerprint: Option<String>,
+    pub(crate) node_identity_scope: String,
     ownership: GatewayOwnership,
 }
 
@@ -83,6 +86,7 @@ impl GatewayWsConfig {
         ownership: GatewayOwnership,
     ) -> Self {
         Self {
+            node_identity_scope: ws_url.clone(),
             ws_url,
             token,
             password,
@@ -90,109 +94,11 @@ impl GatewayWsConfig {
             ownership,
         }
     }
-}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum TlsTrustDecision {
-    SystemRoots,
-    Pinned([u8; 32]),
-}
-
-fn tls_trust_decision(fingerprint: Option<&str>) -> Result<TlsTrustDecision, String> {
-    fingerprint
-        .map(parse_tls_fingerprint)
-        .transpose()
-        .map(|fingerprint| {
-            fingerprint.map_or(TlsTrustDecision::SystemRoots, TlsTrustDecision::Pinned)
-        })
-}
-
-fn parse_tls_fingerprint(raw: &str) -> Result<[u8; 32], String> {
-    let value = raw.trim();
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
+    pub(crate) fn with_node_identity_scope(mut self, scope: String) -> Self {
+        self.node_identity_scope = scope;
+        self
     }
-    let mut fingerprint = [0_u8; 32];
-    for (index, byte) in fingerprint.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|_| "Gateway TLS fingerprint is invalid.".to_string())?;
-    }
-    Ok(fingerprint)
-}
-
-fn pinned_fingerprint_matches(expected: &[u8; 32], certificate_der: &[u8]) -> bool {
-    let observed: [u8; 32] = Sha256::digest(certificate_der).into();
-    bool::from(expected.as_slice().ct_eq(observed.as_slice()))
-}
-
-struct GatewayTlsPinVerifier {
-    expected: [u8; 32],
-    supported_algorithms: WebPkiSupportedAlgorithms,
-}
-
-impl fmt::Debug for GatewayTlsPinVerifier {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GatewayTlsPinVerifier")
-            .finish_non_exhaustive()
-    }
-}
-
-impl ServerCertVerifier for GatewayTlsPinVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        // The local CLI authenticates this exact leaf-certificate hash before handing it to the
-        // app. A present pin replaces CA/hostname trust, matching OpenClawKit; the signature
-        // methods below still prove the peer owns the certificate's private key.
-        if pinned_fingerprint_matches(&self.expected, end_entity.as_ref()) {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(RustlsError::General(TLS_PIN_MISMATCH_ERROR.to_string()))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        verify_tls12_signature(message, cert, signature, &self.supported_algorithms)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        verify_tls13_signature(message, cert, signature, &self.supported_algorithms)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.supported_algorithms.supported_schemes()
-    }
-}
-
-fn pinned_tls_connector(expected: [u8; 32]) -> Result<Connector, String> {
-    let provider = rustls::crypto::ring::default_provider();
-    let verifier = GatewayTlsPinVerifier {
-        expected,
-        supported_algorithms: provider.signature_verification_algorithms,
-    };
-    let config = ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_safe_default_protocol_versions()
-        .map_err(|error| format!("Could not configure Gateway TLS: {error}"))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth();
-    Ok(Connector::Rustls(Arc::new(config)))
 }
 
 #[derive(Clone, Deserialize)]
@@ -328,7 +234,7 @@ enum GatewayRequest {
         generation: GatewayGeneration,
     },
     RefreshCanvasSurface {
-        observed_url: Option<String>,
+        observed_url: String,
         generation: GatewayGeneration,
     },
     ChatHistory {
@@ -347,6 +253,23 @@ enum GatewayRequest {
         suspension_id: String,
         route: GatewaySleepRoute,
     },
+}
+
+impl GatewayRequest {
+    fn method(&self) -> &'static str {
+        match self {
+            Self::AgentsList => "agents.list",
+            Self::ChatSend { .. } => "chat.send",
+            Self::RefreshCanvasSurface { .. } => "plugin.surface.refresh",
+            Self::ChatHistory { .. } => "chat.history",
+            #[cfg(target_os = "linux")]
+            Self::Desktop { method, .. } => method.name(),
+            #[cfg(target_os = "linux")]
+            Self::SuspendPrepare { .. } => "gateway.suspend.prepare",
+            #[cfg(target_os = "linux")]
+            Self::SuspendResume { .. } => "gateway.suspend.resume",
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -369,24 +292,14 @@ impl DesktopMethod {
     }
 }
 
-enum GatewayResponse {
-    #[cfg(target_os = "linux")]
-    Desktop(Value),
-    AgentsList(AgentsListResult),
-    ChatSend(ChatSendAck),
-    CanvasSurface(Option<String>),
-    ChatHistory(ChatHistoryPage),
-    #[cfg(target_os = "linux")]
-    SuspendPrepare(SuspendPrepareResponse),
-    #[cfg(target_os = "linux")]
-    SuspendResume(SuspendResumeResponse),
-}
+type RequestCompletion =
+    Box<dyn FnOnce(Result<Value, RequestFailure>) -> Option<RequestFailure> + Send>;
 
 enum DriverCommand {
     Request {
         request: GatewayRequest,
         budget: Option<Duration>,
-        reply: oneshot::Sender<Result<GatewayResponse, String>>,
+        complete: RequestCompletion,
     },
     Reconfigure,
 }
@@ -422,36 +335,11 @@ impl GatewayConnectionState {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ConnectErrorDetails {
-    code: Option<String>,
-    device_id: Option<String>,
-    remediation_hint: Option<String>,
-    retryable: Option<bool>,
-    pause_reconnect: Option<bool>,
-}
-
-impl ConnectErrorDetails {
-    fn from_value(value: Option<&Value>) -> Self {
-        let Some(value) = value else {
-            return Self::default();
-        };
-        Self {
-            code: connect_detail_text(value.get("code"), 80),
-            device_id: connect_detail_text(value.get("deviceId"), 128),
-            remediation_hint: connect_detail_text(value.get("remediationHint"), 240),
-            retryable: value.get("retryable").and_then(Value::as_bool),
-            pause_reconnect: value.get("pauseReconnect").and_then(Value::as_bool),
-        }
-    }
-}
-
 struct RequestFailure {
     message: String,
     disconnect: bool,
     connect_details: ConnectErrorDetails,
     connect_state: Option<GatewayConnectionState>,
-    tls_failure: bool,
 }
 
 impl RequestFailure {
@@ -461,13 +349,12 @@ impl RequestFailure {
             disconnect: true,
             connect_details: ConnectErrorDetails::default(),
             connect_state: None,
-            tls_failure: false,
         }
     }
 
     fn tls(message: impl Into<String>) -> Self {
         Self {
-            tls_failure: true,
+            connect_state: Some(GatewayConnectionState::TlsFailure),
             ..Self::transport(message)
         }
     }
@@ -478,18 +365,63 @@ impl RequestFailure {
             disconnect: false,
             connect_details: ConnectErrorDetails::from_value(details),
             connect_state: None,
-            tls_failure: false,
         }
     }
 
     fn classify_connect(mut self, auth: &GatewayAuth) -> Self {
-        self.connect_state =
-            classify_connect_failure(self.connect_details.code.as_deref(), !auth.is_none());
+        self.connect_state = classify_connect_failure(self.connect_details.code(), !auth.is_none())
+            .or(self.connect_state);
         self
+    }
+
+    fn from_shared(error: SharedClientError) -> Self {
+        match error {
+            SharedClientError::Gateway {
+                message, details, ..
+            } => Self::method_with_details(message, details.as_ref()),
+            SharedClientError::DispatchRejected(message) => {
+                Self::method_with_details(message, None)
+            }
+            SharedClientError::RequestTimeout(method) => {
+                Self::transport(format!("{method} request timed out."))
+            }
+            SharedClientError::Tls(message) => Self::tls(message),
+            error => Self::transport(error.to_string()),
+        }
     }
 }
 
-#[derive(Clone, Default, Serialize)]
+fn decode_response<T: DeserializeOwned>(method: &str, payload: Value) -> Result<T, RequestFailure> {
+    serde_json::from_value(payload).map_err(|error| {
+        if method == "chat.history" {
+            // An optional recovery response cannot turn a completed send into another send.
+            RequestFailure::method_with_details(
+                "Gateway history does not support bounded Quick Chat recovery.",
+                None,
+            )
+        } else {
+            RequestFailure::transport(format!("Invalid {method} response: {error}"))
+        }
+    })
+}
+
+fn complete_request<T: DeserializeOwned + Send + 'static>(
+    method: &'static str,
+    reply: oneshot::Sender<Result<T, String>>,
+) -> RequestCompletion {
+    Box::new(move |result| {
+        let result = result.and_then(|payload| decode_response(method, payload));
+        let disconnect = result
+            .as_ref()
+            .err()
+            .filter(|failure| failure.disconnect)
+            .map(|failure| RequestFailure::transport(failure.message.clone()));
+        let _ = reply.send(result.map_err(|failure| failure.message));
+        disconnect
+    })
+}
+
+#[derive(Clone, Serialize)]
 pub(crate) struct CanvasSurfaceState {
     #[serde(rename = "gatewayGeneration")]
     generation: u64,
@@ -498,14 +430,22 @@ pub(crate) struct CanvasSurfaceState {
 }
 
 #[derive(Default)]
+struct GatewayConfigState {
+    config: Option<GatewayWsConfig>,
+    native_control_session: Option<NativeControlSession>,
+    canvas_surface: Option<String>,
+    user_accent: Option<String>,
+}
+
+#[derive(Default)]
 struct GatewayClientInner {
-    config: Mutex<Option<GatewayWsConfig>>,
+    route_publication: Mutex<()>,
+    config: Mutex<GatewayConfigState>,
     config_generation: AtomicU64,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
-    canvas_surface: Mutex<CanvasSurfaceState>,
-    user_accent: Mutex<Option<String>>,
+    connection_changed: tokio::sync::Notify,
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
@@ -535,7 +475,15 @@ impl GatewayClient {
         generation: GatewayGeneration,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        let _config = self
+        self.with_config_state(generation, |_| action())
+    }
+
+    fn with_config_state<T>(
+        &self,
+        generation: GatewayGeneration,
+        action: impl FnOnce(&mut GatewayConfigState) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut config = self
             .inner
             .config
             .lock()
@@ -543,7 +491,7 @@ impl GatewayClient {
         if self.generation() != generation {
             return Err("Gateway changed during the Quick Chat request.".to_string());
         }
-        action()
+        action(&mut config)
     }
 
     #[cfg(target_os = "linux")]
@@ -564,21 +512,31 @@ impl GatewayClient {
         self.inner.desktop_demand.store(active, Ordering::SeqCst);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn with_desktop_route<T>(
         &self,
         generation: u64,
         action: impl FnOnce(Option<&str>) -> Result<T, String>,
     ) -> Result<T, String> {
-        let config = self
+        // Keep route replacement fenced without holding the config read across
+        // UI navigation: its callbacks read the live native bootstrap again.
+        let _publication = self
             .inner
-            .config
+            .route_publication
             .lock()
             .map_err(|_| "Gateway route unavailable")?;
-        if self.inner.config_generation.load(Ordering::SeqCst) != generation {
-            return Err("Desktop Gateway changed; refresh before trying again.".into());
-        }
-        action(config.as_ref().map(|config| config.ws_url.as_str()))
+        let url = {
+            let config = self
+                .inner
+                .config
+                .lock()
+                .map_err(|_| "Gateway route unavailable")?;
+            if self.inner.config_generation.load(Ordering::SeqCst) != generation {
+                return Err("Desktop Gateway changed; refresh before trying again.".into());
+            }
+            config.config.as_ref().map(|config| config.ws_url.clone())
+        };
+        action(url.as_deref())
     }
 
     #[cfg(target_os = "linux")]
@@ -593,7 +551,7 @@ impl GatewayClient {
                 .ok_or_else(|| "Select a Gateway in the desktop app first.".into())
         })?;
         let is_send = matches!(method, DesktopMethod::Send);
-        let response = self
+        let value: Value = self
             .request(GatewayRequest::Desktop {
                 generation,
                 method,
@@ -601,9 +559,6 @@ impl GatewayClient {
             })
             .await?;
         self.with_desktop_route(generation, |_| Ok(()))?;
-        let GatewayResponse::Desktop(value) = response else {
-            return Err("Unexpected desktop response".into());
-        };
         if is_send {
             let ack: ChatSendAck = serde_json::from_value(value.clone())
                 .map_err(|error| format!("Invalid chat.send response: {error}"))?;
@@ -619,16 +574,8 @@ impl GatewayClient {
         surface_url: &str,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        self.with_generation(generation, || {
-            let surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
-            if !self.is_connected()
-                || surface.generation != generation.0
-                || surface.url.as_deref() != Some(surface_url)
-            {
+        self.with_config_state(generation, |state| {
+            if !self.is_connected() || state.canvas_surface.as_deref() != Some(surface_url) {
                 return Err("Gateway Canvas owner or capability changed.".to_string());
             }
             action()
@@ -644,7 +591,13 @@ impl GatewayClient {
     }
 
     fn set_configuration(&self, app: &AppHandle, config: Option<GatewayWsConfig>) {
-        self.replace_configuration(config);
+        let generation = GatewayGeneration(self.replace_configuration(config.clone()));
+        if let Some(node) = app.try_state::<crate::desktop_node::DesktopNode>() {
+            let _ = self.with_generation(generation, || {
+                node.configure(generation, config);
+                Ok(())
+            });
+        }
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         self.emit_connection_state(app);
@@ -652,31 +605,146 @@ impl GatewayClient {
     }
 
     fn replace_configuration(&self, config: Option<GatewayWsConfig>) -> u64 {
+        let _publication = self
+            .inner
+            .route_publication
+            .lock()
+            .expect("gateway route publication mutex poisoned");
         // Publish the route and its generation together, including same-URL mode changes.
         let mut current = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        *current = config;
+        current.config = config;
+        current.native_control_session = None;
+        self.inner.connection_changed.notify_waiters();
         let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self
             .inner
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        *self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned") = CanvasSurfaceState {
-            generation,
-            url: None,
-        };
+        current.canvas_surface = None;
         self.inner
             .connection_state
             .store(GatewayConnectionState::Down as u64, Ordering::SeqCst);
         generation
+    }
+
+    pub(crate) async fn wait_for_native_control_auth(
+        &self,
+        generation: GatewayGeneration,
+    ) -> Result<(), String> {
+        tokio::time::timeout(REQUEST_TIMEOUT, async {
+            loop {
+                let changed = self.inner.connection_changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                self.with_generation(generation, || Ok(()))?;
+                if self.is_connected() {
+                    return Ok(());
+                }
+                if self.inner.reconnect_paused.load(Ordering::SeqCst) {
+                    return Err(self
+                        .inner
+                        .connection_notice
+                        .lock()
+                        .ok()
+                        .and_then(|notice| notice.clone())
+                        .unwrap_or_else(|| {
+                            "Connect the native app to this Gateway before opening its dashboard."
+                                .into()
+                        }));
+                }
+                changed.await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            "The native Gateway connection is not ready. Retry after the app connects.".to_string()
+        })?
+    }
+
+    // Keep the live native binding held while the routing owner samples or
+    // publishes its startup projection. Never await in action.
+    pub(crate) fn with_native_control_bootstrap<T>(
+        &self,
+        generation: GatewayGeneration,
+        action: impl FnOnce(Url, String) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let state = self
+            .inner
+            .config
+            .lock()
+            .map_err(|_| "Gateway configuration unavailable.")?;
+        let config = state
+            .config
+            .as_ref()
+            .ok_or("Gateway configuration unavailable.")?;
+        if self.generation() != generation || config.ownership != GatewayOwnership::Remote {
+            return Err("Native Gateway connection changed.".into());
+        }
+        // A retired/not-ready session still owns a secret-free native marker.
+        // Publishing that projection retires installed shared credentials too.
+        let legacy_auth = state
+            .native_control_session
+            .as_ref()
+            .filter(|_| self.is_connected())
+            .map(NativeControlSession::legacy_auth)
+            .unwrap_or_else(|| json!({}));
+        let gateway = Url::parse(&config.ws_url).map_err(|_| "Invalid native Gateway address.")?;
+        let dashboard = crate::remote_gateway::dashboard_url(&gateway)?;
+        let script = crate::gateway_control_auth::initialization_script_with_legacy_auth(
+            &dashboard,
+            &gateway,
+            legacy_auth,
+        )?;
+        action(dashboard, script)
+    }
+
+    pub(crate) fn native_control_auth(
+        &self,
+        generation: GatewayGeneration,
+        dashboard: &Url,
+        challenge: &Challenge,
+    ) -> Result<Value, String> {
+        challenge.validate()?;
+        let state = self
+            .inner
+            .config
+            .lock()
+            .map_err(|_| "Gateway configuration unavailable.")?;
+        let config = state
+            .config
+            .as_ref()
+            .ok_or("Connect the native app to this Gateway first.")?;
+        let expected = crate::remote_gateway::dashboard_url(
+            &Url::parse(&config.ws_url).map_err(|_| "Invalid native Gateway address.")?,
+        )?;
+        if self.generation() != generation
+            || !self.is_connected()
+            || config.ownership != GatewayOwnership::Remote
+            || !crate::gateway_windows::matches_route(dashboard, &expected)
+        {
+            return Err("The native Gateway connection changed. Reconnect the dashboard.".into());
+        }
+        let session = state.native_control_session.as_ref().ok_or(
+            "The native Gateway has not accepted dashboard authentication. Reconnect the app.",
+        )?;
+        let store = self
+            .inner
+            .identity
+            .lock()
+            .map_err(|_| "Native identity unavailable.")?;
+        let store = store.as_ref().ok_or("Native identity unavailable.")?;
+        let auth = session.current_auth(store, &config.ws_url)?;
+        crate::gateway_control_auth::connect_auth(
+            &store.identity(),
+            &auth,
+            &session.scopes,
+            challenge,
+        )
     }
 
     pub fn activate(&self, app: AppHandle) {
@@ -721,10 +789,7 @@ impl GatewayClient {
         if let Some(result) = cached {
             return self.with_generation(generation, || Ok(result));
         }
-        let response = self.request(GatewayRequest::AgentsList).await?;
-        let GatewayResponse::AgentsList(result) = response else {
-            return Err("Gateway returned the wrong response for agents.list.".to_string());
-        };
+        let result: AgentsListResult = self.request(GatewayRequest::AgentsList).await?;
         self.cache_agents(generation, result.clone())?;
         Ok(result)
     }
@@ -740,7 +805,7 @@ impl GatewayClient {
     ) -> Result<ChatSendResult, String> {
         self.with_generation(generation, || Ok(()))?;
         let target = routing_target(scope, selected_agent_id, main_key);
-        let response = self
+        let ack: ChatSendAck = self
             .request(GatewayRequest::ChatSend {
                 params: ChatSendParams {
                     session_key: target.session_key.clone(),
@@ -751,9 +816,6 @@ impl GatewayClient {
                 generation,
             })
             .await?;
-        let GatewayResponse::ChatSend(ack) = response else {
-            return Err("Gateway returned the wrong response for chat.send.".to_string());
-        };
         classify_chat_ack(&ack)?;
         if ack.run_id != idempotency_key {
             return Err("Gateway acknowledged a different Quick Chat run.".to_string());
@@ -776,7 +838,7 @@ impl GatewayClient {
         deadline: Instant,
     ) -> Result<ChatHistoryPage, String> {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let response = tokio::time::timeout(
+        let page = tokio::time::timeout(
             remaining,
             self.request_with_budget(
                 GatewayRequest::ChatHistory {
@@ -791,9 +853,6 @@ impl GatewayClient {
         .await
         .map_err(|_| "Reply recovery timed out waiting for Gateway history.".to_string())??;
         self.with_generation(generation, || Ok(()))?;
-        let GatewayResponse::ChatHistory(page) = response else {
-            return Err("Gateway returned the wrong response for chat.history.".to_string());
-        };
         Ok(page)
     }
 
@@ -806,31 +865,29 @@ impl GatewayClient {
         if observed.generation != generation.0 || observed.url.as_deref() != Some(&observed_url) {
             return Err("Gateway Canvas surface generation changed before refresh.".to_string());
         }
-        let response = self
+        let response: PluginSurfaceRefreshResponse = self
             .request(GatewayRequest::RefreshCanvasSurface {
-                observed_url: observed.url.clone(),
+                observed_url,
                 generation,
             })
             .await?;
-        let GatewayResponse::CanvasSurface(refreshed) = response else {
-            return Err(
-                "Gateway returned the wrong response for plugin.surface.refresh.".to_string(),
-            );
-        };
+        let refreshed = response
+            .plugin_surface_urls
+            .and_then(|urls| urls.get("canvas").cloned())
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty());
         let Some(refreshed) = refreshed else {
             return Err("Gateway did not return a refreshed Canvas surface.".to_string());
         };
-        self.with_generation(generation, || {
-            let mut current = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
-            if current.generation != observed.generation || current.url != observed.url {
+        self.with_config_state(generation, |state| {
+            if state.canvas_surface != observed.url {
                 return Err("Gateway Canvas surface changed during refresh.".to_string());
             }
-            current.url = Some(refreshed);
-            Ok(current.clone())
+            state.canvas_surface = Some(refreshed);
+            Ok(CanvasSurfaceState {
+                generation: generation.0,
+                url: state.canvas_surface.clone(),
+            })
         })
     }
 
@@ -840,21 +897,17 @@ impl GatewayClient {
         request_id: String,
         route: GatewaySleepRoute,
     ) -> Result<SleepPrepareOutcome, String> {
-        let response = tokio::time::timeout(SUSPEND_REQUEST_TIMEOUT, async {
-            self.wait_for_sleep_connection(&route).await?;
-            self.request_with_budget(
-                GatewayRequest::SuspendPrepare { request_id, route },
-                Some(SUSPEND_REQUEST_TIMEOUT),
-            )
+        let response: SuspendPrepareResponse =
+            tokio::time::timeout(SUSPEND_REQUEST_TIMEOUT, async {
+                self.wait_for_sleep_connection(&route).await?;
+                self.request_with_budget(
+                    GatewayRequest::SuspendPrepare { request_id, route },
+                    Some(SUSPEND_REQUEST_TIMEOUT),
+                )
+                .await
+            })
             .await
-        })
-        .await
-        .map_err(|_| "Gateway sleep preparation timed out.".to_string())??;
-        let GatewayResponse::SuspendPrepare(response) = response else {
-            return Err(
-                "Gateway returned the wrong response for gateway.suspend.prepare.".to_string(),
-            );
-        };
+            .map_err(|_| "Gateway sleep preparation timed out.".to_string())??;
         Ok(response.into_outcome())
     }
 
@@ -864,24 +917,20 @@ impl GatewayClient {
         suspension_id: String,
         route: GatewaySleepRoute,
     ) -> Result<bool, String> {
-        let response = tokio::time::timeout(SUSPEND_REQUEST_TIMEOUT, async {
-            self.wait_for_sleep_connection(&route).await?;
-            self.request_with_budget(
-                GatewayRequest::SuspendResume {
-                    suspension_id,
-                    route,
-                },
-                Some(SUSPEND_REQUEST_TIMEOUT),
-            )
+        let response: SuspendResumeResponse =
+            tokio::time::timeout(SUSPEND_REQUEST_TIMEOUT, async {
+                self.wait_for_sleep_connection(&route).await?;
+                self.request_with_budget(
+                    GatewayRequest::SuspendResume {
+                        suspension_id,
+                        route,
+                    },
+                    Some(SUSPEND_REQUEST_TIMEOUT),
+                )
+                .await
+            })
             .await
-        })
-        .await
-        .map_err(|_| "Gateway sleep resume timed out.".to_string())??;
-        let GatewayResponse::SuspendResume(response) = response else {
-            return Err(
-                "Gateway returned the wrong response for gateway.suspend.resume.".to_string(),
-            );
-        };
+            .map_err(|_| "Gateway sleep resume timed out.".to_string())??;
         Ok(response.resumed)
     }
 
@@ -893,6 +942,7 @@ impl GatewayClient {
             .lock()
             .expect("gateway config mutex poisoned");
         current
+            .config
             .as_ref()
             .filter(|config| {
                 config.ownership == GatewayOwnership::Local && is_loopback_ws_url(&config.ws_url)
@@ -952,15 +1002,18 @@ impl GatewayClient {
         }
     }
 
-    async fn request(&self, request: GatewayRequest) -> Result<GatewayResponse, String> {
+    async fn request<T: DeserializeOwned + Send + 'static>(
+        &self,
+        request: GatewayRequest,
+    ) -> Result<T, String> {
         self.request_with_budget(request, None).await
     }
 
-    async fn request_with_budget(
+    async fn request_with_budget<T: DeserializeOwned + Send + 'static>(
         &self,
         request: GatewayRequest,
         budget: Option<Duration>,
-    ) -> Result<GatewayResponse, String> {
+    ) -> Result<T, String> {
         if !self.is_connected() {
             return Err("Gateway unreachable — retrying".to_string());
         }
@@ -972,11 +1025,12 @@ impl GatewayClient {
             .clone()
             .ok_or_else(|| "Gateway unreachable — retrying".to_string())?;
         let (reply, response) = oneshot::channel();
+        let complete = complete_request(request.method(), reply);
         commands
             .send(DriverCommand::Request {
                 request,
                 budget,
-                reply,
+                complete,
             })
             .await
             .map_err(|_| "Gateway unreachable — retrying".to_string())?;
@@ -989,11 +1043,7 @@ impl GatewayClient {
     async fn run_driver(&self, app: AppHandle, mut receiver: mpsc::Receiver<DriverCommand>) {
         let mut reconnect_attempt = 0_u32;
         loop {
-            if !driver_should_run(
-                app.get_window(QUICKCHAT_LABEL).is_some()
-                    || self.inner.desktop_demand.load(Ordering::SeqCst),
-                self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
-            ) {
+            if !self.driver_has_demand(&app) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
                 self.set_connection_state(&app, GatewayConnectionState::Down, None);
                 tokio::time::sleep(DRIVER_TICK).await;
@@ -1007,7 +1057,7 @@ impl GatewayClient {
                     .lock()
                     .expect("gateway config mutex poisoned");
                 (
-                    current.clone(),
+                    current.config.clone(),
                     self.inner.config_generation.load(Ordering::SeqCst),
                 )
             };
@@ -1027,15 +1077,9 @@ impl GatewayClient {
             let failure = connection_result.as_ref().err();
             let disconnected_state = failure
                 .and_then(|failure| failure.connect_state)
-                .or_else(|| {
-                    failure
-                        .is_some_and(|failure| failure.tls_failure)
-                        .then_some(GatewayConnectionState::TlsFailure)
-                })
                 .unwrap_or(GatewayConnectionState::Down);
-            let pause_reconnect = failure
-                .map(|failure| should_pause_reconnect(&failure.connect_details))
-                .unwrap_or(false);
+            let pause_reconnect =
+                failure.is_some_and(|failure| failure.connect_details.should_pause_reconnect());
             let notice = failure.and_then(|failure| {
                 connection_notice(
                     disconnected_state,
@@ -1063,19 +1107,12 @@ impl GatewayClient {
                 reconnect_attempt = 0;
                 continue;
             }
-            reconnect_attempt = if reached_hello {
+            reconnect_attempt = if reached_hello || connection_result.is_ok() {
                 1
             } else {
                 reconnect_attempt.saturating_add(1)
             };
-            if connection_result.is_ok() {
-                reconnect_attempt = 1;
-            }
-            if !driver_should_run(
-                app.get_window(QUICKCHAT_LABEL).is_some()
-                    || self.inner.desktop_demand.load(Ordering::SeqCst),
-                self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
-            ) {
+            if !self.driver_has_demand(&app) {
                 continue;
             }
             let delay = reconnect_backoff(reconnect_attempt);
@@ -1090,6 +1127,22 @@ impl GatewayClient {
         }
     }
 
+    fn driver_has_demand(&self, app: &AppHandle) -> bool {
+        driver_should_run(
+            app.get_window(QUICKCHAT_LABEL).is_some()
+                || self.inner.desktop_demand.load(Ordering::SeqCst)
+                || self
+                    .inner
+                    .config
+                    .lock()
+                    .expect("gateway config mutex poisoned")
+                    .config
+                    .as_ref()
+                    .is_some_and(|config| config.ownership == GatewayOwnership::Remote),
+            self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+        )
+    }
+
     async fn connect_and_serve(
         &self,
         app: &AppHandle,
@@ -1098,90 +1151,114 @@ impl GatewayClient {
         receiver: &mut mpsc::Receiver<DriverCommand>,
     ) -> Result<(), RequestFailure> {
         let (identity, auth) = self.identity_and_auth(app, config)?;
-        let mut socket = tokio::time::timeout(CONNECT_TIMEOUT, connect_gateway_socket(config))
-            .await
-            .map_err(|_| RequestFailure::transport("Gateway connection timed out."))??;
-        let challenge = wait_for_connect_challenge(&mut socket).await?;
+        let trust = tls_trust(config.tls_fingerprint.as_deref()).map_err(RequestFailure::tls)?;
+        if matches!(trust, TlsTrust::Pinned(_)) && !config.ws_url.starts_with("wss://") {
+            return Err(RequestFailure::tls(
+                "Gateway TLS fingerprint requires a wss:// URL.",
+            ));
+        }
+        let shared_config = SharedGatewayClientConfig::new(&config.ws_url)
+            .map_err(RequestFailure::from_shared)?
+            .tls_trust(trust)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .challenge_timeout(HANDSHAKE_TIMEOUT)
+            .request_timeout(REQUEST_TIMEOUT)
+            .write_timeout(REQUEST_TIMEOUT)
+            .max_message_bytes(MAX_MESSAGE_BYTES)
+            .max_frame_bytes(MAX_FRAME_BYTES)
+            .max_in_flight(16);
         // Native child WebViews use platform HTTP trust and cannot bind the optional
         // WebSocket leaf pin, so pinned Gateway connections remain capability-free.
         let inline_widgets_available = config
             .tls_fingerprint
             .as_deref()
             .is_none_or(|value| value.trim().is_empty());
-        let params = connect_params(
-            &identity,
-            &auth,
-            &challenge.nonce,
-            challenge.issued_at_ms,
-            inline_widgets_available,
-        )
-        .map_err(RequestFailure::transport)?;
-        let config_changed = AtomicBool::new(false);
-        let dispatch = |frame: &Value| {
-            dispatch_chat_event(app, frame, GatewayGeneration(generation));
-            if frame.get("type").and_then(Value::as_str) == Some("event")
-                && frame.get("event").and_then(Value::as_str) == Some("config.changed")
+        let connect_identity = identity.clone();
+        let connect_auth = auth.clone();
+        let session =
+            match SharedGatewayClient::connect(shared_config, move |challenge| async move {
+                connect_params(
+                    &connect_identity,
+                    &connect_auth,
+                    &challenge.nonce,
+                    challenge.issued_at_ms,
+                    inline_widgets_available,
+                )
+            })
+            .await
             {
-                config_changed.store(true, Ordering::SeqCst);
-            }
-        };
-        let hello = match request_on_socket(
-            &mut socket,
-            "connect",
-            params,
-            REQUEST_TIMEOUT,
-            &dispatch,
-            None,
-        )
-        .await
-        {
-            Ok(hello) => hello,
-            Err(failure) => {
-                let failure = failure.classify_connect(&auth);
-                if should_clear_stored_device_token(&failure, &auth) {
-                    self.clear_device_token(&config.ws_url)?;
+                Ok(session) => session,
+                Err(error) => {
+                    let failure = RequestFailure::from_shared(error).classify_connect(&auth);
+                    if should_clear_stored_device_token(&failure, &auth) {
+                        self.update_identity(|store| store.clear_device_token(&config.ws_url))?;
+                    }
+                    return Err(failure);
                 }
-                return Err(failure);
-            }
-        };
-        drop(auth);
-        let hello = validate_hello(hello).map_err(RequestFailure::transport)?;
+            };
+        let hello = validate_hello(session.hello().clone()).map_err(RequestFailure::transport)?;
         if let Some(device_token) = hello.device_token.as_deref() {
-            self.persist_device_token(&config.ws_url, device_token)?;
+            self.update_identity(|store| store.persist_device_token(&config.ws_url, device_token))?;
         }
         self.set_canvas_surface_url(
             generation,
             gated_canvas_surface_url(hello.canvas_surface_url, inline_widgets_available),
         );
 
-        let agents = request_agents_list(&mut socket, REQUEST_TIMEOUT, &dispatch).await?;
-        let accent = request_gateway_accent(&mut socket, &dispatch).await?;
+        let config_changed = AtomicBool::new(false);
+        let dispatch = |event: &GatewayEvent| {
+            dispatch_gateway_event(app, event, GatewayGeneration(generation), &config_changed);
+        };
+        let agents = await_session_result_while_dispatching(
+            &session,
+            request_agents_list_session(&session, Instant::now() + REQUEST_TIMEOUT),
+            &dispatch,
+        )
+        .await?;
+        let accent = await_session_result_while_dispatching(
+            &session,
+            request_gateway_accent_session(&session, Instant::now() + REQUEST_TIMEOUT),
+            &dispatch,
+        )
+        .await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
             return Ok(());
         }
         self.cache_agents(GatewayGeneration(generation), agents)
             .map_err(|message| RequestFailure::method_with_details(message, None))?;
         self.set_user_accent(generation, accent);
+        self.with_config_state(GatewayGeneration(generation), |state| {
+            state.native_control_session = NativeControlSession::from_hello(
+                auth,
+                hello.auth_method.as_deref(),
+                hello.operator_scopes,
+                hello.device_token.as_deref(),
+            );
+            Ok(())
+        })
+        .map_err(RequestFailure::transport)?;
         self.set_connection_state_for_generation(
             app,
             GatewayConnectionState::Up,
             None,
             GatewayGeneration(generation),
         );
+        let mut transport_activity = session.subscribe_transport_activity();
         let mut last_gateway_activity = Instant::now();
 
         loop {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
-                || !driver_should_run(
-                    app.get_window(QUICKCHAT_LABEL).is_some()
-                        || self.inner.desktop_demand.load(Ordering::SeqCst),
-                    self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
-                )
+                || !self.driver_has_demand(app)
             {
                 return Ok(());
             }
             if config_changed.swap(false, Ordering::SeqCst) {
-                let accent = request_gateway_accent(&mut socket, &dispatch).await?;
+                let accent = await_session_result_while_dispatching(
+                    &session,
+                    request_gateway_accent_session(&session, Instant::now() + REQUEST_TIMEOUT),
+                    &dispatch,
+                )
+                .await?;
                 if self.inner.config_generation.load(Ordering::SeqCst) != generation {
                     return Ok(());
                 }
@@ -1197,27 +1274,33 @@ impl GatewayClient {
                     };
                     match command {
                         DriverCommand::Reconfigure => return Ok(()),
-                        DriverCommand::Request { request, budget, reply } => {
-                            let result = perform_request(self, generation, &mut socket, request, budget, &dispatch).await;
+                        DriverCommand::Request { request, budget, complete } => {
+                            let deadline = Instant::now() + budget.unwrap_or(REQUEST_TIMEOUT);
+                            let result = perform_request_while_dispatching(
+                                app,
+                                self,
+                                generation,
+                                &session,
+                                request,
+                                deadline,
+                                &dispatch,
+                            ).await;
                             last_gateway_activity = Instant::now();
-                            match result {
-                                Ok(response) => {
-                                    let _ = reply.send(Ok(response));
-                                }
-                                Err(failure) => {
-                                    let disconnect = failure.disconnect;
-                                    let message = failure.message;
-                                    let _ = reply.send(Err(message.clone()));
-                                    if disconnect {
-                                        return Err(RequestFailure::transport(message));
-                                    }
-                                }
+                            if let Some(failure) = complete(result) {
+                                return Err(failure);
                             }
                         }
                     }
                 }
-                incoming = socket.next() => {
-                    handle_idle_message(&dispatch, &mut socket, incoming).await?;
+                event = session.next_event() => {
+                    let event = event.map_err(RequestFailure::from_shared)?;
+                    dispatch(&event);
+                    last_gateway_activity = Instant::now();
+                }
+                activity = transport_activity.changed() => {
+                    activity.map_err(|_| {
+                        RequestFailure::transport("Gateway transport activity ended.")
+                    })?;
                     last_gateway_activity = Instant::now();
                 }
                 _ = tokio::time::sleep(DRIVER_TICK) => {
@@ -1266,32 +1349,18 @@ impl GatewayClient {
         ))
     }
 
-    fn persist_device_token(
+    fn update_identity(
         &self,
-        gateway: &str,
-        device_token: &str,
+        update: impl FnOnce(&mut GatewayDeviceIdentityStore) -> Result<(), String>,
     ) -> Result<(), RequestFailure> {
         let mut store =
             self.inner.identity.lock().map_err(|_| {
                 RequestFailure::transport("Gateway device identity is unavailable.")
             })?;
-        store
+        let store = store
             .as_mut()
-            .ok_or_else(|| RequestFailure::transport("Gateway device identity is unavailable."))?
-            .persist_device_token(gateway, device_token)
-            .map_err(RequestFailure::transport)
-    }
-
-    fn clear_device_token(&self, gateway: &str) -> Result<(), RequestFailure> {
-        let mut store =
-            self.inner.identity.lock().map_err(|_| {
-                RequestFailure::transport("Gateway device identity is unavailable.")
-            })?;
-        store
-            .as_mut()
-            .ok_or_else(|| RequestFailure::transport("Gateway device identity is unavailable."))?
-            .clear_device_token(gateway)
-            .map_err(RequestFailure::transport)
+            .ok_or_else(|| RequestFailure::transport("Gateway device identity is unavailable."))?;
+        update(store).map_err(RequestFailure::transport)
     }
 
     fn cache_agents(
@@ -1315,62 +1384,33 @@ impl GatewayClient {
     }
 
     fn set_canvas_surface_url(&self, generation: u64, url: Option<String>) {
-        let _ = self.with_generation(GatewayGeneration(generation), || {
-            let mut surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
-            *surface = CanvasSurfaceState { generation, url };
+        let _ = self.with_config_state(GatewayGeneration(generation), |state| {
+            state.canvas_surface = url;
             Ok(())
         });
     }
 
     fn canvas_surface_state(&self) -> CanvasSurfaceState {
-        let _config = self
+        let state = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        let surface = self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned")
-            .clone();
-        let generation = self.inner.config_generation.load(Ordering::SeqCst);
-        if surface.generation == generation {
-            surface
-        } else {
-            CanvasSurfaceState {
-                generation,
-                url: None,
-            }
+        CanvasSurfaceState {
+            generation: self.generation().0,
+            url: state.canvas_surface.clone(),
         }
     }
 
     fn set_user_accent(&self, generation: u64, accent: Option<String>) -> bool {
-        self.with_generation(GatewayGeneration(generation), || {
-            let mut current = self
-                .inner
-                .user_accent
-                .lock()
-                .expect("gateway user accent mutex poisoned");
-            if *current == accent {
+        self.with_config_state(GatewayGeneration(generation), |state| {
+            if state.user_accent == accent {
                 return Ok(false);
             }
-            *current = accent;
+            state.user_accent = accent;
             Ok(true)
         })
         .unwrap_or(false)
-    }
-
-    fn user_accent(&self) -> Option<String> {
-        self.inner
-            .user_accent
-            .lock()
-            .expect("gateway user accent mutex poisoned")
-            .clone()
     }
 
     fn is_connected(&self) -> bool {
@@ -1397,26 +1437,16 @@ impl GatewayClient {
         notice: Option<String>,
         generation: GatewayGeneration,
     ) {
-        let event = self.with_generation(generation, || {
+        let event = self.with_config_state(generation, |config| {
             if state != GatewayConnectionState::Up {
+                config.native_control_session = None;
                 *self
                     .inner
                     .agents_cache
                     .lock()
                     .expect("gateway agents cache mutex poisoned") = None;
-                *self
-                    .inner
-                    .canvas_surface
-                    .lock()
-                    .expect("gateway canvas surface mutex poisoned") = CanvasSurfaceState {
-                    generation: generation.0,
-                    url: None,
-                };
-                *self
-                    .inner
-                    .user_accent
-                    .lock()
-                    .expect("gateway accent mutex poisoned") = None;
+                config.canvas_surface = None;
+                config.user_accent = None;
             }
             let notice_changed = {
                 let mut current = self
@@ -1439,35 +1469,40 @@ impl GatewayClient {
             if !state_changed && !notice_changed {
                 return Ok(None);
             }
-            let surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .expect("gateway canvas surface mutex poisoned");
             Ok(Some(GatewayStateEvent::new(
                 state,
                 notice,
-                surface.url.clone(),
-                self.user_accent(),
+                config.canvas_surface.clone(),
+                config.user_accent.clone(),
                 generation,
             )))
         });
-        if let Ok(Some(event)) = event {
-            let _ = app.emit_to(QUICKCHAT_LABEL, GATEWAY_STATE_EVENT, event);
+        self.inner.connection_changed.notify_waiters();
+        if let Ok(event) = event {
+            if let Some(event) = event {
+                let _ = app.emit_to(QUICKCHAT_LABEL, GATEWAY_STATE_EVENT, event);
+            }
+            // Configuration replacement can already have stored Down. Refresh
+            // even without a state event: every retired native owner must also
+            // retire its cached and installed startup credential projection.
+            let client = self.clone();
+            let current_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(owner) =
+                    current_app.try_state::<crate::gateway_windows::GatewayWindows>()
+                {
+                    let _ = owner.refresh_primary_native_auth(&current_app, &client, generation);
+                }
+            });
         }
     }
 
     fn state_event(&self) -> GatewayStateEvent {
-        let _config = self
+        let config = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        let surface = self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned");
         let notice = self
             .inner
             .connection_notice
@@ -1477,8 +1512,8 @@ impl GatewayClient {
         GatewayStateEvent::new(
             self.connection_state(),
             notice,
-            surface.url.clone(),
-            self.user_accent(),
+            config.canvas_surface.clone(),
+            config.user_accent.clone(),
             self.generation(),
         )
     }
@@ -1520,8 +1555,10 @@ impl GatewayStateEvent {
 }
 
 fn reject_disconnected_command(command: DriverCommand) {
-    if let DriverCommand::Request { reply, .. } = command {
-        let _ = reply.send(Err("Gateway unreachable — retrying".to_string()));
+    if let DriverCommand::Request { complete, .. } = command {
+        let _ = complete(Err(RequestFailure::transport(
+            "Gateway unreachable — retrying",
+        )));
     }
 }
 
@@ -1546,18 +1583,6 @@ fn routing_target(scope: &str, selected_agent_id: &str, main_key: &str) -> ChatR
     }
 }
 
-fn connect_detail_text(value: Option<&Value>, max_chars: usize) -> Option<String> {
-    let normalized = value
-        .and_then(Value::as_str)?
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if normalized.is_empty() {
-        return None;
-    }
-    Some(normalized.chars().take(max_chars).collect())
-}
-
 fn classify_connect_failure(
     detail_code: Option<&str>,
     has_local_credential: bool,
@@ -1573,10 +1598,6 @@ fn classify_connect_failure(
             || (!has_local_credential && code.starts_with("AUTH_") && code.ends_with("_MISMATCH"))
     });
     credential_required.then_some(GatewayConnectionState::CredentialRequired)
-}
-
-fn should_pause_reconnect(details: &ConnectErrorDetails) -> bool {
-    details.pause_reconnect == Some(true) || details.retryable == Some(false)
 }
 
 fn short_device_id(device_id: &str) -> Option<String> {
@@ -1604,11 +1625,11 @@ fn connection_notice(
     // The Gateway owns recovery semantics and can give more precise operator guidance than this
     // client. Keep only its bounded plain-text hint, then add the safe pairing identifier.
     let mut notice = details
-        .remediation_hint
-        .clone()
+        .remediation_hint()
+        .map(ToOwned::to_owned)
         .unwrap_or_else(|| fallback.to_string());
     if state == GatewayConnectionState::PairingRequired {
-        if let Some(device_id) = details.device_id.as_deref().and_then(short_device_id) {
+        if let Some(device_id) = details.device_id().and_then(short_device_id) {
             notice.push_str(" · Device ");
             notice.push_str(&device_id);
         }
@@ -1617,13 +1638,12 @@ fn connection_notice(
 }
 
 fn reconnect_backoff(attempt: u32) -> Duration {
-    let shift = attempt.saturating_sub(1).min(5);
-    Duration::from_secs((1_u64 << shift).min(MAX_RECONNECT_DELAY.as_secs()))
+    shared_reconnect_backoff(attempt, MAX_RECONNECT_DELAY)
 }
 
 fn should_clear_stored_device_token(failure: &RequestFailure, auth: &GatewayAuth) -> bool {
     matches!(auth, GatewayAuth::DeviceToken(_))
-        && failure.connect_details.code.as_deref() == Some(AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE)
+        && failure.connect_details.invalidates_device_token()
 }
 
 fn connect_params(
@@ -1660,6 +1680,7 @@ fn connect_params(
     Ok(params)
 }
 
+#[cfg(test)]
 fn request_frame(id: &str, method: &str, params: Value) -> Value {
     json!({
         "type": "req",
@@ -1669,235 +1690,171 @@ fn request_frame(id: &str, method: &str, params: Value) -> Value {
     })
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ConnectChallenge {
-    nonce: String,
-    issued_at_ms: u64,
-}
-
-fn parse_connect_challenge(value: &Value) -> Result<ConnectChallenge, RequestFailure> {
-    let nonce = value
-        .get("payload")
-        .and_then(|payload| payload.get("nonce"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|nonce| !nonce.is_empty());
-    let issued_at_ms = value
-        .get("payload")
-        .and_then(|payload| payload.get("ts"))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| RequestFailure::transport("Gateway challenge timestamp was invalid."))?;
-    nonce
-        .map(|nonce| ConnectChallenge {
-            nonce: nonce.to_owned(),
-            issued_at_ms,
-        })
-        .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."))
-}
-
-async fn wait_for_connect_challenge(
-    socket: &mut GatewaySocket,
-) -> Result<ConnectChallenge, RequestFailure> {
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-        loop {
-            let value = next_json(socket).await?;
-            if value.get("type").and_then(Value::as_str) == Some("event")
-                && value.get("event").and_then(Value::as_str) == Some("connect.challenge")
-            {
-                return parse_connect_challenge(&value);
-            }
-        }
-    })
-    .await
-    .map_err(|_| RequestFailure::transport("Gateway connect challenge timed out."))?
-}
-
-struct RequestDispatch<'a> {
-    client: &'a GatewayClient,
+struct RequestDispatch {
     generation: GatewayGeneration,
     connection_generation: u64,
-    deadline: Option<Instant>,
+    deadline: Instant,
     #[cfg(target_os = "linux")]
-    sleep_route: Option<&'a GatewaySleepRoute>,
+    sleep_route: Option<GatewaySleepRoute>,
 }
 
-async fn request_on_socket<T, F>(
-    socket: &mut GatewaySocket,
+fn validate_request_dispatch(
+    client: &GatewayClient,
+    authority: &RequestDispatch,
+    dispatch: &mut SharedDispatchContext<'_>,
+) -> Result<(), DispatchRejection> {
+    let current = client
+        .inner
+        .config
+        .lock()
+        .map_err(|_| DispatchRejection::new("Gateway route is unavailable."))?;
+    if current.config.is_none() {
+        return Err(DispatchRejection::new(
+            "Gateway route changed before dispatch; refresh before trying again.",
+        ));
+    }
+    let owner_changed = client.generation() != authority.generation
+        || authority.connection_generation != authority.generation.0;
+    #[cfg(target_os = "linux")]
+    if let Some(route) = authority.sleep_route.as_ref() {
+        let owned = current.config.as_ref().is_some_and(|config| {
+            config.ownership == GatewayOwnership::Local
+                && config.ws_url == route.ws_url
+                && is_loopback_ws_url(&config.ws_url)
+        });
+        if owner_changed || !owned {
+            return Err(DispatchRejection::new(
+                "Gateway sleep route changed; lease will self-expire.",
+            ));
+        }
+    }
+    if owner_changed || Instant::now() >= authority.deadline {
+        return Err(DispatchRejection::new(
+            "Gateway request owner changed or recovery deadline expired.",
+        ));
+    }
+    dispatch.enqueue();
+    Ok(())
+}
+
+async fn request_on_session(
+    client: &GatewayClient,
+    session: &SharedGatewaySession,
     method: &str,
     params: Value,
-    budget: Duration,
-    dispatch: &F,
-    authority: Option<RequestDispatch<'_>>,
-) -> Result<T, RequestFailure>
-where
-    T: DeserializeOwned,
-    F: Fn(&Value),
-{
-    let id = Uuid::new_v4().to_string();
-    let encoded = serde_json::to_string(&request_frame(&id, method, params)).map_err(|error| {
-        RequestFailure::transport(format!("Could not encode {method}: {error}"))
-    })?;
-    futures_util::future::poll_fn(|cx| Pin::new(&mut *socket).poll_ready(cx))
-        .await
-        .map_err(|error| RequestFailure::transport(format!("Could not send {method}: {error}")))?;
-    {
-        // Read current authority after transport readiness, and hold it through enqueue.
-        // The socket generation also fences commands queued for a replaced connection.
-        let current = authority.as_ref().map(|authority| {
-            authority
-                .client
-                .inner
-                .config
-                .lock()
-                .expect("gateway config mutex poisoned")
-        });
-        if let Some(authority) = authority.as_ref() {
-            if current.as_ref().is_none_or(|config| config.is_none()) {
-                return Err(RequestFailure::method_with_details(
-                    "Gateway route changed before dispatch; refresh before trying again.",
-                    None,
-                ));
-            }
-            let owner_changed = authority.client.generation() != authority.generation
-                || authority.connection_generation != authority.generation.0;
-            #[cfg(target_os = "linux")]
-            if let Some(route) = authority.sleep_route {
-                let owned = current
-                    .as_ref()
-                    .and_then(|current| current.as_ref())
-                    .is_some_and(|config| {
-                        config.ownership == GatewayOwnership::Local
-                            && config.ws_url == route.ws_url
-                            && is_loopback_ws_url(&config.ws_url)
-                    });
-                if owner_changed || !owned {
-                    return Err(RequestFailure::method_with_details(
-                        "Gateway sleep route changed; lease will self-expire.",
-                        None,
-                    ));
-                }
-            }
-            if owner_changed
-                || authority
-                    .deadline
-                    .is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                return Err(RequestFailure::method_with_details(
-                    "Gateway request owner changed or recovery deadline expired.",
-                    None,
-                ));
-            }
-        }
-        // Keep the configuration guard alive through the actual socket enqueue.
-        let _current = current;
-        Pin::new(&mut *socket)
-            .start_send(Message::Text(encoded.into()))
-            .map_err(|error| {
-                RequestFailure::transport(format!("Could not send {method}: {error}"))
-            })?;
-    }
-    socket
-        .flush()
-        .await
-        .map_err(|error| RequestFailure::transport(format!("Could not send {method}: {error}")))?;
-
-    tokio::time::timeout(budget, async {
-        loop {
-            let value = next_json(socket).await?;
-            dispatch(&value);
-            if value.get("type").and_then(Value::as_str) != Some("res")
-                || value.get("id").and_then(Value::as_str) != Some(id.as_str())
-            {
-                continue;
-            }
-            if value.get("ok").and_then(Value::as_bool) == Some(true) {
-                // Decode before the driver releases this socket to another request.
-                let payload = value.get("payload").cloned().unwrap_or(Value::Null);
-                return serde_json::from_value(payload).map_err(|error| {
-                    RequestFailure::transport(format!("Invalid {method} response: {error}"))
-                });
-            }
-            let message = value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("Gateway request failed.");
-            let details = value
-                .get("error")
-                .and_then(|error| error.get("details"))
-                .filter(|details| details.is_object());
-            return Err(RequestFailure::method_with_details(message, details));
-        }
-    })
-    .await
-    .map_err(|_| RequestFailure::transport(format!("Gateway {method} request timed out.")))?
-}
-
-async fn perform_request<F>(
-    client: &GatewayClient,
-    connection_generation: u64,
-    socket: &mut GatewaySocket,
-    request: GatewayRequest,
-    budget: Option<Duration>,
-    dispatch: &F,
-) -> Result<GatewayResponse, RequestFailure>
-where
-    F: Fn(&Value),
-{
-    let budget = budget.unwrap_or(REQUEST_TIMEOUT);
-    match request {
-        #[cfg(target_os = "linux")]
-        GatewayRequest::Desktop {
-            generation,
+    authority: RequestDispatch,
+) -> Result<Value, RequestFailure> {
+    let guard_client = client.clone();
+    session
+        .request_with_dispatch_deadline(
             method,
             params,
-        } => request_on_socket(
-            socket,
-            method.name(),
-            params,
-            budget,
-            dispatch,
-            Some(RequestDispatch {
-                client,
-                generation: GatewayGeneration(generation),
-                connection_generation,
-                deadline: None,
-                sleep_route: None,
-            }),
+            tokio::time::Instant::from_std(authority.deadline),
+            move |dispatch| validate_request_dispatch(&guard_client, &authority, dispatch),
         )
         .await
-        .map(GatewayResponse::Desktop),
-        GatewayRequest::AgentsList => request_agents_list(socket, budget, dispatch)
-            .await
-            .map(GatewayResponse::AgentsList),
-        GatewayRequest::ChatSend { params, generation } => {
-            let params = serde_json::to_value(params).map_err(|error| {
-                RequestFailure::transport(format!("Could not encode chat.send: {error}"))
-            })?;
-            request_on_socket(
-                socket,
-                "chat.send",
-                params,
-                budget,
-                dispatch,
-                Some(RequestDispatch {
-                    client,
-                    generation,
-                    connection_generation,
-                    deadline: None,
-                    #[cfg(target_os = "linux")]
-                    sleep_route: None,
-                }),
-            )
-            .await
-            .map(GatewayResponse::ChatSend)
+        .map_err(RequestFailure::from_shared)
+}
+
+async fn perform_request_while_dispatching(
+    app: &AppHandle,
+    client: &GatewayClient,
+    connection_generation: u64,
+    session: &SharedGatewaySession,
+    request: GatewayRequest,
+    deadline: Instant,
+    dispatch: impl FnMut(&GatewayEvent),
+) -> Result<Value, RequestFailure> {
+    if let GatewayRequest::ChatSend { params, generation } = &request {
+        // Queue this WebView event before polling the request that can produce chat events.
+        client
+            .with_generation(*generation, || {
+                app.emit_to(
+                    QUICKCHAT_LABEL,
+                    SEND_PREPARED_EVENT,
+                    json!({
+                        "sessionKey": params.session_key,
+                        "agentId": params.agent_id,
+                        "runId": params.idempotency_key,
+                        "gatewayGeneration": generation,
+                    }),
+                )
+                .map_err(|error| format!("Could not prepare the Quick Chat reply: {error}"))
+            })
+            .map_err(|error| RequestFailure::method_with_details(error, None))?;
+    }
+    await_session_result_while_dispatching(
+        session,
+        perform_session_request(client, connection_generation, session, request, deadline),
+        dispatch,
+    )
+    .await
+}
+
+async fn await_session_result_while_dispatching<T, F, D>(
+    session: &SharedGatewaySession,
+    request: F,
+    mut dispatch: D,
+) -> Result<T, RequestFailure>
+where
+    F: Future<Output = Result<T, RequestFailure>>,
+    D: FnMut(&GatewayEvent),
+{
+    tokio::pin!(request);
+    loop {
+        tokio::select! {
+            result = &mut request => return result,
+            event = session.next_event() => {
+                let event = event.map_err(RequestFailure::from_shared)?;
+                dispatch(&event);
+            }
         }
-        GatewayRequest::ChatHistory {
-            target,
-            generation,
-            offset,
-            deadline,
-        } => {
+    }
+}
+
+async fn perform_session_request(
+    client: &GatewayClient,
+    connection_generation: u64,
+    session: &SharedGatewaySession,
+    request: GatewayRequest,
+    deadline: Instant,
+) -> Result<Value, RequestFailure> {
+    let method = request.method();
+    let generation = match &request {
+        GatewayRequest::AgentsList => GatewayGeneration(connection_generation),
+        GatewayRequest::ChatSend { generation, .. }
+        | GatewayRequest::ChatHistory { generation, .. }
+        | GatewayRequest::RefreshCanvasSurface { generation, .. } => *generation,
+        #[cfg(target_os = "linux")]
+        GatewayRequest::Desktop { generation, .. } => GatewayGeneration(*generation),
+        #[cfg(target_os = "linux")]
+        GatewayRequest::SuspendPrepare { route, .. }
+        | GatewayRequest::SuspendResume { route, .. } => GatewayGeneration(route.generation),
+    };
+    let authority = RequestDispatch {
+        generation,
+        connection_generation,
+        deadline: match &request {
+            GatewayRequest::ChatHistory { deadline, .. } => *deadline,
+            _ => deadline,
+        },
+        #[cfg(target_os = "linux")]
+        sleep_route: None,
+    };
+    #[cfg(target_os = "linux")]
+    let mut authority = authority;
+    let params = match request {
+        #[cfg(target_os = "linux")]
+        GatewayRequest::Desktop { params, .. } => params,
+        GatewayRequest::AgentsList => {
+            return request_snapshot_session(session, method, deadline).await
+        }
+        GatewayRequest::ChatSend { params, .. } => {
+            serde_json::to_value(params).map_err(|error| {
+                RequestFailure::transport(format!("Could not encode chat.send: {error}"))
+            })?
+        }
+        GatewayRequest::ChatHistory { target, offset, .. } => {
             let mut params = json!({
                 "sessionKey": target.session_key,
                 "limit": 200,
@@ -1910,102 +1867,26 @@ where
             if let Some(offset) = offset {
                 params["offset"] = json!(offset);
             }
-            // Decode this optional method as data so unsupported/malformed history cannot
-            // turn a successfully completed send into a broken connection or another send.
-            let value: Value = request_on_socket(
-                socket,
-                "chat.history",
-                params,
-                budget,
-                dispatch,
-                Some(RequestDispatch {
-                    client,
-                    generation,
-                    connection_generation,
-                    deadline: Some(deadline),
-                    #[cfg(target_os = "linux")]
-                    sleep_route: None,
-                }),
-            )
-            .await?;
-            serde_json::from_value(value)
-                .map(GatewayResponse::ChatHistory)
-                .map_err(|_| {
-                    RequestFailure::method_with_details(
-                        "Gateway history does not support bounded Quick Chat recovery.",
-                        None,
-                    )
-                })
+            params
         }
-        GatewayRequest::RefreshCanvasSurface {
-            observed_url,
-            generation,
-        } => {
-            let mut params = json!({ "surface": "canvas" });
-            if let Some(observed_url) = observed_url {
-                params["observedUrl"] = Value::String(observed_url);
-            }
-            let response: PluginSurfaceRefreshResponse = request_on_socket(
-                socket,
-                "plugin.surface.refresh",
-                params,
-                budget,
-                dispatch,
-                Some(RequestDispatch {
-                    client,
-                    generation,
-                    connection_generation,
-                    deadline: None,
-                    #[cfg(target_os = "linux")]
-                    sleep_route: None,
-                }),
-            )
-            .await?;
-            let canvas = response
-                .plugin_surface_urls
-                .and_then(|urls| urls.get("canvas").cloned())
-                .map(|url| url.trim().to_string())
-                .filter(|url| !url.is_empty());
-            Ok(GatewayResponse::CanvasSurface(canvas))
+        GatewayRequest::RefreshCanvasSurface { observed_url, .. } => {
+            json!({ "surface": "canvas", "observedUrl": observed_url })
         }
         #[cfg(target_os = "linux")]
-        GatewayRequest::SuspendPrepare { request_id, route } => request_on_socket(
-            socket,
-            "gateway.suspend.prepare",
-            json!({ "requestId": request_id }),
-            budget,
-            dispatch,
-            Some(RequestDispatch {
-                client,
-                generation: GatewayGeneration(route.generation),
-                sleep_route: Some(&route),
-                connection_generation,
-                deadline: None,
-            }),
-        )
-        .await
-        .map(GatewayResponse::SuspendPrepare),
+        GatewayRequest::SuspendPrepare { request_id, route } => {
+            authority.sleep_route = Some(route);
+            json!({ "requestId": request_id })
+        }
         #[cfg(target_os = "linux")]
         GatewayRequest::SuspendResume {
             suspension_id,
             route,
-        } => request_on_socket(
-            socket,
-            "gateway.suspend.resume",
-            json!({ "suspensionId": suspension_id }),
-            budget,
-            dispatch,
-            Some(RequestDispatch {
-                client,
-                generation: GatewayGeneration(route.generation),
-                sleep_route: Some(&route),
-                connection_generation,
-                deadline: None,
-            }),
-        )
-        .await
-        .map(GatewayResponse::SuspendResume),
-    }
+        } => {
+            authority.sleep_route = Some(route);
+            json!({ "suspensionId": suspension_id })
+        }
+    };
+    request_on_session(client, session, method, params, authority).await
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -2025,33 +1906,35 @@ fn is_loopback_ws_url(raw: &str) -> bool {
     })
 }
 
-async fn request_agents_list<F>(
-    socket: &mut GatewaySocket,
-    budget: Duration,
-    dispatch: &F,
-) -> Result<AgentsListResult, RequestFailure>
-where
-    F: Fn(&Value),
-{
-    request_on_socket(socket, "agents.list", json!({}), budget, dispatch, None).await
+async fn request_agents_list_session(
+    session: &SharedGatewaySession,
+    deadline: Instant,
+) -> Result<AgentsListResult, RequestFailure> {
+    let payload = request_snapshot_session(session, "agents.list", deadline).await?;
+    decode_response("agents.list", payload)
 }
 
-async fn request_gateway_accent<F>(
-    socket: &mut GatewaySocket,
-    dispatch: &F,
-) -> Result<Option<String>, RequestFailure>
-where
-    F: Fn(&Value),
-{
-    let config = request_on_socket(
-        socket,
-        "config.get",
-        json!({}),
-        REQUEST_TIMEOUT,
-        dispatch,
-        None,
-    )
-    .await?;
+async fn request_snapshot_session(
+    session: &SharedGatewaySession,
+    method: &str,
+    deadline: Instant,
+) -> Result<Value, RequestFailure> {
+    session
+        .request_with_deadline(
+            method,
+            json!({}),
+            tokio::time::Instant::from_std(deadline),
+            || Ok(()),
+        )
+        .await
+        .map_err(RequestFailure::from_shared)
+}
+
+async fn request_gateway_accent_session(
+    session: &SharedGatewaySession,
+    deadline: Instant,
+) -> Result<Option<String>, RequestFailure> {
+    let config = request_snapshot_session(session, "config.get", deadline).await?;
     Ok(gateway_user_accent(&config))
 }
 
@@ -2073,6 +1956,8 @@ fn gateway_user_accent(config: &Value) -> Option<String> {
 
 struct ValidatedHello {
     device_token: Option<String>,
+    auth_method: Option<String>,
+    operator_scopes: Option<Vec<String>>,
     tick_watch_timeout: Duration,
     canvas_surface_url: Option<String>,
 }
@@ -2106,6 +1991,9 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
     #[serde(rename_all = "camelCase")]
     struct HelloAuth {
         device_token: Option<String>,
+        method: Option<String>,
+        role: Option<String>,
+        scopes: Option<Vec<String>>,
     }
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -2141,6 +2029,10 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
         .filter(|value| !value.is_empty());
     Ok(ValidatedHello {
         device_token: hello.auth.device_token,
+        auth_method: hello.auth.method,
+        operator_scopes: (hello.auth.role.as_deref() == Some(CLIENT_ROLE))
+            .then_some(hello.auth.scopes)
+            .flatten(),
         tick_watch_timeout: Duration::from_millis(tick_interval_ms).saturating_mul(2),
         canvas_surface_url,
     })
@@ -2170,114 +2062,19 @@ fn ack_error_message(ack: &ChatSendAck) -> String {
         .unwrap_or_else(|| format!("Gateway chat.send {}.", ack.status))
 }
 
-type GatewaySocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
-
-async fn connect_gateway_socket(config: &GatewayWsConfig) -> Result<GatewaySocket, RequestFailure> {
-    let trust =
-        tls_trust_decision(config.tls_fingerprint.as_deref()).map_err(RequestFailure::tls)?;
-    let result = match trust {
-        TlsTrustDecision::SystemRoots => connect_async(config.ws_url.as_str()).await,
-        TlsTrustDecision::Pinned(expected) => {
-            if !config.ws_url.starts_with("wss://") {
-                return Err(RequestFailure::tls(
-                    "Gateway TLS fingerprint requires a wss:// URL.",
-                ));
-            }
-            let connector = pinned_tls_connector(expected).map_err(RequestFailure::tls)?;
-            connect_async_tls_with_config(config.ws_url.as_str(), None, false, Some(connector))
-                .await
-        }
-    };
-    result
-        .map(|(socket, _)| socket)
-        .map_err(|error| connect_failure(config, error))
-}
-
-fn connect_failure(config: &GatewayWsConfig, error: TungsteniteError) -> RequestFailure {
-    let message = format!("Gateway connection failed: {error}");
-    if is_tls_connect_failure(&config.ws_url, &error) {
-        RequestFailure::tls(message)
-    } else {
-        RequestFailure::transport(message)
-    }
-}
-
-fn is_tls_connect_failure(ws_url: &str, error: &TungsteniteError) -> bool {
-    if !ws_url.starts_with("wss://") {
-        return false;
-    }
-    error.to_string().contains(TLS_PIN_MISMATCH_ERROR)
-        || matches!(error, TungsteniteError::Tls(_))
-        || matches!(error, TungsteniteError::Io(io_error) if io_error.kind() == ErrorKind::InvalidData)
-}
-
-async fn next_json(socket: &mut GatewaySocket) -> Result<Value, RequestFailure> {
-    loop {
-        let message = socket
-            .next()
-            .await
-            .ok_or_else(|| RequestFailure::transport("Gateway connection closed."))?
-            .map_err(|error| {
-                RequestFailure::transport(format!("Gateway connection failed: {error}"))
-            })?;
-        match message {
-            Message::Text(text) => {
-                return serde_json::from_str(text.as_ref()).map_err(|error| {
-                    RequestFailure::transport(format!("Gateway sent invalid JSON: {error}"))
-                });
-            }
-            Message::Ping(payload) => {
-                socket.send(Message::Pong(payload)).await.map_err(|error| {
-                    RequestFailure::transport(format!("Could not answer Gateway ping: {error}"))
-                })?
-            }
-            Message::Close(_) => {
-                return Err(RequestFailure::transport("Gateway connection closed."));
-            }
-            _ => {}
-        }
-    }
-}
-
-async fn handle_idle_message<F>(
-    dispatch: &F,
-    socket: &mut GatewaySocket,
-    incoming: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
-) -> Result<(), RequestFailure>
-where
-    F: Fn(&Value),
-{
-    let message = incoming
-        .ok_or_else(|| RequestFailure::transport("Gateway connection closed."))?
-        .map_err(|error| {
-            RequestFailure::transport(format!("Gateway connection failed: {error}"))
-        })?;
-    match message {
-        Message::Text(text) => {
-            if let Ok(value) = serde_json::from_str::<Value>(text.as_ref()) {
-                dispatch(&value);
-            }
-            Ok(())
-        }
-        Message::Ping(payload) => socket.send(Message::Pong(payload)).await.map_err(|error| {
-            RequestFailure::transport(format!("Could not answer Gateway ping: {error}"))
-        }),
-        Message::Close(_) => Err(RequestFailure::transport("Gateway connection closed.")),
-        _ => Ok(()),
-    }
-}
-
-fn dispatch_chat_event<R: tauri::Runtime>(
+fn dispatch_gateway_event<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    frame: &Value,
+    event: &GatewayEvent,
     generation: GatewayGeneration,
+    config_changed: &AtomicBool,
 ) {
-    if frame.get("type").and_then(Value::as_str) != Some("event")
-        || frame.get("event").and_then(Value::as_str) != Some("chat")
-    {
+    if event.event == "config.changed" {
+        config_changed.store(true, Ordering::SeqCst);
+    }
+    if event.event != "chat" {
         return;
     }
-    if let Some(payload) = frame.get("payload").and_then(Value::as_object) {
+    if let Some(payload) = event.payload.as_object() {
         let mut payload = payload.clone();
         // Stamp the socket that delivered this event, not whichever route is active now.
         payload.insert("gatewayGeneration".to_string(), json!(generation));
@@ -2288,6 +2085,173 @@ fn dispatch_chat_event<R: tauri::Runtime>(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::convert::Infallible;
+
+    type GatewaySocket = SharedGatewaySession;
+
+    async fn accept_test_session(
+        stream: tokio::net::TcpStream,
+    ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "event",
+                    "event": "connect.challenge",
+                    "payload": {
+                        "nonce": "fixture-nonce",
+                        "ts": 1_700_000_000_123_u64,
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let connect: Value = serde_json::from_str(
+            socket
+                .next()
+                .await
+                .expect("connect frame")
+                .expect("valid connect frame")
+                .to_text()
+                .expect("text connect frame"),
+        )
+        .unwrap();
+        assert_eq!(connect["method"], "connect");
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "res",
+                    "id": connect["id"],
+                    "ok": true,
+                    "payload": {
+                        "type": "hello-ok",
+                        "protocol": MAX_PROTOCOL_VERSION,
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        socket
+    }
+
+    async fn connect_test_session(url: &str) -> GatewaySocket {
+        SharedGatewayClient::connect(SharedGatewayClientConfig::new(url).unwrap(), |_| async {
+            Ok::<_, Infallible>(json!({"role": "test"}))
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn session_request_drains_events_while_waiting_for_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (close_tx, close_rx) = oneshot::channel();
+        let (dispatched_tx, mut dispatched_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_test_session(stream).await;
+            let request = socket.next().await.unwrap().unwrap();
+            let Message::Text(text) = request else {
+                panic!("expected request frame");
+            };
+            let request: Value = serde_json::from_str(&text).unwrap();
+            for sequence in [1, 2] {
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "event",
+                            "event": "config.changed",
+                            "payload": { "sequence": sequence },
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    dispatched_rx.recv().await,
+                    Some(sequence),
+                    "event must dispatch before the request response"
+                );
+            }
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "res",
+                        "id": request["id"],
+                        "ok": true,
+                        "payload": {
+                            "defaultId": "main",
+                            "mainKey": "main",
+                            "scope": "per-sender",
+                            "agents": [{ "id": "main" }],
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let _ = close_rx.await;
+            socket.close(None).await.unwrap();
+        });
+        let session = SharedGatewayClient::connect(
+            SharedGatewayClientConfig::new(&url)
+                .unwrap()
+                .event_capacity(1),
+            |_| async { Ok::<_, Infallible>(json!({"role": "test"})) },
+        )
+        .await
+        .unwrap();
+        let mut sequences = Vec::new();
+        let result = await_session_result_while_dispatching(
+            &session,
+            request_agents_list_session(&session, Instant::now() + Duration::from_secs(1)),
+            |event| {
+                let sequence = event.payload["sequence"].as_u64().unwrap();
+                sequences.push(sequence);
+                dispatched_tx.send(sequence).unwrap();
+            },
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("request failed: {}", failure.message));
+
+        assert_eq!(result.default_id, "main");
+        assert_eq!(sequences, [1, 2]);
+        close_tx.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    async fn perform_request(
+        client: &GatewayClient,
+        generation: u64,
+        socket: &mut GatewaySocket,
+        request: GatewayRequest,
+        budget: Option<Duration>,
+        _on_event: &impl Fn(&GatewayEvent),
+    ) -> Result<Value, RequestFailure> {
+        perform_session_request(
+            client,
+            generation,
+            socket,
+            request,
+            Instant::now() + budget.unwrap_or(REQUEST_TIMEOUT),
+        )
+        .await
+    }
+
+    async fn request_agents_list(
+        socket: &mut GatewaySocket,
+        timeout: Duration,
+        _on_event: &impl Fn(&GatewayEvent),
+    ) -> Result<AgentsListResult, RequestFailure> {
+        request_agents_list_session(socket, Instant::now() + timeout).await
+    }
 
     pub(crate) struct RpcFixture {
         pub(crate) client: GatewayClient,
@@ -2309,9 +2273,7 @@ pub(crate) mod tests {
                     let Ok((stream, _)) = listener.accept().await else {
                         break;
                     };
-                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
-                        continue;
-                    };
+                    let mut socket = accept_test_session(stream).await;
                     while let Some(Ok(message)) = socket.next().await {
                         if !message.is_text() {
                             continue;
@@ -2344,7 +2306,7 @@ pub(crate) mod tests {
                     }
                 }
             });
-            let (socket, _) = connect_async(&url).await.unwrap();
+            let socket = connect_test_session(&url).await;
             let client = GatewayClient::new();
             let generation = client.replace_configuration(Some(GatewayWsConfig::new(
                 url,
@@ -2380,7 +2342,7 @@ pub(crate) mod tests {
                     if let DriverCommand::Request {
                         request,
                         budget,
-                        reply,
+                        complete,
                     } = command
                     {
                         let result = perform_request(
@@ -2391,9 +2353,8 @@ pub(crate) mod tests {
                             budget,
                             &|_| {},
                         )
-                        .await
-                        .map_err(|failure| failure.message);
-                        let _ = reply.send(result);
+                        .await;
+                        let _ = complete(result);
                     }
                 }
             })
@@ -2409,12 +2370,13 @@ pub(crate) mod tests {
                 .config
                 .lock()
                 .unwrap()
+                .config
                 .as_ref()
                 .unwrap()
                 .ws_url
                 .clone();
             let generation = self.client.generation();
-            let (socket, _) = connect_async(&url).await.unwrap();
+            let socket = connect_test_session(&url).await;
             self.driver = Self::start_driver(&self.client, generation.0, socket);
         }
 
@@ -2437,7 +2399,7 @@ pub(crate) mod tests {
                 .send(DriverCommand::Request {
                     request: GatewayRequest::AgentsList,
                     budget: Some(Duration::from_secs(1)),
-                    reply,
+                    complete: complete_request::<AgentsListResult>("agents.list", reply),
                 })
                 .await
                 .unwrap();
@@ -2472,7 +2434,7 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn replace_route(&self) {
-            let config = self.client.inner.config.lock().unwrap().clone();
+            let config = self.client.inner.config.lock().unwrap().config.clone();
             self.client.replace_configuration(config);
         }
 
@@ -2552,7 +2514,7 @@ pub(crate) mod tests {
             let connection = client.generation();
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
-                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let mut socket = accept_test_session(stream).await;
                 let mut frames = vec![];
                 while let Some(Ok(message)) = socket.next().await {
                     if !message.is_text() {
@@ -2578,7 +2540,7 @@ pub(crate) mod tests {
                 }
                 frames
             });
-            let (mut socket, _) = connect_async(&url).await.unwrap();
+            let mut socket = connect_test_session(&url).await;
             if case == "stale-connection" {
                 client.replace_configuration(Some(config));
             }
@@ -2614,7 +2576,7 @@ pub(crate) mod tests {
             request_agents_list(&mut socket, Duration::from_secs(1), &|_| {})
                 .await
                 .unwrap_or_else(|failure| panic!("marker failed: {}", failure.message));
-            socket.close(None).await.unwrap();
+            socket.close().await;
             let frames = tokio::time::timeout(Duration::from_secs(1), server)
                 .await
                 .unwrap()
@@ -3044,7 +3006,7 @@ esac
                 fs::write(self.directory.join("dashboard.json"), response.to_string())
                     .expect("write dashboard response");
                 let cli = OpenClawCli::discover().expect("discover fixture CLI");
-                gateway::ensure_ready(&cli)
+                gateway::dashboard(&cli, gateway::status(&cli)?)
             }
         }
 
@@ -3200,7 +3162,7 @@ esac
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut socket = accept_test_session(stream).await;
             // Only the final request may cross the transport. A stale queued prompt
             // would become this first frame and fail the independent wire assertion.
             let frame: Value =
@@ -3211,7 +3173,7 @@ esac
             assert_eq!(frame["params"]["deliver"], false);
             socket.send(Message::Text(json!({"type":"res","id":frame["id"],"ok":true,"payload":{"status":"started","runId":"fixture-run"}}).to_string().into())).await.unwrap();
         });
-        let (mut socket, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        let mut socket = connect_test_session(&format!("ws://{address}")).await;
         let client = GatewayClient::new();
         let config = |ownership| {
             GatewayWsConfig::new(format!("ws://{address}"), None, None, None, ownership)
@@ -3252,7 +3214,7 @@ esac
         .await
         .is_err());
         let current = client.replace_configuration(Some(config(GatewayOwnership::Remote)));
-        let response = perform_request(
+        let value = perform_request(
             &client,
             current,
             &mut socket,
@@ -3266,15 +3228,19 @@ esac
         )
         .await
         .unwrap_or_else(|error| panic!("{}", error.message));
-        let GatewayResponse::Desktop(value) = response else {
-            panic!("desktop response expected");
-        };
         assert_eq!(value["runId"], "fixture-run");
         server.await.unwrap();
     }
 
     #[tokio::test]
     async fn malformed_success_payloads_require_reconnection() {
+        fn completion<T: DeserializeOwned + Send + 'static>(
+            method: &'static str,
+        ) -> RequestCompletion {
+            let (reply, _) = oneshot::channel();
+            complete_request::<T>(method, reply)
+        }
+
         let client = GatewayClient::new();
         client.replace_configuration(Some(GatewayWsConfig::new(
             "ws://127.0.0.1:18789".into(),
@@ -3287,7 +3253,11 @@ esac
         let route = client.sleep_route().expect("local sleep route");
         let generation = client.inner.config_generation.load(Ordering::SeqCst);
         let requests = [
-            ("agents.list", GatewayRequest::AgentsList),
+            (
+                "agents.list",
+                GatewayRequest::AgentsList,
+                completion::<AgentsListResult>("agents.list"),
+            ),
             (
                 "chat.send",
                 GatewayRequest::ChatSend {
@@ -3299,13 +3269,15 @@ esac
                     },
                     generation: GatewayGeneration(generation),
                 },
+                completion::<ChatSendAck>("chat.send"),
             ),
             (
                 "plugin.surface.refresh",
                 GatewayRequest::RefreshCanvasSurface {
-                    observed_url: None,
+                    observed_url: "http://127.0.0.1:18789/__openclaw__/canvas/fixture".into(),
                     generation: GatewayGeneration(generation),
                 },
+                completion::<PluginSurfaceRefreshResponse>("plugin.surface.refresh"),
             ),
             #[cfg(target_os = "linux")]
             (
@@ -3314,6 +3286,7 @@ esac
                     request_id: "fixture-sleep".into(),
                     route: route.clone(),
                 },
+                completion::<SuspendPrepareResponse>("gateway.suspend.prepare"),
             ),
             #[cfg(target_os = "linux")]
             (
@@ -3322,18 +3295,17 @@ esac
                     suspension_id: "fixture-sleep".into(),
                     route: route.clone(),
                 },
+                completion::<SuspendResumeResponse>("gateway.suspend.resume"),
             ),
         ];
-        for (method, request) in requests {
+        for (method, request, complete) in requests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind websocket fixture");
             let address = listener.local_addr().expect("fixture address");
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.expect("accept fixture");
-                let mut socket = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("accept websocket");
+                let mut socket = accept_test_session(stream).await;
                 let message = socket.next().await.unwrap().unwrap();
                 let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
                 assert_eq!(frame["method"], method);
@@ -3348,13 +3320,10 @@ esac
                     .await
                     .expect("send malformed payload");
             });
-            let (mut socket, _) = connect_async(format!("ws://{address}"))
-                .await
-                .expect("connect fixture");
-            let failure = perform_request(&client, generation, &mut socket, request, None, &|_| {})
-                .await
-                .err()
-                .expect("typed response must reject a number");
+            let mut socket = connect_test_session(&format!("ws://{address}")).await;
+            let result =
+                perform_request(&client, generation, &mut socket, request, None, &|_| {}).await;
+            let failure = complete(result).expect("typed response must reject a number");
             assert!(failure.disconnect, "{method} must recycle the socket");
             assert!(failure
                 .message
@@ -3371,22 +3340,18 @@ esac
         let address = listener.local_addr().expect("fixture address");
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept websocket fixture");
-            let mut socket = tokio_tungstenite::accept_async(stream)
-                .await
-                .expect("accept websocket handshake");
+            let mut socket = accept_test_session(stream).await;
             let _request = socket.next().await.expect("request frame");
             std::future::pending::<()>().await;
         });
-        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}"))
-            .await
-            .expect("connect websocket fixture");
+        let mut socket = connect_test_session(&format!("ws://{address}")).await;
         let (commands, mut receiver) = mpsc::channel(2);
         let (reply, response) = oneshot::channel();
         commands
             .send(DriverCommand::Request {
                 request: GatewayRequest::AgentsList,
                 budget: Some(SUSPEND_REQUEST_TIMEOUT),
-                reply,
+                complete: complete_request::<AgentsListResult>("agents.list", reply),
             })
             .await
             .expect("queue budgeted request");
@@ -3400,7 +3365,7 @@ esac
         let DriverCommand::Request {
             request,
             budget,
-            reply,
+            complete,
         } = command
         else {
             panic!("expected request command");
@@ -3420,7 +3385,7 @@ esac
         };
         let elapsed = started.elapsed();
         assert!(failure.disconnect, "timeout must recycle the socket");
-        let _ = reply.send(Err(failure.message));
+        let _ = complete(Err(failure));
 
         assert!(matches!(
             tokio::time::timeout(Duration::from_millis(250), receiver.recv())
@@ -3457,6 +3422,7 @@ esac
                 tls_fingerprint: None,
             };
             crate::remote_ws_config(&request, &Url::parse(url).expect("Gateway URL"))
+                .expect("remote config")
         }
 
         struct SleepSocketFixture {
@@ -3486,7 +3452,7 @@ esac
                 let server_fail_resume = fail_resume.clone();
                 let server = tokio::spawn(async move {
                     let (stream, _) = listener.accept().await.unwrap();
-                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    let mut socket = accept_test_session(stream).await;
                     let mut frames = Vec::new();
                     while let Some(Ok(Message::Text(text))) = socket.next().await {
                         let frame: Value = serde_json::from_str(&text).unwrap();
@@ -3517,7 +3483,7 @@ esac
                     }
                     frames
                 });
-                let (socket, _) = connect_async(url).await.expect("connect sleep socket");
+                let socket = connect_test_session(&url).await;
                 Self {
                     client,
                     generation,
@@ -3532,7 +3498,7 @@ esac
                 let DriverCommand::Request {
                     request,
                     budget,
-                    reply,
+                    complete,
                 } = command
                 else {
                     panic!("expected sleep request");
@@ -3545,9 +3511,8 @@ esac
                     budget,
                     &|_| {},
                 )
-                .await
-                .map_err(|failure| failure.message);
-                let _ = reply.send(result);
+                .await;
+                let _ = complete(result);
             }
 
             async fn next_request(&mut self) -> DriverCommand {
@@ -3575,6 +3540,7 @@ esac
                     .config
                     .lock()
                     .unwrap()
+                    .config
                     .as_ref()
                     .unwrap()
                     .ws_url
@@ -3902,34 +3868,27 @@ esac
     }
 
     #[test]
-    fn tls_trust_decision_uses_system_roots_or_an_exact_pin() {
+    fn tls_trust_uses_system_roots_or_an_exact_pin() {
         assert_eq!(
-            tls_trust_decision(None).expect("system trust"),
-            TlsTrustDecision::SystemRoots
+            tls_trust(None).expect("system trust"),
+            TlsTrust::SystemRoots
         );
         assert_eq!(
-            tls_trust_decision(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrustDecision::Pinned([0xab; 32])
+            tls_trust(Some(&"ab".repeat(32))).expect("pinned trust"),
+            TlsTrust::Pinned([0xab; 32])
         );
-        assert!(tls_trust_decision(Some("sha256:abc")).is_err());
-
-        let certificate = b"fixture gateway leaf certificate";
-        let expected: [u8; 32] = Sha256::digest(certificate).into();
-        assert!(pinned_fingerprint_matches(&expected, certificate));
-        assert!(!pinned_fingerprint_matches(
-            &expected,
-            b"different gateway leaf certificate"
-        ));
+        assert!(tls_trust(Some("sha256:abc")).is_err());
     }
 
     #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
-        let tls_error = TungsteniteError::Io(std::io::Error::new(
-            ErrorKind::InvalidData,
-            TLS_PIN_MISMATCH_ERROR,
-        ));
-        assert!(is_tls_connect_failure("wss://127.0.0.1:18789", &tls_error));
-        assert!(!is_tls_connect_failure("ws://127.0.0.1:18789", &tls_error));
+        let failure =
+            RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))
+                .classify_connect(&GatewayAuth::None);
+        assert_eq!(
+            failure.connect_state,
+            Some(GatewayConnectionState::TlsFailure)
+        );
         assert_eq!(
             GatewayConnectionState::TlsFailure.event_name(),
             "tls-failure"
@@ -4008,34 +3967,6 @@ esac
         // Pinning only withdraws inline widgets; agent-kind is unconditional.
         assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
-    }
-
-    #[test]
-    fn connect_challenge_uses_gateway_timestamp() {
-        let Ok(challenge) = parse_connect_challenge(&json!({
-            "payload": {
-                "nonce": " fixture-nonce ",
-                "ts": 1_700_000_000_123_u64
-            }
-        })) else {
-            panic!("expected valid challenge");
-        };
-
-        assert_eq!(
-            challenge,
-            ConnectChallenge {
-                nonce: "fixture-nonce".to_string(),
-                issued_at_ms: 1_700_000_000_123,
-            }
-        );
-        assert!(parse_connect_challenge(&json!({
-            "payload": { "nonce": "missing-time" }
-        }))
-        .is_err());
-        assert!(parse_connect_challenge(&json!({
-            "payload": { "nonce": "fixture-nonce", "ts": "1700000000123" }
-        }))
-        .is_err());
     }
 
     #[test]
@@ -4275,7 +4206,7 @@ esac
                 failure.connect_state,
                 Some(GatewayConnectionState::CredentialRequired)
             );
-            assert!(should_pause_reconnect(&failure.connect_details));
+            assert!(failure.connect_details.should_pause_reconnect());
             assert!(!should_clear_stored_device_token(&failure, &auth));
             let state = failure.connect_state.expect("classified state");
             let notice = connection_notice(state, &failure.connect_details, true);
@@ -4312,11 +4243,10 @@ esac
             .expect("gateway command mutex poisoned") = Some(commands);
 
         client.resume_paused_reconnect();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(25), receiver.recv())
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
 
         client.inner.reconnect_paused.store(true, Ordering::SeqCst);
         client.resume_paused_reconnect();
@@ -4330,18 +4260,18 @@ esac
     fn reconnect_pause_requires_explicit_server_policy() {
         let pause_details = json!({ "pauseReconnect": true });
         let paused = RequestFailure::method_with_details("pause", Some(&pause_details));
-        assert!(should_pause_reconnect(&paused.connect_details));
+        assert!(paused.connect_details.should_pause_reconnect());
 
         let terminal_details = json!({ "retryable": false });
         let terminal = RequestFailure::method_with_details("terminal", Some(&terminal_details));
-        assert!(should_pause_reconnect(&terminal.connect_details));
+        assert!(terminal.connect_details.should_pause_reconnect());
 
         let retry_details = json!({ "retryable": true, "pauseReconnect": false });
         let retry = RequestFailure::method_with_details("retry", Some(&retry_details));
-        assert!(!should_pause_reconnect(&retry.connect_details));
-        assert!(!should_pause_reconnect(
-            &RequestFailure::transport("transport").connect_details
-        ));
+        assert!(!retry.connect_details.should_pause_reconnect());
+        assert!(!RequestFailure::transport("transport")
+            .connect_details
+            .should_pause_reconnect());
     }
 
     #[test]
@@ -4418,3 +4348,7 @@ esac
         );
     }
 }
+
+#[cfg(test)]
+#[path = "gateway_control_auth_owner_tests.rs"]
+mod native_control_auth_tests;

@@ -22,9 +22,22 @@ This keeps secret-provider outages off hot request paths.
 
 Gateway ingress protection, structurally invalid config or resolved values, policy violations, and unknown ownership still fail closed. Isolated owners never fall through to a lower-precedence credential source.
 
+When startup database admission marks an agent unavailable, secrets preparation
+omits that exact database's auth store without substituting an empty credential
+store. Pending background inspection is not a secret failure: the admission owner
+resolves and publishes the agent's credentials and prepares its models before
+admitting the agent. No manual secrets reload is needed after successful
+preparation. Failed inspections and ownership refusals remain cold store owners
+with repair guidance. Unreadable stores without a matching admission refusal still
+fail preparation; a secrets reload alone cannot readmit the agent.
+
+Background preparation preserves the saved model configuration separately from
+runtime catalog defaults, so recovery does not disable otherwise compatible
+runtime choices such as Codex.
+
 ## Egress-time injection (sentinels)
 
-For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health probes replace known sentinels in URL and header values immediately before each request leaves the process.
+For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v2.<authenticated-ciphertext>.end`, not the provider credential. The guarded model fetch and managed local-provider health checks replace known sentinels in URL and header values immediately before each request leaves the process.
 
 Unknown sentinel-shaped values fail closed before network activity. OpenClaw refuses to send the request rather than forwarding an unresolved sentinel to a provider. Resolved secret values are also registered for exact-value log redaction as a defense in depth measure.
 
@@ -91,7 +104,7 @@ In interactive onboarding, choosing SecretRef storage runs preflight validation 
 
 - Env refs: validates the env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
-- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
+- Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before check/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
 - Generated gateway token: setup mints `gateway.auth.token` itself, so reference mode has nothing to prompt for. With `OPENCLAW_GATEWAY_TOKEN` exported it writes an `env` ref to that variable, keeping a later rotation authoritative; otherwise it writes the token to the secret store under `OPENCLAW_GATEWAY_TOKEN` and stores a `store` ref. An existing store entry is reused rather than rotated, so re-running setup never invalidates already-paired clients.
 
 Validation failure shows the error and lets you retry.

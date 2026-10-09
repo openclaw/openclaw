@@ -10,6 +10,10 @@ import {
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../lib/gateway-errors.ts";
+import {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
@@ -17,7 +21,6 @@ import {
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
@@ -71,11 +74,18 @@ function createUsageDetailRequest<T>(
     },
     onError: (error) => {
       pending = null;
-      const failure = failUsageDetailRefresh(status, error, gateway.snapshot);
-      if (failure.clearData && value) {
+      const clearData = isMissingOperatorReadScopeError(error);
+      status = failPanelRefresh(
+        clearData ? createPanelRefreshStatus() : status,
+        error,
+        gateway.snapshot,
+      );
+      if (clearData && value) {
         delete value.data;
       }
-      status = failure.status;
+      if (clearData && status.error) {
+        status = { ...status, error: formatMissingOperatorReadScopeMessage("usage details") };
+      }
     },
   });
 

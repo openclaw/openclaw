@@ -1,7 +1,9 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
@@ -316,6 +318,7 @@ export class ReefTransportClient {
     signal?: AbortSignal,
     secrets: readonly string[] = [],
   ): Promise<T> {
+    const effect = captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -325,14 +328,25 @@ export class ReefTransportClient {
     });
     try {
       let response: Response;
+      let initiated = false;
       try {
-        response = await this.fetcher(url, {
-          method,
-          headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-          ...(bytes.length ? { body: bytes as BodyInit } : {}),
-          signal: timeout.signal,
+        response = await effect.initiate(() => {
+          timeout.signal?.throwIfAborted();
+          initiated = true;
+          return this.fetcher(url, {
+            method,
+            headers: {
+              ...headers,
+              ...(bytes.length ? { "content-type": "application/json" } : {}),
+            },
+            ...(bytes.length ? { body: bytes as BodyInit } : {}),
+            signal: timeout.signal,
+          });
         });
       } catch (error) {
+        if (!initiated) {
+          throw error;
+        }
         if (timeout.signal?.aborted) {
           throw timeout.signal.reason;
         }
@@ -400,7 +414,7 @@ export class ReefInboxEntryParkedError extends Error {
 
 interface ReefInboxConnectionOptions {
   initialCursor?: number;
-  persistCursor?: (cursor: number) => void;
+  persistCursor?: ((cursor: number) => void) | ((cursor: number) => Promise<void>);
   onState?: (state: "connected" | "disconnected") => void;
   onError?: (error: Error) => void;
 }
@@ -412,22 +426,6 @@ export function createReefWebSocket(
   return new WebSocket(url, {
     maxPayload: REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES,
     handshakeTimeout: options.handshakeTimeoutMs ?? REEF_WS_HANDSHAKE_MS,
-  });
-}
-
-export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(done, ms);
-    function done(): void {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    }
-    signal?.addEventListener("abort", done, { once: true });
   });
 }
 
@@ -479,7 +477,7 @@ export class ReefInboxConnection {
         });
       } catch (error) {
         this.options.onError?.(asError(error));
-        await abortableSleep(delay, signal);
+        await sleepWithAbort(delay, signal).catch(() => {});
         delay = Math.min(delay * 2, 30_000);
       }
     }
@@ -552,7 +550,7 @@ export class ReefInboxConnection {
       if (parked) {
         this.processedAboveCursor.add(entry.seq);
       } else {
-        this.advanceCursor(entry.seq);
+        await this.advanceCursor(entry.seq);
       }
     }
     if (cursor !== undefined) {
@@ -566,7 +564,7 @@ export class ReefInboxConnection {
       }
       if (fresh.length === 0) {
         // Empty pages may echo the old cursor after expiry/acknowledgment.
-        this.advanceCursor(this.reconciledThrough);
+        await this.advanceCursor(this.reconciledThrough);
       }
     }
     return parked;
@@ -584,11 +582,15 @@ export class ReefInboxConnection {
     await this.serialize(() => this.drain(signal));
   }
 
-  private advanceCursor(cursor: number): void {
+  private async advanceCursor(cursor: number): Promise<void> {
     if (cursor <= this.cursor) {
       return;
     }
-    this.options.persistCursor?.(cursor);
+    await this.options.persistCursor?.(cursor);
+    // A direct drain may publish a newer cursor while this persistence waits.
+    if (cursor <= this.cursor) {
+      return;
+    }
     this.cursor = cursor;
     for (const seq of this.processedAboveCursor) {
       if (seq <= cursor) {

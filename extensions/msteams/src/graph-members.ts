@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph members behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
 import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.js";
@@ -8,18 +7,6 @@ type GetMemberInfoMSTeamsParams = {
   to: string;
   userId: string;
   currentRequesterId?: string | null;
-};
-
-type GetMemberInfoMSTeamsResult = {
-  user: {
-    id: string | undefined;
-    displayName: string | undefined;
-    mail: string | undefined;
-    jobTitle: string | undefined;
-    userPrincipalName: string | undefined;
-    officeLocation: string | undefined;
-    roles: string[];
-  };
 };
 
 type GraphConversationMember = {
@@ -42,11 +29,10 @@ function normalizeUserId(value?: string | null): string {
 
 async function findStandardChannelMember(params: {
   token: string;
-  to: string;
+  conversation: ReturnType<typeof resolveConversationPath>;
   userId: string;
 }): Promise<GraphConversationMember | undefined> {
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conversation = resolveConversationPath(conversationId);
+  const { conversation } = params;
   if (conversation.kind !== "channel" || !conversation.teamId) {
     return undefined;
   }
@@ -76,12 +62,7 @@ async function findStandardChannelMember(params: {
   return result.found;
 }
 
-/**
- * Fetch a user profile from Microsoft Graph by user ID.
- */
-export async function getMemberInfoMSTeams(
-  params: GetMemberInfoMSTeamsParams,
-): Promise<GetMemberInfoMSTeamsResult> {
+export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
   const isCurrentRequester =
     normalizeUserId(params.userId) === normalizeUserId(params.currentRequesterId);
   if (isCurrentRequester && resolveConversationPath(params.to).kind === "chat") {
@@ -103,7 +84,7 @@ export async function getMemberInfoMSTeams(
     conversation.kind === "channel"
       ? await findStandardChannelMember({
           token: await resolveGraphToken(params.cfg),
-          to: params.to,
+          conversation,
           userId: params.userId,
         })
       : undefined;

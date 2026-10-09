@@ -7,13 +7,12 @@ import { NonEmptyString } from "./primitives.js";
 /**
  * Artifact lookup and download protocol schemas.
  *
- * Artifacts are files or payloads produced by sessions, runs, tasks, or agents;
+ * Artifacts are files or payloads produced by sessions, runs, or agents;
  * these schemas keep lookup filters explicit and download results transport-safe.
  */
 const ArtifactQueryParamsProperties = {
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
-  taskId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   /** Assistant-delivered artifacts only; omit to include uploaded inputs and tool observations. */
   messageRole: Type.Optional(Type.Literal("assistant")),
@@ -34,7 +33,6 @@ export const ArtifactSummarySchema = closedObject({
   sizeBytes: Type.Optional(Type.Integer({ minimum: 0 })),
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
-  taskId: Type.Optional(NonEmptyString),
   messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
   source: Type.Optional(NonEmptyString),
   image: Type.Optional(closedObject({ url: NonEmptyString })),
@@ -67,7 +65,12 @@ export const ArtifactsGetResultSchema = closedObject({
 });
 
 /** Download request payload for one artifact. */
-export const ArtifactsDownloadParamsSchema = ArtifactGetParamsSchema;
+export const ArtifactsDownloadParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  artifactId: NonEmptyString,
+  /** Opt in only when the client can reach the Gateway's HTTP(S) media routes. */
+  transport: Type.Optional(Type.Literal("http")),
+});
 
 /** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */
 export const ArtifactsDownloadResultSchema = closedObject({

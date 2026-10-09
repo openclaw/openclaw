@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireMemoryIndexReadGeneration,
-  withMemoryIndexPublishGeneration,
+  withMemoryIndexGeneration,
 } from "./manager-index-generation-lease.js";
 
 const leaseChildSource = String.raw`
@@ -54,7 +54,7 @@ const leaseChildSource = String.raw`
   }
   const generation = await acquire(
     databasePath + ".generation-lock.sqlite",
-    mode === "read" ? "shared" : "exclusive",
+    mode === "write" ? "exclusive" : "shared",
   );
   if (mode === "read") {
     admission.exec("ROLLBACK");
@@ -65,19 +65,19 @@ const leaseChildSource = String.raw`
     process.stdin.resume();
     await once(process.stdin, "end");
     generation.exec("ROLLBACK");
-    if (mode === "write") {
+    if (mode !== "read") {
       admission.exec("ROLLBACK");
     }
   } finally {
     generation.close();
-    if (mode === "write") {
+    if (mode !== "read") {
       admission.close();
     }
   }
 `;
 
 function spawnLeaseFixture(
-  mode: "read" | "read-admission" | "write",
+  mode: "read" | "read-admission" | "write" | "mutation",
   databasePath: string,
 ): ChildProcessWithoutNullStreams {
   return spawn(
@@ -126,6 +126,27 @@ async function withReadGeneration<T>(key: string, run: () => Promise<T>): Promis
 }
 
 describe("memory index generation lease", () => {
+  it("lets existing readers finish while fused retrieval excludes foreign mutations", async () => {
+    const databasePath = leasePath("fused-retrieval-cross-process");
+    const releaseOrdinary = await acquireMemoryIndexReadGeneration(databasePath);
+    const releaseFused = await acquireMemoryIndexReadGeneration(databasePath, undefined, true);
+    let released = false;
+    const child = spawnLeaseFixture("mutation", databasePath);
+    try {
+      expect(await readChildLine(child)).toBe("contended");
+      const acquired = readChildLine(child);
+      await releaseFused();
+      released = true;
+      expect(await acquired).toBe("acquired");
+    } finally {
+      if (!released) {
+        await releaseFused();
+      }
+      await stopChild(child);
+      await releaseOrdinary();
+    }
+  });
+
   it("admits another reader into the active generation when no writer is queued", async () => {
     let releaseFirstReader = () => {};
     const firstReaderGate = new Promise<void>((resolve) => {
@@ -165,7 +186,7 @@ describe("memory index generation lease", () => {
     });
     await vi.waitFor(() => expect(events).toContain("first-reader-start"));
 
-    const publish = withMemoryIndexPublishGeneration(generationPath, async () => {
+    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
       events.push("publish");
     });
     await Promise.resolve();
@@ -189,7 +210,7 @@ describe("memory index generation lease", () => {
       await firstReaderGate;
     });
     await vi.waitFor(() => expect(events).toContain("first-reader"));
-    const publish = withMemoryIndexPublishGeneration(generationPath, async () => {
+    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
       events.push("publish");
     });
     const nextReader = withReadGeneration(generationPath, async () => {
@@ -226,7 +247,7 @@ describe("memory index generation lease", () => {
     try {
       expect(await readChildLine(child)).toBe("acquired");
       const events: string[] = [];
-      const publication = withMemoryIndexPublishGeneration(databasePath, async () => {
+      const publication = withMemoryIndexGeneration(databasePath, "write", async () => {
         events.push("published");
       });
       await new Promise<void>((resolve) => {
@@ -250,7 +271,7 @@ describe("memory index generation lease", () => {
     try {
       expect(await readChildLine(firstReader)).toBe("acquired");
       const events: string[] = [];
-      publication = withMemoryIndexPublishGeneration(databasePath, async () => {
+      publication = withMemoryIndexGeneration(databasePath, "write", async () => {
         events.push("published");
       });
       await new Promise<void>((resolve) => {

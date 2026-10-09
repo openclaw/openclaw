@@ -20,6 +20,10 @@ export function commandReply(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
+export function renderCommandJsonBlock(label: string, value: unknown): string {
+  return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+}
+
 /** Returns command arguments only when the complete slash-command token matches. */
 export function matchCommandPrefix(body: string, command: string): string | null {
   return body === command
@@ -82,7 +86,7 @@ export function defineGatewayControlCommand(
       // Adopt before teardown so the successor cannot replay this non-idempotent
       // command. Adoption loss throws and must prevent the effect.
       await params.opts?.turnAdoptionLifecycle?.onAdopted();
-      return run(params);
+      return rejectNonOwnerCommand(params, label) ?? run(params);
     },
   );
 }
@@ -108,6 +112,11 @@ export function rejectNonOwnerCommand(
   commandLabel: string,
 ): CommandHandlerResult | null {
   if (params.command.senderIsOwner) {
+    try {
+      params.command.assertOwnerCurrent?.();
+    } catch {
+      return commandReply("Your owner authority changed; send a new request.");
+    }
     return null;
   }
   logVerbose(
@@ -160,12 +169,7 @@ export function buildDisabledCommandReply(params: {
 
 export function requireCommandFlagEnabled(
   cfg: { commands?: unknown } | undefined,
-  params: {
-    label: string;
-    configKey: CommandFlagKey;
-    disabledVerb?: "is" | "are";
-    docsUrl?: string;
-  },
+  params: Parameters<typeof buildDisabledCommandReply>[0],
 ): CommandHandlerResult | null {
   if (isCommandFlagEnabled(cfg, params.configKey)) {
     return null;

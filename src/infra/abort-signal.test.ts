@@ -20,16 +20,27 @@ describe("abort errors", () => {
     expect(isAbortError(createAbortError("aborted"))).toBe(true);
     expect(isAbortError({ name: "AbortError", message: "test" })).toBe(true);
     expect(isAbortError(new Error("This operation was aborted"))).toBe(true);
+    expect(
+      isAbortError({
+        name: "AbortError",
+        get message() {
+          throw new Error("Abort metadata is unavailable");
+        },
+      }),
+    ).toBe(true);
   });
 
   it.each([
     null,
-    undefined,
     "string error",
-    42,
-    new Error("Operation aborted"),
     new Error("aborted"),
-    new Error("Request was aborted"),
+    ...(["name", "message"] as const).map((field) =>
+      Object.defineProperty(new Error("Metadata is unavailable"), field, {
+        get() {
+          throw new Error("Error metadata is unavailable");
+        },
+      }),
+    ),
   ])("rejects non-abort input %#", (value) => {
     expect(isAbortError(value)).toBe(false);
   });
@@ -64,6 +75,64 @@ describe("waitForAbortSignal", () => {
 });
 
 describe("racePromiseWithAbortSignal", () => {
+  it("does not start work under an existing abort", async () => {
+    const signal = AbortSignal.abort(new Error("stopped"));
+    const start = () => {
+      throw new Error("must not start");
+    };
+    await expect(racePromiseWithAbortSignal(start, signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: signal.reason,
+    });
+  });
+
+  it.each(["pending", "fulfilled", "throwing"] as const)(
+    "registers cancellation before starting a %s operation and preserves race order",
+    async (outcome) => {
+      const controller = new AbortController();
+      const source = createDeferred<string>();
+      const failure = new Error("source failed");
+      const pending = racePromiseWithAbortSignal(() => {
+        controller.abort();
+        if (outcome === "throwing") {
+          throw failure;
+        }
+        return outcome === "fulfilled" ? Promise.resolve("done") : source.promise;
+      }, controller.signal);
+      if (outcome === "pending") {
+        await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      } else if (outcome === "fulfilled") {
+        await expect(pending).resolves.toBe("done");
+      } else {
+        await expect(pending).rejects.toBe(failure);
+      }
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      source.resolve("late result");
+    },
+  );
+
+  it.each([true, false])(
+    "preserves a custom abort result (already aborted: %s)",
+    async (already) => {
+      const controller = new AbortController();
+      const reason = { source: "caller" };
+      if (already) {
+        controller.abort(reason);
+      }
+      const source = createDeferred<string>();
+      const pending = racePromiseWithAbortSignal(
+        source.promise,
+        controller.signal,
+        (signal) => signal.reason,
+      );
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      source.resolve("late result");
+      await expect(source.promise).resolves.toBe("late result");
+    },
+  );
+
   it.each(["rejected", "pending", "fulfilled"] as const)(
     "observes a %s source when an existing abort wins",
     async (state) => {

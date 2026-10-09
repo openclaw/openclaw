@@ -1,12 +1,14 @@
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function buildFtsQuery(raw: string): string | null {
-  const tokens = normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
-  if (tokens.length === 0) {
+  return buildMatchQueryFromTerms(normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []));
+}
+
+export function buildMatchQueryFromTerms(terms: string[]): string | null {
+  if (terms.length === 0) {
     return null;
   }
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
+  return terms.map((term) => `"${term.replaceAll('"', "")}"`).join(" AND ");
 }
 
 export function bm25RankToScore(rank: number): number {

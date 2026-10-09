@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type {
@@ -42,30 +42,8 @@ const memoryHostRecallResultSchema = z.looseObject({
   endLine: memoryHostFiniteNumberSchema,
   score: memoryHostFiniteNumberSchema,
 });
-const memoryHostRecallResultsSchema = z.array(memoryHostRecallResultSchema);
 const memoryHostSkippedRecallResultSchema = memoryHostRecallResultSchema.extend({
   reason: z.literal("non-short-term-memory-path"),
-});
-const memoryHostSkippedRecallResultsSchema = z.array(memoryHostSkippedRecallResultSchema);
-const boundedRecallResultsSchema = z.array(z.unknown()).transform((values, context) => {
-  const parsed = memoryHostRecallResultsSchema.safeParse(
-    values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS),
-  );
-  if (!parsed.success) {
-    context.addIssue({ code: "custom", message: "invalid recall result" });
-    return z.NEVER;
-  }
-  return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
-});
-const boundedSkippedRecallResultsSchema = z.array(z.unknown()).transform((values, context) => {
-  const parsed = memoryHostSkippedRecallResultsSchema.safeParse(
-    values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS),
-  );
-  if (!parsed.success) {
-    context.addIssue({ code: "custom", message: "invalid skipped recall result" });
-    return z.NEVER;
-  }
-  return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
 });
 const memoryHostPromotionCandidateSchema = z.looseObject({
   key: z.string(),
@@ -75,17 +53,19 @@ const memoryHostPromotionCandidateSchema = z.looseObject({
   score: memoryHostFiniteNumberSchema,
   recallCount: memoryHostFiniteNumberSchema,
 });
-const memoryHostPromotionCandidatesSchema = z.array(memoryHostPromotionCandidateSchema);
-const boundedPromotionCandidatesSchema = z.array(z.unknown()).transform((values, context) => {
-  const parsed = memoryHostPromotionCandidatesSchema.safeParse(
-    values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS),
-  );
-  if (!parsed.success) {
-    context.addIssue({ code: "custom", message: "invalid promotion candidate" });
-    return z.NEVER;
-  }
-  return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
-});
+
+function boundedEventItems<T extends z.ZodType>(itemSchema: T, message: string) {
+  const itemsSchema = z.array(itemSchema);
+  return z.array(z.unknown()).transform((values, context) => {
+    const parsed = itemsSchema.safeParse(values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS));
+    if (!parsed.success) {
+      context.addIssue({ code: "custom", message });
+      return z.NEVER;
+    }
+    return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
+  });
+}
+
 const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
   z.looseObject({
     type: z.literal("memory.recall.recorded"),
@@ -93,7 +73,7 @@ const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
     storageTruncated: z.unknown().optional(),
     query: z.string(),
     resultCount: memoryHostFiniteNumberSchema,
-    results: boundedRecallResultsSchema,
+    results: boundedEventItems(memoryHostRecallResultSchema, "invalid recall result"),
   }),
   z.looseObject({
     type: z.literal("memory.recall.skipped"),
@@ -103,7 +83,10 @@ const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
     reason: z.literal("non-short-term-memory-path"),
     eligibleResultCount: memoryHostFiniteNumberSchema,
     skippedResultCount: memoryHostFiniteNumberSchema,
-    results: boundedSkippedRecallResultsSchema,
+    results: boundedEventItems(
+      memoryHostSkippedRecallResultSchema,
+      "invalid skipped recall result",
+    ),
   }),
   z.looseObject({
     type: z.literal("memory.promotion.applied"),
@@ -111,7 +94,10 @@ const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
     storageTruncated: z.unknown().optional(),
     memoryPath: z.string(),
     applied: memoryHostFiniteNumberSchema,
-    candidates: boundedPromotionCandidatesSchema,
+    candidates: boundedEventItems(
+      memoryHostPromotionCandidateSchema,
+      "invalid promotion candidate",
+    ),
   }),
   z.looseObject({
     type: z.literal("memory.dream.completed"),
@@ -135,22 +121,7 @@ function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
 }
 
 function memoryHostWorkspacePrefix(workspaceDir: string): string {
-  return createHash("sha256")
-    .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
-    .digest("hex")
-    .slice(0, WORKSPACE_HASH_BYTES);
-}
-
-function eventKeyPrefix(workspaceDir: string): string {
-  return `${memoryHostWorkspacePrefix(workspaceDir)}:event:`;
-}
-
-function eventKeyRangeEnd(workspaceDir: string): string {
-  return `${memoryHostWorkspacePrefix(workspaceDir)}:event;`;
-}
-
-function cursorKey(workspaceDir: string): string {
-  return `${memoryHostWorkspacePrefix(workspaceDir)}:cursor`;
+  return sha256HexPrefixCore(normalizeMemoryHostWorkspaceKey(workspaceDir), WORKSPACE_HASH_BYTES);
 }
 
 function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {
@@ -194,9 +165,6 @@ export function normalizeMemoryHostEventRecordForStorage(
         startLine: result.startLine,
         endLine: result.endLine,
         score: result.score,
-        ...(event.type === "memory.recall.skipped"
-          ? { reason: "non-short-term-memory-path" as const }
-          : {}),
       };
     });
     const normalized =
@@ -206,12 +174,7 @@ export function normalizeMemoryHostEventRecordForStorage(
             timestamp: timestamp.value,
             query: query.value,
             resultCount: event.resultCount,
-            results: results.map((result) => ({
-              path: result.path,
-              startLine: result.startLine,
-              endLine: result.endLine,
-              score: result.score,
-            })),
+            results,
             ...(truncated ? { storageTruncated: true as const } : {}),
           }
         : {
@@ -221,13 +184,9 @@ export function normalizeMemoryHostEventRecordForStorage(
             reason: "non-short-term-memory-path" as const,
             eligibleResultCount: event.eligibleResultCount,
             skippedResultCount: event.skippedResultCount,
-            results: results.map((result) => ({
-              path: result.path,
-              startLine: result.startLine,
-              endLine: result.endLine,
-              score: result.score,
-              reason: "non-short-term-memory-path" as const,
-            })),
+            results: results.map((result) =>
+              Object.assign(result, { reason: "non-short-term-memory-path" as const }),
+            ),
             ...(truncated ? { storageTruncated: true as const } : {}),
           };
     return Buffer.byteLength(JSON.stringify(normalized), "utf8") <= MAX_MEMORY_HOST_EVENT_JSON_BYTES
@@ -301,7 +260,8 @@ export async function registerMemoryHostEvent(params: {
   if (!event) {
     throw new TypeError("Memory host event is invalid");
   }
-  const keyStartInclusive = eventKeyPrefix(params.workspaceDir);
+  const workspacePrefix = memoryHostWorkspacePrefix(params.workspaceDir);
+  const keyStartInclusive = `${workspacePrefix}:event:`;
   const recordedAt = Date.now();
   const journal: Parameters<typeof registerPluginStateSequencedJournalEntry>[0] = {
     pluginId: MEMORY_HOST_EVENTS_PLUGIN_ID,
@@ -310,7 +270,7 @@ export async function registerMemoryHostEvent(params: {
       maxEntries: MAX_MEMORY_HOST_EVENT_CURSORS,
       ...(params.env ? { env: params.env } : {}),
     },
-    cursorKey: cursorKey(params.workspaceDir),
+    cursorKey: `${workspacePrefix}:cursor`,
     journalOptions: {
       namespace: MEMORY_HOST_EVENTS_NAMESPACE,
       maxEntries: maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS,
@@ -319,10 +279,10 @@ export async function registerMemoryHostEvent(params: {
     journalKeyPrefix: `${keyStartInclusive}1:`,
     journalKeyRange: {
       keyStartInclusive,
-      keyEndExclusive: eventKeyRangeEnd(params.workspaceDir),
+      keyEndExclusive: `${workspacePrefix}:event;`,
       valueKind: "event",
     },
-    journalValue: (sequence) => ({ kind: "event", event, recordedAt, sequence }),
+    journalValue: { kind: "event", event, recordedAt },
   };
   // Capture workspace keys and event time together before the lazy store load yields.
   const pluginState = await import("../plugin-state/plugin-state-store.js");
@@ -343,22 +303,23 @@ export async function listStoredMemoryHostEvents(params: {
         ),
       )
     : (maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS);
+  const workspacePrefix = memoryHostWorkspacePrefix(params.workspaceDir);
   const query: Parameters<typeof pluginStateEntriesInKeyRange>[0] = {
     pluginId: MEMORY_HOST_EVENTS_PLUGIN_ID,
     namespace: MEMORY_HOST_EVENTS_NAMESPACE,
-    keyStartInclusive: eventKeyPrefix(params.workspaceDir),
-    keyEndExclusive: eventKeyRangeEnd(params.workspaceDir),
+    keyStartInclusive: `${workspacePrefix}:event:`,
+    keyEndExclusive: `${workspacePrefix}:event;`,
     limit,
     order: "desc",
     ...(params.env ? { env: params.env } : {}),
   };
   const pluginState = await import("../plugin-state/plugin-state-store.js");
-  const entries = pluginState
-    .pluginStateEntriesInKeyRange(query)
-    .flatMap((entry): PersistedMemoryHostEvent[] => {
+  const entries = (await pluginState.pluginStateEntriesInKeyRange(query)).flatMap(
+    (entry): PersistedMemoryHostEvent[] => {
       const value = entry.value as StoredMemoryHostEvent;
       return value.kind === "event" ? [{ ...entry, value }] : [];
-    });
+    },
+  );
   return entries.toReversed();
 }
 

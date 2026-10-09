@@ -58,6 +58,14 @@ it.each([
         sessions: [],
         defaults: { model: null, modelProvider: null, contextTokens: null },
         people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
+        activityPulse: {
+          since: new Date(2026, 8, 20).getTime(),
+          until: new Date(2026, 8, 28).getTime(),
+          buckets: Array.from({ length: 8 }, () => 0),
+          sessions: 0,
+          started: 0,
+          running: 0,
+        },
       },
       expandedAutomationDays: new Set(),
       onRetry: vi.fn(),
@@ -67,7 +75,7 @@ it.each([
     render(renderSessionActivityView(props), container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const content = main.querySelector<HTMLElement>(
-      personId ? "[data-activity-identity]" : ".activity-feed__summary",
+      personId ? "[data-activity-identity]" : ".activity-pulse",
     )!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
       "32px",
@@ -95,20 +103,22 @@ it.each([
             error: controller.error,
             loading: controller.loading,
             retrying: controller.retrying,
-            onRetry: () => controller.load(client, props.filters, "retry"),
+            onRetry: () => {
+              void controller.load(client, props.filters, "retry");
+            },
           }),
           container,
         ),
     });
     try {
-      controller.load(client, props.filters);
+      void controller.load(client, props.filters);
       await vi.waitFor(() => expect(controller.loading).toBe(false));
       const retained = container.querySelector<HTMLElement>(
-        personId ? "[data-activity-identity]" : ".activity-feed__summary",
+        personId ? "[data-activity-identity]" : ".activity-pulse",
       )!;
       const retainedTop = retained.getBoundingClientRect().top;
       request.mockRejectedValueOnce(new Error("Refresh failed"));
-      controller.load(client, props.filters, "refresh");
+      void controller.load(client, props.filters, "refresh");
       await vi.waitFor(() => expect(controller.error).toBe("Refresh failed"));
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const retryButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(

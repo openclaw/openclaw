@@ -1,19 +1,43 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { serialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
+import { threadId, Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../config/sessions/session-entry-current.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
+import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
+import {
+  appendMemoryHostEvent,
+  readMemoryHostEventRecords,
+} from "../plugin-sdk/memory-host-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { VERSION } from "../version.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  pluginStateEntriesInKeyRange,
+  registerPluginStateSequencedJournalEntry,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
+import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -21,6 +45,407 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("keeps a session-bound comparison from claiming state after its session changes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-session-current" }, async (state) => {
+      const target = { agentId: "main", sessionKey: "agent:main:claim", env: state.env };
+      const entry = { sessionId: "claim-session", updatedAt: 1, lifecycleRevision: "original" };
+      await upsertSessionEntryCore(target, entry);
+      const read = await withSessionEntryReadOnlyInWorker(
+        target,
+        () => {},
+        async (result, owner) => {
+          if (!result.ok) {
+            throw result.error;
+          }
+          return captureSessionEntryCurrentRead(target, owner);
+        },
+      );
+      if (!read.source) {
+        throw new Error("Expected a file-backed session");
+      }
+      const store = createPluginStateKeyedStore<string>("device-pair", {
+        namespace: "session-claim",
+        maxEntries: 10,
+        env: state.env,
+      });
+      await store.register("tab", "open");
+      const comparison = (await store.observe!("tab")).comparison;
+      const facts: Array<SessionEntryCurrentFacts | undefined> = [];
+      const guarded = store.withCurrent!({
+        assertCurrent: read.assertSourceCurrent,
+        sessionEntryCurrent: {
+          source: read.source,
+          assertCurrent(current: SessionEntryCurrentFacts | undefined) {
+            facts.push(current);
+            if (current?.lifecycleRevision !== "original") {
+              throw new Error("Session no longer owns this claim");
+            }
+          },
+        },
+      });
+      await upsertSessionEntryCore(target, { ...entry, lifecycleRevision: "successor" });
+      await expect(
+        guarded.compareAndApply("tab", comparison, {
+          operation: "update",
+          action: "set",
+          value: "claimed",
+        }),
+      ).rejects.toBeInstanceOf(PluginStateStoreError);
+      expect(facts).toContainEqual(expect.objectContaining({ lifecycleRevision: "successor" }));
+      expect(await store.lookup("tab")).toBe("open");
+      expect(await store.delete("tab")).toBe(true);
+    });
+  });
+
+  it("keeps every captured session current through a compound native claim", async () => {
+    await withOpenClawTestState({ label: "plugin-state-compound-current" }, async (state) => {
+      const checks: SessionEntryCurrentCheck[] = [];
+      const targets = ["lease", "mutation"].map((key) => ({
+        agentId: "main",
+        sessionKey: `agent:main:${key}`,
+        env: state.env,
+      }));
+      for (const target of targets) {
+        await upsertSessionEntryCore(target, {
+          sessionId: target.sessionKey,
+          previousSessionId: "original",
+          updatedAt: 1,
+        });
+        const read = await withSessionEntryReadOnlyInWorker(
+          target,
+          () => {},
+          async (result, owner) => {
+            if (!result.ok) {
+              throw result.error;
+            }
+            return captureSessionEntryCurrentRead(target, owner);
+          },
+        );
+        if (!read.source) {
+          throw new Error("Expected a file-backed session");
+        }
+        checks.push({
+          source: read.source,
+          assertCurrent: (current: SessionEntryCurrentFacts | undefined) => {
+            read.assertSourceCurrent();
+            if (current?.previousSessionId !== "original") {
+              throw new Error("Session lineage changed");
+            }
+          },
+        });
+      }
+      const store = createPluginStateKeyedStore<string>("device-pair", {
+        namespace: "compound-claim",
+        maxEntries: 10,
+        env: state.env,
+      });
+      await store.register("tab", "open");
+      const guarded = store.withCurrent!({
+        assertCurrent: () => {},
+        sessionEntryCurrent: {
+          sources: checks.map((check) => check.source),
+          assertCurrent: (entries: readonly (SessionEntryCurrentFacts | undefined)[]) => {
+            checks.forEach((check, index) => check.assertCurrent(entries[index]));
+          },
+        },
+      });
+      const first = await store.observe!("tab");
+      await expect(
+        guarded.compareAndApply("tab", first.comparison, {
+          operation: "update",
+          action: "set",
+          value: "claimed",
+        }),
+      ).resolves.toEqual({ status: "applied" });
+      await upsertSessionEntryCore(targets[1]!, {
+        sessionId: targets[1]!.sessionKey,
+        previousSessionId: "successor",
+        updatedAt: 2,
+      });
+      const next = await store.observe!("tab");
+      await expect(
+        guarded.compareAndApply("tab", next.comparison, {
+          operation: "update",
+          action: "set",
+          value: "forbidden",
+        }),
+      ).rejects.toBeInstanceOf(PluginStateStoreError);
+      expect(await store.lookup("tab")).toBe("claimed");
+    });
+  });
+
+  it.each(["register", "delete"] as const)(
+    "revalidates caller authority after asynchronous worker admission for %s",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-current-owner" }, async (state) => {
+        const store = createPluginStateKeyedStore<string>("device-pair", {
+          namespace: "owner-admission",
+          maxEntries: 10,
+          env: state.env,
+        });
+        await store.register("subscription", "original");
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) {
+            throw new Error("command owner revoked");
+          }
+        };
+        const pending =
+          operation === "register"
+            ? store.register("subscription", "replacement", { assertCurrent })
+            : store.delete("subscription", { assertCurrent });
+        current = false;
+        await expect(pending).rejects.toThrow("plugin state");
+        expect(await store.lookup("subscription")).toBe("original");
+      });
+    },
+  );
+
+  it("opens cold state and sweeps reopened state without host data SQL", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const observation = observeHostDataSql();
+      try {
+        expect(existsSync(databasePath)).toBe(false);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        expect(existsSync(databasePath)).toBe(true);
+        for (const method of observation.calls) {
+          expect(method).not.toHaveBeenCalled();
+        }
+
+        const now = Date.now();
+        seedPluginStateEntriesForTests([
+          {
+            pluginId: "fixture-plugin",
+            namespace: "sweep",
+            key: "expired",
+            value: { expired: true },
+            expiresAt: now - 1,
+          },
+          {
+            pluginId: "fixture-plugin",
+            namespace: "sweep",
+            key: "live",
+            value: { live: true },
+            expiresAt: now + 86_400_000,
+          },
+        ]);
+        await closeOpenClawStateDatabaseAsync();
+        for (const method of observation.calls) {
+          method.mockClear();
+        }
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(1);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        for (const method of observation.calls) {
+          expect(method).not.toHaveBeenCalled();
+        }
+      } finally {
+        observation.restore();
+      }
+      const persisted = createPluginStateSyncKeyedStore("fixture-plugin", {
+        namespace: "sweep",
+        maxEntries: 10,
+        env: state.env,
+      });
+      expect(persisted.lookup("expired")).toBeUndefined();
+      expect(persisted.lookup("live")).toEqual({ live: true });
+    });
+  });
+
+  it.each(["observe", "compareDelete"] as const)(
+    "revalidates %s authority after native writer contention and releases refused transactions",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-native-contention" }, async (state) => {
+        let current = true;
+        const revoked = new Error("plugin owner revoked after dispatch");
+        const store = createPluginStateKeyedStore<string>(
+          "memory-core",
+          {
+            namespace: "writer-contention",
+            retention: "retained",
+            env: state.env,
+          },
+          () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+        );
+        const messages = vi.spyOn(Worker.prototype, "postMessage");
+        await store.register("workspace", "owner");
+        const worker = messages.mock.contexts[0];
+        messages.mockRestore();
+        if (!(worker instanceof Worker)) {
+          throw new Error("Expected the shared-state worker");
+        }
+        const observation = await store.observe("workspace");
+        const captured = captureOpenClawStateWorkerContext({ env: state.env });
+        const foreign = holdForeignWriter(captured);
+        const posted = createDeferredCore();
+        const nativePost = worker.postMessage.bind(worker);
+        const dispatch = vi
+          .spyOn(worker, "postMessage")
+          .mockImplementation((message, transferList) => {
+            const request = asOptionalRecord(message);
+            nativePost(message, transferList);
+            if (
+              request?.type === "execute" &&
+              request.input instanceof Uint8Array &&
+              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
+            ) {
+              posted.resolve();
+            }
+          });
+        const execute = () =>
+          operation === "observe"
+            ? store.observe("workspace")
+            : store.compareAndApply("workspace", observation.comparison, {
+                operation: "delete",
+                action: "delete",
+              });
+        const pending = execute().then(
+          (value) => ({ ok: true, value }) as const,
+          (error: unknown) => ({ ok: false, error }) as const,
+        );
+        try {
+          await Promise.race([
+            posted.promise,
+            pending.then(() => {
+              throw new Error("Plugin operation settled before worker dispatch");
+            }),
+          ]);
+          // The dispatched operation must revalidate authority after acquiring the native writer.
+          current = false;
+          foreign.release();
+          await expect(pending).resolves.toMatchObject({
+            ok: false,
+            error: {
+              code:
+                operation === "observe" ? "PLUGIN_STATE_READ_FAILED" : "PLUGIN_STATE_WRITE_FAILED",
+              cause: revoked,
+            },
+          });
+        } finally {
+          dispatch.mockRestore();
+          foreign.close();
+          await pending;
+          current = true;
+        }
+        expect(await store.lookup("workspace")).toBe("owner");
+        // Claim the actual writer lock before closing the worker to prove refusal rolled back.
+        const nextOwner = holdForeignWriter(captured);
+        nextOwner.close();
+        if (operation === "observe") {
+          await expect(execute()).resolves.toMatchObject({ value: "owner" });
+        } else {
+          await expect(execute()).resolves.toEqual({ status: "applied" });
+        }
+        expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
+      });
+    },
+  );
+
+  it("appends and reads the memory journal off-thread with unchanged persisted bytes", async () => {
+    await withOpenClawTestState({ label: "memory-journal-worker" }, async (state) => {
+      const workspaceDir = state.workspaceDir;
+      const event = {
+        type: "memory.recall.recorded" as const,
+        timestamp: "2026-09-13T12:00:00.000Z",
+        query: "ordinary journal event",
+        resultCount: 0,
+        results: [],
+      };
+      const observation = observeHostDataSql();
+      const sql = observation.calls;
+      try {
+        expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([]);
+        expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+        await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
+        await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
+        expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
+          event,
+          event,
+        ]);
+        for (const method of sql) {
+          expect(method).not.toHaveBeenCalled();
+        }
+        await closeOpenClawStateDatabaseAsync();
+        expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
+          event,
+          event,
+        ]);
+        for (const method of sql) {
+          expect(method).not.toHaveBeenCalled();
+        }
+      } finally {
+        observation.restore();
+      }
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      const rows = db
+        .prepare(
+          "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+        )
+        .all("memory-core", "memory-host.events");
+      expect(rows).toHaveLength(2);
+      for (const [index, row] of rows.entries()) {
+        const sequence = index + 1;
+        const value = JSON.parse(String(row.value_json)) as { recordedAt: number };
+        expect(row.entry_key).toMatch(
+          new RegExp(`^[a-f0-9]{24}:event:1:${String(sequence).padStart(16, "0")}$`),
+        );
+        expect(row.value_json).toBe(
+          JSON.stringify({ kind: "event", event, recordedAt: value.recordedAt, sequence }),
+        );
+      }
+      expect(
+        db
+          .prepare(
+            "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?",
+          )
+          .get("memory-core", "memory-host.event-cursors"),
+      ).toEqual({ value_json: '{"kind":"cursor","lastSequence":2}' });
+    });
+  });
+
+  it("captures journal data and range before asynchronous admission", async () => {
+    await withOpenClawTestState({ label: "memory-journal-capture" }, async (state) => {
+      const journalValue = { kind: "event", detail: { value: "captured" } };
+      const journalKeyRange = { keyStartInclusive: "event:", keyEndExclusive: "event;" };
+      const pending = registerPluginStateSequencedJournalEntry({
+        pluginId: "memory-core",
+        cursorOptions: {
+          namespace: "memory-host.event-cursors",
+          maxEntries: 1_000,
+          env: state.env,
+        },
+        cursorKey: "workspace:cursor",
+        journalOptions: { namespace: "memory-host.events", maxEntries: 10_000, env: state.env },
+        journalKeyPrefix: "event:1:",
+        journalKeyRange,
+        journalValue,
+      });
+      journalValue.detail.value = "changed";
+      journalKeyRange.keyStartInclusive = "changed:";
+      journalKeyRange.keyEndExclusive = "changed;";
+      await expect(pending).resolves.toBe(1);
+      await expect(
+        pluginStateEntriesInKeyRange({
+          pluginId: "memory-core",
+          namespace: "memory-host.events",
+          keyStartInclusive: "event:",
+          keyEndExclusive: "event;",
+          limit: 1,
+          env: state.env,
+        }),
+      ).resolves.toMatchObject([
+        {
+          key: "event:1:0000000000000001",
+          value: { kind: "event", detail: { value: "captured" }, sequence: 1 },
+        },
+      ]);
+    });
+  });
+
   it("shares public keyed operations with the legacy store while SQL stays on the worker", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-coexistence" }, async () => {
       const options = {
@@ -28,13 +453,8 @@ describe("worker plugin state", () => {
         maxEntries: 10,
         overflowPolicy: "reject-new" as const,
       };
-      const native = requireNodeSqlite();
-      const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
-      const exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
-      const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      );
-      const sql = [prepare, exec, ...statements];
+      const observation = observeHostDataSql();
+      const sql = observation.calls;
       try {
         const store = createPluginStateKeyedStore<number>("slack", options);
         const legacy = createPluginStateSyncKeyedStore<number>("slack", options);
@@ -94,7 +514,7 @@ describe("worker plugin state", () => {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
       const persisted = createPluginStateSyncKeyedStore<number>("slack", options);
       expect(persisted.lookup("legacy")).toBe(1);
@@ -171,6 +591,89 @@ describe("worker plugin state", () => {
       }
     });
   });
+
+  it("bounds native listing bytes while preserving complete sync and worker entries", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-listing-bytes" }, async () => {
+      const pluginId = "memory-core";
+      const namespace = "short-term-recall";
+      const expected = Array.from({ length: 64 }, (_, index) => ({
+        key: `entry-${String(index).padStart(2, "0")}`,
+        value: { index, text: "value😀" },
+        createdAt: 1000 + index,
+      }));
+      seedPluginStateEntriesForTests(expected.map((entry) => ({ pluginId, namespace, ...entry })));
+      const options = { namespace, maxEntries: expected.length };
+      const sync = createPluginStateSyncKeyedStore(pluginId, options);
+      const store = createPluginStateKeyedStore(pluginId, options);
+      const { db } = openOpenClawStateDatabase();
+      const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
+        sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
+      );
+      try {
+        expect(sync.entries()).toEqual(expected);
+        expect(reads.counts.listing).toBeGreaterThan(0);
+        expect(reads.counts.listing).toBeLessThanOrEqual(1);
+        expect(reads.rowCounts.listing).toBeGreaterThan(0);
+        expect(reads.rowCounts.listing).toBeLessThanOrEqual(expected.length);
+        expect(reads.textBytes.listing).toBeGreaterThan(0);
+        expect.soft(reads.textBytes.listing).toBeLessThan(4096);
+      } finally {
+        reads.restore();
+      }
+      expect(await store.entries()).toEqual(expected);
+    });
+  });
+
+  it.each(["created_at", "expires_at"] as const)(
+    "keeps later %s native errors ahead of earlier corrupt listing JSON",
+    async (column) => {
+      await withOpenClawTestState({ label: `plugin-state-worker-listing-${column}` }, async () => {
+        const pluginId = "memory-core";
+        const namespace = "listing-errors";
+        seedPluginStateEntriesForTests(
+          ["healthy", "corrupt", "unsafe"].map((key, index) => ({
+            pluginId,
+            namespace,
+            key,
+            value: { key },
+            createdAt: 1000 + index,
+          })),
+        );
+        const { db, path } = openOpenClawStateDatabase();
+        db.prepare(
+          "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+        ).run("invalid JSON", pluginId, namespace, "corrupt");
+        const options = { namespace, maxEntries: 3 };
+        const sync = createPluginStateSyncKeyedStore(pluginId, options);
+        const store = createPluginStateKeyedStore(pluginId, options);
+        const corrupt = { code: "PLUGIN_STATE_CORRUPT", operation: "entries", path };
+        expect(() => sync.entries()).toThrowError(expect.objectContaining(corrupt));
+        await expect(store.entries()).rejects.toMatchObject(corrupt);
+
+        const update = db.prepare(
+          column === "created_at"
+            ? "UPDATE plugin_state_entries SET created_at = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?"
+            : "UPDATE plugin_state_entries SET expires_at = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+        );
+        update.run(9223372036854775807n, pluginId, namespace, "unsafe");
+        const snapshot = db.prepare(
+          "SELECT * FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+        );
+        snapshot.setReadBigInts(true);
+        const before = snapshot.all(pluginId, namespace);
+        const nativeError = {
+          code: "PLUGIN_STATE_READ_FAILED",
+          operation: "entries",
+          path,
+          cause: expect.objectContaining({ name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+        };
+        expect(() => sync.entries()).toThrowError(expect.objectContaining(nativeError));
+        expect(snapshot.all(pluginId, namespace)).toEqual(before);
+        await expect(store.entries()).rejects.toMatchObject(nativeError);
+        expect(snapshot.all(pluginId, namespace)).toEqual(before);
+      });
+    },
+  );
 
   it("returns complete entries and positional bulk values larger than a broker frame", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-large-reads" }, async () => {
@@ -275,7 +778,9 @@ describe("worker plugin state", () => {
         operation: "delete",
         path,
         cause: expect.any(SyntaxError),
+        owner: { pid: process.pid, threadId: expect.any(Number), version: VERSION },
       });
+      expect(corrupt).not.toHaveProperty("owner.threadId", threadId);
     });
   });
 });

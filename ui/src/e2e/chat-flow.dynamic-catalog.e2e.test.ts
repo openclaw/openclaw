@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
@@ -180,6 +181,7 @@ suite.define(() => {
         '[data-chat-model-option="omniroute/deepseekv4flash-equivalent"]',
       );
       await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
+      await revealChatModelOption(newSessionModel);
       await expect.poll(() => newSessionModel.isVisible()).toBe(true);
       if (dynamicCatalogProofDir) {
         await page.screenshot({

@@ -4,11 +4,11 @@ import {
   type OutboundLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { withTelegramNativeQuoteFallback } from "./reply-parameters.js";
 import {
   logTelegramOutboundSendOk,
   toAcceptedThreadScopedParams,
   withTelegramApiContext,
-  withTelegramNativeQuoteFallback,
   type TelegramApiContext,
 } from "./send-context.js";
 import type { TelegramLocationSendOpts, TelegramSendResult } from "./send-message-types.js";
@@ -47,7 +47,6 @@ export async function sendLocationTelegram(
         replyQuoteText: opts.quoteText,
         useReplyIdAsQuoteSource: true,
       },
-      request: { kind: "nonIdempotent" },
     });
     const replyMarkup = buildInlineKeyboard(opts.buttons);
     const commonParams = {

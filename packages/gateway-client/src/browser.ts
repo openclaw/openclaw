@@ -1,6 +1,8 @@
 // Browser-safe gateway client surface. Keep Node transport/TLS dependencies out
 // of this entry so browser consumers share the wire engine without polyfills.
 export * from "./device-auth.js";
+export * from "./chat-stream-message.js";
+export * from "./chat-stream-projection.js";
 export * from "./browser-device-auth.js";
 export * from "./gateway-origin-scope.js";
 export * from "./connect-auth.js";
@@ -21,4 +23,11 @@ export * from "@openclaw/gateway-protocol/gateway-error-details";
 export * from "@openclaw/gateway-protocol/startup-unavailable";
 export * from "@openclaw/gateway-protocol/version";
 export { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
-export type { ConnectParams, ErrorShape, EventFrame, HelloOk } from "@openclaw/gateway-protocol";
+export type {
+  ChannelsStatusResult,
+  ConnectParams,
+  ErrorShape,
+  EventFrame,
+  HelloOk,
+  QuestionRecord,
+} from "@openclaw/gateway-protocol";

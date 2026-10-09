@@ -4,7 +4,6 @@ import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import type { readSessionChangedEvent } from "./reconcile.ts";
 import type {
-  SessionCapability,
   SessionConnectionOwner,
   SessionDeleteBatchResult,
   SessionDeleteOptions,
@@ -12,6 +11,7 @@ import type {
   SessionDeleteTarget,
   SessionGateway,
   SessionListScope,
+  SessionRefreshOutcome,
   SessionState,
 } from "./session-capability.ts";
 import {
@@ -48,7 +48,7 @@ type DeletionHost = {
   ) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
   invalidateLists: () => void;
-  refreshReplacement: SessionCapability["refreshReplacement"];
+  reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
   reconcilePreviousConnection: (
     scope: NonNullable<ReturnType<SessionConnectionOwner["capture"]>>,
     agentId?: string | null,
@@ -268,7 +268,7 @@ export function createSessionDeletions(host: DeletionHost) {
     }
     if (result.deleted.length > 0) {
       if (host.connection.isCurrent(scope)) {
-        await host.refreshReplacement(targets.length === 1 ? targets[0]?.agentId : undefined);
+        await host.reconcileMutation(targets.length === 1 ? targets[0]?.agentId : undefined);
       }
       if (!host.connection.isCurrent(scope) && !(await host.reconcilePreviousConnection(scope))) {
         return { deleted: [], errors: [], preservedWorktrees: [] };

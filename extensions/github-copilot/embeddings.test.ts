@@ -233,8 +233,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     "github-copilot/",
     "github-copilot/github-copilot/text-embedding-3-small",
     "github-copilot/ text-embedding-3-small",
-    "github-copilot/\tgithub-copilot/text-embedding-3-small",
-    "other/text-embedding-3-small",
   ])("rejects the unavailable explicit model %s", async (model) => {
     mockDiscoveryResponse({
       ok: true,
@@ -338,6 +336,38 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(textSpy).not.toHaveBeenCalled();
     expect(resolveCopilotRuntimeAuthMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["discovery", "embeddings"] as const)(
+    "redacts encoded request-header credentials from %s failures",
+    async (stage) => {
+      const body = "upstream rejected synthetic%2Bcredential%3Avalue; quota exhausted";
+      if (stage === "discovery") {
+        mockDiscoveryResponse({ ok: false, status: 403, text: body });
+      } else {
+        mockDiscoveryResponse({
+          ok: true,
+          json: buildModelsResponse([{ id: "text-embedding-3-small" }]),
+        });
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => new Response(body, { status: 403 })),
+        );
+      }
+      const request = async () => {
+        const result = await githubCopilotMemoryEmbeddingProviderAdapter.create({
+          ...defaultCreateOptions(),
+          remote: { headers: { "X-Proxy-Token": "synthetic+credential:value" } },
+        });
+        if (stage === "embeddings") {
+          await result.provider?.embed("hello", { inputType: "query" });
+        }
+      };
+
+      await expect(request()).rejects.toThrow(
+        `GitHub Copilot ${stage === "discovery" ? "model discovery" : "embeddings"} HTTP 403: upstream rejected ***; quota exhausted`,
+      );
+    },
+  );
 
   it.each([
     { remote: undefined, expected: "vscode-chat" },

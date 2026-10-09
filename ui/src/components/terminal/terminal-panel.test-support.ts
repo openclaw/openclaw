@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 export type CreateOptions = {
@@ -21,11 +22,13 @@ export function createTerminalController(dispose: () => void = vi.fn()) {
   const wasmTerm = {};
   const renderer = {
     setTheme: vi.fn(),
+    remeasureFont: vi.fn(),
     render: vi.fn(),
   };
   return {
     readOnly: false,
     terminal: {
+      options: { fontFamily: terminalFontFamily() },
       cols: 100,
       rows: 30,
       viewportY: 0,

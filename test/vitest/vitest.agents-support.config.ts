@@ -9,6 +9,8 @@ export function createAgentsSupportVitestConfig(env?: Record<string, string | un
     env,
     exclude: owner.exclude,
     name: owner.name,
+    // Retired agent leases reopen shared-state workers through the host broker.
+    pool: "forks",
   });
 }
 

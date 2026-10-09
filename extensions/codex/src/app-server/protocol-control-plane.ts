@@ -1,16 +1,15 @@
-import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type { CodexCursorPage, JsonObject, JsonValue } from "./protocol-json.js";
 
-/** Current Codex marketplace, app, skill, hook, and config wire contracts. */
 export type CodexExperimentalFeatureListParams = {
   cursor?: string | null;
   limit?: number | null;
   threadId?: string | null;
 };
 
-export type CodexExperimentalFeatureListResponse = {
-  data: Array<{ name: string; enabled: boolean }>;
-  nextCursor?: string | null;
-};
+export type CodexExperimentalFeatureListResponse = CodexCursorPage<{
+  name: string;
+  enabled: boolean;
+}>;
 
 export type CodexPluginSummary = {
   id: string;
@@ -72,9 +71,7 @@ export type CodexPluginInstalledResponse = {
   marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
 };
 
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+export type CodexPluginListResponse = CodexPluginInstalledResponse & {
   featuredPluginIds: string[];
 };
 
@@ -134,10 +131,7 @@ export type CodexAppsListParams = {
   forceRefetch?: boolean;
 };
 
-export type CodexAppsListResponse = {
-  data: CodexAppInfo[];
-  nextCursor?: string | null;
-};
+export type CodexAppsListResponse = CodexCursorPage<CodexAppInfo>;
 
 export type CodexInstalledApp = {
   id: string;
@@ -187,11 +181,6 @@ export type CodexAppsReadResponse = {
   missingAppIds: string[];
 };
 
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
-};
-
 type CodexSkillScope = "user" | "repo" | "system" | "admin";
 
 type CodexSkillMetadata = {
@@ -203,6 +192,7 @@ type CodexSkillMetadata = {
   path: string;
   scope: CodexSkillScope;
   enabled: boolean;
+  pluginId?: string | null;
 };
 
 type CodexSkillErrorInfo = {
@@ -220,14 +210,7 @@ export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
 };
 
-export type CodexHooksListParams = {
-  cwds: string[];
-};
-
-export type CodexHooksListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
-};
+export type CodexHooksListResponse = CodexCursorPage<JsonValue>;
 
 export type CodexConfigReadResponse = {
   config: JsonObject;

@@ -44,11 +44,11 @@
       "fireworks": {
         "baseUrl": "https://api.fireworks.ai/inference/v1",
         "api": "openai-completions",
-        "defaultModel": "accounts/fireworks/routers/glm-5p2-fast",
+        "defaultModel": "accounts/fireworks/routers/glm-5p3-fast",
         "models": [
           {
-            "id": "accounts/fireworks/routers/glm-5p2-fast",
-            "name": "GLM 5.2 Fast",
+            "id": "accounts/fireworks/routers/glm-5p3-fast",
+            "name": "GLM 5.3 Fast",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 256000,
@@ -56,7 +56,7 @@
             "cost": {
               "input": 2.1,
               "output": 6.6,
-              "cacheRead": 0.21,
+              "cacheRead": 0.39,
               "cacheWrite": 0
             }
           },

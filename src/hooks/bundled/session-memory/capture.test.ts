@@ -1,10 +1,16 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as accessor from "../../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { captureSessionMemoryTranscript } from "./capture.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-memory-capture-");
 
 function message(id: string, parentId: string | null, role: string, content = id) {
   return { type: "message", id, parentId, message: { role, content } };
@@ -18,22 +24,37 @@ describe("session memory capture", () => {
       agentId: "main",
       sessionId: "capture",
       sessionKey: "agent:main:capture",
-      storePath: path.join(tempDirs.make("openclaw-memory-capture-"), "sessions.json"),
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
     };
   });
 
-  afterEach(() => vi.restoreAllMocks());
-
   async function captureReady() {
     await accessor.waitForSessionTranscriptProjection(scope);
-    return captureSessionMemoryTranscript(scope, undefined);
+    return captureWithoutCallerSql();
   }
 
-  function captureDuringRepair() {
-    vi.spyOn(accessor, "readSessionTranscriptBoundedMessageTailPage").mockImplementation(() => {
-      throw new accessor.SessionTranscriptProjectionUnavailableError(scope.sessionId);
-    });
-    return captureSessionMemoryTranscript(scope, undefined);
+  async function captureWithoutCallerSql() {
+    const hostSql = observeHostDataSql();
+    try {
+      const captured = await captureSessionMemoryTranscript(scope, undefined);
+      expect(hostSql.queries).toEqual([]);
+      return captured;
+    } finally {
+      hostSql.restore();
+    }
+  }
+
+  async function captureDuringRepair() {
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
+    );
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+    database.db
+      .prepare("DELETE FROM session_transcript_active_events WHERE session_id = ?")
+      .run(scope.sessionId);
+    return captureWithoutCallerSql();
   }
 
   it.each(
@@ -75,7 +96,7 @@ describe("session memory capture", () => {
           : 'user: "current"',
       };
       expect(await captureReady()).toEqual(expected);
-      expect(captureDuringRepair()).toEqual(expected);
+      expect(await captureDuringRepair()).toEqual(expected);
     },
   );
 
@@ -96,7 +117,7 @@ describe("session memory capture", () => {
       content: 'user: "restricted"\nassistant: "chosen"',
     };
     expect(await captureReady()).toEqual(expected);
-    expect(captureDuringRepair()).toEqual(expected);
+    expect(await captureDuringRepair()).toEqual(expected);
   });
 
   it("does not charge discarded reset-tail tools against the capture budget", async () => {
@@ -110,7 +131,7 @@ describe("session memory capture", () => {
     expect(captured.status === "available" && captured.content?.includes("k".repeat(1_024))).toBe(
       true,
     );
-    expect(captureDuringRepair()).toEqual(captured);
+    expect(await captureDuringRepair()).toEqual(captured);
   });
 
   it("skips oversized rows while retaining the bounded recent conversation", async () => {
@@ -125,7 +146,7 @@ describe("session memory capture", () => {
       content: 'assistant: "older"\nassistant: "latest"',
     };
     expect(await captureReady()).toEqual(expected);
-    expect(captureDuringRepair()).toEqual(expected);
+    expect(await captureDuringRepair()).toEqual(expected);
   });
 
   it("does not scan beyond the message cap to fill an excerpt", async () => {
@@ -142,6 +163,6 @@ describe("session memory capture", () => {
     );
     const expected = { status: "available", content: null, originClass: "agent" };
     expect(await captureReady()).toEqual(expected);
-    expect(captureDuringRepair()).toEqual(expected);
+    expect(await captureDuringRepair()).toEqual(expected);
   });
 });

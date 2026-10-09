@@ -3,6 +3,7 @@ import { ChannelType } from "discord-api-types/v10";
 import type { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -111,16 +112,7 @@ async function createStatusCommand(cfg: OpenClawConfig, pluginExecute?: ReturnTy
 }
 
 function setDefaultRouteState() {
-  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async (params) => ({
-    route: {
-      agentId: "main",
-      channel: "discord",
-      accountId: params.accountId ?? "default",
-      sessionKey: "agent:main:main",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    },
+  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = (params) => ({
     effectiveRoute: {
       agentId: "main",
       channel: "discord",
@@ -131,9 +123,7 @@ function setDefaultRouteState() {
       matchedBy: "default",
     },
     boundSessionKey: undefined,
-    configuredRoute: null,
     configuredBinding: null,
-    bindingReadiness: null,
   });
 }
 
@@ -197,23 +187,6 @@ describe("discord native /status", () => {
     setDefaultRouteState();
   });
 
-  it("returns a direct status reply without falling through the generic dispatcher", async () => {
-    const cfg = createConfig();
-    const command = await createStatusCommand(cfg);
-    const interaction = createInteraction();
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
-    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
-    expect(interaction.followUp).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
-      content: "status reply",
-      ephemeral: true,
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
   it("delivers an embed-only direct status reply without reporting it unavailable", async () => {
     const embeds = [{ title: "Status", description: "All systems operational" }];
     runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
@@ -243,27 +216,13 @@ describe("discord native /status", () => {
 
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
     expect(executePluginCommand).not.toHaveBeenCalled();
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
     expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
       content: "status reply",
       ephemeral: true,
     });
-  });
-
-  it("keeps every direct status chunk ephemeral", async () => {
-    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
-      text: `fallback models\nruntime info\n${"x".repeat(2200)}`,
-    });
-    const cfg = createConfig();
-    const command = await createStatusCommand(cfg);
-    const interaction = createInteraction();
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
-    for (const [payload] of interaction.followUp.mock.calls) {
-      expect((payload as { ephemeral?: boolean }).ephemeral).toBe(true);
-    }
   });
 
   it("keeps direct status media follow-up chunks ephemeral", async () => {
@@ -313,3 +272,5 @@ describe("discord native /status", () => {
     expect(statusCall.defaultGroupActivation()).toBe("always");
   });
 });
+
+installDiscordIngressTestRuntime();

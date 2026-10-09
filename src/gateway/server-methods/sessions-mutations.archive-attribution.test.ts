@@ -6,7 +6,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { loadGatewaySessionRow } from "../session-utils.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -78,51 +79,95 @@ async function invokePatchSession(
 }
 
 describe("sessions.patch archive attribution", () => {
-  it("stamps the transition actor without adding transcript events and preserves the first archiver", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:archive-attribution";
-      const sessionId = "session-archive-attribution";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId, updatedAt: 1, pinnedAt: 2 },
-      );
+  it.each([undefined, 20])(
+    "preserves the interruption outcome, receipts, and first archiver (endedAt=%s)",
+    async (endedAt) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:archive-attribution";
+        const sessionId = "session-archive-attribution";
+        const retained = {
+          mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
+          restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-boot" }],
+          restartRecoveryTerminalRunIds: ["delivered-run"],
+          pendingFinalDelivery: {
+            kind: "replayable" as const,
+            text: "Retained final",
+            createdAt: 15,
+          },
+          lastRunId: "previous-terminal-client-run",
+          ...(endedAt === undefined ? {} : { endedAt, runtimeMs: 10 }),
+        };
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId,
+            updatedAt: 1,
+            pinnedAt: 2,
+            status: "interrupted",
+            startedAt: 10,
+            abortedLastRun: true,
+            ...retained,
+          },
+        );
 
-      await patchSession(
-        { key: sessionKey, archived: true, expectedSessionId: sessionId },
-        client("profile-ada", "Ada"),
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+        await patchSession(
+          { key: sessionKey, archived: true, expectedSessionId: sessionId },
+          client("profile-ada", "Ada"),
+        );
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+          ...retained,
+          status: "interrupted",
+          abortedLastRun: true,
+          archivedAt: expect.any(Number),
+          archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+        });
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.lifecycleRunId).toBeUndefined();
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.endedAt).toBe(endedAt);
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.runtimeMs).toBe(
+          endedAt === undefined ? undefined : 10,
+        );
+
+        await patchSession(
+          { key: sessionKey, archived: true, expectedSessionId: sessionId },
+          client("profile-bob", "Bob"),
+        );
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedBy).toEqual({
+          type: "human",
+          id: "profile-ada",
+          label: "Ada",
+        });
+
+        await patchSession(
+          { key: sessionKey, archived: false, expectedSessionId: sessionId },
+          client("profile-bob", "Bob"),
+        );
+        const restored = loadSessionEntry({ agentId: "main", sessionKey });
+        expect(restored?.archivedAt).toBeUndefined();
+        expect(restored?.archivedBy).toBeUndefined();
+        expect(restored).toMatchObject({ ...retained, status: "interrupted" });
+
+        expect(await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey })).toEqual([]);
       });
-
-      await patchSession(
-        { key: sessionKey, archived: true, expectedSessionId: sessionId },
-        client("profile-bob", "Bob"),
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedBy).toEqual({
-        type: "human",
-        id: "profile-ada",
-        label: "Ada",
-      });
-
-      await patchSession(
-        { key: sessionKey, archived: false, expectedSessionId: sessionId },
-        client("profile-bob", "Bob"),
-      );
-      const restored = loadSessionEntry({ agentId: "main", sessionKey });
-      expect(restored?.archivedAt).toBeUndefined();
-      expect(restored?.archivedBy).toBeUndefined();
-
-      expect(await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey })).toEqual([]);
-    });
-  });
+    },
+  );
 
   it("does not fabricate attribution or transcript events for an unidentified client", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+      const terminal = {
+        status: "failed" as const,
+        startedAt: 10,
+        endedAt: 20,
+        runtimeMs: 10,
+        abortedLastRun: false,
+        lastRunId: "failed-run",
+        lastRunError: "Execution failed",
+      };
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: 1, ...terminal },
+      );
 
       await patchSession(
         { key: sessionKey, archived: true, expectedSessionId: sessionId },
@@ -130,6 +175,7 @@ describe("sessions.patch archive attribution", () => {
       );
 
       const archived = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(archived).toMatchObject(terminal);
       expect(archived?.archivedAt).toEqual(expect.any(Number));
       expect(archived?.archivedBy).toBeUndefined();
       expect(await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey })).toEqual([]);
@@ -152,20 +198,31 @@ describe("sessions.patch archive attribution", () => {
         { sessionId: "session-alias-happy-archive", updatedAt: 2 },
       );
 
-      await patchSession(
-        {
-          key: aliasKey,
-          archived: true,
-          expectedSessionId: "session-alias-happy-archive",
-        },
-        client("profile-ada", "Ada"),
-      );
-
-      expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
-        archived: true,
-        archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "profile-ada" },
-      });
+      const projection = await createSessionRowProjection({ cfg: {} });
+      try {
+        await patchSession(
+          {
+            key: aliasKey,
+            archived: true,
+            expectedSessionId: "session-alias-happy-archive",
+          },
+          client("profile-ada", "Ada"),
+        );
+        const query = { key: canonicalKey, agentId: "main" };
+        await withReadySessionRows(
+          projection,
+          () => [query],
+          () => {
+            expect(projection.snapshot(query).row).toMatchObject({
+              archived: true,
+              archivedAt: expect.any(Number),
+              archivedBy: { type: "human", id: "profile-ada" },
+            });
+          },
+        );
+      } finally {
+        projection.dispose();
+      }
     });
   });
 });

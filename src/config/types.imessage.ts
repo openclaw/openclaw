@@ -5,9 +5,9 @@
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 /** Private-API and helper actions the iMessage runtime may expose to agents. */
 export type IMessageActionConfig = {
@@ -29,7 +29,6 @@ export type IMessageActionConfig = {
 export type IMessageReactionNotificationMode = "off" | "own" | "all";
 export type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
-/** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = Omit<
   CommonChannelMessagingConfig,
   "mentionPatterns" | "replyToMode"
@@ -58,29 +57,11 @@ export type IMessageAccountConfig = Omit<
     remoteAttachmentRoots?: string[];
     /** Timeout for probe/RPC operations in milliseconds (default: 10000). */
     probeTimeoutMs?: number;
-    /**
-     * Merge consecutive same-sender DM rows from `chat.db` into a single agent
-     * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
-     * rows several seconds apart) lands as one merged message. DM-only — group chats
-     * keep instant per-message dispatch. Widens the default inbound debounce
-     * window to 7000 ms when enabled without an explicit
-     * `messages.inbound.byChannel.imessage` or global
-     * `messages.inbound.debounceMs`. Default: `false`.
-     */
     groups?: Record<
       string,
-      {
-        requireMention?: boolean;
-        tools?: GroupToolPolicyConfig;
-        toolsBySender?: GroupToolPolicyBySenderConfig;
-        /**
-         * Per-group system prompt. Injected into the agent's system prompt on
-         * every turn that handles a message in that group. Matches the shape
-         * already supported by Discord, Telegram, IRC, Slack, GoogleChat, and
-         * other group-capable channels. The wildcard `groups["*"]` entry is
-         * also honored.
-         */
-        systemPrompt?: string;
+      Omit<CommonChannelGroupConfig, "skills" | "enabled" | "allowFrom"> & {
+        /** Override mention gating in native reply threads whose root this account sent. */
+        requireMentionInBotThreads?: boolean;
       }
     >;
     /**
@@ -120,7 +101,6 @@ export type IMessageAccountConfig = Omit<
 
 /** Top-level iMessage config, with optional account map layered over default account fields. */
 export type IMessageConfig = {
-  /** Optional per-account iMessage configuration (multi-account). */
   accounts?: Record<string, IMessageAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;

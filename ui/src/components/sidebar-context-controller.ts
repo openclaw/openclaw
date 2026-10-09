@@ -3,7 +3,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 
-/** Preserve each lower-sidebar scroll position without moving the global navigation. */
+/** Preserve the shared sidebar's scroll position for each destination. */
 export class SidebarContextController implements ReactiveController {
   private readonly positions = new Map<string, number>();
   private presentedKey = "sessions";
@@ -43,9 +43,7 @@ export class SidebarContextController implements ReactiveController {
     const scroller = this.scroller;
     if (scroller) {
       scroller.scrollTop = this.positions.get(this.key) ?? 0;
-      if (!this.host.contextualSidebar) {
-        this.host.sessionData.updateSessionsScrollState(scroller);
-      }
+      this.host.sessionData.updateSessionsScrollState(scroller);
     }
   }
 
@@ -55,9 +53,7 @@ export class SidebarContextController implements ReactiveController {
       return;
     }
     this.positions.set(this.presentedKey, scroller.scrollTop);
-    if (!this.host.contextualSidebar) {
-      this.host.sessionData.updateSessionsScrollState(scroller);
-    }
+    this.host.sessionData.updateSessionsScrollState(scroller);
   }
 
   private get key(): string {

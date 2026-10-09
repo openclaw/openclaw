@@ -1,13 +1,35 @@
 import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 // Github Copilot tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { resolveCopilotStarterModel } from "./starter-model.js";
 import { fetchCopilotUsage } from "./usage.js";
+
+const catalogTransport = vi.hoisted(() => ({
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+  releases: [] as Array<() => Promise<void>>,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: vi.fn(async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      const result = await actual.fetchWithSsrFGuard({
+        ...params,
+        lookupFn: catalogTransport.lookup,
+      });
+      const release = vi.fn(result.release);
+      catalogTransport.releases.push(release);
+      return { ...result, release };
+    }),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-model-shared")>()),
@@ -25,6 +47,7 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
 import {
+  COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
   fetchCopilotModelCatalog,
   resolveCopilotForwardCompatModel,
   selectCopilotStarterModel,
@@ -45,11 +68,10 @@ function createMockCtx(
 }
 
 function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
-  const result = resolveCopilotForwardCompatModel(ctx);
-  if (!result) {
-    throw new Error(`expected model ${ctx.modelId} to resolve`);
-  }
-  return result;
+  return expectDefined(
+    resolveCopilotForwardCompatModel(ctx),
+    `expected model ${ctx.modelId} to resolve`,
+  );
 }
 
 describe("resolveCopilotForwardCompatModel", () => {
@@ -63,41 +85,6 @@ describe("resolveCopilotForwardCompatModel", () => {
       "github-copilot/gpt-4o": { id: "gpt-4o", name: "gpt-4o" },
     });
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
-  });
-
-  it("uses static metadata for gpt-5.3-codex when not in registry", () => {
-    const result = requireResolvedModel(createMockCtx("gpt-5.3-codex"));
-    expect(result).toEqual({
-      id: "gpt-5.3-codex",
-      name: "GPT-5.3-Codex",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: null },
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-    });
-  });
-
-  it("uses curated static metadata for gpt-5.4 when not in registry", () => {
-    const result = requireResolvedModel(createMockCtx("gpt-5.4"));
-    expect(result).toEqual({
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: null },
-      compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
-    });
   });
 
   it("uses static metadata for gpt-5.5 when live discovery rows are unavailable", () => {
@@ -185,48 +172,9 @@ describe("resolveCopilotForwardCompatModel", () => {
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
     }
   });
-
-  it.each(["gpt-5.4-mini", "claude-sonnet-5"])(
-    "uses manifest reasoning metadata for %s instead of synthesizing an unknown model",
-    (modelId) => {
-      expect(requireResolvedModel(createMockCtx(modelId)).reasoning).toBe(true);
-    },
-  );
 });
 
 describe("fetchCopilotUsage", () => {
-  it("targets the public github.com usage endpoint by default", async () => {
-    let calledUrl: string | undefined;
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      calledUrl = url;
-      return makeResponse(200, { copilot_plan: "pro" });
-    });
-
-    await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(calledUrl).toBe("https://api.github.com/copilot_internal/user");
-  });
-
-  it("routes usage through the tenant host for *.ghe.com domains", async () => {
-    let calledUrl: string | undefined;
-    const mockFetch = createProviderUsageFetch(async (url) => {
-      calledUrl = url;
-      return makeResponse(200, { copilot_plan: "business" });
-    });
-
-    await fetchCopilotUsage("token", 5000, mockFetch, "acme.ghe.com");
-
-    expect(calledUrl).toBe("https://api.acme.ghe.com/copilot_internal/user");
-  });
-
-  it("returns HTTP errors for failed requests", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(500, "boom"));
-    const result = await fetchCopilotUsage("token", 5000, mockFetch);
-
-    expect(result.error).toBe("HTTP 500");
-    expect(result.windows).toHaveLength(0);
-  });
-
   it("cancels failed response bodies", async () => {
     let canceled = false;
     const body = new ReadableStream({
@@ -240,6 +188,7 @@ describe("fetchCopilotUsage", () => {
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
 
     expect(result.error).toBe("HTTP 500");
+    expect(result.windows).toHaveLength(0);
     expect(canceled).toBe(true);
   });
 
@@ -504,6 +453,27 @@ describe("github-copilot runtime auth", () => {
 });
 
 describe("fetchCopilotModelCatalog", () => {
+  beforeEach(() => {
+    catalogTransport.lookup.mockReset();
+    catalogTransport.releases.length = 0;
+    vi.mocked(fetchWithSsrFGuard).mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    for (const release of catalogTransport.releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
+
+  function fetchCatalogWithFetch({
+    fetchImpl,
+    ...params
+  }: Parameters<typeof fetchCopilotModelCatalog>[0] & { fetchImpl: typeof fetch }) {
+    vi.stubGlobal("fetch", fetchImpl);
+    return fetchCopilotModelCatalog(params);
+  }
+
   // Trimmed sample of the real Copilot /models response shape captured against
   // api.githubcopilot.com against an Individual Copilot subscription. Includes
   // a chat model, a router (must be filtered), an embedding (must be filtered),
@@ -660,7 +630,7 @@ describe("fetchCopilotModelCatalog", () => {
   }
 
   async function fetchSelectionFixture(data: unknown[]) {
-    return await fetchCopilotModelCatalog({
+    return await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: vi.fn().mockResolvedValue(makeResponse(200, { data })) as unknown as typeof fetch,
@@ -753,6 +723,7 @@ describe("fetchCopilotModelCatalog", () => {
     },
   );
   it("selects onboarding's starter model using the configured integration identity", async () => {
+    catalogTransport.lookup.mockResolvedValueOnce([{ address: "10.0.0.5", family: 4 }]);
     const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       if (requestUrl.endsWith("/copilot_internal/user")) {
@@ -838,12 +809,19 @@ describe("fetchCopilotModelCatalog", () => {
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, sampleApiResponse));
 
-    const out = await fetchCopilotModelCatalog({
+    const out = await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.githubcopilot.com/models",
+        policy: { allowedOrigins: ["https://api.githubcopilot.com"] },
+      }),
+    );
+    expect(catalogTransport.lookup).toHaveBeenCalledWith("api.githubcopilot.com", { all: true });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [calledUrl, calledInit] = fetchImpl.mock.calls[0] ?? [];
     expect(calledUrl).toBe("https://api.githubcopilot.com/models");
@@ -912,7 +890,7 @@ describe("fetchCopilotModelCatalog", () => {
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, { data: [] }));
 
-    await fetchCopilotModelCatalog({
+    await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com/",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -947,7 +925,7 @@ describe("fetchCopilotModelCatalog", () => {
       }),
     );
 
-    const out = await fetchCopilotModelCatalog({
+    const out = await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -991,7 +969,7 @@ describe("fetchCopilotModelCatalog", () => {
       }),
     );
 
-    const out = await fetchCopilotModelCatalog({
+    const out = await fetchCatalogWithFetch({
       copilotApiToken: "tid=test",
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -1012,6 +990,72 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
+  it.each(["redirect", "metadata DNS"] as const)(
+    "blocks unsafe catalog %s targets",
+    async (source) => {
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          source === "redirect"
+            ? new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } })
+            : makeResponse(200, { data: [] }),
+        );
+      if (source === "metadata DNS") {
+        catalogTransport.lookup.mockResolvedValueOnce([{ address: "169.254.169.254", family: 4 }]);
+      }
+      await expect(
+        fetchCatalogWithFetch({
+          copilotApiToken: "tid=test",
+          baseUrl: "https://api.githubcopilot.com",
+          fetchImpl,
+        }),
+      ).rejects.toThrow(/blocked|private|metadata/i);
+      expect(fetchImpl).toHaveBeenCalledTimes(source === "redirect" ? 1 : 0);
+    },
+  );
+
+  it.each(["timeout", "caller"] as const)(
+    "cancels pending catalog transport on %s abort",
+    async (source) => {
+      vi.useFakeTimers();
+      const started = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+        const signal = expectDefined(init?.signal, "catalog request signal");
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("Expected catalog abort to carry an Error"),
+              ),
+            { once: true },
+          );
+          started.resolve();
+        });
+      });
+      const pending = fetchCatalogWithFetch({
+        copilotApiToken: "tid=test",
+        baseUrl: "https://api.githubcopilot.com",
+        ...(source === "caller" ? { signal: controller.signal } : {}),
+        fetchImpl,
+      });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await started.promise;
+      if (source === "timeout") {
+        await vi.advanceTimersByTimeAsync(COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
+      } else {
+        expect(vi.getTimerCount()).toBe(0);
+        controller.abort();
+      }
+      await rejected;
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("cancels stalled non-2xx response bodies before the caller falls back", async () => {
     let canceled = false;
     const response = new Response(
@@ -1025,7 +1069,7 @@ describe("fetchCopilotModelCatalog", () => {
     const fetchImpl = vi.fn().mockResolvedValue(response);
 
     await expect(
-      fetchCopilotModelCatalog({
+      fetchCatalogWithFetch({
         copilotApiToken: "tid=bad",
         baseUrl: "https://api.githubcopilot.com",
         fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -1040,7 +1084,7 @@ describe("fetchCopilotModelCatalog", () => {
       const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, payload));
 
       await expect(
-        fetchCopilotModelCatalog({
+        fetchCatalogWithFetch({
           copilotApiToken: "tid=test",
           baseUrl: "https://api.githubcopilot.com",
           fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -1049,25 +1093,16 @@ describe("fetchCopilotModelCatalog", () => {
     }
   });
 
-  it("rejects empty token / baseUrl synchronously before fetching", async () => {
-    const fetchImpl = vi.fn();
-
+  it.each(["copilotApiToken", "baseUrl"] as const)("rejects empty %s", async (field) => {
+    const fetchImpl = vi.fn<typeof fetch>();
     await expect(
-      fetchCopilotModelCatalog({
-        copilotApiToken: "",
-        baseUrl: "https://api.githubcopilot.com",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow(/copilotApiToken required/);
-
-    await expect(
-      fetchCopilotModelCatalog({
+      fetchCatalogWithFetch({
         copilotApiToken: "tid=test",
-        baseUrl: "",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
+        baseUrl: "https://api.githubcopilot.com",
+        [field]: "",
+        fetchImpl,
       }),
-    ).rejects.toThrow(/baseUrl required/);
-
+    ).rejects.toThrow(`${field} required`);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

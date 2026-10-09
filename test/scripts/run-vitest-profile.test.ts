@@ -13,7 +13,7 @@ import {
 } from "../../scripts/run-vitest-profile.mts";
 import { decodeUtf8Tail } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForFixtureFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -29,7 +29,14 @@ describe("scripts/run-vitest-profile", () => {
     root: string,
     signal: AbortSignal,
     env?: NodeJS.ProcessEnv,
-    diagnostics?: { mode: string; flags: string[]; ordering: string; profiles: string },
+    diagnostics?: {
+      mode: string;
+      flags: string[];
+      ordering: string;
+      profiles: string;
+      stages: string;
+    },
+    observeOutput?: (stdout: string) => void,
   ) {
     let inspectChild: (() => unknown) | undefined;
     let reported = false;
@@ -51,6 +58,18 @@ describe("scripts/run-vitest-profile", () => {
         } catch {
           hashOrder = "unavailable";
         }
+        let profileStages: string;
+        try {
+          const fd = fs.openSync(diagnostics.stages, "r");
+          try {
+            const bytes = Buffer.alloc(4096);
+            profileStages = bytes.subarray(0, fs.readSync(fd, bytes)).toString("utf8");
+          } finally {
+            fs.closeSync(fd);
+          }
+        } catch {
+          profileStages = "unavailable";
+        }
         let cpuProfiles: number | "unavailable";
         try {
           cpuProfiles = fs
@@ -68,6 +87,7 @@ describe("scripts/run-vitest-profile", () => {
               aborted: signal.aborted,
               child: inspectChild?.() ?? "not observed",
               hashOrder,
+              profileStages,
               cpuProfiles,
             },
             (_key, value: unknown) =>
@@ -95,6 +115,9 @@ describe("scripts/run-vitest-profile", () => {
             maxBuffer: 1024 * 1024,
             requireProcessTreeExit: process.platform !== "win32",
             onReady(child, readOutput) {
+              if (observeOutput) {
+                child.stdout?.on("data", () => observeOutput(readOutput().stdout));
+              }
               inspectChild = () => {
                 const output = readOutput();
                 return {
@@ -362,7 +385,7 @@ it("retains the selected execution context", async () => {
   it("cancels an admitted profiling workload before releasing its inputs", ({ signal }) =>
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-cancellation-");
-      const ready = path.join(root, "ready");
+      const ready = createDeferred();
       const release = path.join(root, "release");
       const config = path.join(root, "vitest.config.mjs");
       fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
@@ -381,7 +404,7 @@ it("retains the selected execution context", async () => {
 import { setTimeout as tick } from "node:timers/promises";
 import { it } from "vitest";
 it("holds admitted work until the caller releases it", async () => {
-  fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+  console.log("profile-workload-ready");
   while (!fs.existsSync(${JSON.stringify(release)})) await tick(5);
 });`,
       );
@@ -400,9 +423,23 @@ it("holds admitted work until the caller releases it", async () => {
         ],
         root,
         AbortSignal.any([signal, controller.signal]),
+        undefined,
+        undefined,
+        (stdout) => {
+          if (stdout.includes("profile-workload-ready")) {
+            ready.resolve();
+          }
+        },
       );
       try {
-        await waitForFixtureFile(ready, completion, "ready");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            completion,
+            `Child exited before writing ${path.join(root, "ready")}`,
+          ),
+          signal,
+        );
         const aborted = expect(completion).rejects.toMatchObject({ cause: { code: "ABORT_ERR" } });
         controller.abort();
         fs.writeFileSync(release, "released");
@@ -423,18 +460,82 @@ it("holds admitted work until the caller releases it", async () => {
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-help-");
       const ordering = path.join(root, "hash-order.jsonl");
+      const drained = path.join(root, "event-loop-drained");
+      const stages = path.join(root, "profile-stages.jsonl");
+      const profiles = path.join(root, "profiles");
       const preload = path.join(root, "observe-hash-order.mjs");
       fs.writeFileSync(
         preload,
-        `import crypto from "node:crypto";
+        `import childProcess from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import inspector from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
+const childEntry = ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile-child.mts"))};
+const role = process.argv[1] === childEntry ? "inner"
+  : process.argv[1] === ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile.mts"))} ? "outer" : undefined;
+const recordedStages = new Set();
+function recordStage(stage, code = null, signal = null) {
+  if (!role || recordedStages.has(stage) || recordedStages.size >= 16) return;
+  recordedStages.add(stage);
+  try {
+    fs.appendFileSync(${JSON.stringify(stages)}, JSON.stringify({
+      role, stage,
+      code: Number.isSafeInteger(code) ? code : null,
+      signal: ["SIGTERM", "SIGKILL", "SIGINT", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGHUP", "SIGQUIT", "SIGPIPE", "SIGTRAP", "SIGUSR1", "SIGUSR2", "SIGXCPU", "SIGXFSZ", "SIGSYS"].includes(signal) ? signal : null,
+    }) + "\\n");
+  } catch {
+    // Observation must not change finalization, exit, or the original error.
+  }
+}
+recordStage("preload");
+if (role === "inner") {
+  process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "drained"));
+}
+if (role === "inner") process.once("exit", code => recordStage("exit-event", code));
+const spawn = childProcess.spawn;
+childProcess.spawn = function(...args) {
+  const child = Reflect.apply(spawn, this, args);
+  if (role === "outer" && args[0] === process.execPath && args[1]?.[0] === childEntry) {
+    child.once("exit", (code, signal) => recordStage("child-exit", code, signal));
+    child.once("close", (code, signal) => recordStage("child-close", code, signal));
+  }
+  return child;
+};
+const writeFile = fsPromises.writeFile;
+fsPromises.writeFile = function(...args) {
+  const target = args[0];
+  const observe = role === "inner" && typeof target === "string"
+    && path.dirname(target) === ${JSON.stringify(profiles)}
+    && path.basename(target).startsWith("CPU.") && target.endsWith(".cpuprofile");
+  if (observe) recordStage("write-requested");
+  const result = Reflect.apply(writeFile, this, args);
+  if (observe) result.then(
+    () => recordStage("write-resolved"),
+    () => recordStage("write-rejected"),
+  );
+  return result;
+};
 let profiling = false;
 inspector.Session = class extends inspector.Session {
   async post(method, ...params) {
-    const result = await super.post(method, ...params);
-    if (method === "Profiler.start") profiling = true;
+    if (method === "Profiler.stop") recordStage("stop-requested");
+    try {
+      const result = await super.post(method, ...params);
+      if (method === "Profiler.start") profiling = true;
+      if (method === "Profiler.stop") recordStage("stop-resolved");
+      return result;
+    } catch (error) {
+      if (method === "Profiler.stop") recordStage("stop-rejected");
+      throw error;
+    }
+  }
+  disconnect(...args) {
+    recordStage("disconnect-entered");
+    const result = super.disconnect(...args);
+    recordStage("disconnect-returned");
     return result;
   }
 };
@@ -465,7 +566,7 @@ syncBuiltinESMExports();`,
         root,
         signal,
         { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
-        { mode, flags, ordering, profiles: path.join(root, "profiles") },
+        { mode, flags, ordering, profiles, stages },
       );
       expect(
         fs
@@ -477,6 +578,8 @@ syncBuiltinESMExports();`,
       ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
       expect(result.code, result.output).toBe(0);
       expect(result.output).toContain("Usage:");
+      expect(fs.existsSync(drained), result.output).toBe(true);
+      expect(fs.readdirSync(profiles)).toHaveLength(mode === "main" ? 1 : 0);
     }),
   );
 

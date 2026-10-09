@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 
 export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -22,7 +22,7 @@ export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
   });
 }
 
-export async function openChatSidePanelType(page: Page, label: string): Promise<void> {
+export async function openChatSidePanelType(page: Page | Locator, label: string): Promise<void> {
   const panel = page.locator(".sidebar-region__right-runtime .side-panel");
   if (
     !(await panel.locator('[data-region-header="side"]').isVisible()) &&
@@ -55,7 +55,7 @@ export async function focusChatSidePanel(page: Page): Promise<void> {
 
 export async function restoreChatAsMain(page: Page): Promise<void> {
   const side = page.locator('[data-region-header="side"]');
-  await side.getByRole("tab", { name: "Chat", exact: true }).click();
+  await side.locator('wa-tab[panel="conversation"]').click();
   await page.locator(".chat-panel-swap").click();
   await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
 }

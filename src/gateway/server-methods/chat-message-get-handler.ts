@@ -1,255 +1,178 @@
-// Single-message lookup applies the same visibility and display projection as chat.history.
-import {
-  ErrorCodes,
-  errorShape,
-  validateChatMessageGetParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { validateChatMessageGetParams } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
-  dropPreSessionStartAnnouncePairs,
-  isPendingAssistantError,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { readChatHistoryMessageId } from "../session-history-tail.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { hiddenSessionNotFound } from "../session-sharing-policy.js";
-import { createSessionListEntryFilter } from "../session-sharing.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
-import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { readChatHistoryPage } from "./chat-history-pages.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { resolveSessionModelRef } from "../session-utils.js";
+import { readChatHistoryMessageById } from "./chat-history-pages.js";
+import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-async function isChatMessageIdVisibleAfterHistoryFilters(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionEntry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
-  sessionKey: string;
-  agentId: string;
-  message: unknown;
-  messageId: string;
-  sessionStartedAt?: number;
-  allowResetArchiveFallback?: boolean;
-}): Promise<boolean> {
-  if (isPendingAssistantError(params.message)) {
-    // A recovered attempt remains stored but no longer belongs to visible history.
-    // Reuse the anchored history owner; ordinary message lookups stay on the exact-ID path.
-    const page = await readChatHistoryPage({
-      entry: params.sessionEntry,
-      provider: undefined,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-      sessionAgentId: params.agentId,
-      canonicalKey: params.sessionKey,
-      max: 1,
-      maxHistoryBytes: MAX_PAYLOAD_BYTES,
-      effectiveMaxChars: MAX_PAYLOAD_BYTES,
-      offset: undefined,
-      messageId: params.messageId,
-      ignoreCliSessionImports: true,
-    });
-    return page.messages.some((message) => readChatHistoryMessageId(message) === params.messageId);
-  }
-  if (params.sessionStartedAt === undefined) {
-    return true;
-  }
-  // The anchored reader includes the immediately preceding row, which is the
-  // complete context needed to hide a stale announce and its paired reply.
-  const { messages } = await readSessionMessagesAroundIdWithStatsAsync(
-    {
-      agentId: params.agentId,
-      sessionEntry: params.sessionEntry,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    {
-      maxMessages: 1,
-      messageId: params.messageId,
-      ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
-    },
-  );
-  return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
-    (message) => readChatHistoryMessageId(message) === params.messageId,
-  );
-}
-
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context, client }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    signal,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
-    const { sessionKey, messageId, maxChars } = params;
-    const agentIdOverride = normalizeOptionalText(params.agentId);
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
+    const { sessionKey, messageId, maxChars, sessionId: requestedSessionId } = params;
+    const agentIdOverride = normalizeOptionalString(params.agentId);
+    const selection = await prepareChatHistorySessionRead({
+      context,
+      client,
+      respond,
+      sessionMutationAuthorization,
+      signal,
+      method: "chat.message.get",
       sessionKey,
       agentIdOverride,
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const session = loadGatewaySessionEntryReadOnly(sessionKey, {
-      agentId: requestedAgentId,
+      requestedSessionId,
     });
-    const { cfg, storePath, entry, canonicalKey } = session;
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: sessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+    if (!selection) {
       return;
     }
-    const sessionId = entry?.sessionId;
-    if (!sessionId) {
-      respond(true, { ok: false, unavailableReason: "not_found" });
-      return;
-    }
-    const canReadSession = (current: typeof session): boolean => {
-      if (
-        !current.entry ||
-        current.agentId !== session.agentId ||
-        current.canonicalKey !== canonicalKey ||
-        current.storePath !== storePath ||
-        current.entry.sessionId !== sessionId ||
-        current.entry.lifecycleRevision !== entry.lifecycleRevision
-      ) {
+    try {
+      const { selectedSession, entry, queries, readCurrentSharing, rowProjection } = selection;
+      const { cfg, agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
+      const sessionId = requestedSessionId ?? entry?.sessionId;
+      const historyEntry =
+        requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
+      const withCurrentSession = <T>(consume: () => T) =>
+        withReadySessionRows(rowProjection, queries, (read) => {
+          signal?.throwIfAborted();
+          return readCurrentSharing(read) ? consume() : undefined;
+        });
+      const respondNotFound = () => respond(true, { ok: false, unavailableReason: "not_found" });
+      const respondMessage = (message: unknown, applyModelPolicy = false) => {
+        if (!message) {
+          respond(true, { ok: false, unavailableReason: "not_visible" });
+          return;
+        }
+        // maxChars bounds individual fields; structured content must also fit the transport.
         respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "session changed while reading history; reload the conversation",
-            { retryable: true },
-          ),
+          true,
+          jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
+            ? { ok: false, unavailableReason: "oversized" }
+            : applyModelPolicy
+              ? projectOperatorModelRead(
+                  { context, client, agentId: sessionAgentId },
+                  { ok: true, message },
+                )
+              : { ok: true, message },
         );
-        return false;
-      }
-      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
-      if (entryFilter?.(current.canonicalKey, current.entry) === false) {
-        respond(false, undefined, hiddenSessionNotFound(canonicalKey));
-        return false;
-      }
-      return true;
-    };
-    if (!canReadSession(session)) {
-      return;
-    }
-
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
-    const effectiveMaxChars =
-      typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
-    if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
-      // Pending IDs have their own owner. A transcript miss must never widen
-      // into pending custody or an archived physical session.
-      const pending = readSessionPendingInput(
-        {
-          agentId: sessionAgentId,
-          sessionKey: canonicalKey,
-          sessionId,
-          storePath,
-        },
-        messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length),
-      );
-      if (!pending) {
-        respond(true, { ok: false, unavailableReason: "not_found" });
+      };
+      if (!sessionId) {
+        await withCurrentSession(respondNotFound);
         return;
       }
-      const message = projectPendingInputMessage(pending, effectiveMaxChars);
-      if (!message) {
-        respond(true, { ok: false, unavailableReason: "not_visible" });
+      const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
+      if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
+        // Pending IDs have their own owner. A transcript miss must never widen
+        // into pending custody or an archived physical session.
+        if (sessionId !== entry?.sessionId) {
+          await withCurrentSession(respondNotFound);
+          return;
+        }
+        const pending = await readSessionPendingInput(
+          {
+            agentId: sessionAgentId,
+            sessionKey: canonicalKey,
+            sessionId,
+            storePath,
+          },
+          messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length),
+        );
+        if (!(await withCurrentSession(() => true))) {
+          return;
+        }
+        if (!pending) {
+          await withCurrentSession(respondNotFound);
+          return;
+        }
+        const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+          [pending.message],
+          context.cronStorePath,
+        );
+        await withCurrentSession(() => {
+          const message = projectPendingInputMessage(
+            pending,
+            effectiveMaxChars,
+            undefined,
+            resolveCronJobName,
+          );
+          respondMessage(message);
+        });
         return;
       }
-      respond(
-        true,
-        jsonUtf8Bytes(message) > MAX_PAYLOAD_BYTES - 1024
-          ? { ok: false, unavailableReason: "oversized" }
-          : { ok: true, message },
-      );
-      return;
-    }
-    const resolved = await readSessionMessageByIdAsync(
-      {
-        agentId: sessionAgentId,
-        sessionEntry: entry,
+      const resolved = await readChatHistoryMessageById({
+        entry: historyEntry,
+        provider: getCliSessionBinding(historyEntry, "claude-cli")?.sessionId
+          ? resolveSessionModelRef(cfg, historyEntry, sessionAgentId, {
+              allowPluginNormalization: false,
+            }).provider
+          : undefined,
+        sessionAgentId,
         sessionId,
-        sessionKey,
+        canonicalKey,
         storePath,
-      },
-      messageId,
-      { allowResetArchiveFallback: true },
-    );
-    const visible =
-      resolved.found &&
-      (await isChatMessageIdVisibleAfterHistoryFilters({
-        sessionId,
-        storePath,
-        sessionEntry: entry,
-        sessionKey,
-        agentId: sessionAgentId,
-        message: resolved.message,
         messageId,
-        sessionStartedAt:
-          typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-        allowResetArchiveFallback: true,
-      }));
-    // Async transcript/archive reads cannot publish under a stale sharing or
-    // physical-session snapshot. Pending input reads above are synchronous.
-    if (
-      !canReadSession(
-        loadGatewaySessionEntryReadOnly(sessionKey, {
-          agentId: requestedAgentId,
-          clone: false,
-          projection: "list",
-        }),
-      )
-    ) {
-      return;
+        max: 1,
+        maxHistoryBytes: MAX_PAYLOAD_BYTES,
+        effectiveMaxChars,
+        offset: undefined,
+      });
+      // Async transcript/archive reads cannot publish under a stale sharing or
+      // physical-session snapshot.
+      if (!(await withCurrentSession(() => true))) {
+        return;
+      }
+      if (!resolved.found) {
+        await withCurrentSession(respondNotFound);
+        return;
+      }
+      if (resolved.oversized) {
+        await withCurrentSession(() =>
+          respond(true, { ok: false, unavailableReason: "oversized" }),
+        );
+        return;
+      }
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        [resolved.message],
+        context.cronStorePath,
+      );
+      await withCurrentSession(() => {
+        const projectedMessage = resolved.message
+          ? projectChatDisplayMessage(resolved.message, {
+              includeCommentaryFallbacks: true,
+              maxChars: effectiveMaxChars,
+              resolveCurrentUserProfileDisplay,
+              resolveCronJobName,
+            })
+          : undefined;
+        const projected = projectedMessage
+          ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
+          : undefined;
+        respondMessage(projected, true);
+      });
+    } finally {
+      selection.release();
     }
-    if (!visible) {
-      respond(true, { ok: false, unavailableReason: "not_found" });
-      return;
-    }
-    if (resolved.oversized) {
-      respond(true, { ok: false, unavailableReason: "oversized" });
-      return;
-    }
-
-    const projectedMessage = resolved.message
-      ? projectChatDisplayMessage(resolved.message, {
-          maxChars: effectiveMaxChars,
-          resolveCurrentUserProfileDisplay,
-        })
-      : undefined;
-    const projected = projectedMessage
-      ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
-      : undefined;
-    if (!projected) {
-      respond(true, { ok: false, unavailableReason: "not_visible" });
-      return;
-    }
-
-    respond(true, {
-      ok: true,
-      message: projected,
-    });
   },
 };

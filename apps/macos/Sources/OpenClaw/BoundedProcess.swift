@@ -36,7 +36,7 @@ enum BoundedProcess {
         let configuration = Configuration(
             executable: .path(.init(path)),
             arguments: Arguments(arguments),
-            environment: environment.map(self.environment(from:)) ?? .inherit,
+            environment: environment.map(ManagedProcess.environment(from:)) ?? .inherit,
             workingDirectory: workingDirectory.map { .init($0) },
             platformOptions: platformOptions)
         let executionResult = try await Subprocess.run(
@@ -52,21 +52,14 @@ enum BoundedProcess {
                     let deadline = await exitSignal.wait(timeout: timeout)
                     try Task.checkCancellation()
                     // Terminate before joining the observer: its callback may be awaiting a busy UI actor.
-                    switch deadline {
-                    case .exited:
-                        // The body still owns the unreaped leader, so its process-group ID cannot be reused.
-                        try? execution.send(signal: .kill, toProcessGroup: true)
-                        return false
-                    case .timedOut:
-                        if exitSignal.hasExited() {
-                            try? execution.send(signal: .kill, toProcessGroup: true)
-                            return false
-                        }
+                    let timedOut = deadline == .timedOut && !exitSignal.hasExited()
+                    if timedOut {
                         try? execution.send(signal: .terminate, toProcessGroup: true)
                         try? await Task.sleep(for: .milliseconds(100))
-                        try? execution.send(signal: .kill, toProcessGroup: true)
-                        return true
                     }
+                    // The body still owns the unreaped leader, so its process-group ID cannot be reused.
+                    try? execution.send(signal: .kill, toProcessGroup: true)
+                    return timedOut
                 }
                 group.addTask {
                     try await whileRunning(exitSignal)
@@ -91,15 +84,5 @@ enum BoundedProcess {
             Int32(code)
         }
         return BoundedProcessResult(output: data, terminationStatus: terminationStatus)
-    }
-
-    private static func environment(from values: [String: String]) -> Environment {
-        var converted: [Environment.Key: String] = [:]
-        converted.reserveCapacity(values.count)
-        for (key, value) in values {
-            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
-            converted[environmentKey] = value
-        }
-        return .custom(converted)
     }
 }

@@ -41,7 +41,8 @@ Supported `appServer` fields:
 | `approvalPolicy`                 | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `sandbox`                        | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.                                                                                                                                                                                                                                    |
 | `approvalsReviewer`              | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                                                                                                                                                                                                                                             |
-| `serviceTier`                    | unset                                                  | Native Codex app-server preference only. Any non-empty string passes through for forward compatibility; documented values are `"priority"` and `"flex"`. `null` clears the override, and legacy `"fast"` normalizes to `"priority"`. This is neither the shared Fast-mode setting nor a direct embedded OpenAI setting. A shared Fast run control supersedes it with `priority` or `null`, or decides per model call in auto mode.                                                                                                             |
+| `serviceTier`                    | unset                                                  | Native app-server preference when no shared Fast-mode control is supplied. Non-empty strings pass through; documented values are `"priority"` and `"flex"`. Legacy `"fast"` normalizes to `"priority"`, and `null` clears the override. Native `"ultrafast"` starts from `priority` and requires an explicit shared Ultrafast selection. Shared Fast sends `priority`, off sends `null`, and Auto decides per call. This does not configure direct embedded OpenAI requests.                                                                   |
+| `enableUltrafast`                | `true`                                                 | Allow `ultrafast` only for an explicit shared `"ultrafast"` selection and an advertised native model. Unset or `true` permits that selection; `false` hides Ultrafast in the Codex picker, sends ordinary Fast (`priority`) for an explicit selection, and skips the Ultrafast catalog check. Fast, Auto, and unspecified selections never automatically upgrade. Unsupported models and unavailable catalogs keep the baseline tier.                                                                                                          |
 | `cyberFailover`                  | automatic Daybreak Blue escalation                     | Controls the automatic retry after an OpenAI cyber-policy refusal. `mode` (`"auto"` default, or `"off"`) enables it, `model` (default `"gpt-daybreak-blue-latest"`) is the escalation target, and `cooloffMs` (default `600000`) bounds the session window that follows an attempt. Escalation retries a refused turn once, never changes the stored model selection, and treats an unauthorized target as unavailable rather than retrying it. See [Runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation). |
 | `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                                                                                                                            |
 | `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                                                                                                                                           |
@@ -61,6 +62,7 @@ is required.
       codex: {
         config: {
           appServer: {
+            approvalPolicy: "never",
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
@@ -83,9 +85,30 @@ is required.
 }
 ```
 
+With `enabled: true`, `domains` uses Codex's native host matching. Hosts absent
+from the effective native allowlist are denied unless the configured approval
+policy permits an explicit exception. Set `approvalPolicy: "never"`, as above,
+to prevent approval-based exceptions. Native system requirements can contribute
+allowed domains or select a managed allowlist, so this map does not replace the
+system's network policy. Explicit denies in the effective policy take precedence
+over overlapping allows and cannot be approved.
+
+Use `*.example.com` for subdomains or `**.example.com` for both the apex domain
+and subdomains. These restrictions apply to commands run through the Codex
+sandbox. They do not restrict Gateway traffic, model-provider requests, or
+unrelated MCP processes.
+
+With `networkProxy.enabled: true`, invalid configuration fails with the rejected
+field path, without logging configuration values. After a plugin update, saved
+configuration with blank optional `networkProxy.profileName` or
+`remoteWorkspaceRoot` values needs an explicit `openclaw doctor --fix` before
+Codex can run. Doctor removes those blank values while keeping the domain policy.
+Fix other invalid fields manually before retrying. Valid configurations need no
+repair.
+
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile: Codex managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
-Domain entries use `allow` or `deny`; Unix socket entries use Codex's
-`allow` or `none` values.
+Domain entries use `allow` or `deny`. Unix socket entries use `allow` or `none`;
+OpenClaw translates `none` to Codex's native `deny` permission.

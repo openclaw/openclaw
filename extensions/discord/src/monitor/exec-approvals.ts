@@ -1,4 +1,3 @@
-// Discord plugin module implements exec approvals behavior.
 import { ButtonStyle } from "discord-api-types/v10";
 import {
   resolveApprovalOverGateway,
@@ -29,6 +28,7 @@ import {
   type ComponentData,
   type MessagePayloadObject,
 } from "../internal/discord.js";
+import { replySilently } from "./agent-components-reply.js";
 
 type ExecApprovalButtonContext = {
   getApprovers: () => string[];
@@ -110,24 +110,20 @@ class ExecApprovalButton extends Button {
   override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
-      try {
-        await interaction.reply({
-          content: "This approval is no longer valid.",
-          ephemeral: true,
-        });
-      } catch {}
+      await replySilently(interaction, {
+        content: "This approval is no longer valid.",
+        ephemeral: true,
+      });
       return;
     }
 
     const approvers = this.ctx.getApprovers();
     const userId = interaction.userId;
     if (!approvers.some((id) => id === userId)) {
-      try {
-        await interaction.reply({
-          content: "⛔ You are not authorized to approve requests.",
-          ephemeral: true,
-        });
-      } catch {}
+      await replySilently(interaction, {
+        content: "⛔ You are not authorized to approve requests.",
+        ephemeral: true,
+      });
       return;
     }
 

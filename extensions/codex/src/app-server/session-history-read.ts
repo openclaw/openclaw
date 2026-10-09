@@ -5,6 +5,7 @@ import {
   readCodexSessionContext,
   SessionTranscriptReadFenceError,
   type SessionTranscriptContextVersion,
+  type SessionTranscriptContextProjectionSource,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import type {
   SessionTranscriptTargetParams,
@@ -61,6 +62,7 @@ export async function readCodexNativeHistory<T>(
   read: (messages: Iterable<AgentMessage>) => T,
   admission?: TranscriptTurnAdmission,
   onSnapshot?: (version: SessionTranscriptContextVersion | undefined) => void,
+  physicalSource?: SessionTranscriptContextProjectionSource["physicalSource"],
 ): Promise<CodexHistoryReadResult<T>> {
   const consume = (
     messages: Iterable<AgentMessage>,
@@ -80,7 +82,7 @@ export async function readCodexNativeHistory<T>(
       return consume([], undefined);
     }
     if (target.kind === "sqlite") {
-      return readCodexSessionContext(target.target, consume, admission);
+      return readCodexSessionContext(target.target, consume, admission, physicalSource);
     }
     // The legacy file codec is needed only for explicit file imports, never native SQLite reads.
     const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =

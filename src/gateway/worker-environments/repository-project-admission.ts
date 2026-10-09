@@ -11,21 +11,12 @@ import {
   prepareGitHubReadIdentity,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseProjectGitUrl } from "../../projects/project-git-url.js";
+import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
-import {
-  discardResponse,
-  fetchGitHubApi,
-  GITHUB_API_ORIGIN,
-  GitHubGraphQLUnavailableError,
-  readGitHubGraphQLResponse,
-  readGitHubJsonResponse,
-} from "../control-ui-github-api.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
-import {
-  readRepositoryWorkerProjectSnapshot,
-  type RepositoryWorkerProjectSnapshot,
-} from "./repository-project-source.js";
+import { gitHubPublicApi } from "../github-public-api.js";
+import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const GitObject = /^[a-f0-9]{40}$/u;
 // Commit lookup requests one changed file; trees are nonrecursive and inspect
@@ -89,7 +80,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   if (!request || !/^[A-Za-z0-9_-]{1,128}$/u.test(params.namespace)) {
     throw new Error("Repository preparation request is invalid");
   }
-  const url = parseProjectGitUrl(request.url)?.url;
+  const url = parseConfiguredProjectGitUrl(request.url)?.url;
   if (!url || (request.baseCommit !== undefined && !GitObject.test(request.baseCommit))) {
     throw new Error("Repository preparation requires a GitHub URL and a valid pinned commit");
   }
@@ -141,7 +132,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     identity.assertSelected();
   };
   const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
-  const endpoint = `${GITHUB_API_ORIGIN}/repos${repositoryPath}`;
+  const endpoint = `${gitHubPublicApi.GITHUB_API_BASE_URL}/repos${repositoryPath}`;
   const read = async (
     suffix: string,
     readIdentity: typeof identity,
@@ -150,8 +141,8 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     graphql?: { query: string; variables: Record<string, string> },
   ): Promise<unknown> => {
     assertOwner();
-    const response = await fetchGitHubApi(
-      graphql ? `${GITHUB_API_ORIGIN}/graphql` : endpoint + suffix,
+    const response = await gitHubPublicApi.fetchGitHubApi(
+      graphql ? gitHubPublicApi.GITHUB_GRAPHQL_URL : endpoint + suffix,
       fetch,
       readIdentity.token,
       async () => sourceChanged(),
@@ -165,10 +156,15 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       assertOwner();
       value =
         graphql && readIdentity.token
-          ? await readGitHubGraphQLResponse(response, fetch, readIdentity.token, METADATA_MAX_BYTES)
-          : await readGitHubJsonResponse(response, METADATA_MAX_BYTES);
+          ? await gitHubPublicApi.readGitHubGraphQLResponse(
+              response,
+              fetch,
+              readIdentity.token,
+              METADATA_MAX_BYTES,
+            )
+          : await gitHubPublicApi.readGitHubJsonResponse(response, METADATA_MAX_BYTES);
     } finally {
-      await discardResponse(response);
+      await gitHubPublicApi.discardResponse(response);
     }
     await readIdentity.revalidate();
     assertOwner();
@@ -180,7 +176,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       typeof value.node_id !== "string" ||
       !/^[A-Za-z0-9_+/=-]{1,256}$/u.test(value.node_id) ||
       typeof value.clone_url !== "string" ||
-      parseProjectGitUrl(value.clone_url)?.url !== url ||
+      parseConfiguredProjectGitUrl(value.clone_url)?.url !== url ||
       typeof value.private !== "boolean" ||
       (value.private && (readIdentity.selection.source === "anonymous" || !readIdentity.token))
     ) {
@@ -216,7 +212,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     } catch (error) {
       // Native classic tokens can read public REST metadata without the
       // public_repo scope required by GraphQL. Preserve the full REST fence.
-      if (!(error instanceof GitHubGraphQLUnavailableError)) {
+      if (!(error instanceof gitHubPublicApi.GitHubGraphQLUnavailableError)) {
         throw error;
       }
       await readIdentity.revalidate();
@@ -277,6 +273,11 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     sourceChanged();
   }
   const source = { kind: "repository" as const, url, repositoryId, owner };
+  // GitHub Enterprise can report internal repositories as non-private even
+  // though anonymous Git transport is unavailable. Keep credential-free worker
+  // clones limited to public github.com repositories; enterprise source always
+  // uses the temporary authenticated pack path on the Gateway.
+  const requiresGitPack = metadata.private || new URL(url).hostname !== "github.com";
   const project = readRepositoryWorkerProjectSnapshot({
     key: createHash("sha256")
       // Preserve public cache keys, but never reinterpret them as private content.
@@ -396,7 +397,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     setupRecipe,
     assertCurrent,
     revalidate,
-    ...(metadata.private
+    ...(requiresGitPack
       ? {
           prepareGitPack: async (input: { temporaryRoot: string; signal: AbortSignal }) => {
             assertAdmission();

@@ -1,14 +1,6 @@
-export type SessionObserverEvent = {
-  runId: string;
-  seq: number;
-  stream: string;
-  ts: number;
-  data: Record<string, unknown>;
-  lifecycleGeneration?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-};
+import type { AgentEventPayload } from "../infra/agent-events.js";
+
+export type SessionObserverEvent = AgentEventPayload;
 
 export type SessionObserverCompanionSnapshot = {
   agentId: string;
@@ -18,9 +10,18 @@ export type SessionObserverCompanionSnapshot = {
 };
 
 export type SessionObserverService = {
+  /** @deprecated Use handleEventAsync; retained until the next Plugin SDK major. */
   handleEvent: (event: SessionObserverEvent) => void;
+  handleEventAsync: (event: SessionObserverEvent) => Promise<void>;
   setConnectionVisibility: (connId: string, visible: boolean) => void;
   removeConnection: (connId: string) => void;
+  /** @deprecated Use getCompanionSnapshotAsync; retained until the next Plugin SDK major. */
   getCompanionSnapshot: (sessionKey: string, agentId?: string) => SessionObserverCompanionSnapshot;
+  getCompanionSnapshotAsync: (
+    sessionKey: string,
+    agentId?: string,
+  ) => Promise<SessionObserverCompanionSnapshot>;
+  /** @deprecated Use disposeAsync to join accepted work before closing database workers. */
   dispose: () => void;
+  disposeAsync: () => Promise<void>;
 };

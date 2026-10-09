@@ -14,6 +14,12 @@ const binding = {
     .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/iu)
     .nullable(),
 };
+const linuxIdentity = z.strictObject({
+  ...binding,
+  platform: z.literal("linux"),
+  scope: z.enum(["user", "system"]),
+  unitName: text,
+});
 /** Canonical daemon-selected identity; never a command, credential or authority. */
 const RecoveryNativeIdentitySchema = z.discriminatedUnion("platform", [
   z.strictObject({ ...binding, platform: z.literal("win32"), taskName: text }),
@@ -21,19 +27,8 @@ const RecoveryNativeIdentitySchema = z.discriminatedUnion("platform", [
   // Scope and the daemon-observed user-manager UID are identity, not defaults
   // derived from the updater process or enable policy. System scope has no UID.
   z.discriminatedUnion("scope", [
-    z.strictObject({
-      ...binding,
-      platform: z.literal("linux"),
-      scope: z.literal("user"),
-      unitName: text,
-      uid: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    }),
-    z.strictObject({
-      ...binding,
-      platform: z.literal("linux"),
-      scope: z.literal("system"),
-      unitName: text,
-    }),
+    linuxIdentity.extend({ scope: z.literal("user"), uid: revision }),
+    linuxIdentity.extend({ scope: z.literal("system") }),
   ]),
 ]);
 const RecoveryNativeFactsSchema = z
@@ -177,7 +172,6 @@ export function currentUpdateRecoveryNativeFacts(
  * dispatches and unrelated native histories require their ordinary owners. */
 export function isRecoverablePreparationNative(
   manager: z.infer<typeof RecoveryNativeManagerSchema>,
-  restored = false,
 ): boolean {
   const { original, effects } = manager;
   if (effects.length === 0) {
@@ -189,22 +183,18 @@ export function isRecoverablePreparationNative(
     original.enabled === true &&
     original.loaded &&
     !original.stopped &&
-    effects.length <= 2 &&
+    effects.length === 2 &&
     stop?.action === "stop" &&
-    stop.state !== "not-applied" &&
     isDeepStrictEqual(stop.before, original) &&
     isDeepStrictEqual(stop.after, {
       ...original,
       stopped: true,
       loaded: manager.identity.platform !== "darwin",
     }) &&
-    (restore
-      ? stop.state === "observed" &&
-        restore.action === "restore" &&
-        restore.state !== "not-applied" &&
-        isDeepStrictEqual(restore.before, stop.after) &&
-        isDeepStrictEqual(restore.after, original) &&
-        (!restored || restore.state === "observed")
-      : !restored)
+    stop.state === "observed" &&
+    restore?.action === "restore" &&
+    restore.state === "observed" &&
+    isDeepStrictEqual(restore.before, stop.after) &&
+    isDeepStrictEqual(restore.after, original)
   );
 }

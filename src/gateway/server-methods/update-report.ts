@@ -15,7 +15,7 @@ import {
 } from "../../infra/update-failure-report.js";
 import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
-import { refreshLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -55,20 +55,19 @@ function projectReportInput(payload: RestartSentinelPayload): UpdateFailureRepor
       ...(typeof stats.reason === "string" ? { reason: stats.reason } : {}),
       ...(readIdentity(stats.before) ? { before: readIdentity(stats.before) } : {}),
       ...(readIdentity(stats.after) ? { after: readIdentity(stats.after) } : {}),
-      steps: (stats.steps ?? []).map((step) => {
-        const projected: UpdateFailureReportInput["result"]["steps"][number] = {
-          name: step.name,
-          command: "",
-          cwd: "",
-          durationMs: step.durationMs ?? 0,
-          exitCode: step.log?.exitCode ?? null,
-          failureFacts: step.failureFacts,
-        };
-        if (step.advisory) {
-          projected.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
-        }
-        return projected;
-      }),
+      steps: (stats.steps ?? []).map((step) =>
+        Object.assign(
+          {
+            name: step.name,
+            command: "",
+            cwd: "",
+            durationMs: step.durationMs ?? 0,
+            exitCode: step.log?.exitCode ?? null,
+            failureFacts: step.failureFacts,
+          },
+          step.advisory ? { advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } : {},
+        ),
+      ),
       durationMs: stats.durationMs ?? 0,
       ...(recovery ? { recovery } : {}),
     },
@@ -170,10 +169,13 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     });
     return;
   }
-  if (!hasUpdateReportOwnerAuthority(client)) {
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  const systemActor = client?.internal?.operatorRoleActor?.kind === "system";
+  const publicationMode = hasUpdateReportOwnerAuthority(client) ? "host" : "browser";
+  if (publicationMode === "browser" && !profileId?.trim()) {
     respond(false, undefined, {
       code: ErrorCodes.FORBIDDEN,
-      message: "Update failure reports require gateway-owner or system administrator authority.",
+      message: "Update failure reports require an identified administrator.",
     });
     return;
   }
@@ -185,7 +187,9 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     hasCurrentClientAuthority() &&
     (!runtimeIdentity ||
       context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) === true) &&
-    hasUpdateReportOwnerAuthority(client);
+    client?.authenticatedUserProfile?.profileId === profileId &&
+    (client?.internal?.operatorRoleActor?.kind === "system") === systemActor &&
+    (publicationMode === "browser" || hasUpdateReportOwnerAuthority(client));
   if (!hasCurrentReportAuthority()) {
     return;
   }
@@ -219,6 +223,7 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
       };
     } else {
       const submitted = await submitUpdateFailureReport(prepared, params.previewDigest, {
+        publicationMode,
         hasCurrentAuthority: hasCurrentReportAuthority,
         validateCurrentAttempt: async () => {
           const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
@@ -237,6 +242,9 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
         return;
       }
       result = projectPublicSubmitResult(submitted);
+    }
+    if (!hasCurrentReportAuthority()) {
+      return;
     }
     if (!validateUpdateReportResult(result)) {
       respond(false, undefined, {

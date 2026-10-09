@@ -1,8 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
 import {
   deleteCronJobRowInDatabase,
   fingerprintCronJobRows,
+  fingerprintCronRuntimeRows,
   loadedCronStoreFromRows,
   loadCronRows,
 } from "./row-codec.js";
@@ -10,8 +13,7 @@ import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
-import { tryParseJsonObject } from "./scalar-codec.js";
-import type { CronJobRow } from "./schema.js";
+import type { CronJobReadRow } from "./schema.js";
 import type { LoadedCronStore } from "./types.js";
 
 type CronLoadWriter = {
@@ -19,10 +21,15 @@ type CronLoadWriter = {
   committed(): void;
 };
 
-function isRetiredCollectionReview(row: CronJobRow): boolean {
+/** The weekly Workshop curator and its older `skillCollectionReview` payload are retired. */
+function isRetiredCollectionReview(row: CronJobReadRow): boolean {
+  const job = safeParseJsonRecord(row.job_json);
+  const declarationKey = row.declaration_key ?? job?.declarationKey;
   return (
     row.payload_kind === "skillCollectionReview" ||
-    asRecord(tryParseJsonObject(row.job_json)?.payload).kind === "skillCollectionReview"
+    asRecord(job?.payload).kind === "skillCollectionReview" ||
+    (typeof declarationKey === "string" &&
+      declarationKey.startsWith(RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX))
   );
 }
 
@@ -38,7 +45,7 @@ export function loadCronStoreFromDatabase(
     rows = rows.filter((row) => !retiredIds.has(row.job_id));
   } else if (retiredIds.size > 0) {
     // Retire generated jobs before runtime validation, including databases already
-    // on v16. Gateway convergence recreates them with the isolated agent-turn target.
+    // on the current schema version. No replacement job is created.
     const removed = writer.write((db) => {
       const current = loadCronRows(db, storeKey, retiredIds).filter(isRetiredCollectionReview);
       for (const row of current) {
@@ -65,7 +72,13 @@ export function loadCronStoreFromDatabase(
       });
     }
   }
-  return !writer ? loaded : { ...loaded, jobsFingerprint: fingerprintCronJobRows(rows) };
+  return !writer
+    ? loaded
+    : {
+        ...loaded,
+        jobsFingerprint: fingerprintCronJobRows(rows),
+        runtimeFingerprint: fingerprintCronRuntimeRows(rows),
+      };
 }
 
 function repairLoadedCronRuntimeAuthority(

@@ -4,14 +4,11 @@ import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
 const source = 'console.log("Windows 🦞 — 日本語");\n';
 
 describe("Crabbox guest Node script transport", () => {
-  it.each(["linux", "windows/wsl2", "macos"] as const)(
-    "preserves the POSIX heredoc on %s",
-    (target) => {
-      expect(wrapCrabboxNodeScript(source, target, "GUEST_SCRIPT")).toBe(
-        `set -eu\nnode <<'GUEST_SCRIPT'\n${source}\nGUEST_SCRIPT`,
-      );
-    },
-  );
+  it("preserves the POSIX heredoc", () => {
+    expect(wrapCrabboxNodeScript(source, "linux", "GUEST_SCRIPT")).toBe(
+      `set -eu\nnode <<'GUEST_SCRIPT'\n${source}\nGUEST_SCRIPT`,
+    );
+  });
 
   it("transports Unicode bytes through a temporary native PowerShell script", () => {
     const command = wrapCrabboxNodeScript(source, "windows/normal");

@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
-  type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import {
   resolveAgentConfig,
@@ -19,9 +16,10 @@ import {
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
 import {
-  createOpenClawCodingTools,
+  createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
 } from "../agents/agent-tools.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
   CodeModeNamespaceDescriptor,
@@ -35,9 +33,14 @@ import {
   type CodeModeHeadlessResult,
 } from "../agents/code-mode.js";
 import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../agents/conversation-capability-profile.js";
+import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
@@ -60,13 +63,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { logWarn } from "../logger.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import {
-  bindGatewayContextResolver,
-  withPluginRuntimeRegistryScope,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -74,6 +75,7 @@ import {
   resolveCronAgentConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { prepareCronRunAdmission } from "./run-admission.js";
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import {
   DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS,
@@ -82,6 +84,8 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { resolveCronAuthenticatedChannelRequester } from "./tools-allow-provenance.js";
+import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
 import {
   parseScriptPayloadResult,
   parseTriggerResult,
@@ -98,6 +102,9 @@ const MAX_CONCURRENT_TRIGGER_EVALS = 3;
 const MAX_CACHED_TRIGGER_RUNTIMES = 128;
 const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
 const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
+// Holds a finished evaluation for MCP teardown at most this long; a hung connect or shutdown
+// keeps retiring as tracked work instead of holding the result and trigger slot.
+const CRON_SCRIPT_MCP_CLEANUP_GRACE_MS = 1_000;
 
 let activeTriggerEvaluations = 0;
 
@@ -112,7 +119,16 @@ const assertTriggerCodesCoverHeadless: AssertTriggerCodesCoverHeadless = true;
 void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
-  createTools: (admitted: AdmittedRunContext, signal: AbortSignal) => AnyAgentTool[];
+  createTools: (
+    admitted: AdmittedRunContext,
+    signal: AbortSignal,
+    messageActionTurnCapability: string | undefined,
+  ) => Promise<AnyAgentTool[]>;
+  /** Starts this evaluation's own MCP runtime for servers its toolsAllow names by prefix. */
+  acquireMcpTools?: (
+    admitted: AdmittedRunContext,
+    reservedToolNames: readonly string[],
+  ) => CronScriptMcpTools | undefined;
   context: HookContext & { config: OpenClawConfig; agentId: string; sessionKey: string };
   pluginRegistry?: PluginRegistry;
 };
@@ -163,7 +179,8 @@ async function prepareTriggerRuntime(
   params: Parameters<PrepareTriggerRuntime>[0],
   loadPluginRegistry: LoadTriggerPluginRegistry = loadAgentRuntimePluginRegistryHandle,
 ): Promise<PreparedTriggerRuntime> {
-  params.signal?.throwIfAborted();
+  const { signal: preparationSignal } = params;
+  preparationSignal?.throwIfAborted();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
@@ -185,8 +202,9 @@ async function prepareTriggerRuntime(
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
     provisioning: workspaceProvisioning,
+    guard: { assertHost: () => preparationSignal?.throwIfAborted() },
   });
-  params.signal?.throwIfAborted();
+  preparationSignal?.throwIfAborted();
   const workspaceDir = workspace.dir;
   const pluginRegistry = loadPluginRegistry({
     config,
@@ -207,21 +225,58 @@ async function prepareTriggerRuntime(
       sessionKey,
       workspaceDir,
     });
-    params.signal?.throwIfAborted();
+    preparationSignal?.throwIfAborted();
     const effectiveWorkspace =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
     const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
       toolsEnabled: true,
       toolsAllow: params.toolsAllow,
     });
-    // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
+    const authProfileStoreSource =
+      toolPlan.constructTools && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    preparationSignal?.throwIfAborted();
+    const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+      toolsAllow: params.toolsAllow,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      execTarget: params.execTarget,
+    });
+    // Core and MCP tools of one evaluation share one policy owner, like embedded runs.
+    const capabilityProfiles = new WeakMap<
+      AdmittedRunContext,
+      ResolvedConversationCapabilityProfile
+    >();
+    const resolveCapabilityProfile = (admitted: AdmittedRunContext) => {
+      let profile = capabilityProfiles.get(admitted);
+      if (!profile) {
+        profile = resolveConversationCapabilityProfile({
+          config,
+          sessionKey,
+          runId: admitted.operationalRunInstance.runId,
+          agentId,
+          workspaceDir: effectiveWorkspace,
+          cwd: effectiveWorkspace,
+          spawnWorkspaceDir: workspaceDir,
+          sandboxToolPolicy: sandbox?.enabled ? sandbox.tools : undefined,
+          runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+          inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+          scheduledToolPolicy,
+        });
+        capabilityProfiles.set(admitted, profile);
+      }
+      return profile;
+    };
     // LSP runtimes are session-scoped and intentionally outside trigger v1.
-    const createTools: PreparedTriggerRuntime["createTools"] = (admitted, signal) => {
+    const createTools: PreparedTriggerRuntime["createTools"] = async (
+      admitted,
+      signal,
+      messageActionTurnCapability,
+    ) => {
       const allTools = toolPlan.constructTools
-        ? createOpenClawCodingTools({
+        ? await createOpenClawCodingToolsInternalAsync({
             agentId,
             runId: admitted.operationalRunInstance.runId,
             operationalRunInstance: admitted.operationalRunInstance,
+            messageActionTurnCapability,
             abortSignal: signal,
             exec: { config },
             sandbox,
@@ -229,6 +284,7 @@ async function prepareTriggerRuntime(
             trigger: "cron",
             jobId: params.jobId,
             agentDir,
+            authProfileStoreSource,
             cwd: effectiveWorkspace,
             workspaceDir: effectiveWorkspace,
             spawnWorkspaceDir: workspaceDir,
@@ -237,11 +293,8 @@ async function prepareTriggerRuntime(
             includeCoreTools: toolPlan.includeCoreTools,
             runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
             inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
-            scheduledToolPolicy: resolveScheduledToolPolicyContext({
-              toolsAllow: params.toolsAllow,
-              scheduledToolPolicy: params.scheduledToolPolicy,
-              execTarget: params.execTarget,
-            }),
+            scheduledToolPolicy,
+            conversationCapabilityProfile: resolveCapabilityProfile(admitted),
             toolConstructionPlan: toolPlan.codingToolConstructionPlan,
           })
         : [];
@@ -257,8 +310,27 @@ async function prepareTriggerRuntime(
       sessionKey,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
     };
+    const acquireMcpTools: PreparedTriggerRuntime["acquireMcpTools"] = (
+      admitted,
+      reservedToolNames,
+    ) => {
+      const runId = admitted.operationalRunInstance.runId;
+      return acquireCronScriptMcpTools({
+        sessionId: runId,
+        sessionKey,
+        agentId,
+        config,
+        workspaceDir: effectiveWorkspace,
+        agentDir,
+        toolsAllow: params.toolsAllow,
+        capabilityProfile: resolveCapabilityProfile(admitted),
+        reservedToolNames,
+        hookContext: { ...context, runId, trigger: "cron" },
+      });
+    };
     return {
       createTools,
+      acquireMcpTools,
       context,
       ...(pluginRegistry ? { pluginRegistry } : {}),
     };
@@ -363,7 +435,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       wallClockMs: number;
       maxToolCalls: number;
       label: string;
-      onExecutionStarted?: () => void;
+      onExecutionStarted?: () => void | Promise<void>;
     },
   ): Promise<
     | { kind: "completed"; result: Extract<CodeModeHeadlessResult, { status: "completed" }> }
@@ -375,7 +447,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       params.label,
     );
     const catalogRef = createToolSearchCatalogRef();
-    let admission: PreparedAgentRunAdmission | undefined;
+    const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
+    let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
+    let mcp: CronScriptMcpTools | undefined;
     try {
       const request = {
         runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
@@ -389,7 +463,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         }),
         execTarget: params.job.toolsAllowExecTarget,
       };
-      const runId = `cron-trigger:${params.job.id}:${crypto.randomUUID()}`;
       let runtime: CachedTriggerRuntime | undefined;
       let tools: AnyAgentTool[];
       let admitted: AdmittedRunContext | undefined;
@@ -412,25 +485,21 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
             throw new PluginInstanceUnavailableError();
           }
           if (!admitted) {
-            admission = prepareAgentRunAdmission({
+            admission = prepareCronRunAdmission({
               cfg: runtime.context.config,
-              operationalRunInstance: createOperationalRunInstanceRef(runId),
-              facts: {
-                runId,
-                agentId: runtime.context.agentId,
-                ingress: params.executionIdentity?.ingress ?? {
-                  kind: "schedule",
-                  boundary: "cron.script",
-                  state: "present",
-                },
-                ...(params.executionIdentity?.invoker
-                  ? { invoker: params.executionIdentity.invoker }
-                  : {}),
-              },
+              runId,
+              agentId: runtime.context.agentId,
+              sessionKey: runtime.context.sessionKey,
+              jobId: params.job.id,
+              deliveryAttemptFence: params.deliveryAttemptFence,
+              toolsAllow: request.toolsAllow,
+              scheduledToolPolicy: request.scheduledToolPolicy,
+              channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
+              executionIdentity: params.executionIdentity,
+              ingressBoundary: "cron.script",
+              resolveGatewayContext: deps.resolveGatewayContext,
             });
-            admitted = await admission.admit("gateway");
-            bindGatewayContextResolver(admitted, deps.resolveGatewayContext);
-            params.executionIdentity?.onPostAdmission?.(admitted);
+            admitted = await admission.preparedRunAdmission.admit("gateway");
             assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, evaluationScope.signal);
             caller = createAdmittedGatewayToolCallerIdentity({
               admittedRunContext: admitted,
@@ -446,11 +515,23 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           }
           const selected = runtime;
           const authority = admitted;
-          tools = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
-            selected.createTools(authority, evaluationScope.signal),
+          tools = await withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
+            selected.createTools(
+              authority,
+              evaluationScope.signal,
+              admission?.messageActionTurnCapability,
+            ),
           );
+          assertActive();
           if (!runtime.isCurrent()) {
             throw new PluginInstanceUnavailableError();
+          }
+          // A script that never names MCP cannot reach it, so it starts no server.
+          if (/\bMCP\b/.test(params.script)) {
+            const reservedToolNames = tools.map((tool) => tool.name);
+            mcp = withPluginRuntimeRegistryScope(selected.pluginRegistry, () =>
+              selected.acquireMcpTools?.(authority, reservedToolNames),
+            );
           }
           break;
         } catch (error) {
@@ -474,6 +555,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           runtime?.invalidate();
           // Retry setup once with the same admission and deadline, never script execution.
         }
+      }
+      let mcpUnavailable: string | undefined;
+      if (mcp) {
+        // Server connection and tool listing spend the evaluation's own deadline.
+        const surface = await evaluationScope.wait(mcp.surface);
+        tools = [...tools, ...surface.tools];
+        mcpUnavailable = surface.unavailable;
       }
       const ctx: ToolSearchToolContext = {
         ...runtime.context,
@@ -515,7 +603,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         if (remainingWallClockMs <= 0) {
           throw new CodeModeHeadlessTimeoutError(`${params.label} timed out`);
         }
-        params.onExecutionStarted?.();
+        await params.onExecutionStarted?.();
         assertActive();
         const result = await runHeadless({
           ctx,
@@ -526,7 +614,11 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           signal: evaluationScope.signal,
         });
         if (result.status === "failed") {
-          return scriptFailure(result.error, result.code);
+          // A failed server is absent from `MCP`; name why when the script fails.
+          return scriptFailure(
+            mcpUnavailable ? `${result.error} (${mcpUnavailable})` : result.error,
+            result.code,
+          );
         }
         assertActive();
         return { kind: "completed" as const, result };
@@ -544,6 +636,16 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       admission?.close();
       clearToolSearchCatalog({ catalogRef });
       evaluationScope.cleanup();
+      if (mcp) {
+        await runAgentCleanupStep({
+          runId,
+          sessionId: runId,
+          step: "cron-script-mcp-retire",
+          timeoutMs: CRON_SCRIPT_MCP_CLEANUP_GRACE_MS,
+          log: { warn: logWarn },
+          cleanup: mcp.dispose,
+        });
+      }
     }
   };
 }

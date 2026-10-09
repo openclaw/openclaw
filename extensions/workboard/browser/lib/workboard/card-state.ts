@@ -1,19 +1,12 @@
-import { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { matchesBoardFilter } from "./board-filter.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
   WorkboardMetadata,
-  WorkboardStaleState,
   WorkboardStatus,
-  WorkboardTemplateId,
   WorkboardUiState,
 } from "./types.ts";
-
-export { normalizeString };
-
-const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
 export function isActiveWorkboardCard(card: WorkboardCard): boolean {
   return !card.metadata?.archivedAt;
@@ -121,14 +114,9 @@ export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
 }
 
 function parentDependencyIds(card: WorkboardCard): string[] {
-  const ids: string[] = [];
-  for (const link of card.metadata?.links ?? []) {
-    const id = link.type === "parent" ? link.targetCardId?.trim() : "";
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  return normalizeUniqueTrimmedStringList(
+    card.metadata?.links?.filter((link) => link.type === "parent").map((link) => link.targetCardId),
+  );
 }
 
 export function getWorkboardDependencyState(
@@ -199,17 +187,7 @@ export function resetDraftState(state: WorkboardUiState) {
 }
 
 export function normalizeDraftLabels(value: string): string[] {
-  const labels: string[] = [];
-  for (const label of value.split(",")) {
-    const trimmed = label.trim();
-    if (trimmed && !labels.includes(trimmed)) {
-      labels.push(trimmed);
-    }
-    if (labels.length >= 12) {
-      break;
-    }
-  }
-  return labels;
+  return normalizeUniqueTrimmedStringList(value.split(",")).slice(0, 12);
 }
 
 export function draftPayload(state: WorkboardUiState) {
@@ -225,18 +203,7 @@ export function draftPayload(state: WorkboardUiState) {
   };
 }
 
-type WorkboardCardDraft = {
-  title: string;
-  notes: string;
-  status: WorkboardStatus;
-  priority: WorkboardCard["priority"];
-  labels: string[];
-  agentId: string;
-  sessionKey: string;
-  templateId: WorkboardTemplateId | "";
-};
-
-function cardDraftPayload(card: WorkboardCard): WorkboardCardDraft {
+function cardDraftPayload(card: WorkboardCard) {
   return {
     title: card.title,
     notes: card.notes ?? "",
@@ -245,7 +212,7 @@ function cardDraftPayload(card: WorkboardCard): WorkboardCardDraft {
     labels: card.labels,
     agentId: card.agentId ?? "",
     sessionKey: workboardCardSessionKey(card) ?? "",
-    templateId: card.metadata?.templateId ?? "",
+    templateId: card.metadata?.templateId ?? ("" as const),
   };
 }
 
@@ -296,30 +263,6 @@ export function rebaseWorkboardDraft(state: WorkboardUiState, current: Workboard
     state.draftTemplateId = next.templateId;
   }
   state.editingCardBase = current;
-}
-
-export function isFailedSessionStatus(status: GatewaySessionRow["status"]): boolean {
-  return status === "failed" || status === "killed" || status === "timeout";
-}
-
-export function staleSessionState(session: GatewaySessionRow): WorkboardStaleState | undefined {
-  if (session.status !== "running") {
-    return undefined;
-  }
-  if (session.hasActiveRun !== false) {
-    return undefined;
-  }
-  if (
-    typeof session.updatedAt !== "number" ||
-    Date.now() - session.updatedAt < WORKBOARD_STALE_SESSION_MS
-  ) {
-    return undefined;
-  }
-  return {
-    detectedAt: Date.now(),
-    lastSessionUpdatedAt: session.updatedAt,
-    reason: "Linked session has not reported recent activity.",
-  };
 }
 
 export function workboardCardSessionKey(card: WorkboardCard): string | undefined {

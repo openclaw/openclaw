@@ -1,6 +1,11 @@
 // Bundled-discovery compatibility is machine-owned upgrade state.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  isArtifactPreservingStateRead,
+} from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -12,6 +17,7 @@ import {
   getPluginCacheRetirementSignal,
   getProcessPluginCache,
   preparePluginCacheFact,
+  PluginCacheFactInvalidatedError,
 } from "./plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
@@ -20,6 +26,20 @@ type BundledDiscoveryMode = "compat" | "allowlist" | undefined;
 
 function parseBundledDiscoveryMode(value: unknown): BundledDiscoveryMode {
   return value === "compat" || value === "allowlist" ? value : undefined;
+}
+
+function readBundledDiscoveryFact<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+      throw new PluginCacheFactInvalidatedError(
+        "Plugin discovery read admission changed during preparation; retry the operation.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 function resolveBundledDiscoveryOptions(
@@ -41,10 +61,8 @@ export function readBundledDiscoveryMode(
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): "compat" | "allowlist" | undefined {
   const resolvedOptions = resolveBundledDiscoveryOptions(options);
-  const value = readConfigMachineState<unknown>(
-    "plugins.bundledDiscovery",
-    resolvedOptions,
-    behavior,
+  const value = readBundledDiscoveryFact(() =>
+    readConfigMachineState<unknown>("plugins.bundledDiscovery", resolvedOptions, behavior),
   );
   return parseBundledDiscoveryMode(value);
 }
@@ -57,7 +75,11 @@ export function readBundledDiscoveryMode(
 const discoveryState = resolveGlobalSingleton<{
   generation: object;
   memoized?: { key: string; value: BundledDiscoveryMode };
-}>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({ generation: {} }));
+  snapshotModes: WeakMap<object, { value: BundledDiscoveryMode }>;
+}>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({
+  generation: {},
+  snapshotModes: new WeakMap(),
+}));
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   clearBundledDiscoveryModeMemo();
@@ -78,11 +100,26 @@ function resolveBundledDiscoveryMemoKey(env: NodeJS.ProcessEnv): string {
 export function readBundledDiscoveryModeMemoized(
   env: NodeJS.ProcessEnv = process.env,
   behavior: { artifactPreservingReadOnly?: boolean } = {},
+  readPreparedValue?: (databasePath: string) => unknown,
 ): "compat" | "allowlist" | undefined {
-  if (behavior.artifactPreservingReadOnly) {
-    // Copied-state planning binds the observed bytes, not process-stable runtime metadata.
-    // Read a private SQLite snapshot so neither cached state nor source WAL coordination leaks in.
-    return readBundledDiscoveryMode(env === process.env ? {} : { env }, behavior);
+  const options = env === process.env ? {} : { env };
+  const snapshot =
+    behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead()
+      ? readBundledDiscoveryFact(() =>
+          getActiveOpenClawStateDatabaseReadSnapshot(resolveBundledDiscoveryOptions(options)),
+        )
+      : undefined;
+  if (snapshot || behavior.artifactPreservingReadOnly) {
+    // Reuse policy only for these private bytes; it must never replace the live memo.
+    const prepared = snapshot && discoveryState.snapshotModes.get(snapshot);
+    if (prepared) {
+      return prepared.value;
+    }
+    const value = readBundledDiscoveryMode(options, behavior);
+    if (snapshot) {
+      discoveryState.snapshotModes.set(snapshot, { value });
+    }
+    return value;
   }
   const key = resolveBundledDiscoveryMemoKey(env);
   if (discoveryState.memoized?.key !== key) {
@@ -98,7 +135,9 @@ export function readBundledDiscoveryModeMemoized(
     } else {
       discoveryState.memoized = {
         key,
-        value: readBundledDiscoveryMode(env === process.env ? {} : { env }),
+        value: readPreparedValue
+          ? parseBundledDiscoveryMode(readBundledDiscoveryFact(() => readPreparedValue(key)))
+          : readBundledDiscoveryMode(env === process.env ? {} : { env }),
       };
     }
   }
@@ -110,6 +149,31 @@ export async function prepareBundledDiscoveryMode(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<() => void> {
   const owner = getPluginCache();
+  const options = resolveBundledDiscoveryOptions({ env });
+  const snapshot = isArtifactPreservingStateRead()
+    ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
+    : undefined;
+  if (snapshot) {
+    const metadata = owner.metadata;
+    const generation = discoveryState.generation;
+    const signal = getPluginCacheRetirementSignal(owner);
+    // Private policy needs no global activation, but its caller must retain this exact scope.
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (
+        owner.metadata !== metadata ||
+        discoveryState.generation !== generation ||
+        readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options)) !==
+          snapshot
+      ) {
+        throw new PluginCacheFactInvalidatedError(
+          "Plugin discovery snapshot changed during preparation; retry the operation.",
+        );
+      }
+    };
+    assertCurrent();
+    return assertCurrent;
+  }
   const cache = owner.preparedBundledDiscoveryModes;
   const key = resolveBundledDiscoveryMemoKey(env);
   const generation = discoveryState.generation;
@@ -129,14 +193,18 @@ export async function prepareBundledDiscoveryMode(
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
     if (discoveryState.generation !== generation) {
-      throw new Error("Plugin discovery state changed during preparation; retry the operation.");
+      throw new PluginCacheFactInvalidatedError(
+        "Plugin discovery state changed during preparation; retry the operation.",
+      );
     }
     return { value, generation };
   });
   const activate = () => {
     prepared.assertCurrent();
     if (discoveryState.generation !== generation) {
-      throw new Error("Plugin discovery state changed during preparation; retry the operation.");
+      throw new PluginCacheFactInvalidatedError(
+        "Plugin discovery state changed during preparation; retry the operation.",
+      );
     }
     // Another root may use the single-slot memo while preparation awaits its row.
     // Reuse this operation's captured fact for the following synchronous derivation.
@@ -153,6 +221,7 @@ export async function prepareBundledDiscoveryMode(
  */
 export function clearBundledDiscoveryModeMemo(): void {
   discoveryState.memoized = undefined;
+  discoveryState.snapshotModes = new WeakMap();
   discoveryState.generation = {};
   for (const cache of new Set([getPluginCache(), getProcessPluginCache()])) {
     cache.preparedBundledDiscoveryModes.clear();

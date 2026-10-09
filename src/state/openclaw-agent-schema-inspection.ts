@@ -7,7 +7,10 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { readSqliteWriterAppVersion } from "../infra/sqlite-schema-header.js";
+import {
+  readSqliteSchemaHeader,
+  readSqliteWriterAppVersion,
+} from "../infra/sqlite-schema-header.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { isValidAgentId } from "../routing/session-key.js";
@@ -18,8 +21,13 @@ import {
   assertCanonicalAgentPersistenceVersion,
   assertOpenClawAgentCurrentRuntimeSchema,
   readExistingAgentSchemaMeta,
+  hasPendingCurrentVersionAgentDatabaseMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
 import type { OpenClawAgentSchemaPreflightResult } from "./openclaw-database-preflight.types.js";
+import {
+  canReuseOpenClawAgentIntegrityVerification,
+  type readOpenClawAgentIntegrityVerification,
+} from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 export type AgentSchemaInspectionInput = {
@@ -29,10 +37,15 @@ export type AgentSchemaInspectionInput = {
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;
   requireStartupMigrationReadiness?: boolean;
+  deferRuntimeIntegrity?: boolean;
+  startupIntegrityStateDir?: string;
+  startupIntegrityVerification?: ReturnType<typeof readOpenClawAgentIntegrityVerification>;
 };
 
 export type AgentSchemaInspection = {
   version: number;
+  integrityGateOutcome?: "cached" | "healthy";
+  preparationPending?: true;
   writerAppVersion?: string;
   reason?: string;
   failure?: Error;
@@ -44,8 +57,20 @@ export function inspectAgentDatabaseSchema(
   database: DatabaseSync,
   input: AgentSchemaInspectionInput,
 ): AgentSchemaInspection {
+  if (!input.verifyCurrentSchemaShape && !input.requireStartupMigrationReadiness) {
+    try {
+      const { userVersion, ...header } = readSqliteSchemaHeader(
+        database,
+        input.inspectOwnership ? input.supportedVersion : undefined,
+      );
+      return { version: userVersion, ...header };
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(database);
+    }
+  }
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
+  let checkingShape = false;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -57,7 +82,24 @@ export function inspectAgentDatabaseSchema(
       inspection.agentSchemaMeta = readExistingAgentSchemaMeta(database);
     }
     if (input.requireStartupMigrationReadiness) {
-      assertSqliteIntegrity(database, input.pathname);
+      const migrationPending =
+        version !== input.supportedVersion ||
+        hasPendingCurrentVersionAgentDatabaseMigration(database);
+      if (
+        canReuseOpenClawAgentIntegrityVerification(
+          input.pathname,
+          input.startupIntegrityVerification,
+          migrationPending,
+        )
+      ) {
+        inspection.integrityGateOutcome = "cached";
+      } else if (input.deferRuntimeIntegrity && !migrationPending) {
+        // The pending Gateway owner claims the live lease and validates before writes.
+        inspection.preparationPending = true;
+      } else {
+        assertSqliteIntegrity(database, input.pathname);
+        inspection.integrityGateOutcome = "healthy";
+      }
       assertCanonicalAgentPersistenceVersion(database, input.pathname, version);
     }
     const agentId =
@@ -70,15 +112,24 @@ export function inspectAgentDatabaseSchema(
       agentId != null &&
       (!input.requireStartupMigrationReadiness || version > 0)
     ) {
-      assertOpenClawAgentDatabaseForMaintenance(database, {
+      checkingShape = true;
+      const needsIndexRepair = assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: input.pathname,
+        allowStartupIndexRepair: input.requireStartupMigrationReadiness,
       });
+      if (needsIndexRepair) {
+        inspection.preparationPending = true;
+      }
     }
     return inspection;
   } catch (error) {
     if (input.requireStartupMigrationReadiness) {
-      return { ...inspection, failure: toStringifiedError(error) };
+      return {
+        ...inspection,
+        failure: toStringifiedError(error),
+        ...(checkingShape ? { reason: formatErrorMessage(error) } : {}),
+      };
     }
     // Preserve the observed version even when shape validation fails, so Doctor
     // can still report a pending migration alongside the unreadable shape.

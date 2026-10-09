@@ -16,8 +16,14 @@ final class DevicePairingApprovalPrompter {
     private var source: PairingPromptSupport.Source?
     private var task: Task<Void, Never>?
     private var queue: [PendingRequest] = []
-    var pendingCount: Int = 0
-    var pendingRepairCount: Int = 0
+    var pendingCount: Int {
+        self.queue.count
+    }
+
+    var pendingRepairCount: Int {
+        self.queue.count(where: { $0.isRepair == true })
+    }
+
     /// Device ids already paired on the gateway (from the last list fetch);
     /// drives the "previously paired" trust signal on cards.
     private var pairedDeviceIds: Set<String> = []
@@ -29,17 +35,13 @@ final class DevicePairingApprovalPrompter {
     /// hidden optimistically and restored by the failure path.
     private var pendingLocalDecisionRequestIds: Set<String> = []
 
-    private struct PairingList: Codable {
+    private struct PairingList: Decodable {
         let pending: [PendingRequest]
         let paired: [PairedDevice]?
     }
 
-    private struct PairedDevice: Codable, Equatable {
+    private struct PairedDevice: Decodable {
         let deviceId: String
-        let approvedAtMs: Double?
-        let displayName: String?
-        let platform: String?
-        let remoteIp: String?
     }
 
     struct PendingRequest: Codable, Equatable, Identifiable {
@@ -80,8 +82,7 @@ final class DevicePairingApprovalPrompter {
     }
 
     func stop() {
-        self.task?.cancel()
-        self.task = nil
+        SimpleTaskSupport.stop(task: &self.task)
         self.replaceSource(nil)
         self.center.unregister(kind: .device)
     }
@@ -93,7 +94,6 @@ final class DevicePairingApprovalPrompter {
         self.pairedDeviceIds.removeAll()
         self.trustUnknownRequestIds.removeAll()
         self.pendingLocalDecisionRequestIds.removeAll(keepingCapacity: false)
-        self.updatePendingCounts()
         self.syncCards()
     }
 
@@ -119,13 +119,7 @@ final class DevicePairingApprovalPrompter {
         self.queue = list.pending.sorted(by: { $0.ts < $1.ts })
         // This snapshot is authoritative for every pending request in it.
         self.trustUnknownRequestIds.removeAll()
-        self.updatePendingCounts()
         self.syncCards()
-    }
-
-    private func updatePendingCounts() {
-        self.pendingCount = self.queue.count
-        self.pendingRepairCount = self.queue.count(where: { $0.isRepair == true })
     }
 
     private func syncCards() {
@@ -200,7 +194,6 @@ final class DevicePairingApprovalPrompter {
         }
 
         self.queue.removeAll { $0.requestId == request.requestId }
-        self.updatePendingCounts()
         self.syncCards()
     }
 
@@ -216,24 +209,13 @@ final class DevicePairingApprovalPrompter {
         guard let source = self.source else { return }
         switch push {
         case let .event(evt) where evt.event == "device.pair.requested":
-            guard let payload = evt.payload else { return }
-            do {
-                let req = try GatewayPayloadDecoding.decode(payload, as: PendingRequest.self)
-                self.enqueue(req, source: source)
-            } catch {
-                self.logger
-                    .error("failed to decode device pairing request: \(error.localizedDescription, privacy: .public)")
-            }
+            guard let req: PendingRequest = PairingPromptSupport.decodeEventPayload(
+                evt.payload, context: "device pairing request", logger: self.logger) else { return }
+            self.enqueue(req, source: source)
         case let .event(evt) where evt.event == "device.pair.resolved":
-            guard let payload = evt.payload else { return }
-            do {
-                let resolved = try GatewayPayloadDecoding.decode(payload, as: PairingResolvedEvent.self)
-                self.handleResolved(resolved, source: source)
-            } catch {
-                self.logger
-                    .error(
-                        "failed to decode device pairing resolution: \(error.localizedDescription, privacy: .public)")
-            }
+            guard let resolved: PairingResolvedEvent = PairingPromptSupport.decodeEventPayload(
+                evt.payload, context: "device pairing resolution", logger: self.logger) else { return }
+            self.handleResolved(resolved, source: source)
         case .snapshot:
             Task { await self.loadPendingRequestsFromGateway(source: source) }
         case .seqGap:
@@ -258,7 +240,6 @@ final class DevicePairingApprovalPrompter {
         source.invalidateList()
         self.queue = next
         self.trustUnknownRequestIds.insert(req.requestId)
-        self.updatePendingCounts()
         self.syncCards()
         // The "previously paired" trust signal must not come from a stale
         // startup snapshot; re-fetch gateway truth for each new request.
@@ -272,7 +253,6 @@ final class DevicePairingApprovalPrompter {
         // so it cannot resurrect the resolved card.
         source.invalidateList()
         self.queue.removeAll { $0.requestId == resolved.requestId }
-        self.updatePendingCounts()
         self.syncCards()
     }
 }

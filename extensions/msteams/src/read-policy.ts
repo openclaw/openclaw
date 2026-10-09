@@ -59,9 +59,10 @@ function isStableUserId(value: string): boolean {
   return /^[0-9a-f-]{16,}$/i.test(value);
 }
 
-async function resolveAllowedDmTarget(
+async function resolveDmTarget(
   cfg: OpenClawConfig,
   target: string,
+  directOperator = false,
 ): Promise<string | undefined> {
   const teams = cfg.channels?.msteams;
   if (teams?.dmPolicy === "disabled") {
@@ -71,11 +72,12 @@ async function resolveAllowedDmTarget(
   if (!userId) {
     return undefined;
   }
-  const allowFrom = teams?.allowFrom ?? [];
+  const allowFrom = directOperator ? [] : (teams?.allowFrom ?? []);
   const normalizedEntries = allowFrom.map((entry) =>
     normalizeUserTarget(entry.replace(/^(msteams|teams):/i, "")),
   );
-  const allowAll = (teams?.dmPolicy ?? "pairing") === "open" || normalizedEntries.includes("*");
+  const allowAll =
+    directOperator || (teams?.dmPolicy ?? "pairing") === "open" || normalizedEntries.includes("*");
   if (isStableUserId(userId)) {
     return allowAll || normalizedEntries.some((entry) => entry === userId)
       ? `user:${userId}`
@@ -98,31 +100,6 @@ async function resolveAllowedDmTarget(
         (entry) => entry.resolved && entry.id?.toLowerCase() === resolvedTarget.id?.toLowerCase(),
       );
     return allowed ? `user:${resolvedTarget.id}` : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function resolveDirectDmTarget(
-  cfg: OpenClawConfig,
-  target: string,
-): Promise<string | undefined> {
-  if (cfg.channels?.msteams?.dmPolicy === "disabled") {
-    return undefined;
-  }
-  const userId = normalizeUserTarget(target);
-  if (!userId) {
-    return undefined;
-  }
-  if (isStableUserId(userId)) {
-    return `user:${userId}`;
-  }
-  if (!isDangerousNameMatchingEnabled(cfg.channels?.msteams)) {
-    return undefined;
-  }
-  try {
-    const [resolved] = await resolveMSTeamsUserAllowlist({ cfg, entries: [userId] });
-    return resolved?.resolved && resolved.id ? `user:${resolved.id}` : undefined;
   } catch {
     return undefined;
   }
@@ -248,34 +225,43 @@ async function resolveAllowedChannelTarget(
   if (!stableTeamId || !stableChannelId) {
     return undefined;
   }
+  return (await isMappedChannelAllowed(cfg, stableTeamId, stableChannelId))
+    ? stableTarget
+    : undefined;
+}
+
+async function isMappedChannelAllowed(
+  cfg: OpenClawConfig,
+  teamId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const teams = cfg.channels?.msteams;
+  if (!teams?.teams) {
+    return false;
+  }
   try {
-    const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(cfg, stableTeamId);
-    if (botFrameworkTeamKey) {
-      const allowed = resolveMSTeamsRouteConfig({
-        cfg: teams,
-        teamId: botFrameworkTeamKey,
-        conversationId: stableChannelId,
-      }).allowed;
-      if (allowed) {
-        return stableTarget;
-      }
+    const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(cfg, teamId);
+    if (
+      botFrameworkTeamKey &&
+      resolveMSTeamsRouteConfig({ cfg: teams, teamId: botFrameworkTeamKey, conversationId }).allowed
+    ) {
+      return true;
     }
     if (!hasMutableChannelConfig(cfg)) {
-      return undefined;
+      return false;
     }
     const resolved = await resolveMSTeamsTeamsConfig({
       cfg,
       teamIdMode: "graph",
       teams: teams.teams,
     });
-    const allowed = resolveMSTeamsRouteConfig({
+    return resolveMSTeamsRouteConfig({
       cfg: { ...teams, teams: resolved.teams },
-      teamId: stableTeamId,
-      conversationId: stableChannelId,
+      teamId,
+      conversationId,
     }).allowed;
-    return allowed ? stableTarget : undefined;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
@@ -296,43 +282,33 @@ export async function assertMSTeamsReadTargetAllowed(params: {
   const current = isCurrentMSTeamsReadTarget({ ctx: params.ctx, target });
   const directOperator = params.ctx.conversationReadOrigin === "direct-operator";
   const currentChatType = params.ctx.toolContext?.currentChatType;
+  const groupEnabled = resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled";
+  const dmEnabled = params.cfg.channels?.msteams?.dmPolicy !== "disabled";
+  const currentScopeEnabled = isChannel
+    ? groupEnabled
+    : isDm || currentChatType === "direct"
+      ? dmEnabled
+      : currentChatType === "group" || currentChatType === "channel"
+        ? groupEnabled
+        : groupEnabled && dmEnabled;
   const allowedTarget = directOperator
     ? isChannel
-      ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
+      ? groupEnabled
         ? await resolveStableChannelTarget(params.cfg, target)
         : undefined
       : isDm
-        ? await resolveDirectDmTarget(params.cfg, target)
-        : isChat &&
-            resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
-            params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+        ? await resolveDmTarget(params.cfg, target, true)
+        : isChat && groupEnabled && dmEnabled
           ? target
           : undefined
     : current
-      ? isChannel
-        ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
-          ? target
-          : undefined
-        : isDm
-          ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
-            ? target
-            : undefined
-          : currentChatType === "direct"
-            ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
-              ? target
-              : undefined
-            : currentChatType === "group" || currentChatType === "channel"
-              ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
-                ? target
-                : undefined
-              : resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
-                  params.cfg.channels?.msteams?.dmPolicy !== "disabled"
-                ? target
-                : undefined
+      ? currentScopeEnabled
+        ? target
+        : undefined
       : isChannel
         ? await resolveAllowedChannelTarget(params.cfg, target)
         : isDm
-          ? await resolveAllowedDmTarget(params.cfg, target)
+          ? await resolveDmTarget(params.cfg, target)
           : isChat
             ? bothUnknownScopesAllowed(params.cfg)
               ? target
@@ -379,36 +355,9 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
   if (params.ctx?.conversationReadOrigin === "direct-operator") {
     return stableTeamId;
   }
-  let allowed = directRoute.allowlistConfigured ? directRoute.allowed : groupPolicy === "open";
-  if (!allowed && teams?.teams) {
-    try {
-      const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(
-        params.cfg,
-        stableTeamId,
-      );
-      if (botFrameworkTeamKey) {
-        allowed = resolveMSTeamsRouteConfig({
-          cfg: teams,
-          teamId: botFrameworkTeamKey,
-          conversationId: "__openclaw_all_channels__",
-        }).allowed;
-      }
-      if (!allowed && hasMutableChannelConfig(params.cfg)) {
-        const resolved = await resolveMSTeamsTeamsConfig({
-          cfg: params.cfg,
-          teamIdMode: "graph",
-          teams: teams.teams,
-        });
-        allowed = resolveMSTeamsRouteConfig({
-          cfg: { ...teams, teams: resolved.teams },
-          teamId: stableTeamId,
-          conversationId: "__openclaw_all_channels__",
-        }).allowed;
-      }
-    } catch {
-      allowed = false;
-    }
-  }
+  const allowed =
+    (directRoute.allowlistConfigured ? directRoute.allowed : groupPolicy === "open") ||
+    (await isMappedChannelAllowed(params.cfg, stableTeamId, "__openclaw_all_channels__"));
   if (!allowed) {
     throw new ToolAuthorizationError(
       "Microsoft Teams channel list requires access to every channel in the team.",

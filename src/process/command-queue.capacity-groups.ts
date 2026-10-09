@@ -1,8 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-// Capacity groups: a shared, hard aggregate budget across several command
-// lanes, with per-member reservations. Split out of command-queue.ts to keep
-// that file within its size budget; the queue supplies its own `drainLane` so
-// this module never has to import the queue runtime.
+// The queue supplies `drainLane` so capacity policy never imports the queue runtime.
 import {
   getQueueState,
   normalizeLane,
@@ -10,12 +7,10 @@ import {
   type LaneGroupState,
 } from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
-/** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
 
-/** Declares a group's shared budget and its members' hard reservations. */
 export type CommandLaneGroupSpec = {
   /** Hard aggregate cap across all members. */
   budget: number;
@@ -57,7 +52,12 @@ const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Nested,
 ]);
 
-const GROUP_INELIGIBLE_PREFIXES = ["session:", "nested:", "context-engine-turn-maintenance:"];
+const GROUP_INELIGIBLE_PREFIXES = [
+  "session:",
+  "nested:",
+  SUBAGENT_LANE_PREFIX,
+  "context-engine-turn-maintenance:",
+];
 
 function assertGroupEligibleLane(lane: string): void {
   if (GROUP_INELIGIBLE_LANES.has(lane)) {
@@ -143,8 +143,6 @@ export function canAdmitInGroup(lane: string): boolean {
 }
 
 /**
- * Define or replace a capacity group.
- *
  * Membership is held here, keyed by lane name, and deliberately NOT inside
  * `LaneState`: `setCommandLaneConcurrency` must not be able to detach a lane
  * from its group, or session suspend/resume would silently restore a member to
@@ -154,7 +152,7 @@ export function validateCommandLaneGroupSpec(
   group: string,
   spec: CommandLaneGroupSpec,
 ): LaneGroupState {
-  const members = spec.members.map((member) => normalizeLane(member));
+  const members = new Set(spec.members.map((member) => normalizeLane(member)));
   for (const member of members) {
     assertGroupEligibleLane(member);
   }
@@ -162,7 +160,7 @@ export function validateCommandLaneGroupSpec(
   let reservedTotal = 0;
   for (const [rawLane, count] of Object.entries(spec.reservations ?? {})) {
     const member = normalizeLane(rawLane);
-    if (!members.includes(member)) {
+    if (!members.has(member)) {
       throw new Error(`command lane group "${group}" reserves for non-member lane "${member}"`);
     }
     const reserved = Math.max(0, Math.floor(count));
@@ -177,7 +175,7 @@ export function validateCommandLaneGroupSpec(
       `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
     );
   }
-  return { group, budget, members: new Set(members), reservations };
+  return { group, budget, members, reservations };
 }
 
 /** Install a validated group, detaching its members from any previous owner. */

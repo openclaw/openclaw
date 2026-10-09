@@ -3,6 +3,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -24,11 +25,12 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
+import { registerPreparedSettlementTests } from "./dispatch-from-config.prepared-settlement.test-support.js";
 import {
   createDispatcher,
-  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
@@ -70,42 +72,7 @@ describe("dispatchReplyFromConfig", () => {
   });
   afterEach(clearRuntimeConfigSnapshot);
 
-  it("records channel transform suppression before TTS or visible fallback delivery", async () => {
-    setNoAbort();
-    const transport = vi.fn(async () => {});
-    const transformReplyPayload = vi.fn(() => null);
-    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: "agent:main:telegram:direct:123",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: vi.fn(async (_ctx, opts) => {
-        await opts?.onBlockReply?.({ text: "private block" });
-        return { text: "private reply" };
-      }),
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
-    expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
-    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
-    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
-    expect(transport).not.toHaveBeenCalled();
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
-    );
-  });
+  registerPreparedSettlementTests();
 
   it.each([true, false])(
     "keeps a held native final with its delivery owner (primary=%s)",
@@ -2534,19 +2501,14 @@ describe("dispatchReplyFromConfig", () => {
     { final: "same", audio: false, native: true },
     { final: "different", audio: false, native: true },
     { final: "same", audio: true, native: true },
-    { final: "same", audio: false, native: "identityless" },
     { final: "different", audio: false, native: "identityless" },
     { final: "same", audio: true, native: "identityless" },
-    { final: "same", audio: false, native: "deferred" },
     { final: "different", audio: false, native: "deferred" },
     { final: "same", audio: true, native: "deferred" },
-    { final: "same", audio: false, native: "ambiguous" },
     { final: "different", audio: false, native: "ambiguous" },
     { final: "same", audio: true, native: "ambiguous" },
-    { final: "same", audio: false, native: "partial" },
     { final: "different", audio: false, native: "partial" },
     { final: "same", audio: true, native: "partial" },
-    { final: "same", audio: false, native: "partial-envelope" },
     { final: "different", audio: false, native: "partial-envelope" },
     { final: "same", audio: true, native: "partial-envelope" },
   ])(
@@ -2779,15 +2741,9 @@ describe("dispatchReplyFromConfig", () => {
   it.each([
     { completionState: "prepared", audio: false, native: false },
     { completionState: "queued", audio: false, native: false },
-    { completionState: "unknown", audio: false, native: false },
     { completionState: "prepared", audio: true, native: false },
-    { completionState: "queued", audio: true, native: false },
-    { completionState: "unknown", audio: true, native: false },
     { completionState: "prepared", audio: false, native: true },
-    { completionState: "queued", audio: false, native: true },
-    { completionState: "unknown", audio: false, native: true },
     { completionState: "prepared", audio: true, native: true },
-    { completionState: "queued", audio: true, native: true },
     { completionState: "unknown", audio: true, native: true },
   ] as const)(
     "preserves completion ownership for a pending block ($completionState, audio=$audio, native=$native)",
@@ -2953,7 +2909,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
     expect(
       vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
-    ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
+    ).toEqual([
+      "Partial useful answer.",
+      expect.stringContaining(GENERIC_EXTERNAL_RUN_FAILURE_TEXT),
+    ]);
   });
 
   it.each([

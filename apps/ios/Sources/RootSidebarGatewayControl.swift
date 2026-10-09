@@ -182,12 +182,7 @@ struct RootSidebarGatewayControl: View {
     }
 
     private func refreshRegistry() {
-        // Demo/capture screens must not expose the installed user's saved hosts.
-        guard !self.appModel.isAppleReviewDemoModeEnabled, !self.appModel.isScreenshotFixtureModeEnabled else {
-            self.registry = .empty
-            return
-        }
-        self.registry = GatewaySettingsStore.loadGatewayRegistry()
+        self.registry = self.appModel.loadDisplayedGatewayRegistry()
     }
 
     private func switchGateway(_ stableID: String) {
@@ -197,7 +192,7 @@ struct RootSidebarGatewayControl: View {
         let currentID = self.appModel.activeGatewayConnectConfig?.effectiveStableID
             ?? self.appModel.connectedGatewayID ?? self.registry.activeStableID
         guard !GatewayStableIdentifier.matches(stableID, currentID) else { return }
-        if self.appModel.presentedChatViewModel?.isAttachmentOwnerPinned == true ||
+        if self.appModel.chatPresentation.viewModel?.isAttachmentOwnerPinned == true ||
             self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
         {
             self.switchError = String(localized: """
@@ -205,7 +200,7 @@ struct RootSidebarGatewayControl: View {
             """)
             return
         }
-        if let draft = self.appModel.presentedChatViewModel?.input, !draft.isEmpty {
+        if let draft = self.appModel.chatPresentation.viewModel?.input, !draft.isEmpty {
             self.switchError = String(localized: "Send or clear the current draft before switching gateways.")
             return
         }

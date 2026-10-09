@@ -39,6 +39,7 @@ suite.define(() => {
       const sessionKey = "agent:main:archive-actions";
       const messageText = "Archive action proof.";
       const session = sessionRow(sessionKey, "Archive actions", baseTime);
+      const main = sessionRow("agent:main:main", "Main", baseTime + 1_000);
       const gateway = await installMockGateway(page, {
         featureMethods: [
           "chat.metadata",
@@ -47,6 +48,7 @@ suite.define(() => {
           "sessions.branches.switch",
           "sessions.fork",
           "sessions.github.publish",
+          "sessions.github.options",
           "sessions.patch",
           "sessions.rewind",
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -88,10 +90,7 @@ suite.define(() => {
             editorText: messageText,
             sessionKey: "agent:main:dashboard:archive-action-fork",
           },
-          "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:main", "Main", baseTime + 1_000),
-            session,
-          ]),
+          "sessions.list": sessionsListResponse([main, session]),
         },
         sessionArchiveFiltering: true,
         sessionKey,
@@ -150,10 +149,14 @@ suite.define(() => {
         await rewind.click();
         await confirmation.waitFor({ state: "visible" });
 
-        await gateway.emitGatewayEvent("sessions.changed", {
+        const archived = {
           ...session,
           archived: true,
           archivedAt: baseTime + 2_000,
+        };
+        await gateway.setSessionsListResponse(sessionsListResponse([main, archived]));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...archived,
           reason: "update",
           sessionKey,
         });

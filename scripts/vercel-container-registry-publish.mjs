@@ -5,15 +5,18 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
-import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import {
+  parseDockerImageConfigVersion,
+  resolveDockerReleasePolicy,
+} from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
 // Conservative decimal client caps, not independently verified server byte thresholds.
-// https://vercel.com/docs/container-registry/limits-and-pricing (September 9, 2026).
+// https://vercel.com/docs/container-registry/limits-and-pricing (September 23, 2026).
 const VCR_BYTE_CAPS = Object.freeze({
-  layer: 500_000_000,
+  layer: 2_000_000_000,
   total: 15_000_000_000,
   manifest: 4_000_000,
   config: 1_000_000,
@@ -249,20 +252,8 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
       }
       throw error;
     }
-    let version;
-    try {
-      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
-    } catch (error) {
-      throw new Error(`Could not parse the ${platform} image config for ${imageRef}.`, {
-        cause: error,
-      });
-    }
-    if (typeof version !== "string" || version.trim().length === 0) {
-      throw new Error(
-        `${imageRef} does not have an org.opencontainers.image.version label for ${platform}.`,
-      );
-    }
-    versions.set(platform, version.trim());
+    const version = parseDockerImageConfigVersion(raw, imageRef, platform);
+    versions.set(platform, version);
   }
   const uniqueVersions = new Set(versions.values());
   if (uniqueVersions.size !== 1) {

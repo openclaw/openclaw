@@ -1,5 +1,7 @@
 import { Type } from "typebox";
 import {
+  COMPUTER_ESCALATION_REASONS,
+  COMPUTER_SCROLL_DIRECTIONS,
   COMPUTER_USE_V1_ACTION_NAMES,
   type ComputerUseV2ActionName,
 } from "../../plugins/computer-use-contract.js";
@@ -48,7 +50,8 @@ export function createComputerToolSchema(
       ? "get_accessibility_tree"
       : "Accessibility observations";
   return Type.Object({
-    action: stringEnum(actions),
+    // Attached desktops arbitrate control on the Gateway, independently of provider actions.
+    action: stringEnum(actions.includes("screenshot") ? [...actions, "take_control"] : actions),
     ...(targetScope === "paired"
       ? {
           ...gatewayCallOptionSchemaProperties(),
@@ -60,6 +63,12 @@ export function createComputerToolSchema(
             Type.String({
               description:
                 "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
+            }),
+          ),
+          environmentId: Type.Optional(
+            Type.String({
+              description:
+                "Conversation-attached environment ID returned by the environment tool. Selects its desktop; later calls retain that target. Cannot combine with target, node, or Gateway overrides.",
             }),
           ),
         }
@@ -94,7 +103,7 @@ export function createComputerToolSchema(
           'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
       }),
     ),
-    scrollDirection: optionalStringEnum(["up", "down", "left", "right"] as const),
+    scrollDirection: optionalStringEnum(COMPUTER_SCROLL_DIRECTIONS),
     scrollAmount: optionalPositiveIntegerSchema({
       maximum: 100,
       description: "scroll: number of wheel ticks.",
@@ -116,14 +125,14 @@ export function createComputerToolSchema(
     windowRef: Type.Optional(
       Type.String({
         description:
-          "Opaque window reference for window actions; not valid for screenshot or wait.",
+          "Opaque window reference from list_windows; required for browser_prepare. To discover browser pages, call get_browser_state with windowRef, then pass the returned browserRef and pageRef together for page snapshots and browser actions. Window actions also use windowRef; screenshot and wait do not.",
       }),
     ),
     browserRef: Type.Optional(
-      Type.String({ description: "Opaque browser reference from get_browser_state." }),
+      Type.String({ description: "From get_browser_state(windowRef); requires pageRef." }),
     ),
     pageRef: Type.Optional(
-      Type.String({ description: "Opaque browser page reference from get_browser_state." }),
+      Type.String({ description: "From get_browser_state(windowRef); requires browserRef." }),
     ),
     elementRef: Type.Optional(
       Type.String({ description: "Opaque accessibility element reference from observation." }),
@@ -170,13 +179,7 @@ export function createComputerToolSchema(
     y1: Type.Optional(Type.Number({ minimum: 0 })),
     x2: Type.Optional(Type.Number({ minimum: 0 })),
     y2: Type.Optional(Type.Number({ minimum: 0 })),
-    reason: optionalStringEnum([
-      "ax_tree_pixel_mismatch",
-      "background_delivery_failed",
-      "foreground_ineffective",
-      "no_window_target",
-      "other",
-    ] as const),
+    reason: optionalStringEnum(COMPUTER_ESCALATION_REASONS),
     snapshotFormat: optionalStringEnum(["dom_refs_v1", "semantic_v2"] as const),
     continuation: Type.Optional(Type.String()),
     includeScreenshot: Type.Optional(Type.Boolean()),

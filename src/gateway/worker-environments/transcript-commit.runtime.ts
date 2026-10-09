@@ -1,440 +1,242 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  WorkerTranscriptCommitParams,
-  WorkerTranscriptMessage,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { AgentMessage } from "../../agents/runtime/index.js";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
-  loadSessionEntry,
   publishTranscriptUpdate,
-  replaceSessionEntrySync,
   withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
+import { publishSessionEntryWorkerMetadataInvalidation } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
+import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withOwnedSessionTranscriptWriterFence,
+} from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Base64Url, sha256Hex } from "../../infra/crypto-digest.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { prepareWorkerTurnTranscriptMessage } from "./placement-turn-claim-events.js";
-import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import type {
   WorkerTranscriptCommitInput,
   WorkerTranscriptCommitOutcome,
   WorkerTranscriptCommitStore,
-} from "./transcript-commit-store.js";
+} from "./transcript-commit-ledger.js";
 import type {
   WorkerTranscriptCommitApplication,
   WorkerTranscriptCommitterOptions,
 } from "./transcript-commit.js";
+import {
+  applyPreparedTranscriptCommit,
+  isCommittedAgentMessage,
+  prepareTranscriptCommit,
+  type ApplyTranscriptCommitResult,
+  type CommittedAgentMessage,
+  type TranscriptCommitInput,
+} from "./transcript-commit.kernel.js";
+import type { WorkerTranscriptOperations } from "./transcript-commit.worker.js";
 
-type SemanticAgentMessage = Extract<AgentMessage, { role: "assistant" | "toolResult" | "user" }>;
-type CommittedAgentMessage = SemanticAgentMessage & { idempotencyKey: string };
-
-type AppliedTranscriptMessage = {
-  appended: boolean;
-  message: AgentMessage;
-  messageId: string;
-  messageSeq?: number;
-};
-
-type ApplyTranscriptCommitResult =
-  | { ok: true; messages: AppliedTranscriptMessage[] }
-  | { ok: false; reason: "invalid-batch" | "session-not-attached" | "stale-base-leaf" };
-
-type PersistedCommitResolution =
-  | { kind: "ambiguous" | "missing" }
-  | { kind: "found"; messages: AppliedTranscriptMessage[] };
-
-const WORKER_TRANSCRIPT_SESSION_CONFLICT = new Error("worker transcript session changed");
-
-function cloneContentPart(
-  part: WorkerTranscriptMessage["content"][number],
-): WorkerTranscriptMessage["content"][number] {
-  if (part.type === "text") {
-    return {
-      type: "text",
-      text: part.text,
-      ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-    };
-  }
-  if (part.type === "image") {
-    return { type: "image", data: part.data, mimeType: part.mimeType };
-  }
-  if (part.type === "thinking") {
-    return {
-      type: "thinking",
-      thinking: part.thinking,
-      ...(part.thinkingSignature ? { thinkingSignature: part.thinkingSignature } : {}),
-      ...(part.redacted === undefined ? {} : { redacted: part.redacted }),
-    };
-  }
-  return {
-    type: "toolCall",
-    id: part.id,
-    name: part.name,
-    arguments: structuredClone(part.arguments),
-    ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-    ...(part.executionMode ? { executionMode: part.executionMode } : {}),
-  };
-}
-
-function buildCommittedMessage(
-  message: WorkerTranscriptMessage,
-  idempotencyKey: string,
-): CommittedAgentMessage {
-  const content = message.content.map((part) => cloneContentPart(part));
-  if (message.role === "user") {
-    return {
-      role: "user",
-      content,
-      timestamp: message.timestamp,
-      idempotencyKey,
-    } as CommittedAgentMessage; // SAFETY: The user schema admits text/image content; cloning preserves those variants.
-  }
-  if (message.role === "toolResult") {
-    return {
-      role: "toolResult",
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content,
-      ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
-      isError: message.isError,
-      timestamp: message.timestamp,
-      idempotencyKey,
-    } as CommittedAgentMessage; // SAFETY: The tool-result schema admits text/image content; cloning preserves those variants.
-  }
-  return {
-    role: "assistant",
-    content,
-    api: message.api,
-    provider: message.provider,
-    model: message.model,
-    ...(message.responseModel ? { responseModel: message.responseModel } : {}),
-    ...(message.responseId ? { responseId: message.responseId } : {}),
-    ...(message.providerReplay ? { providerReplay: structuredClone(message.providerReplay) } : {}),
-    ...(message.diagnostics
-      ? {
-          diagnostics: message.diagnostics.map((diagnostic) => ({
-            type: diagnostic.type,
-            timestamp: diagnostic.timestamp,
-            ...(diagnostic.error
-              ? {
-                  error: {
-                    ...(diagnostic.error.name === undefined ? {} : { name: diagnostic.error.name }),
-                    message: diagnostic.error.message,
-                    ...(diagnostic.error.stack === undefined
-                      ? {}
-                      : { stack: diagnostic.error.stack }),
-                    ...(diagnostic.error.code === undefined ? {} : { code: diagnostic.error.code }),
-                  },
-                }
-              : {}),
-            ...(diagnostic.details ? { details: structuredClone(diagnostic.details) } : {}),
-          })),
-        }
-      : {}),
-    usage: {
-      input: message.usage.input,
-      output: message.usage.output,
-      cacheRead: message.usage.cacheRead,
-      cacheWrite: message.usage.cacheWrite,
-      ...(message.usage.contextUsage
-        ? { contextUsage: structuredClone(message.usage.contextUsage) }
-        : {}),
-      totalTokens: message.usage.totalTokens,
-      cost: {
-        input: message.usage.cost.input,
-        output: message.usage.cost.output,
-        cacheRead: message.usage.cost.cacheRead,
-        cacheWrite: message.usage.cost.cacheWrite,
-        total: message.usage.cost.total,
-        ...(message.usage.cost.totalOrigin ? { totalOrigin: message.usage.cost.totalOrigin } : {}),
-      },
-    },
-    stopReason: message.stopReason,
-    ...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }),
-    ...(message.errorCode === undefined ? {} : { errorCode: message.errorCode }),
-    ...(message.errorType === undefined ? {} : { errorType: message.errorType }),
-    ...(message.errorBody === undefined ? {} : { errorBody: message.errorBody }),
-    timestamp: message.timestamp,
-    idempotencyKey,
-  } as CommittedAgentMessage; // SAFETY: The assistant schema admits text/thinking/toolCall content; cloning preserves those variants.
-}
-
-function requestHash(request: WorkerTranscriptCommitParams): string {
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        baseLeafId: request.baseLeafId,
-        messages: request.messages,
-      }),
-    )
-    .digest("hex");
-}
-
-function messageIdempotencyKey(params: {
-  sessionId: string;
-  runEpoch: number;
-  seq: number;
-  index: number;
-}): string {
-  const digest = createHash("sha256")
-    .update([params.sessionId, params.runEpoch, params.seq, params.index].join("\0"))
-    .digest("base64url");
-  return `worker-commit-${digest}`;
-}
-
-function readMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!isRecord(message)) {
-    return undefined;
-  }
-  const value = message.idempotencyKey;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function isCommittedAgentMessage(message: unknown): message is CommittedAgentMessage {
-  if (!isRecord(message)) {
-    return false;
-  }
-  const role = message.role;
-  return (
-    (role === "user" || role === "assistant" || role === "toolResult") &&
-    readMessageIdempotencyKey(message) !== undefined
-  );
-}
-
-function resolveActiveCommitPrefix(params: {
-  baseLeafId: string | null;
-  manager: SessionManager;
-  messages: readonly AgentMessage[];
-}):
-  | {
-      activeVisibleEntryCount: number;
-      ok: true;
-      recoveredMessages: AppliedTranscriptMessage[];
-    }
-  | { ok: false } {
-  const activeBranch = params.manager.getBranch();
-  const activeVisibleEntryCount = activeBranch.filter(
-    (entry) => entry.type === "message" || entry.type === "compaction",
-  ).length;
-  if (params.manager.getLeafId() === params.baseLeafId) {
-    return { activeVisibleEntryCount, ok: true, recoveredMessages: [] };
-  }
-
-  const baseIndex =
-    params.baseLeafId === null
-      ? -1
-      : activeBranch.findIndex((entry) => entry.id === params.baseLeafId);
-  if (params.baseLeafId !== null && baseIndex < 0) {
-    return { ok: false };
-  }
-
-  const activeSuffix = activeBranch.slice(baseIndex + 1);
-  if (activeSuffix.length === 0) {
-    return { ok: false };
-  }
-
-  const recoveredMessages: AppliedTranscriptMessage[] = [];
-  for (const [index, entry] of activeSuffix.slice(0, params.messages.length).entries()) {
-    const expectedKey = readMessageIdempotencyKey(params.messages[index]);
-    if (
-      entry.type !== "message" ||
-      !expectedKey ||
-      !isCommittedAgentMessage(entry.message) ||
-      readMessageIdempotencyKey(entry.message) !== expectedKey
-    ) {
-      return { ok: false };
-    }
-    recoveredMessages.push({
-      appended: false,
-      message: entry.message,
-      messageId: entry.id,
-    });
-  }
-  return { activeVisibleEntryCount, ok: true, recoveredMessages };
-}
-
-function resolvePersistedCommitAcrossDag(params: {
-  baseLeafId: string | null;
-  manager: SessionManager;
-  messages: readonly AgentMessage[];
-}): PersistedCommitResolution {
-  const childrenByParent = new Map<string | null, ReturnType<SessionManager["getEntries"]>>();
-  for (const entry of params.manager.getEntries()) {
-    const children = childrenByParent.get(entry.parentId) ?? [];
-    children.push(entry);
-    childrenByParent.set(entry.parentId, children);
-  }
-
-  const completedPaths: AppliedTranscriptMessage[][] = [];
-  const visit = (
-    parentId: string | null,
-    messageIndex: number,
-    path: AppliedTranscriptMessage[],
-  ): void => {
-    if (completedPaths.length > 1) {
-      return;
-    }
-    if (messageIndex === params.messages.length) {
-      completedPaths.push(path);
-      return;
-    }
-    const expectedKey = readMessageIdempotencyKey(params.messages[messageIndex]);
-    if (!expectedKey) {
-      return;
-    }
-    for (const entry of childrenByParent.get(parentId) ?? []) {
-      if (
-        entry.type !== "message" ||
-        !isCommittedAgentMessage(entry.message) ||
-        readMessageIdempotencyKey(entry.message) !== expectedKey
-      ) {
-        continue;
-      }
-      visit(entry.id, messageIndex + 1, [
-        ...path,
-        { appended: false, message: entry.message, messageId: entry.id },
-      ]);
-    }
-  };
-
-  // The pending ledger binds the request hash while each deterministic key
-  // binds tuple + index. Do not compare re-redacted content across restarts.
-  visit(params.baseLeafId, 0, []);
-  if (completedPaths.length > 1) {
-    return { kind: "ambiguous" };
-  }
-  const messages = completedPaths[0];
-  return messages ? { kind: "found", messages } : { kind: "missing" };
-}
+const log = createSubsystemLogger("gateway/worker-transcript");
+const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.workerTranscriptCommit);
 
 async function applyWorkerTranscriptCommit(params: {
   assertCurrent: () => undefined;
   config: OpenClawConfig;
   identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
+  assistantItemIds: ReadonlyMap<string, string>;
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
   runId: string | null;
-  sessionId: string;
-  target: ResolvedWorkerSessionTarget;
+  target: BoundAgentRunSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
+  const target = withOwnedSessionTranscriptWriterFence({
+    ...captureSessionTranscriptTargetBinding(params.target),
+    expectedLifecycleRevision: params.target.expectedLifecycleRevision,
+    expectedWriterRunId: params.target.expectedWriterRunId,
+  });
+  const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+  const assertCurrent = () => {
+    params.assertCurrent();
+    assertOwned();
+  };
+  assertCurrent();
   const redactedMessages = params.messages.map((message) =>
     attachSessionTranscriptRunId(redactTranscriptMessage(message, params.config), params.runId),
   );
-  const expectedState = {
-    sessionId: params.sessionId,
-    lifecycleRevision: params.target.sessionEntry.lifecycleRevision,
+  const { env: _env, ...scope } = target;
+  const input: TranscriptCommitInput = {
+    scope,
+    messages: params.messages,
+    lifecycleRevision: target.expectedLifecycleRevision,
+    requestedBaseLeafId: params.requestedBaseLeafId,
+    recoverPersistedBatch: params.recoverPersistedBatch,
+    cwd: process.cwd(),
+  };
+  const prepareFresh = (recoveredCount: number) => {
+    const messages = redactedMessages.slice(recoveredCount);
+    if (!messages.every(isCommittedAgentMessage)) {
+      return undefined;
+    }
+    return messages.map((message) => {
+      if (message.role === "assistant") {
+        Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
+        applyAssistantDeliveryDirectives(message);
+      }
+      return redactTranscriptMessageForStorage(message, { config: params.config });
+    });
   };
   let applied: ApplyTranscriptCommitResult;
-  try {
-    applied = await withTranscriptWriteTransaction(params.target, (transcriptTarget) => {
-      params.assertCurrent();
-      const currentEntry = loadSessionEntry(params.target);
-      if (!currentEntry || currentEntry.sessionId !== expectedState.sessionId) {
-        return { ok: false as const, reason: "session-not-attached" as const };
+  if (isIncognitoSessionKey(target.sessionKey)) {
+    // Incognito retains its process-held database until the worker-owned cutover.
+    let projectionNeedsReconcile = false;
+    applied = await withTranscriptWriteTransaction(target, (): ApplyTranscriptCommitResult => {
+      assertCurrent();
+      const nativeInput = { ...input, scope: target };
+      const plan = prepareTranscriptCommit(nativeInput);
+      if (!plan.result.ok || plan.result.messages.length === input.messages.length) {
+        return plan.result;
       }
-      if (currentEntry.lifecycleRevision !== expectedState.lifecycleRevision) {
-        return { ok: false as const, reason: "invalid-batch" as const };
+      const messages = prepareFresh(plan.result.messages.length);
+      if (!messages) {
+        return { ok: false, reason: "invalid-batch" };
       }
-
-      const manager = SessionManager.open(transcriptTarget);
-      if (params.recoverPersistedBatch) {
-        // Only a pending ledger row may prove an off-branch batch: the agent DB
-        // can commit before the shared replay ledger records its terminal result.
-        const recovered = resolvePersistedCommitAcrossDag({
-          baseLeafId: params.requestedBaseLeafId,
-          manager,
-          messages: params.messages,
-        });
-        if (recovered.kind === "found") {
-          return { ok: true as const, messages: recovered.messages };
-        }
-        if (recovered.kind === "ambiguous") {
-          return { ok: false as const, reason: "invalid-batch" as const };
-        }
-      }
-      const prefix = resolveActiveCommitPrefix({
-        baseLeafId: params.requestedBaseLeafId,
-        manager,
-        messages: params.messages,
+      const result = applyPreparedTranscriptCommit(nativeInput, plan, messages, () => {
+        projectionNeedsReconcile = true;
       });
-      if (!prefix.ok) {
-        return { ok: false as const, reason: "stale-base-leaf" as const };
-      }
-
-      // Redaction can change role discriminators; admit the whole fresh suffix before any writes.
-      const freshMessages = redactedMessages.slice(prefix.recoveredMessages.length);
-      if (!freshMessages.every(isCommittedAgentMessage)) {
-        return { ok: false as const, reason: "invalid-batch" as const };
-      }
-
-      const messages = [...prefix.recoveredMessages];
-      let nextMessageSeq = prefix.activeVisibleEntryCount;
-      for (const message of freshMessages) {
-        if (message.role === "assistant") {
-          Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
-        }
-        const messageId = manager.appendMessage(message, {
-          config: params.config,
-          // Active-path recovery owns dedupe. A global key scan could reuse an
-          // id from an abandoned branch while SessionManager advances another id.
-          idempotencyLookup: "caller-checked",
-        });
-        nextMessageSeq += 1;
-        messages.push({
-          appended: true,
-          message,
-          messageId,
-          messageSeq: nextMessageSeq,
-        });
-      }
-
-      const freshEntry = loadSessionEntry(params.target);
-      if (
-        !freshEntry ||
-        freshEntry.sessionId !== expectedState.sessionId ||
-        freshEntry.lifecycleRevision !== expectedState.lifecycleRevision
-      ) {
-        throw WORKER_TRANSCRIPT_SESSION_CONFLICT;
-      }
-      const appendedCount = messages.filter((message) => message.appended).length;
-      const nextEntry = {
-        ...freshEntry,
-        ...(appendedCount > 0
-          ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) }
-          : {}),
-      };
-      replaceSessionEntrySync(params.target, nextEntry);
-      // Synchronous assistant preparation can close the owner after earlier rows were appended.
-      params.assertCurrent();
-      return { ok: true as const, messages };
+      assertCurrent();
+      return result;
     });
-  } catch (error) {
-    if (error === WORKER_TRANSCRIPT_SESSION_CONFLICT) {
-      return { ok: false, reason: "invalid-batch" };
+    if (projectionNeedsReconcile) {
+      startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: target.sessionId });
     }
-    throw error;
+  } else {
+    await restoreSessionColdTranscript(target, assertCurrent);
+    assertCurrent();
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    let worker:
+      | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<WorkerTranscriptOperations>>>
+      | undefined;
+    let outcome: { ok: true; value: ApplyTranscriptCommitResult } | { ok: false; error: unknown };
+    try {
+      worker = await openOpenClawAgentSqliteWorkerStore<WorkerTranscriptOperations>(
+        options,
+        { execution },
+        { moduleUrl, input: undefined },
+      );
+      const value = await worker.run(async (writer): Promise<ApplyTranscriptCommitResult> => {
+        const databaseIdentity = execution.fileIdentity;
+        if (!databaseIdentity) {
+          throw new Error("Worker transcript has no prepared database identity");
+        }
+        const plan = await writer.execute({
+          type: "transcript.prepare",
+          input: { ...input, scope: { ...scope, storePath: databaseIdentity.nativeLocation } },
+        });
+        assertCurrent();
+        if (!plan.ok || plan.messages.length === input.messages.length) {
+          return plan;
+        }
+        const messages = prepareFresh(plan.messages.length);
+        if (!messages) {
+          return { ok: false, reason: "invalid-batch" };
+        }
+        assertCurrent();
+        const committed = await writer.execute({ type: "transcript.commit", input: { messages } });
+        if (committed.result.ok && committed.result.messages.some((message) => message.appended)) {
+          publishSessionEntryWorkerMetadataInvalidation({
+            agentId: target.agentId,
+            storePath: execution.path,
+            databaseIdentity: databaseIdentity.physicalIdentity,
+            sessionKey: target.sessionKey,
+          });
+        }
+        if (committed.projectionNeedsReconcile) {
+          startSessionTranscriptIndexReconcile({
+            ...options,
+            preferredSessionId: target.sessionId,
+          });
+        }
+        return committed.result;
+      }, assertCurrent);
+      outcome = { ok: true, value };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    const cleanupFailures: unknown[] = [];
+    try {
+      await worker?.close();
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+    try {
+      await execution.release();
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+    if (cleanupFailures.length > 0) {
+      const cleanupError = createSqliteLifecycleAggregateError(
+        [...(outcome.ok ? [] : [outcome.error]), ...cleanupFailures],
+        "Worker transcript operation and cleanup failed",
+        outcome.ok ? cleanupFailures[0] : (outcome.error ?? cleanupFailures[0]),
+      );
+      if (!outcome.ok) {
+        throw cleanupError;
+      }
+      try {
+        log.warn(
+          `Worker transcript completed before cleanup failed: ${formatErrorMessage(cleanupError)}`,
+        );
+      } catch {
+        // A diagnostic failure cannot erase the committed batch receipt.
+      }
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    applied = outcome.value;
   }
   if (!applied.ok) {
     return applied;
   }
 
   for (const message of applied.messages) {
-    if (!message.appended) {
+    const itemId =
+      message.message.role === "assistant"
+        ? params.assistantItemIds.get(readTranscriptMessageIdempotencyKey(message.message) ?? "")
+        : undefined;
+    // Pending recovery can find a committed row whose original publication was lost.
+    // A recovered sequence certifies active-branch membership; abandoned rows stay silent.
+    if (!message.appended && (!itemId || message.messageSeq === undefined)) {
       continue;
     }
     const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     await publishTranscriptUpdate(params.target, {
+      lifecycleRevision: applied.lifecycleRevision,
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
+      ...(itemId ? { assistantItemIds: [itemId] } : {}),
       ...(runId ? { runId } : {}),
     });
   }
@@ -452,36 +254,45 @@ export async function commitWorkerTranscript(
     sessionId,
     runEpoch: params.request.runEpoch,
     seq: params.request.seq,
-    requestHash: requestHash(params.request),
+    requestHash: sha256Hex(
+      stableStringify({ baseLeafId: params.request.baseLeafId, messages: params.request.messages }),
+    ),
   };
+  const complete = (outcome: WorkerTranscriptCommitOutcome) =>
+    store.complete({ ...input, outcome }, params.assertCurrent);
+  const config = options.getConfig();
+  const target = withOwnedSessionTranscriptWriterFence({
+    ...captureSessionTranscriptTargetBinding(params.sessionTarget),
+    expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision,
+    expectedWriterRunId: params.sessionTarget.expectedWriterRunId,
+  });
+  const assistantItemIds = new Map<string, string>();
+  // Correlation belongs to the commit receipt, never stored or provider-visible content.
+  const messages = params.request.messages.map((message, index) => {
+    const idempotencyKey = `worker-commit-${sha256Base64Url(
+      [sessionId, params.request.runEpoch, params.request.seq, index].join("\0"),
+    )}`;
+    if (message.role === "assistant") {
+      const { itemId, ...assistant } = structuredClone(message);
+      if (itemId) {
+        assistantItemIds.set(idempotencyKey, itemId);
+      }
+      return { ...assistant, idempotencyKey };
+    }
+    return { ...structuredClone(message), idempotencyKey };
+  });
+  const requestedBaseLeafId = params.request.baseLeafId;
   params.assertCurrent();
-  const started = store.begin(input);
+  const started = await store.begin(input, params.assertCurrent);
   if (started.kind === "replay") {
+    params.assertCurrent();
     return started.outcome;
   }
   if (started.kind === "rejected") {
+    params.assertCurrent();
     return { ok: false, reason: "invalid-batch" };
   }
 
-  const config = options.getConfig();
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
-    return store.complete({
-      ...input,
-      outcome: { ok: false, reason: "session-not-attached" },
-    });
-  }
-  const messages = params.request.messages.map((message, index) =>
-    buildCommittedMessage(
-      message,
-      messageIdempotencyKey({
-        sessionId,
-        runEpoch: params.request.runEpoch,
-        seq: params.request.seq,
-        index,
-      }),
-    ),
-  );
   let authorityFailure: { error: unknown } | undefined;
   let applied: ApplyTranscriptCommitResult;
   try {
@@ -497,33 +308,27 @@ export async function commitWorkerTranscript(
       config,
       identity: params.identity,
       messages,
+      assistantItemIds,
       recoverPersistedBatch: started.kind === "recover",
-      requestedBaseLeafId: params.request.baseLeafId,
+      requestedBaseLeafId,
       runId: params.identity.runId,
-      sessionId,
       target,
     });
   } catch (error) {
     // A callback refusal has rolled back the agent transaction. Free only
     // this invocation's fresh reservation; unknown commit outcomes must recover.
     if (started.kind === "claimed" && authorityFailure && authorityFailure.error === error) {
-      store.discardUncommitted(input);
+      await store.discardUncommitted(input);
     }
     throw error;
   }
   if (!applied.ok) {
-    return store.complete({ ...input, outcome: { ok: false, reason: applied.reason } });
+    return await complete({ ok: false, reason: applied.reason });
   }
   const entryIds = applied.messages.map((message) => message.messageId);
   const newLeafId = entryIds.at(-1);
-  if (entryIds.length !== params.request.messages.length || !newLeafId) {
-    return store.complete({
-      ...input,
-      outcome: { ok: false, reason: "invalid-batch" },
-    });
+  if (entryIds.length !== messages.length || !newLeafId) {
+    return await complete({ ok: false, reason: "invalid-batch" });
   }
-  return store.complete({
-    ...input,
-    outcome: { ok: true, result: { entryIds, newLeafId } },
-  });
+  return await complete({ ok: true, result: { entryIds, newLeafId } });
 }

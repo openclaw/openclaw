@@ -1,4 +1,3 @@
-/** Runs gateway discovery, optional SSH tunneling, and per-target probes. */
 import {
   normalizeOptionalString,
   readStringValue,
@@ -21,7 +20,6 @@ import {
   type GatewayStatusTarget,
 } from "./helpers.js";
 
-/** Single gateway status target plus probe details and derived display metadata. */
 export type GatewayStatusProbedTarget = {
   target: GatewayStatusTarget;
   probe: Awaited<ReturnType<typeof probeGateway>>;
@@ -30,7 +28,6 @@ export type GatewayStatusProbedTarget = {
   authDiagnostics: string[];
 };
 
-/** Probes configured, explicit, and optionally SSH-discovered gateway targets. */
 export async function runGatewayStatusProbePass(params: {
   cfg: OpenClawConfig;
   opts: {
@@ -44,8 +41,8 @@ export async function runGatewayStatusProbePass(params: {
   baseTargets: GatewayStatusTarget[];
   remotePort: number;
   sshTarget: string | null;
+  sshRouteTarget?: string | null;
   sshIdentity: string | null;
-  loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
   localTlsFingerprint?: string;
   signal?: AbortSignal;
 }): Promise<{
@@ -73,10 +70,11 @@ export async function runGatewayStatusProbePass(params: {
       return null;
     }
     try {
-      const { startSshPortForward } = await params.loadSshTunnelModule();
+      const { startSshPortForward } = await import("../../infra/ssh-tunnel.js");
       const tunnel = await startSshPortForward({
         target: sshTarget,
         identity: params.sshIdentity ?? undefined,
+        hostKeyPolicy: params.cfg.gateway?.remote?.sshHostKeyPolicy,
         localPortPreferred: params.remotePort,
         remotePort: params.remotePort,
         timeoutMs: Math.min(1500, params.overallTimeoutMs),
@@ -99,7 +97,7 @@ export async function runGatewayStatusProbePass(params: {
   const [discovery, tunnelFirst] = await Promise.all([discoveryTask, tunnelTask]);
 
   if (!sshTarget && params.opts.sshAuto) {
-    const { parseSshTarget } = await params.loadSshTunnelModule();
+    const { parseSshTarget } = await import("../../infra/ssh-tunnel.js");
     sshTarget = pickAutoSshTargetFromDiscovery({
       discovery,
       parseSshTarget,
@@ -143,10 +141,20 @@ export async function runGatewayStatusProbePass(params: {
         const probe = await probeGateway({
           url: target.url,
           config: params.cfg,
-          // Explicit, configured-remote, and SSH targets must not inherit the
-          // local Gateway's device token, even when the transport is loopback.
+          configuredRemote: target.kind === "configRemote",
+          // The same selected route owns both token lookup and the live tunnel.
+          // Transfer that lifetime to the client; the finally block also covers
+          // failures before client construction.
           ...(target.kind === "sshTunnel"
-            ? { suppressStoredDeviceAuth: true }
+            ? {
+                originScopedDeviceAuth: true,
+                sshTunnel: {
+                  target: params.sshRouteTarget ?? sshTarget ?? "",
+                  remotePort: params.remotePort,
+                  ...(params.sshIdentity ? { identity: params.sshIdentity } : {}),
+                },
+                preparedSshTunnel: tunnel ?? undefined,
+              }
             : target.kind !== "localLoopback"
               ? { originScopedDeviceAuth: true }
               : {}),

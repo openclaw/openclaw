@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForPluginCacheRetirement } from "../../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
@@ -18,6 +19,8 @@ let state: OpenClawTestState | undefined;
 afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
+  const { failures } = await waitForPluginCacheRetirement();
+  expect(failures).toEqual([]);
   vi.unstubAllEnvs();
   await state?.cleanup();
   state = undefined;
@@ -78,7 +81,7 @@ it.each([true, false])(
           botToken: "root-token",
           connectionUrl: "https://root.example.com",
           dmPolicy: "pairing",
-          accounts: { alerts: { botToken: "alerts-token" } },
+          accounts: {},
         },
       },
     };
@@ -87,10 +90,12 @@ it.each([true, false])(
     const first = seedMissingDefaultAccountsFromSingleAccountBase(cfg, changes);
     expect(first.channels?.["promotion-chat"]).toEqual({
       enabled: true,
-      dmPolicy: "pairing",
       accounts: {
-        alerts: { botToken: "alerts-token" },
-        default: { botToken: "root-token", connectionUrl: "https://root.example.com" },
+        default: {
+          botToken: "root-token",
+          connectionUrl: "https://root.example.com",
+          dmPolicy: "pairing",
+        },
       },
     });
     expect(changes).toHaveLength(1);
@@ -153,7 +158,7 @@ it.each([
           name: "Environment-backed root",
           groupPolicy: "allowlist",
           groupAllowFrom: [],
-          accounts: { ada: { name: "Ada" } },
+          accounts: {},
         },
       },
     };
@@ -174,7 +179,6 @@ it.each([
               groupPolicy: "allowlist",
               groupAllowFrom: [],
             },
-            ada: { name: "Ada", groupPolicy: "allowlist", groupAllowFrom: [] },
           },
         });
         expect(changes).toHaveLength(1);
@@ -227,6 +231,7 @@ it.each([
   }
 
   const cfg: OpenClawConfig = {
+    meta: { migrations: { webhookListeners: true } },
     ...(enabled === undefined
       ? {}
       : {
@@ -266,4 +271,69 @@ it.each([
   expect(first.changes).toEqual([]);
   expect(second.config).toEqual(first.config);
   expect(second.changes).toEqual([]);
+});
+
+it.each([false, true])(
+  "preserves WhatsApp accounts and returns warning-only results (existing default=%s)",
+  async (existingDefault) => {
+    state = await createOpenClawTestState({ label: "doctor-whatsapp-routing", applyEnv: true });
+    vi.stubEnv("OPENCLAW_OAUTH_DIR", state.statePath("credentials"));
+    const cfg: OpenClawConfig = {
+      meta: { migrations: { webhookListeners: true } },
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "disabled",
+          accounts: {
+            work: { authDir: "/synthetic/work" },
+            ...(existingDefault
+              ? {
+                  default: {
+                    dmPolicy: "allowlist" as const,
+                    allowFrom: ["+15550001111"],
+                    groupPolicy: "disabled" as const,
+                  },
+                }
+              : {}),
+          },
+        },
+      },
+    };
+    const before = structuredClone(cfg);
+    const first = normalizeCompatibilityConfigValues(cfg);
+    expect(Object.keys(first.config.channels?.whatsapp?.accounts ?? {})).toEqual(
+      existingDefault ? ["work", "default"] : ["work"],
+    );
+    expect(first.config).toEqual(before);
+    expect(first.changes).toEqual([]);
+    if (existingDefault) {
+      expect(first.warnings).toEqual([
+        expect.stringContaining('Unqualified WhatsApp operations currently select "default"'),
+      ]);
+    } else {
+      expect(first.warnings).toBeUndefined();
+    }
+    expect(normalizeCompatibilityConfigValues(first.config)).toEqual(first);
+  },
+);
+
+it("honors WhatsApp root preservation from the cold official catalog", async () => {
+  state = await createOpenClawTestState({ label: "doctor-whatsapp-cold", applyEnv: true });
+  const bundledDir = state.path("empty-bundled");
+  await fs.mkdir(bundledDir);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+  vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+  const cfg: OpenClawConfig = {
+    channels: {
+      whatsapp: {
+        dmPolicy: "allowlist",
+        allowFrom: ["+15550001111"],
+        accounts: {},
+      },
+    },
+  };
+  const changes: string[] = [];
+  expect(seedMissingDefaultAccountsFromSingleAccountBase(cfg, changes)).toEqual(cfg);
+  expect(changes).toEqual([]);
 });

@@ -5,12 +5,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateSystemInfoResult } from "../../../packages/gateway-protocol/src/index.js";
 import * as diskSpace from "../../infra/disk-space.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
+import {
+  createModelsListTestContext,
+  providerCatalogEntry,
+} from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAdvertisedLanHostCore: vi.fn(async () => "192.168.1.20"),
   runCommandWithTimeout: vi.fn(),
+  statfs: vi.fn(),
 }));
 
 vi.mock("../../process/exec.js", async (importOriginal) => ({
@@ -18,12 +26,29 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));
 
-const mountedVolumeOutput = (argv: string[]) => ({
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      stat: (...args: Parameters<typeof actual.stat>) => {
+        if (args[0] === "/Volumes/Data") {
+          return Promise.resolve({ dev: 2n });
+        }
+        if (args[0] === "/dev/data") {
+          return Promise.resolve({ rdev: 2n });
+        }
+        return actual.stat(...args);
+      },
+      statfs: mocks.statfs,
+    },
+  };
+});
+
+const mountedVolumeOutput = () => ({
   code: 0,
-  stdout:
-    argv[0] === "mount"
-      ? "/dev/root on / (apfs, local)\n/dev/data on /Volumes/Data (apfs, local)\n"
-      : "/dev/root 1000 600 400 60% /\n/dev/data 2000 500 1500 25% /Volumes/Data\n",
+  stdout: "/dev/root on / (apfs, local)\n/dev/data on /Volumes/Data (apfs, local)\n",
   stderr: "",
 });
 
@@ -39,14 +64,24 @@ import { systemHandlers } from "./system.js";
 describe("system.info", () => {
   let sampleTime = Date.now();
   beforeEach(() => {
-    sampleTime += 10_001;
+    sampleTime += 30_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
+    mocks.statfs.mockReset().mockImplementation(async (path: string) => ({
+      blocks: path === "/" ? 1000n : 2000n,
+      bavail: path === "/" ? 400n : 1500n,
+      frsize: 1024n,
+    }));
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    sampleTime = Math.max(sampleTime, Date.now());
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("returns a schema-valid host resource snapshot", async () => {
+    const readCpus = vi.spyOn(os, "cpus");
     const respond = vi.fn();
     const eventLoop = {
       degraded: false,
@@ -57,6 +92,13 @@ describe("system.info", () => {
       delayMaxMs: 20,
       utilization: 0.25,
       cpuCoreRatio: 0.3,
+      cpuBreakdown: {
+        mainThreadCoreRatio: 0.1,
+        workerCoreRatio: 0.15,
+        otherThreadsCoreRatio: 0.05,
+        hostUtilization: 0.7,
+        hostCpuCount: 8,
+      },
     };
     const getEventLoopHealth = vi.fn(() => ({ ...eventLoop }));
 
@@ -64,22 +106,27 @@ describe("system.info", () => {
       params: {},
       respond,
       context: {
-        getRuntimeConfig: () => ({ gateway: { port: 18789 } }),
+        ...createModelsListTestContext({
+          cfg: { gateway: { port: 18789 } },
+          catalog: [],
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        }),
         getEventLoopHealth,
       },
     } as unknown as GatewayRequestHandlerOptions;
 
-    await expectDefined(
+    const handler = expectDefined(
       systemHandlers["system.info"],
       'systemHandlers["system.info"] test invariant',
-    )(request);
+    );
+    await handler(request);
     eventLoop.cpuCoreRatio = 0.6;
-    await expectDefined(
-      systemHandlers["system.info"],
-      'systemHandlers["system.info"] test invariant',
-    )(request);
+    readCpus.mockReturnValue([]);
+    vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
+    await handler(request);
 
     expect(respond).toHaveBeenCalledTimes(2);
+    expect(mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv)).toEqual([["mount"]]);
     expect(mocks.resolveAdvertisedLanHostCore).toHaveBeenCalledTimes(1);
     const [ok, payload, error] = respond.mock.calls[0] ?? [];
     expect(ok).toBe(true);
@@ -93,6 +140,7 @@ describe("system.info", () => {
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
     expect(payload.eventLoop?.cpuCoreRatio).toBe(0.3);
+    expect(payload.eventLoop?.cpuBreakdown).toEqual(eventLoop.cpuBreakdown);
     expect(payload.processMemory?.rssBytes).toBeGreaterThan(0);
     expect(payload.processMemory?.heapUsedBytes).toBeGreaterThan(0);
     const refreshed = respond.mock.calls[1]?.[1];
@@ -100,14 +148,183 @@ describe("system.info", () => {
       throw new Error("system.info returned an invalid refreshed payload");
     }
     expect(refreshed.eventLoop?.cpuCoreRatio).toBe(0.6);
+    expect(refreshed.cpuCount).toBe(payload.cpuCount);
+    expect(refreshed.cpuModel).toBe(payload.cpuModel);
+    expect(readCpus).not.toHaveBeenCalled();
+    expect(refreshed.eventLoop?.cpuBreakdown).toEqual(eventLoop.cpuBreakdown);
     expect(getEventLoopHealth).toHaveBeenCalledTimes(2);
     expect(payload).toHaveProperty("disks", [
       { path: "/", totalBytes: 1_024_000, availableBytes: 409_600 },
       { path: "/Volumes/Data", totalBytes: 2_048_000, availableBytes: 1_536_000 },
     ]);
+
+    sampleTime += 24 * 60 * 60_000;
+    vi.mocked(Date.now).mockReturnValue(sampleTime);
+    await handler(request);
+    expect(readCpus).not.toHaveBeenCalled();
+    expect(respond.mock.calls[2]?.[1]).toMatchObject({
+      cpuCount: payload.cpuCount,
+      cpuModel: payload.cpuModel,
+      eventLoop: { cpuCoreRatio: 0.6 },
+    });
   });
 
-  it.each(["throw", "mount-exit", "df-exit", "empty"])(
+  it("reports the runtime the default agent's utility completions execute on", async () => {
+    const respond = vi.fn();
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          utilityModel: "anthropic/claude-haiku-4-5",
+          models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    const request = {
+      params: {},
+      respond,
+      context: createModelsListTestContext({
+        cfg: config,
+        catalog: [providerCatalogEntry("anthropic", "claude-haiku-4-5")],
+        preparedAuthModes: { "claude-cli": "oauth" },
+        pluginRegistry: (() => {
+          const registry = createEmptyPluginRegistry();
+          registry.cliBackends.push({
+            pluginId: "anthropic",
+            source: "runtime",
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "claude" },
+            },
+          });
+          return registry;
+        })(),
+      }),
+    } as unknown as GatewayRequestHandlerOptions;
+    const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
+    await handler(request);
+    const payload = respond.mock.calls[0]?.[1];
+    if (!validateSystemInfoResult(payload)) {
+      throw new Error("system.info returned an invalid payload");
+    }
+    expect(payload.defaultAgentUtilityModel).toEqual({
+      status: "configured",
+      model: "anthropic/claude-haiku-4-5",
+      runtime: { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+    });
+  });
+
+  it("keeps each utility route on its prepared owner across requests with the same config", async () => {
+    const config = {
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions" as const,
+            baseUrl: "https://custom.example/v1",
+            apiKey: "synthetic-key",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: "custom/main",
+          utilityModel: "custom/small",
+          models: { "custom/small": { agentRuntime: { id: "utility-test" } } },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
+    const ambientRegistry = createEmptyPluginRegistry();
+    for (const label of ["First Owner", "Replacement Owner"]) {
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.agentHarnesses.push({
+        pluginId: "utility-test",
+        source: "runtime",
+        harness: {
+          id: "utility-test",
+          label,
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          runIsolatedCompletionV2: vi.fn(),
+        },
+      });
+      await withPluginRuntimeRegistryScope(ambientRegistry, () =>
+        handler({
+          params: {},
+          respond,
+          context: createModelsListTestContext({
+            cfg: config,
+            catalog: [providerCatalogEntry("custom", "small")],
+            pluginRegistry,
+          }),
+        } as unknown as GatewayRequestHandlerOptions),
+      );
+      expect(respond.mock.lastCall?.[1].defaultAgentUtilityModel.runtime).toEqual({
+        id: "utility-test",
+        kind: "harness",
+        label,
+      });
+    }
+  });
+
+  it.each([false, true])(
+    "bounds state-volume reads, keeps live counters and invalidates on expiry or path change (unavailable=%s)",
+    async (unavailable) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-first");
+      vi.spyOn(process, "uptime").mockReturnValue(123);
+      vi.spyOn(process, "memoryUsage").mockReturnValue(process.memoryUsage());
+      const freemem = vi.spyOn(os, "freemem").mockReturnValue(1024);
+      const loadavg = vi.spyOn(os, "loadavg").mockReturnValue([1, 2, 3]);
+      const readDisk = vi
+        .spyOn(diskSpace, "tryReadDiskSpace")
+        .mockImplementation((targetPath) =>
+          unavailable
+            ? null
+            : { targetPath, checkedPath: targetPath, totalBytes: 2048, availableBytes: 1024 },
+        );
+      const respond = vi.fn();
+      const request = {
+        params: {},
+        respond,
+        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
+      } as unknown as GatewayRequestHandlerOptions;
+      const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
+      await handler(request);
+      const initial = respond.mock.calls[0]?.[1];
+      freemem.mockReturnValue(512);
+      loadavg.mockReturnValue([4, 5, 6]);
+      readDisk.mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        totalBytes: 2048,
+        availableBytes: 256,
+      }));
+      vi.mocked(Date.now).mockReturnValue(sampleTime + 29_999);
+      await handler(request);
+      expect(readDisk).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[1]?.[1]).toEqual({
+        ...initial,
+        memoryFreeBytes: 512,
+        loadAverage: [4, 5, 6],
+      });
+      vi.mocked(Date.now).mockReturnValue(sampleTime + 30_000);
+      await handler(request);
+      expect(readDisk).toHaveBeenCalledTimes(2);
+      expect(respond.mock.calls[2]?.[1]).toMatchObject({
+        diskAvailableBytes: 256,
+        diskPath: "/system-info-first",
+      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-second");
+      await handler(request);
+      expect(readDisk).toHaveBeenCalledTimes(3);
+      expect(respond.mock.calls[3]?.[1]).toMatchObject({ diskPath: "/system-info-second" });
+    },
+  );
+
+  it.each(["throw", "mount-exit", "statfs-error", "empty"])(
     "preserves the state-directory snapshot only when discovery is unavailable (%s)",
     async (failure) => {
       vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
@@ -118,10 +335,9 @@ describe("system.info", () => {
       }));
       if (failure === "throw") {
         mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error("unavailable"));
+      } else if (failure === "statfs-error") {
+        mocks.statfs.mockRejectedValue(new Error("filesystem unavailable"));
       } else {
-        if (failure === "df-exit") {
-          mocks.runCommandWithTimeout.mockImplementationOnce(mountedVolumeOutput);
-        }
         mocks.runCommandWithTimeout.mockResolvedValueOnce({
           code: failure === "empty" ? 0 : 1,
           stdout: "",
@@ -135,7 +351,7 @@ describe("system.info", () => {
       )({
         params: {},
         respond,
-        context: { getRuntimeConfig: () => ({}) },
+        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
       } as unknown as GatewayRequestHandlerOptions);
       const [ok, payload] = respond.mock.calls[0] ?? [];
       expect(ok).toBe(true);

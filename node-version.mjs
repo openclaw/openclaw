@@ -8,13 +8,15 @@ const NODE_RELEASE_FLOORS = [
 ];
 const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS[NODE_RELEASE_FLOORS.length - 1];
 
-// Render diagnostics from the same release floors used by the runtime guard.
-export const SUPPORTED_NODE_VERSIONS = `${NODE_RELEASE_FLOORS.map(
+// Share numeric requirements and diagnostics with the runtime guard's release floors.
+export const SUPPORTED_NODE_VERSION_RANGE = NODE_RELEASE_FLOORS.map(
   ({ major, minor, patch }, index) =>
     `>=${major}.${minor}.${patch}${index < NODE_RELEASE_FLOORS.length - 1 ? ` <${major + 1}` : ""}`,
-)
-  .join(", ")
-  .replace(/, ([^,]+)$/, ", or $1")} (Node 26 recommended)`;
+).join(" || ");
+export const SUPPORTED_NODE_VERSIONS = `${SUPPORTED_NODE_VERSION_RANGE.replaceAll(
+  " || ",
+  ", ",
+).replace(/, ([^,]+)$/, ", or $1")} (Node 26 recommended)`;
 
 export function formatUnsupportedNodeVersionMessage(version) {
   return [

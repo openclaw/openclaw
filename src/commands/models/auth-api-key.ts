@@ -19,10 +19,15 @@ import {
   resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
 } from "../../agents/model-auth-provider-config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -39,7 +44,7 @@ export async function saveModelProviderApiKey(params: {
   apiKey: string;
   profileId?: string;
   agentDir: string;
-}): Promise<string> {
+}): Promise<{ profileId: string; warning?: string }> {
   const provider = normalizeManualAuthProvider(params.provider);
   const key = normalizeSecretInput(params.apiKey);
   registerSecretValueForRedaction(key);
@@ -143,38 +148,49 @@ export async function saveModelProviderApiKey(params: {
     preserveApiKeyMetadata: true,
     validateCurrentCredential: validateReplacement,
   });
-  await updateConfig((current) => {
-    const id = params.profileId ? undefined : configuredKey(current);
-    if (
-      !params.profileId &&
-      (id !== connectionId ||
-        (id !== undefined && !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
-    ) {
-      throw new Error(
-        "The provider connection changed during the key update. Reopen the connection and save the key again",
-      );
-    }
-    validateSharedBinding();
-    const next = applyAuthProfileConfig(current, {
-      ...current.auth?.profiles?.[profileId],
-      profileId,
-      provider,
-      mode: "api_key",
-    });
-    if (!id || !next.models?.providers?.[id]) {
+  const application = createRuntimeConfigWriteApplication(
+    captureGatewayRootWorkAdmissionContinuationScope()?.run,
+  );
+  let configChanged = false;
+  await updateConfig(
+    (current) => {
+      const id = params.profileId ? undefined : configuredKey(current);
+      if (
+        !params.profileId &&
+        (id !== connectionId ||
+          (id !== undefined &&
+            !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
+      ) {
+        throw new Error(
+          "The provider connection changed during the key update. Reopen the connection and save the key again",
+        );
+      }
+      validateSharedBinding();
+      let next = applyAuthProfileConfig(current, {
+        ...current.auth?.profiles?.[profileId],
+        profileId,
+        provider,
+        mode: "api_key",
+      });
+      if (id && next.models?.providers?.[id]) {
+        next = {
+          ...next,
+          models: {
+            ...next.models,
+            providers: {
+              ...next.models.providers,
+              [id]: { ...next.models.providers[id], apiKey: profileId },
+            },
+          },
+        };
+      }
+      configChanged = !isDeepStrictEqual(current, next);
       return next;
-    }
-    return {
-      ...next,
-      models: {
-        ...next.models,
-        providers: {
-          ...next.models.providers,
-          [id]: { ...next.models.providers[id], apiKey: profileId },
-        },
-      },
-    };
-  }).catch((error: unknown) => {
+    },
+    undefined,
+    undefined,
+    attachRuntimeConfigWriteApplication({}, application),
+  ).catch((error: unknown) => {
     throw new Error(
       "API key saved, but provider settings could not be applied: " +
         (error instanceof Error ? error.message : String(error)) +
@@ -182,5 +198,12 @@ export async function saveModelProviderApiKey(params: {
       { cause: error },
     );
   });
-  return profileId;
+  if (configChanged && !(application.claimed && (await application.result) === "applied")) {
+    return {
+      profileId,
+      warning:
+        "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them.",
+    };
+  }
+  return { profileId };
 }

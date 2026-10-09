@@ -1,5 +1,6 @@
 // File Transfer tests cover file write plugin behavior.
 import crypto from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,34 +23,18 @@ function b64(s: string): string {
 }
 
 function expectFailure(result: Awaited<ReturnType<typeof handleFileWrite>>, code: string) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected file write failure");
-  }
-  expect(result.code).toBe(code);
+  expect(result).toMatchObject({ ok: false, code });
 }
 
 function expectSuccessFields(
   result: Awaited<ReturnType<typeof handleFileWrite>>,
   fields: Record<string, unknown>,
 ) {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
-  }
-  for (const [key, value] of Object.entries(fields)) {
-    expect(result[key as keyof typeof result]).toEqual(value);
-  }
+  expect(result).toMatchObject({ ok: true, ...fields });
 }
 
 async function expectAccessMissing(target: string) {
-  try {
-    await fs.access(target);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected ${target} to be missing`);
+  await expect(fs.access(target)).rejects.toHaveProperty("code", "ENOENT");
 }
 
 describe("handleFileWrite — input validation", () => {
@@ -85,27 +70,55 @@ describe("handleFileWrite — happy path", () => {
   it("writes a new file and returns size + sha256 + overwritten=false", async () => {
     const target = path.join(tmpRoot, "out.txt");
     const contents = "hello write\n";
-    const r = await handleFileWrite({ path: target, contentBase64: b64(contents) });
+    const expectedSha = crypto.createHash("sha256").update(contents).digest("hex");
+    const r = await handleFileWrite({
+      path: target,
+      contentBase64: b64(contents),
+      expectedSha256: expectedSha.toUpperCase(),
+    });
     if (!r.ok) {
       throw new Error(`expected ok, got ${r.code}: ${r.message}`);
     }
     expect(r.size).toBe(contents.length);
     expect(r.overwritten).toBe(false);
-    const expectedSha = crypto.createHash("sha256").update(contents).digest("hex");
     expect(r.sha256).toBe(expectedSha);
 
     const onDisk = await fs.readFile(target, "utf-8");
     expect(onDisk).toBe(contents);
-  });
-
-  it("does not leave .tmp files behind on success", async () => {
-    const target = path.join(tmpRoot, "atomic.txt");
-    const r = await handleFileWrite({ path: target, contentBase64: b64("body") });
-    expect(r.ok).toBe(true);
-
     const entries = await fs.readdir(tmpRoot);
     const tmpFiles = entries.filter((n) => n.includes(".tmp"));
     expect(tmpFiles).toStrictEqual([]);
+  });
+
+  it("closes the published file when its final identity stat fails", async () => {
+    const target = path.join(tmpRoot, "stat-failure.txt");
+    const realOpen = fs.open.bind(fs);
+    let observed: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      const readOnly =
+        flags === "r" ||
+        (typeof flags === "number" && (flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR)) === 0);
+      if (String(file) === target && readOnly) {
+        observed = handle;
+        vi.spyOn(handle, "stat").mockRejectedValueOnce(
+          Object.assign(new Error("identity observation failed"), { code: "EIO" }),
+        );
+      }
+      return handle;
+    });
+    try {
+      const result = await handleFileWrite({ path: target, contentBase64: b64("published") });
+      expectSuccessFields(result, { path: target, size: 9 });
+      if (!observed) {
+        throw new Error("expected a real handle for the published file");
+      }
+      await expect(observed.stat()).rejects.toMatchObject({ code: "EBADF" });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("published");
+    } finally {
+      openSpy.mockRestore();
+      await observed?.close();
+    }
   });
 });
 
@@ -342,30 +355,77 @@ describe("handleFileWrite — symlink protection", () => {
     await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
   });
 
-  it("writes through the preflight binding when the existing file is unchanged", async () => {
+  it("checks hard links on the bound write handle after path validation", async () => {
     const target = path.join(tmpRoot, "target.txt");
+    const alias = path.join(tmpRoot, "outside-alias.txt");
     await fs.writeFile(target, "before");
-    const preflight = await handleFileWrite({
+    const params = {
       path: target,
       contentBase64: b64("after"),
       overwrite: true,
-      preflightOnly: true,
-    });
+      rejectHardlinks: true,
+    };
+    const preflight = await handleFileWrite({ ...params, preflightOnly: true });
     if (!preflight.ok) {
       throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
     }
-
-    const result = await handleFileWrite({
-      path: target,
-      contentBase64: b64("after"),
-      overwrite: true,
-      expectedCanonicalPath: preflight.path,
-      expectedBinding: preflight.binding,
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (args[0] === target && args[1] === "r+") {
+        await fs.link(target, alias);
+      }
+      return handle;
     });
-
-    expectSuccessFields(result, { path: target, size: 5 });
-    await expect(fs.readFile(target, "utf8")).resolves.toBe("after");
+    try {
+      const result = await handleFileWrite({
+        ...params,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+      expectFailure(result, "HARDLINK_TARGET_DENIED");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("before");
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe("before");
+    } finally {
+      openSpy.mockRestore();
+    }
   });
+
+  it.each(["", "after", "after!", "a longer replacement"])(
+    "preserves the preflight-bound inode and hardlinks for payload %j",
+    async (content) => {
+      const target = path.join(tmpRoot, "target.txt");
+      const alias = path.join(tmpRoot, "alias.txt");
+      await fs.writeFile(target, "before");
+      await fs.link(target, alias);
+      const identity = await fs.stat(target, { bigint: true });
+      const preflight = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
+
+      const result = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+
+      expectSuccessFields(result, { path: target, size: Buffer.byteLength(content) });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe(content);
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe(content);
+      await expect(fs.stat(target, { bigint: true })).resolves.toMatchObject({
+        dev: identity.dev,
+        ino: identity.ino,
+      });
+    },
+  );
 
   it("rejects a parent replacement before creating a new file", async () => {
     const parent = path.join(tmpRoot, "parent");
@@ -459,33 +519,6 @@ describe("handleFileWrite — integrity check", () => {
     // Critical: the original must survive. A bad caller hash must not
     // be a primitive for replacing-then-deleting an existing file.
     expect(await fs.readFile(target, "utf-8")).toBe("ORIGINAL_CONTENT_DO_NOT_TOUCH");
-  });
-
-  it("accepts a matching expectedSha256 and keeps the file", async () => {
-    const target = path.join(tmpRoot, "checked.txt");
-    const contents = "real-content";
-    const sha = crypto.createHash("sha256").update(contents).digest("hex");
-
-    const r = await handleFileWrite({
-      path: target,
-      contentBase64: b64(contents),
-      expectedSha256: sha,
-    });
-    expect(r.ok).toBe(true);
-    expect(await fs.readFile(target, "utf-8")).toBe(contents);
-  });
-
-  it("treats expectedSha256 as case-insensitive", async () => {
-    const target = path.join(tmpRoot, "checked.txt");
-    const contents = "abc";
-    const sha = crypto.createHash("sha256").update(contents).digest("hex").toUpperCase();
-
-    const r = await handleFileWrite({
-      path: target,
-      contentBase64: b64(contents),
-      expectedSha256: sha,
-    });
-    expect(r.ok).toBe(true);
   });
 });
 

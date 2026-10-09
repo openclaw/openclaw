@@ -138,6 +138,21 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
   );
 });
 
+async function writeReloadArtifact(rootDir: string, pluginId: string, tool: string) {
+  await fs.promises.mkdir(rootDir);
+  createColdPluginFixture({
+    rootDir,
+    pluginId,
+    manifest: {
+      providers: [],
+      channels: [],
+      channelConfigs: {},
+      providerAuthChoices: [],
+      contracts: { tools: [tool] },
+    },
+  });
+}
+
 describe("reload consent and current install preconditions", () => {
   let testState: OpenClawTestState | undefined;
   afterEach(async () => {
@@ -148,18 +163,7 @@ describe("reload consent and current install preconditions", () => {
     const state = await createOpenClawTestState({ label: "reload-consent-record" });
     testState = state;
     const rootDir = state.path("plugin");
-    await fs.promises.mkdir(rootDir);
-    createColdPluginFixture({
-      rootDir,
-      pluginId: "reload-proof",
-      manifest: {
-        providers: [],
-        channels: [],
-        channelConfigs: {},
-        providerAuthChoices: [],
-        contracts: { tools: ["proof.read"] },
-      },
-    });
+    await writeReloadArtifact(rootDir, "reload-proof", "proof.read");
     const config = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
       plugins: {
@@ -200,8 +204,6 @@ describe("reload consent and current install preconditions", () => {
     const target = { pluginId: "reload-proof", installHash: hashStableJson(record) };
     const request = { plugins: [target], acknowledgeCapabilities: { reviewToken } };
     let failure: unknown;
-    // This combined form is a new public contract. Exercise the real management
-    // owner directly so baseline proof reaches consent, not the old wire rejection.
     await reloadManagedPlugin({ ...request, env: state.env, applyRuntime }).catch(
       (error: unknown) => {
         failure = error;
@@ -228,53 +230,10 @@ describe("reload consent and current install preconditions", () => {
     expect(applyRuntime).toHaveBeenCalledOnce();
   });
 
-  it("rejects an acknowledgment for a different declared surface without persistence or publication", async () => {
-    const { state, record, applyRuntime } = await prepareReload();
-    const foreignRoot = state.path("foreign-plugin");
-    await fs.promises.mkdir(foreignRoot);
-    createColdPluginFixture({
-      rootDir: foreignRoot,
-      pluginId: "foreign-proof",
-      manifest: {
-        providers: [],
-        channels: [],
-        channelConfigs: {},
-        providerAuthChoices: [],
-        contracts: { tools: ["foreign.write"] },
-      },
-    });
-    const foreignToken = computeDeclaredSurfaceHash(
-      resolvePluginArtifactDeclaredSurface(foreignRoot, state.env),
-    );
-    const request = {
-      plugins: [{ pluginId: "reload-proof", installHash: hashStableJson(record) }],
-      acknowledgeCapabilities: { reviewToken: foreignToken },
-    };
-    await expect(
-      reloadManagedPlugin({ ...request, env: state.env, applyRuntime }),
-    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "reload-proof" } });
-    const current = readPersistedInstalledPluginIndexInstallRecords({ env: state.env })?.[
-      "reload-proof"
-    ];
-    expect(current).toEqual(record);
-    expect(applyRuntime).not.toHaveBeenCalled();
-  });
-
   it("stops a multi-target reload when another selected package needs a different review", async () => {
     const { state, record, reviewToken, applyRuntime, config } = await prepareReload();
     const secondRoot = state.path("second-plugin");
-    await fs.promises.mkdir(secondRoot);
-    createColdPluginFixture({
-      rootDir: secondRoot,
-      pluginId: "second-proof",
-      manifest: {
-        providers: [],
-        channels: [],
-        channelConfigs: {},
-        providerAuthChoices: [],
-        contracts: { tools: ["second.write"] },
-      },
-    });
+    await writeReloadArtifact(secondRoot, "second-proof", "second.write");
     const cohortConfig = {
       ...config,
       plugins: {

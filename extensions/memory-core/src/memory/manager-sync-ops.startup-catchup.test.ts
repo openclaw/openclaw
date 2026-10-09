@@ -18,6 +18,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -45,7 +46,7 @@ describe("session startup catch-up", () => {
     vi.useRealTimers();
     resetTranscriptUpdateListener();
     for (const database of startupHarnessDatabases) {
-      database.close();
+      await database.closeShadow();
     }
     startupHarnessDatabases.clear();
     await testState.restoreEnv();
@@ -131,6 +132,38 @@ describe("session startup catch-up", () => {
     };
   }
 
+  it("excludes system-only cron-base sessions but catches later user content", async () => {
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "cron-base";
+    const sessionKey = "agent:main:cron:synthetic-job";
+    await configureTestSessionStore(storePath);
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId, updatedAt: 10 },
+    });
+    const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };
+    await appendSessionTranscriptMessageByIdentity({
+      ...identity,
+      message: {
+        role: "user",
+        content: "Scheduled internal maintenance reminder.",
+        provenance: { kind: "internal_system", sourceTool: "cron" },
+      },
+    });
+    const harness = new SessionStartupCatchupHarness([]);
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
+    expect(harness.isSessionsDirty()).toBe(false);
+
+    await appendSessionTranscriptMessageByIdentity({
+      ...identity,
+      message: { role: "user", content: "Remember my favorite fruit is mango." },
+    });
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([sessionKey]);
+    expect(harness.isSessionsDirty()).toBe(true);
+  });
+
   it("marks stale indexed session files dirty and schedules catch-up sync", async () => {
     const session = await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([
@@ -167,6 +200,9 @@ describe("session startup catch-up", () => {
     await harness.waitForSessionSync();
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.deletedSources).toEqual([
+      { path: stalePath, source: "sessions", expectedHash: "stale-hash" },
+    ]);
     expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
   });
 
@@ -187,6 +223,7 @@ describe("session startup catch-up", () => {
       await expect(catchUp).rejects.toBe(scanError);
       await expect(corpusList).rejects.toBe(scanError);
       expect(harness.syncCalls).toEqual([]);
+      expect(harness.deletedSources).toEqual([]);
       expect(harness.getIndexedSourceState(stalePath)).toEqual({
         path: stalePath,
         hash: "preserved-hash",
@@ -267,7 +304,7 @@ describe("session startup catch-up", () => {
     const harness = new SessionStartupCatchupHarness([
       {
         path: state.path,
-        hash: "current-hash",
+        hash: `sqlite:${state.revisionMs}:current-hash`,
         mtime: state.mtimeMs,
         size: state.size,
       },
@@ -380,7 +417,7 @@ describe("session startup catch-up", () => {
     expect(restarted.indexedPaths).toEqual([]);
   });
 
-  it("indexes a SQLite transcript whose updatedAt rolled back", async () => {
+  it("upgrades an indexed SQLite activity fingerprint during startup catch-up", async () => {
     const session = await writeSqliteSession({
       content: "SQLite rollback",
       updatedAt: 10,
@@ -415,7 +452,7 @@ describe("session startup catch-up", () => {
     expect(harness.indexedContents).toEqual(["User: SQLite rollback"]);
   });
 
-  it("converges an unchanged SQLite updatedAt rollback after deferred session sync", async () => {
+  it("converges a legacy SQLite activity fingerprint without reindexing unchanged text", async () => {
     const session = await writeSqliteSession({ updatedAt: 10 });
     const entry = await buildSessionEntry(session.sessionKey, {
       agentId: "main",
@@ -442,15 +479,41 @@ describe("session startup catch-up", () => {
       true,
     );
 
-    await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
-    await harness.waitForSessionSync();
+    const observed = observeHostDataSql();
+    const cpuStart = process.threadCpuUsage();
+    const started = performance.now();
+    try {
+      await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+      await harness.waitForSessionSync();
+      const sourceSql = observed.queries.filter((sql) =>
+        /\b(?:from|update)\s+["`]?memory_index_sources\b/i.test(sql),
+      );
+      if (process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1") {
+        const cpu = process.threadCpuUsage(cpuStart);
+        console.log(
+          "MEMORY_PUBLICATION_BENCH",
+          JSON.stringify({
+            operation: "source-refresh",
+            cohortSqlObservations: sourceSql.length,
+            wholeMainSqlCalls: observed.calls
+              .slice(1)
+              .reduce((total, call) => total + call.mock.calls.length, 0),
+            wholeMainCpuMs: (cpu.user + cpu.system) / 1000,
+            endToEndMs: performance.now() - started,
+          }),
+        );
+      }
+      expect(sourceSql).toEqual([]);
+    } finally {
+      observed.restore();
+    }
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
     expect(harness.indexedPaths).toEqual([]);
     expect(harness.indexedContents).toEqual([]);
     expect(harness.getIndexedSourceState(entry.path)).toEqual({
       path: entry.path,
-      hash: entry.hash,
+      hash: `sqlite:${entry.revisionMs}:${entry.hash}`,
       mtime: entry.mtimeMs,
       size: entry.size,
     });
