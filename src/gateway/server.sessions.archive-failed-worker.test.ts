@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -102,7 +104,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
   expect(reclaim).not.toHaveBeenCalled();
   const config = (await getGatewayConfigModule()).getRuntimeConfig();
   const policy = createManagedWorktreeOwnerPolicy(config);
-  expect(policy.shouldProtectOwner("session", key)).toBe(true);
+  expect(policy.readOwnerState("session", key)).toBe("active");
   expect(await managedWorktrees.gc(policy)).toMatchObject({
     removed: [],
   });
@@ -140,7 +142,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     to: "local",
     expectedGeneration: failed.generation,
   });
-  expect(createManagedWorktreeOwnerPolicy(config).shouldRemoveOwner("session", key)).toBe(true);
+  expect(createManagedWorktreeOwnerPolicy(config).readOwnerState("session", key)).toBe("retired");
 });
 
 test("failed worker cleanup keeps worktree reconstruction blocked until the worker is gone", async () => {
@@ -183,5 +185,112 @@ test("failed worker cleanup keeps worktree reconstruction blocked until the work
     );
   } finally {
     restore.mockRestore();
+  }
+});
+
+test("sessions.patchMany commits archive and releases same-session writes before responding and waking cleanup", async ({
+  signal,
+}) => {
+  const { key, sessionId, storePath, worktree, tickWorktreeMaintenance } =
+    await createArchiveWorktreeFixture();
+  const revision = loadSessionEntry({ storePath, sessionKey: key })?.lifecycleRevision;
+  await fs.writeFile(path.join(worktree.path, "draft.txt"), "preserved work\n");
+  const effectsEntered = createDeferredCore();
+  const releaseEffects = createDeferredCore();
+  const cleanupEntered = createDeferredCore();
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const originalGc = managedWorktrees.gc.bind(managedWorktrees);
+  const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation((params) => {
+    cleanupEntered.resolve();
+    return originalGc(params);
+  });
+  const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
+  const remove = vi.spyOn(managedWorktrees, "remove").mockImplementation(async (params) => {
+    entered.resolve();
+    await release.promise;
+    return await originalRemove(params);
+  });
+  const archived = directSessionReq(
+    "sessions.patchMany",
+    { targets: [{ key, expectedSessionId: sessionId }], patch: { archived: true } },
+    {
+      context: {
+        cron: {
+          list: async () => {
+            effectsEntered.resolve();
+            await releaseEffects.promise;
+            return [];
+          },
+          getDefaultAgentId: () => "main",
+        },
+      },
+    },
+  );
+  let beforeResponseTick: Promise<void> | undefined;
+  let cleanup: Promise<void> | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        awaitGateBeforeSettlement(
+          effectsEntered.promise,
+          archived,
+          "archive did not reach its committed effects",
+        ),
+        entered.promise,
+        "archive awaited worktree removal before responding",
+      ),
+      signal,
+    );
+    expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
+      archivedAt: expect.any(Number),
+      worktree: { id: worktree.id },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.lifecycleRevision).toBe(revision);
+    expect(
+      await withinTest(directSessionReq("sessions.patch", { key, label: "Same session" }), signal),
+    ).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.label).toBe("Same session");
+    await fs.access(worktree.path);
+
+    beforeResponseTick = tickWorktreeMaintenance();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        beforeResponseTick,
+        cleanupEntered.promise,
+        "worktree cleanup started before the archive response",
+      ),
+      signal,
+    );
+    expect(gc).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+
+    releaseEffects.resolve();
+    expect(await withinTest(archived, signal)).toMatchObject({
+      ok: true,
+      payload: { outcomes: [{ ok: true }] },
+    });
+    cleanup = tickWorktreeMaintenance();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        cleanup,
+        "cleanup did not remove the retired worktree",
+      ),
+      signal,
+    );
+    release.resolve();
+    await cleanup;
+    expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.any(String),
+    });
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+  } finally {
+    releaseEffects.resolve();
+    release.resolve();
+    await Promise.allSettled([archived, beforeResponseTick, cleanup]);
+    gc.mockRestore();
+    remove.mockRestore();
   }
 });

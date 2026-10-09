@@ -11,7 +11,6 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
-import { applyImportanceMultiplier } from "./importance.js";
 import { buildFtsQuery } from "./keyword-query.js";
 import {
   runMemoryCuratedCandidates,
@@ -26,7 +25,7 @@ import type {
   MemoryKeywordWorkerResult,
 } from "./manager-search.worker.js";
 import {
-  applyProjectRanking,
+  applyRetrievalRanking,
   prepareActiveProjectKeys,
   projectScoreMultiplier,
 } from "./project-ranking.js";
@@ -54,6 +53,22 @@ type KeywordSearchOptions = {
   rankingQuery?: string;
   fuseRecallMetadata?: boolean;
 };
+
+function projectRecallMetadata(
+  row:
+    | { importance: number | null; triggers: string | null; project_key: string | null }
+    | undefined,
+) {
+  return {
+    ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
+    ...(typeof row?.triggers === "string" && row.triggers.trim()
+      ? { triggers: row.triggers.trim() }
+      : {}),
+    ...(typeof row?.project_key === "string" && row.project_key.trim()
+      ? { projectKey: row.project_key.trim() }
+      : {}),
+  };
+}
 
 function compareKeywordSearchHits(
   a: KeywordSearchHit,
@@ -94,38 +109,33 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     limit?: number;
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
-    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return await this.readCuratedMemoryCandidates({
-      limit,
-      projectsOnly: false,
-      activeProjectKeys: opts?.activeProjectKeys,
-    });
+    return await this.readCuratedMemoryCandidates(opts, false);
   }
 
   async listCuratedProjectCandidates(opts: {
     activeProjectKeys: string[];
     limit?: number;
   }): Promise<MemorySearchResult[]> {
-    const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
-    return await this.readCuratedMemoryCandidates({
-      limit,
-      projectsOnly: true,
-      activeProjectKeys: opts.activeProjectKeys,
-    });
+    return await this.readCuratedMemoryCandidates(opts, true);
   }
 
-  private async readCuratedMemoryCandidates(query: {
-    limit: number;
-    projectsOnly: boolean;
-    activeProjectKeys?: string[];
-  }): Promise<MemorySearchResult[]> {
+  private async readCuratedMemoryCandidates(
+    opts: { limit?: number; activeProjectKeys?: string[] } | undefined,
+    projectsOnly: boolean,
+  ): Promise<MemorySearchResult[]> {
+    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? (projectsOnly ? 48 : 512))));
     return await this.withManagerOperation(async () => {
       const result = await runMemoryCuratedCandidates(
         {
           agentId: this.agentId,
           databasePath: resolveUserPath(this.settings.store.databasePath),
         },
-        { ...query, checkProvenanceRepair: this.memorySourceProvenanceRepairPending },
+        {
+          limit,
+          projectsOnly,
+          activeProjectKeys: opts?.activeProjectKeys,
+          checkProvenanceRepair: this.memorySourceProvenanceRepairPending,
+        },
       );
       this.memorySourceProvenanceRepairPending = result.provenanceRepairPending;
       if (this.memorySourceProvenanceRepairPending) {
@@ -138,38 +148,26 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         });
         return [];
       }
-      return this.toCuratedMemorySearchResults(result.rows);
-    });
-  }
-
-  private toCuratedMemorySearchResults(
-    rows: Awaited<ReturnType<typeof runMemoryCuratedCandidates>>["rows"],
-  ): MemorySearchResult[] {
-    return rows.map((row) => {
-      const result: MemorySearchResult = {
-        path: row.path,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: 0,
-        snippet: row.text,
-        source: "memory",
-      };
-      if (typeof row.importance === "number") {
-        result.importance = row.importance;
-      }
-      if (typeof row.triggers === "string" && row.triggers.trim()) {
-        result.triggers = row.triggers.trim();
-      }
-      if (typeof row.project_key === "string" && row.project_key.trim()) {
-        result.projectKey = row.project_key.trim();
-      }
-      result.provenance = {
-        originClass: row.origin_class,
-        sessionKind: row.session_kind,
-        observedAt: row.observed_at,
-        ...(typeof row.supersedes_key === "string" ? { supersedesKey: row.supersedes_key } : {}),
-      };
-      return result;
+      return result.rows.map((row): MemorySearchResult => {
+        const candidate: MemorySearchResult = {
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 0,
+          snippet: row.text,
+          source: "memory",
+        };
+        Object.assign(candidate, projectRecallMetadata(row));
+        candidate.provenance = {
+          originClass: row.origin_class,
+          sessionKind: row.session_kind,
+          observedAt: row.observed_at,
+        };
+        if (typeof row.supersedes_key === "string") {
+          candidate.provenance.supersedesKey = row.supersedes_key;
+        }
+        return candidate;
+      });
     });
   }
 
@@ -199,7 +197,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
     const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
-    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
+    const ranked = applyRetrievalRanking(decayed, activeProjects)
       .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
       .map((entry) =>
         entry.exactPathSpecificity > 0
@@ -261,13 +259,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         const row = metadataById.get(entry.id);
         return Object.assign(entry, {
           sourceMtime: sourceMtimes[entry.source].get(entry.path),
-          ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
-          ...(typeof row?.triggers === "string" && row.triggers.trim()
-            ? { triggers: row.triggers.trim() }
-            : {}),
-          ...(typeof row?.project_key === "string" && row.project_key.trim()
-            ? { projectKey: row.project_key.trim() }
-            : {}),
+          ...projectRecallMetadata(row),
           ...(row?.provenance ? { provenance: row.provenance } : {}),
         });
       });

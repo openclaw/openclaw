@@ -94,6 +94,7 @@ export async function runProjectionWrite<T>(
   operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
   operation: (database: OpenClawAgentDatabase) => T,
   memorySource?: MemoryTranscriptProjectionSource,
+  signal?: AbortSignal,
 ): Promise<T> {
   return await runExclusiveSqliteSessionWrite(
     databaseOptions,
@@ -120,6 +121,9 @@ export async function runProjectionWrite<T>(
         : write();
     },
     operationLabel,
+    undefined,
+    "foreground",
+    signal,
   );
 }
 
@@ -219,6 +223,7 @@ export async function finalizePreparedProjection(
       sessionChanges.emit({
         storePath: databaseOptions.path,
         sessionKey: result.sessionKey,
+        scope: "transcript",
         facts: { kind: "unchanged" },
       });
     }
@@ -249,6 +254,7 @@ export async function finalizePreparedProjection(
           {
             storePath: database.path,
             sessionKey: session.session_key,
+            scope: "transcript",
             facts: { kind: "unchanged" },
           },
           database.db,
@@ -264,7 +270,9 @@ export async function finalizePreparedProjection(
 export async function readSessionTranscriptIndexStatus(
   params: OpenClawAgentDatabaseOptions,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  signal?.throwIfAborted();
   assertCurrent?.();
   const options: ReconcileDatabaseOptions = {
     ...params,
@@ -283,6 +291,7 @@ export async function readSessionTranscriptIndexStatus(
         );
         return status.hasMore || status.sessionIds.length > 0;
       },
+      signal,
     );
     incognito.actor.assertReadable();
     incognito.authority.assertCurrent();
@@ -315,6 +324,7 @@ export async function readSessionTranscriptIndexStatus(
               assertCurrent?.();
               execution!.assertCurrent();
             },
+            { signal },
           );
           return receipt?.value ?? { sessionIds: [], hasMore: false, traversalComplete: true };
         })
@@ -329,6 +339,7 @@ export async function readSessionTranscriptIndexStatus(
             };
           },
           memorySource,
+          signal,
         );
     assertCurrent?.();
     return status.hasMore || status.sessionIds.length > 0;

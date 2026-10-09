@@ -5,6 +5,7 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { getUserProfileDisplay } from "../state/user-profiles.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
@@ -211,6 +212,7 @@ export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {
   const { runtime } = params;
+  const agentDatabaseStartup = getAgentDatabaseStartupAdmission();
   const {
     connectionWork,
     runtimeState,
@@ -265,6 +267,17 @@ export function createGatewayRequestContext(
       return runtimeState.cronState.storePath;
     },
     getRuntimeConfig,
+    ...(agentDatabaseStartup
+      ? {
+          agentDatabaseStartup: {
+            get hasPendingAgents() {
+              return agentDatabaseStartup.hasPendingAgents;
+            },
+            waitForAgentPreparation:
+              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
+          },
+        }
+      : {}),
     resolveSessionRequestTargets: (request) =>
       resolveSessionRequestTargets({ ...request, context }),
     getCommittedRuntimeConfig: () =>
@@ -475,6 +488,7 @@ export function createGatewayRequestContext(
         });
       }
     },
+    sharedGatewaySessionGenerationState,
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectStaleSharedGatewayAuthClients({
         clients,

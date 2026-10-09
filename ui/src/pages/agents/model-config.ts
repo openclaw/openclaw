@@ -67,14 +67,13 @@ function stageModelShape(
   primary: string | null,
   fallbacks: string[] | null,
 ) {
-  if (primary && fallbacks) {
-    runtimeConfig.patchForm(path, { primary, fallbacks });
-  } else if (primary) {
-    runtimeConfig.patchForm(path, primary);
-  } else if (fallbacks) {
-    runtimeConfig.patchForm(path, { fallbacks });
-  } else {
+  if (!primary && !fallbacks) {
     runtimeConfig.removeFormValue(path);
+  } else {
+    runtimeConfig.patchForm(
+      path,
+      primary && fallbacks ? { primary, fallbacks } : primary || { fallbacks },
+    );
   }
 }
 

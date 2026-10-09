@@ -501,19 +501,18 @@ async function migrateSource(
         currentConversation ??= current;
       }
       const stored = currentConversation ?? baseStored;
-      const sessionKey = owner
-        ? bindingStoreKey({
-            kind: "session",
-            agentId: owner.agentId,
-            sessionId: owner.sessionId,
-            sessionKey: owner.sessionKey,
-          })
-        : undefined;
       const conversationEntries = conversationKeys.map((key) => ({ key, value: stored }));
-      const sessionEntry =
-        owner && sessionKey
-          ? { key: sessionKey, value: copyBindingForSession(stored, owner.sessionId) }
-          : undefined;
+      const sessionEntry = owner
+        ? {
+            key: bindingStoreKey({
+              kind: "session",
+              agentId: owner.agentId,
+              sessionId: owner.sessionId,
+              sessionKey: owner.sessionKey,
+            }),
+            value: copyBindingForSession(stored, owner.sessionId),
+          }
+        : undefined;
       const entries = [...conversationEntries, ...(sessionEntry ? [sessionEntry] : [])];
       const hasExpected = (value: MigratedBindingRow | undefined, target: MigratedBindingRow) => {
         const parsed = readStoredCodexAppServerBinding(value);

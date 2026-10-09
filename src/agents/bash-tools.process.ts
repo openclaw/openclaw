@@ -567,69 +567,49 @@ export function createProcessTool(
           return runningSessionResult(resolved.session, text);
         }
 
-        case "kill": {
-          if (!scopedSession) {
-            return failText(`No active session found for ${params.sessionId}`);
-          }
-          if (!scopedSession.backgrounded) {
-            return failText(`Session ${params.sessionId} is not backgrounded.`);
-          }
-          if (scopedSession.finalizing) {
-            return failText(`Session ${params.sessionId} is finalizing.`);
-          }
-          if (!cancelBackgroundExecSession(scopedSession.id)) {
-            return failText(
-              `Unable to terminate session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
-            );
-          }
-          resetPollRetrySuggestion(params.sessionId);
-          // The kill was performed; "failed" here would flag a successful
-          // action as a tool error and invite the model to retry it.
-          return textResult(`Termination requested for session ${params.sessionId}.`, {
-            status: "completed",
-            name: deriveSessionName(scopedSession.command),
-          });
-        }
-
-        case "clear": {
-          if (scopedFinished) {
-            resetPollRetrySuggestion(params.sessionId);
-            deleteSession(params.sessionId);
-            return textResult(`Cleared session ${params.sessionId}.`, { status: "completed" });
-          }
-          return failText(`No finished session found for ${params.sessionId}`);
-        }
-
+        case "kill":
+        case "clear":
         case "remove": {
-          if (scopedSession) {
+          if (params.action !== "clear" && scopedSession) {
             if (!scopedSession.backgrounded) {
               return failText(`Session ${params.sessionId} is not backgrounded.`);
             }
             if (scopedSession.finalizing) {
               return failText(`Session ${params.sessionId} is finalizing.`);
             }
+            const removing = params.action === "remove";
             if (!cancelBackgroundExecSession(scopedSession.id)) {
               return failText(
-                `Unable to remove session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
+                `Unable to ${removing ? "remove" : "terminate"} session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
               );
             }
-            // Keep remove semantics deterministic: drop from process registry now.
-            scopedSession.backgrounded = false;
-            deleteSession(params.sessionId);
+            if (removing) {
+              // Hide the record now; the supervisor still owns process settlement.
+              scopedSession.backgrounded = false;
+              deleteSession(params.sessionId);
+            }
             resetPollRetrySuggestion(params.sessionId);
-            // Removal succeeded (termination requested + registry row dropped);
-            // match the finished-session remove branch's success shape.
-            return textResult(`Removed session ${params.sessionId} (termination requested).`, {
-              status: "completed",
-              name: deriveSessionName(scopedSession.command),
-            });
+            return textResult(
+              removing
+                ? `Removed session ${params.sessionId} (termination requested).`
+                : `Termination requested for session ${params.sessionId}.`,
+              { status: "completed", name: deriveSessionName(scopedSession.command) },
+            );
+          }
+          if (params.action === "kill") {
+            return failText(`No active session found for ${params.sessionId}`);
           }
           if (scopedFinished) {
             resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
-            return textResult(`Removed session ${params.sessionId}.`, { status: "completed" });
+            return textResult(
+              `${params.action === "clear" ? "Cleared" : "Removed"} session ${params.sessionId}.`,
+              { status: "completed" },
+            );
           }
-          return failText(`No session found for ${params.sessionId}`);
+          return failText(
+            `No ${params.action === "clear" ? "finished session" : "session"} found for ${params.sessionId}`,
+          );
         }
       }
 

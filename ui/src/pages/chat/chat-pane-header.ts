@@ -196,14 +196,19 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       method: "session.members.listEvidence",
       requiredScope: "operator.read",
     });
-    const sharingWriteAccess = (method: string) =>
-      readSessionMethodAccess(sharingSnapshot, { method, requiredScope: "operator.write" });
-    const sharingVisibilityAccess = sharingWriteAccess("session.visibility.set");
-    const publicShareAccess = sharingWriteAccess("session.publicShare.set");
-    const sharingMemberAddAccess = sharingWriteAccess("session.members.add");
-    const sharingMemberRemoveAccess = sharingWriteAccess("session.members.remove");
+    const sharingWriteReason = (method: string) => {
+      const access = readSessionMethodAccess(sharingSnapshot, {
+        method,
+        requiredScope: "operator.write",
+      });
+      return access.allowed ? undefined : access.reason;
+    };
+    const visibilityDisabledReason = sharingWriteReason("session.visibility.set");
+    const publicShareDisabledReason = sharingWriteReason("session.publicShare.set");
+    const memberAddDisabledReason = sharingWriteReason("session.members.add");
+    const memberRemoveDisabledReason = sharingWriteReason("session.members.remove");
     const sharingOpenDisabledReason =
-      sharingReadAccess.allowed || sharingVisibilityAccess.allowed
+      sharingReadAccess.allowed || visibilityDisabledReason === undefined
         ? undefined
         : sharingReadAccess.reason;
     const renameAccess = row
@@ -497,14 +502,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         allowedVisibilities,
         sharingReadAccess.allowed,
         sharingOpenDisabledReason,
-        sharingVisibilityAccess.allowed,
-        sharingVisibilityAccess.allowed ? undefined : sharingVisibilityAccess.reason,
-        sharingMemberAddAccess.allowed,
-        sharingMemberAddAccess.allowed ? undefined : sharingMemberAddAccess.reason,
-        sharingMemberRemoveAccess.allowed,
-        sharingMemberRemoveAccess.allowed ? undefined : sharingMemberRemoveAccess.reason,
-        publicShareAccess.allowed,
-        publicShareAccess.allowed ? undefined : publicShareAccess.reason,
+        visibilityDisabledReason,
+        memberAddDisabledReason,
+        memberRemoveDisabledReason,
+        publicShareDisabledReason,
         ownerViewing,
         personActivity,
         showOwnerChip,
@@ -518,21 +519,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               allowedVisibilities,
               membersAvailable: sharingReadAccess.allowed,
               openDisabledReason: sharingOpenDisabledReason,
-              visibilityDisabledReason: sharingVisibilityAccess.allowed
-                ? undefined
-                : sharingVisibilityAccess.reason,
-              memberAddDisabledReason: sharingMemberAddAccess.allowed
-                ? undefined
-                : sharingMemberAddAccess.reason,
-              memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-                ? undefined
-                : sharingMemberRemoveAccess.reason,
+              visibilityDisabledReason,
+              memberAddDisabledReason,
+              memberRemoveDisabledReason,
               publicShareDisabledReason:
                 !row.sessionId || isIncognitoSessionKey(row.key)
                   ? t("chat.sessionSharing.publicUnavailable")
-                  : publicShareAccess.allowed
-                    ? undefined
-                    : publicShareAccess.reason,
+                  : publicShareDisabledReason,
               onPublicShareChange: (enabled: boolean) =>
                 void this.setSessionPublicShare(row, enabled),
               onCopyPublicLink: () => void this.copySessionPublicLink(row),
@@ -567,7 +560,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       personActivity,
       catalog,
       catalogColor: this.catalogSession?.color,
-      editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
+      editing: Boolean(this.headerRenameSession && this.headerRenameSession.key === row?.key),
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,

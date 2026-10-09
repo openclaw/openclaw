@@ -118,7 +118,10 @@ internal class WearProxyBridge(
   ): Long =
     when (operation) {
       is WearBridgeOperation.Event -> {
-        markEventDequeued()
+        synchronized(overflowLock) {
+          check(pendingEventCount > 0)
+          pendingEventCount -= 1
+        }
         sendEventPreservingActor(operation.message)
         operation.message.sequence
       }
@@ -249,13 +252,6 @@ internal class WearProxyBridge(
     } else {
       pendingEventCount += 1
       operations.trySend(WearBridgeOperation.Event(event)).getOrThrow()
-    }
-  }
-
-  private fun markEventDequeued() {
-    synchronized(overflowLock) {
-      check(pendingEventCount > 0)
-      pendingEventCount -= 1
     }
   }
 

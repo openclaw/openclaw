@@ -188,7 +188,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           const result = await state.sendReplyOperationAsync(
             deliveryOperation,
             context?.abortSignal,
-            false,
             "block",
             context?.deliveryIntentId,
           );
@@ -225,6 +224,10 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           }
         }
       };
+      const sendWithSource = (sourcePayload: ReplyPayload, terminal = false) => {
+        const send = () => sendPrepared(sourcePayload, terminal);
+        return source ? source.run(send) : send();
+      };
       if (cleanBlockTtsDirectiveText && contributesToFinalReply && payload.text) {
         drain = async (text) => {
           if (!text || deferFinalTtsText) {
@@ -237,20 +240,10 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           const tail = buildCaptionedFinalTextFallback(payload);
           tail.text = text;
           source?.setComplete(true);
-          const send = () => sendPrepared(tail, true);
-          if (source) {
-            await source.run(send);
-          } else {
-            await send();
-          }
+          await sendWithSource(tail, true);
         };
       }
-      const send = () => sendPrepared(cleanedPayload);
-      if (source) {
-        await source.run(send);
-      } else {
-        await send();
-      }
+      await sendWithSource(cleanedPayload);
     };
     return run();
   };

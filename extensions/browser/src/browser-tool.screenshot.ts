@@ -10,9 +10,9 @@ import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
 import { browserScreenshotAction } from "./browser/client-actions.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
@@ -34,26 +34,24 @@ const SCREENSHOT_SHARE_UNAVAILABLE =
 
 export async function executeScreenshotAction({
   input: params,
-  baseUrl,
+  target,
   profile,
   requestedTimeoutMs,
-  proxyRequest,
   signal,
   onTabActivity,
   opts,
 }: {
   input: Record<string, unknown>;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
   requestedTimeoutMs?: number;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
   onTabActivity: (targetId: string | undefined) => void | Promise<void>;
   opts?: BrowserScreenshotOptions;
 }): Promise<AgentToolResult<unknown>> {
   const targetId = readStringParam(params, "targetId");
   const type = params.type === "jpeg" ? "jpeg" : "png";
-  const result = await browserScreenshotAction(proxyRequest ?? baseUrl, {
+  const result = await browserScreenshotAction(target, {
     targetId,
     fullPage: Boolean(params.fullPage),
     ref: readStringParam(params, "ref"),

@@ -466,7 +466,6 @@ suite.define(() => {
         startedAt = Date.now();
         measuring = true;
         await page.reload();
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const selectedCommitted = waitForStartupCommit(selectedKey, selectedPane);
         const homeCommitted = waitForStartupCommit(
@@ -572,11 +571,11 @@ suite.define(() => {
               selectedPane.evaluate((element) => {
                 const pane = element as HTMLElement & {
                   loadingOlder: boolean;
-                  historyIntentConsumed: boolean;
+                  historyIntentTimer: number | null;
                 };
                 return {
                   loadingOlder: pane.loadingOlder,
-                  historyIntentConsumed: pane.historyIntentConsumed,
+                  historyIntentConsumed: pane.historyIntentTimer !== null,
                 };
               }),
             )
@@ -676,7 +675,6 @@ suite.define(() => {
           startedAt = Date.now();
           // Keep the same short-link input even if navigation canonicalized the prior URL.
           await page.goto(`${url.origin}${url.pathname}`);
-          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const narrowSelectedCommitted = waitForStartupCommit(
             selectedKey,
@@ -921,7 +919,6 @@ suite.define(() => {
             (response) => response.url() === new URL(versionedAvatarUrl, suite.server.baseUrl).href,
           );
           await page.reload();
-          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const response = await responseReady;
           expect(response.status()).toBe(200);

@@ -83,6 +83,15 @@ function inspectionFailure(error: unknown): ProcessInspectionError {
   );
 }
 
+function isMissingProcess(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ESRCH")
+  );
+}
+
 export async function readCodexAppServerProcessSnapshot(
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
   pids?: readonly number[],
@@ -90,14 +99,7 @@ export async function readCodexAppServerProcessSnapshot(
   // Registration proves only known owners. Containment still needs the full tree.
   // Include the observer so an empty selected ps result cannot prove disappearance.
   const selected = pids === undefined ? undefined : [...new Set([process.pid, ...pids])];
-  const rows =
-    process.platform === "linux"
-      ? await readLinuxProcesses(selected, deadline)
-      : await readProcesses(
-          selected ? ["-o", PROCESS_COLUMNS, "-p", selected.join(",")] : ["-axo", PROCESS_COLUMNS],
-          deadline,
-          selected !== undefined,
-        );
+  const rows = await readProcesses(selected, deadline, selected !== undefined);
   if (selected && !rows.some((row) => row.pid === process.pid)) {
     throw new ProcessInspectionError("unavailable");
   }
@@ -108,10 +110,7 @@ export async function readCodexAppServerProcess(
   pid: number,
   deadline: number,
 ): Promise<PosixProcess | undefined> {
-  const rows =
-    process.platform === "linux"
-      ? await readLinuxProcesses([pid], deadline)
-      : await readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)], deadline);
+  const rows = await readProcesses([pid], deadline);
   return rows.find((row) => row.pid === pid);
 }
 
@@ -166,13 +165,18 @@ export async function readCodexAppServerProcessCommand(
   return output;
 }
 
-async function readProcesses(
-  args: string[],
+function readProcesses(
+  pids: readonly number[] | undefined,
   deadline: number,
   selected = false,
 ): Promise<PosixProcess[]> {
-  const output = await readProcessOutput({ kind: "ps", args }, deadline);
-  return parseProcesses(output, selected);
+  if (process.platform === "linux") {
+    return readLinuxProcesses(pids, deadline);
+  }
+  const args = pids ? ["-o", PROCESS_COLUMNS, "-p", pids.join(",")] : ["-axo", PROCESS_COLUMNS];
+  return readProcessOutput({ kind: "ps", args }, deadline).then((output) =>
+    parseProcesses(output, selected),
+  );
 }
 
 async function readProcessOutput(
@@ -297,12 +301,7 @@ async function readLinuxProcesses(
       const stat = await readFile(`/proc/${entry}/stat`, options).catch((error: unknown) => {
         // A process may exit between enumeration and read. Other failures must
         // not turn an unreadable process into proof that an orphan is gone.
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           return undefined;
         }
         throw error;
@@ -428,12 +427,7 @@ function readSelectedLinuxProcesses(selected: readonly number[], deadline: numbe
           PROCESS_INSPECTION_MAX_BYTES - bytes,
         );
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           continue;
         }
         throw error;

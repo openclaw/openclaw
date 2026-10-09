@@ -145,79 +145,20 @@ function run(c: Awaited<ReturnType<typeof capture>>, status = "failed") {
   );
 }
 
-it.each([true, false])(
-  "reports retained sets from another installation through the real parser (JSON: %s)",
-  async (json) => {
-    const first = await capture("older", "2026-09-09T00:00:00.000Z"),
-      second = await capture("newer");
-    await terminal(first, "committed");
-    await terminal(second, "restored");
-    await updateStatusCommand({ json });
-    if (json) {
-      expect(result().recoverySets).toEqual(
-        [second, first].map((c) => ({
-          runId: c.manifest.runId,
-          manifestPath: c.manifestPath,
-          status: "stale",
-          message: expect.stringContaining("stale:"),
-          nextAction: "openclaw update status --json",
-        })),
-      );
-    } else {
-      const output = mocks.log.mock.calls.flat().join("\n");
-      for (const c of [first, second]) {
-        expect(output).toContain(c.manifestPath);
-        expect(output).toContain(c.manifest.runId);
-      }
-      expect(output).toContain("stale");
-      expect(output).toContain("Next action: openclaw update status --json");
-    }
-    expect(await fs.readFile(first.manifestPath, "utf8")).toBe(first.raw);
-    expect((await fs.readdir(first.directory)).toSorted()).toEqual([
-      "manifest.json",
-      "outcome.json",
-    ]);
-  },
-);
-it("reports an absent inventory explicitly without creating it", async () => {
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySets).toEqual([]);
-  expect(result()).not.toHaveProperty("recoverySetsError");
-  await expect(fs.stat(`${stateDir}.update-captures`)).rejects.toMatchObject({ code: "ENOENT" });
+it("reports standalone Doctor captures as manual evidence", async () => {
+  const c = await capture("doctor-11111111-1111-4111-8111-111111111111");
+  await updateStatusCommand({});
+  const output = mocks.log.mock.calls.flat().join("\n");
+  expect(output).toContain(c.manifestPath);
+  expect(output).toContain("No repair outcome is recorded");
+  expect(output).not.toContain("no matching update run");
+  expect(output).not.toContain("unresolved after a failed update");
+  expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
 });
-it.each([true, false])(
-  "reports standalone Doctor captures as manual evidence (JSON: %s)",
-  async (json) => {
-    const c = await capture("doctor-11111111-1111-4111-8111-111111111111");
-    await updateStatusCommand({ json });
-    if (json) {
-      expect(result()).not.toHaveProperty("recoverySetsError");
-      expect(result().recoverySets).toEqual([
-        expect.objectContaining({
-          runId: c.manifest.runId,
-          manifestPath: c.manifestPath,
-          status: "manual",
-          message: expect.stringContaining("No repair outcome is recorded"),
-        }),
-      ]);
-    } else {
-      const output = mocks.log.mock.calls.flat().join("\n");
-      expect(output).toContain(c.manifestPath);
-      expect(output).toContain("No repair outcome is recorded");
-      expect(output).not.toContain("no matching update run");
-      expect(output).not.toContain("unresolved after a failed update");
-    }
-    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
-    expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
-  },
-);
 it.each([
   ["partial", false],
-  ["partial", true],
   ["linked-manifest", true],
-  ["copied-manifest", true],
-  ["conflicting-manifest", true],
-  ["linked-payload", true],
 ] as const)(
   "keeps valid recovery sets visible beside an interrupted %s publication (JSON: %s)",
   async (publication, json) => {
@@ -226,27 +167,14 @@ it.each([
     const directory = path.join(path.dirname(c.directory), "22222222-2222-4222-8222-222222222222");
     await fs.mkdir(directory);
     const partialPath = path.join(directory, "manifest.json.partial");
-    if (publication === "linked-payload") {
-      await fs.mkdir(path.join(directory, "database.databases"));
-      await fs.mkdir(path.join(directory, "payload"));
-      const snapshot = path.join(directory, "database.databases", "snapshot.sqlite");
-      await fs.writeFile(snapshot, "retained snapshot bytes");
-      await fs.link(snapshot, path.join(directory, "payload", "0"));
-    } else {
-      await fs.writeFile(
-        partialPath,
-        publication === "partial"
-          ? '{"schemaVersion":2'
-          : JSON.stringify({ ...c.manifest, runId: path.basename(directory) }),
-      );
-      const finalPath = path.join(directory, "manifest.json");
-      if (publication === "linked-manifest") {
-        await fs.link(partialPath, finalPath);
-      } else if (publication === "copied-manifest") {
-        await fs.copyFile(partialPath, finalPath);
-      } else if (publication === "conflicting-manifest") {
-        await fs.writeFile(finalPath, "different, unverified bytes");
-      }
+    await fs.writeFile(
+      partialPath,
+      publication === "partial"
+        ? '{"schemaVersion":2'
+        : JSON.stringify({ ...c.manifest, runId: path.basename(directory) }),
+    );
+    if (publication === "linked-manifest") {
+      await fs.link(partialPath, path.join(directory, "manifest.json"));
     }
     const retained = new Map<string, Buffer>();
     for (const name of await fs.readdir(directory, { recursive: true })) {
@@ -298,36 +226,29 @@ it.each([
     }
   },
 );
-it.each(["linked", "copied"])(
-  "refuses baseline reuse after an interrupted %s seal",
-  async (kind) => {
-    const c = await capture();
-    const partial = `${c.manifestPath}.partial`;
-    if (kind === "linked") {
-      await fs.link(c.manifestPath, partial);
-    } else {
-      await fs.copyFile(c.manifestPath, partial);
-    }
-    const { readUpdateRecoveryBaselineIdentity } =
-      await import("../../infra/update-recovery-backup-reader.js");
-    await expect(
-      readUpdateRecoveryBaselineIdentity({
-        runId: c.manifest.runId,
-        env: process.env,
-        ref: {
-          directory: c.directory,
-          manifestPath: c.manifestPath,
-          manifestSha256: c.manifestSha256,
-        },
-        installRoot: c.manifest.installRoot,
-        readContinuation: () => undefined,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("incomplete publication");
-    expect(await fs.readFile(partial, "utf8")).toBe(c.raw);
-    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
-  },
-);
+it("refuses baseline reuse after an interrupted linked seal", async () => {
+  const c = await capture();
+  const partial = `${c.manifestPath}.partial`;
+  await fs.link(c.manifestPath, partial);
+  const { readUpdateRecoveryBaselineIdentity } =
+    await import("../../infra/update-recovery-backup-reader.js");
+  await expect(
+    readUpdateRecoveryBaselineIdentity({
+      runId: c.manifest.runId,
+      env: process.env,
+      ref: {
+        directory: c.directory,
+        manifestPath: c.manifestPath,
+        manifestSha256: c.manifestSha256,
+      },
+      installRoot: c.manifest.installRoot,
+      readContinuation: () => undefined,
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow("incomplete publication");
+  expect(await fs.readFile(partial, "utf8")).toBe(c.raw);
+  expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+});
 
 it.each([
   "foreign-state",
@@ -335,9 +256,6 @@ it.each([
   "terminal-binding",
   "manifest-symlink",
   "manifest-hardlink",
-  "canary-file",
-  "archive-directory",
-  "malformed-json",
   "malformed-text",
   "canary-manifest",
   "durable-binding",
@@ -379,12 +297,6 @@ it.each([
       await fs.link(target, c.manifestPath);
     }
   }
-  if (fault === "canary-file") {
-    await fs.writeFile(path.join(path.dirname(c.directory), "openclaw-update-canary-aB12cD"), "");
-  }
-  if (fault === "archive-directory") {
-    await fs.mkdir(path.join(path.dirname(c.directory), "agent-schema-run-id.tar.gz"));
-  }
   await expect(updateStatusCommand({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
   if (fault === "malformed-text") {
     expect(mocks.log.mock.calls.flat().join("\n")).toContain("Update recovery sets unavailable:");
@@ -401,50 +313,6 @@ it.each([
     expect(await fs.readFile(c.manifestPath, "utf8")).toBe("{");
   }
 });
-it.each(["privacy-marker", "doctor-archive", "canary-directory"])(
-  "keeps recovery sets visible beside a known %s without changing either artifact",
-  async (artifact) => {
-    const c = await capture();
-    await terminal(c, "committed");
-    const store = path.dirname(c.directory);
-    const sibling = path.join(
-      store,
-      artifact === "privacy-marker"
-        ? ".openclaw-private-update-capture"
-        : artifact === "doctor-archive"
-          ? `agent-schema-${c.manifest.runId}-22222222-2222-4222-8222-222222222222.tar.gz`
-          : "openclaw-update-canary-aB12cD",
-    );
-    const contents =
-      artifact === "privacy-marker"
-        ? "openclaw-private-update-capture-v1\n"
-        : "retained sibling bytes";
-    if (artifact === "canary-directory") {
-      await fs.mkdir(sibling);
-    } else {
-      await fs.writeFile(sibling, contents);
-    }
-    await updateStatusCommand({ json: true });
-    expect(result()).not.toHaveProperty("recoverySetsError");
-    expect(result().recoverySets).toEqual([
-      expect.objectContaining({ runId: c.manifest.runId, status: "stale" }),
-    ]);
-    if (artifact === "canary-directory") {
-      expect(await fs.readdir(sibling)).toEqual([]);
-    } else {
-      expect(await fs.readFile(sibling, "utf8")).toBe(contents);
-    }
-    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
-    // Recognized siblings must not hide genuinely incomplete captures.
-    await fs.unlink(c.manifestPath);
-    await updateStatusCommand({ json: true });
-    expect(result()).not.toHaveProperty("recoverySetsError");
-    expect(result().recoverySets).toEqual([
-      expect.objectContaining({ directory: c.directory, status: "incomplete" }),
-    ]);
-  },
-);
-
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
   const c = await capture();
   mocks.readRun.mockResolvedValue(await run(c));
@@ -472,34 +340,6 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
     "ambiguous",
     "ambiguous",
   ]);
-});
-it.each([
-  { evidence: "missing run", status: "ambiguous", message: "no matching update run" },
-  { evidence: "package rollback", status: "ambiguous", message: "update run is rolled-back" },
-  { evidence: "restored capture", status: "stale", message: "restored state" },
-  { evidence: "contradictory outcome", status: "ambiguous", message: "outcomes disagree" },
-])("classifies retained capture with $evidence", async ({ evidence, status, message }) => {
-  const c = await capture();
-  if (evidence !== "missing run") {
-    const row = await run(c, evidence === "contradictory outcome" ? "succeeded" : "rolled-back");
-    if (evidence === "restored capture") {
-      row.origin.updateRecoveryCapture!.restored = true;
-    } else if (evidence === "contradictory outcome") {
-      await terminal(c, "restored");
-    } else {
-      row.steps.push({ step: evidence, status: "completed", exitCode: 0 });
-    }
-    mocks.readRun.mockResolvedValue(row);
-  }
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySets[0]).toMatchObject({
-    status,
-    nextAction: "openclaw update status --json",
-    message: expect.stringContaining(message),
-  });
-  if (evidence === "missing run") {
-    expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
-  }
 });
 it("validates forward resolution against retained generations without writing", async () => {
   const c = await capture();

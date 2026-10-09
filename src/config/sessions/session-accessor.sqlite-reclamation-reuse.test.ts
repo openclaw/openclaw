@@ -202,7 +202,7 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
     const config = { agents: { entries: { main: {} } }, session: { store: database.path } };
     const operationId = "conversation-admission";
     if (operation !== "directory discovery") {
-      registerConversationAddresses(scope, [
+      await registerConversationAddresses(scope, [
         { ...conversation, deliveryTarget: conversation.target },
       ]);
     }

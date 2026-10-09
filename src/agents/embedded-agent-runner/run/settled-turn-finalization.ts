@@ -112,13 +112,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const replyDeliveryState = await observeSourceDelivery();
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
+    ...initial,
     replyDeliveryState,
     attempt,
-    currentAttemptCompletedAssistant: initial.currentAttemptCompletedAssistant,
-    sessionIdUsed: initial.sessionIdUsed,
-    sessionFileUsed: initial.sessionFileUsed,
     lastRunPromptUsage,
-    terminalState: initial.terminalState,
   });
   const preserveInitial = (finalizationOutcome: "not-attempted" | "failed") => ({
     ...initial,
@@ -165,6 +162,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
+  const describeRun = () =>
+    `runId=${runParams.runId} sessionId=${runParams.sessionId} provider=${errorContext.provider}/${errorContext.model}`;
   // A host summary cannot replace a tool failure or an owner-recorded timeout.
   // Keep the original outcome when recovery produces no answer, including for
   // silent helper runs; a synthetic fallback would otherwise clear the timeout
@@ -177,14 +176,13 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const terminalFailed =
     classifyAgentRunTerminalOutcome(initial.terminalState.outcome) === "failure";
   log.warn(
-    `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-      `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
+    `settled post-tool turn lacked a final answer: ${describeRun()} — running isolated finalization`,
   );
   let finalizationOutcome: "answered" | "empty" | "failed" | "silent-fallback" = "failed";
   try {
     let finalization: Awaited<ReturnType<typeof runPreparedSettledTurnFinalization>>;
     let finalizationAttempt = 0;
-    do {
+    for (;;) {
       finalizationAttempt += 1;
       assertFinalizationActive();
       finalization = await runPreparedSettledTurnFinalization({
@@ -225,42 +223,35 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
       lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
       if (
-        finalization.outcome === "empty" &&
-        finalizationAttempt < MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS
+        finalization.outcome !== "empty" ||
+        finalizationAttempt >= MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS
       ) {
-        log.warn(
-          `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-            `provider=${errorContext.provider}/${errorContext.model} — retrying ${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS - 1} with tools disabled`,
-        );
+        break;
       }
-    } while (
-      finalization.outcome === "empty" &&
-      finalizationAttempt < MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS
-    );
+      log.warn(
+        `settled-turn finalization completed without a visible answer: ${describeRun()} — retrying ${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS - 1} with tools disabled`,
+      );
+    }
     finalizationOutcome = finalization.outcome;
     if (finalization.outcome === "empty") {
       log.warn(
-        `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} attempts=${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving original failure"}`,
+        `settled-turn finalization completed without a visible answer: ${describeRun()} attempts=${finalizationAttempt}/${MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving original failure"}`,
       );
     }
   } catch (error) {
     if (input.finalization.abortSignal.aborted) {
       log.warn(
-        `settled-turn finalization was cancelled: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — preserving cancellation`,
+        `settled-turn finalization was cancelled: ${describeRun()} error=${formatErrorMessage(error)} — preserving cancellation`,
       );
       return preserveInitial("failed");
     }
     log.warn(
-      `settled-turn finalization failed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving original failure"}`,
+      `settled-turn finalization failed: ${describeRun()} error=${formatErrorMessage(error)} — ${terminalFallbackAllowed ? "using terminal fallback reply" : "preserving original failure"}`,
     );
   }
   if (finalizationOutcome !== "answered" && input.finalization.abortSignal.aborted) {
     log.warn(
-      `settled-turn finalization was cancelled before terminal delivery: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
+      `settled-turn finalization was cancelled before terminal delivery: ${describeRun()} — preserving cancellation`,
     );
     return preserveInitial("failed");
   }
@@ -289,8 +280,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     });
     if (input.finalization.abortSignal.aborted) {
       log.warn(
-        `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
+        `settled-turn fallback was cancelled during transcript persistence: ${describeRun()} — preserving cancellation`,
       );
       return preserveInitial("failed");
     }
@@ -569,16 +559,13 @@ function buildSettledToolFallbackAttemptResult(input: {
     ];
   }
   const result = buildSettledTurnFinalizationAttemptResult({
+    ...input,
     outcome: !input.error && isSilentReplyText(input.text) ? "empty" : "answered",
     result: {
       assistant,
       usage: input.sourceAttempt.attemptUsage,
       diagnosticTrace: input.sourceAttempt.diagnosticTrace,
     },
-    settledAttempt: input.settledAttempt,
-    prompt: input.prompt,
-    agentHarnessId: input.agentHarnessId,
-    runtimePlan: input.runtimePlan,
   });
   // A persisted host diagnostic is not a successful provider recovery.
   result.terminal = input.settledAttempt.terminal;

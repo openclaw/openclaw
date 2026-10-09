@@ -27,17 +27,19 @@ import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-eve
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
-  subagentRunRecordVersion,
 } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
+import {
+  subagentRunRowVersion,
+  type SubagentRunSqliteRow,
+} from "../registry/subagent-registry.store.row.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
   readSubagentRunRow,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { captureRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
+import { sameRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import type {
   BlockSubagentCompletionRequest,
@@ -74,7 +76,7 @@ export function decodeSubagentCompletionRecord(
   );
   return {
     subagent,
-    version: expectDefined(subagentRunRecordVersion(subagent), "subagent completion row version"),
+    version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
     cleanupHandled,
   };
 }
@@ -325,16 +327,36 @@ function readRequesterBatch(
   });
 }
 
-function settleRequesterBatch(
+function mutateRequesterBatch(
   database: OpenClawStateDatabase,
-  params: Extract<SubagentCompletionMutation, { kind: "requesterBatch" }>,
+  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
 ): SubagentCompletionMutationResult {
   if (params.committed) {
     return reconcileRequesterWake(database, params);
   }
-  const now = params.now;
   const mutations = readRequesterBatch(database, params).map(
     ({ expected, subagent }): CompletionMutation => {
+      if (params.kind === "requesterWake") {
+        if (params.operation.kind === "complete") {
+          return { subagent, retire: completeRequesterSettleWakeState(subagent) };
+        }
+        if (
+          subagent.pauseReason === "sessions_yield" &&
+          Boolean(subagent.requesterSettleWake?.pauseNotice) !==
+            Boolean(params.operation.state.pauseNotice)
+        ) {
+          throw new Error("Requester pause notice changed before transition");
+        }
+        if (
+          (subagent.requesterSettleWake?.yieldedFinalDeliverable === true) !==
+          (params.operation.state.yieldedFinalDeliverable === true)
+        ) {
+          throw new Error("Requester wake reply policy changed before transition");
+        }
+        transitionRequesterSettleWakeState(subagent, params.operation.state);
+        return { subagent };
+      }
+      const now = params.now;
       if (consumeSubagentPauseNotice(subagent)) {
         // A notice is one paused member's input, not settlement of its frozen cohort.
         if (
@@ -419,10 +441,7 @@ function reconcileRequesterWake(
     if (
       !originalCanonical ||
       !expectedCanonical ||
-      !isDeepStrictEqual(
-        captureRequesterSettleRunIdentity(originalCanonical),
-        captureRequesterSettleRunIdentity(expectedCanonical),
-      )
+      !sameRequesterSettleRunIdentity(originalCanonical, expectedCanonical)
     ) {
       throw new Error("Requester wake reconciliation lost its original generation");
     }
@@ -450,14 +469,8 @@ function reconcileRequesterWake(
       !row ||
       !current ||
       !intended ||
-      !isDeepStrictEqual(
-        captureRequesterSettleRunIdentity(current),
-        captureRequesterSettleRunIdentity(originalCanonical),
-      ) ||
-      !isDeepStrictEqual(
-        captureRequesterSettleRunIdentity(intended),
-        captureRequesterSettleRunIdentity(originalCanonical),
-      ) ||
+      !sameRequesterSettleRunIdentity(current, originalCanonical) ||
+      !sameRequesterSettleRunIdentity(intended, originalCanonical) ||
       current.pauseReason !== intended.pauseReason ||
       current.completionTarget !== intended.completionTarget ||
       current.expectsCompletionMessage !== intended.expectsCompletionMessage ||
@@ -490,36 +503,6 @@ function reconcileRequesterWake(
     }
   }
   return result;
-}
-
-function mutateRequesterWake(
-  database: OpenClawStateDatabase,
-  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" }>,
-): SubagentCompletionMutationResult {
-  if (params.committed) {
-    return reconcileRequesterWake(database, params);
-  }
-  const mutations = readRequesterBatch(database, params).map(({ subagent }): CompletionMutation => {
-    if (params.operation.kind === "complete") {
-      return { subagent, retire: completeRequesterSettleWakeState(subagent) };
-    }
-    if (
-      subagent.pauseReason === "sessions_yield" &&
-      Boolean(subagent.requesterSettleWake?.pauseNotice) !==
-        Boolean(params.operation.state.pauseNotice)
-    ) {
-      throw new Error("Requester pause notice changed before transition");
-    }
-    if (
-      (subagent.requesterSettleWake?.yieldedFinalDeliverable === true) !==
-      (params.operation.state.yieldedFinalDeliverable === true)
-    ) {
-      throw new Error("Requester wake reply policy changed before transition");
-    }
-    transitionRequesterSettleWakeState(subagent, params.operation.state);
-    return { subagent };
-  });
-  return commitCompletionMutations(database, mutations);
 }
 
 /** Worker transaction owner supplies the handle and live admission before/after this mutation. */
@@ -602,9 +585,8 @@ export function mutateSubagentCompletionInDatabase(
       return commitCompletionMutations(database, [{ subagent: current }]);
     }
     case "requesterBatch":
-      return settleRequesterBatch(database, mutation);
     case "requesterWake":
-      return mutateRequesterWake(database, mutation);
+      return mutateRequesterBatch(database, mutation);
   }
   throw new Error("Unknown subagent completion mutation");
 }

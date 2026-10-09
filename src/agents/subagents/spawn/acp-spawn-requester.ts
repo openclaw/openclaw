@@ -1,11 +1,7 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { readAcpResumeSessionOwner } from "../../../acp/runtime/session-meta-resume.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
 import {
   isSubagentSessionKey,
   parseAgentSessionKey,
@@ -73,22 +69,21 @@ export function resolveRequesterInternalSessionKey(params: {
     : alias;
 }
 
-export function resolveAcpSpawnRequesterState(params: {
+export async function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
   requesterAgentId: string;
-  targetAgentId: string;
+  ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
-}): AcpSpawnRequesterState {
-  const bindingService = getSessionBindingService();
+}): Promise<AcpSpawnRequesterState> {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
   const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
-      ? bindingService
-          .listBySession(params.parentSessionKey)
-          .some((record) => record.targetKind === "subagent" && record.status !== "ended")
+      ? (await listSessionBindingsBySessionAsync(params.parentSessionKey)).some(
+          (record) => record.targetKind === "subagent" && record.status !== "ended",
+        )
       : false;
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"
@@ -113,7 +108,7 @@ export function resolveAcpSpawnRequesterState(params: {
         : false,
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
-      targetAgentId: params.targetAgentId,
+      targetAgentId: params.ownerAgentId,
       requesterAgentId: params.requesterAgentId,
       requesterChannel: params.ctx.agentChannel,
       requesterAccountId: params.ctx.agentAccountId,
@@ -142,48 +137,4 @@ export function shouldStreamAcpSpawnToParent(params: {
     params.requester.heartbeatRelayRouteUsable;
 
   return params.streamToParentRequested || implicitStreamToParent;
-}
-
-export async function validateAcpResumeSessionOwnership(params: {
-  cfg: OpenClawConfig;
-  targetAgentId: string;
-  backendId?: string;
-  requesterSessionKey?: string;
-  resumeSessionId?: string;
-  assertCurrent?: () => void;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
-  if (!resumeSessionId) {
-    return { ok: true };
-  }
-  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
-  if (!requesterSessionKey) {
-    return {
-      ok: false,
-      error: "sessions_spawn resumeSessionId requires an active requester session context.",
-    };
-  }
-
-  const owner = await readAcpResumeSessionOwner({
-    cfg: params.cfg,
-    agentId: params.targetAgentId,
-    backendId: normalizeOptionalLowercaseString(params.backendId),
-    resumeSessionId,
-    assertCurrent: params.assertCurrent,
-  });
-  params.assertCurrent?.();
-  if (
-    owner &&
-    (owner.sessionKey === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.spawnedBy) === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey)
-  ) {
-    return { ok: true };
-  }
-
-  return {
-    ok: false,
-    error:
-      "sessions_spawn resumeSessionId is only allowed for ACP sessions previously recorded for this requester. Omit resumeSessionId to start a fresh ACP session.",
-  };
 }

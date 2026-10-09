@@ -53,27 +53,33 @@ function fixture(
   const initial = structuredClone(readUserModelAuthProfile(profileId));
   const database = openOpenClawStateDatabase();
   const controller = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "personal-usage-run",
-      sessionId: "personal-usage-session",
-      sessionFile: state.path("synthetic-session.jsonl"),
-      workspaceDir: state.workspaceDir,
-      prompt: "synthetic personal-account failure",
-      timeoutMs: 60_000,
-      config,
+    runInput: {
+      runParams: {
+        runId: "personal-usage-run",
+        sessionId: "personal-usage-session",
+        sessionFile: state.path("synthetic-session.jsonl"),
+        workspaceDir: state.workspaceDir,
+        prompt: "synthetic personal-account failure",
+        timeoutMs: 60_000,
+        config,
+      },
+      globalLane: "personal-usage-test",
+      agentDir,
+      fallbackConfigured: false,
     },
-    provider: credential.provider,
-    modelId: "synthetic-model",
-    globalLane: "personal-usage-test",
-    agentDir,
-    fallbackConfigured: false,
-    profileFailureStore: store,
-    getLastProfileId: () => profileId,
+    preparedRuntime: {
+      provider: credential.provider,
+      modelId: "synthetic-model",
+      profileFailureStore: store,
+      snapshot: () => ({
+        lastProfileId: profileId,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: async () => false,
+    },
     getSessionId: () => "personal-usage-session",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile: async () => false,
   });
   return {
     profileId,

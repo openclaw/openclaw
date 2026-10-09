@@ -59,11 +59,11 @@ two ways.
 
 The short-id form applies to non-Incognito sessions when the key's rest, everything after
 `agent:<agentId>:`, ends in a UUID. `<sessionRef>` is an optional display-name
-slug plus a short id, such as `deploy-monitor-6db92d48`. The short id is the
-authoritative part: at least eight lowercase hexadecimal characters from the
-start of the key's trailing UUID, with UUID dashes omitted. Longer prefixes up
-to all 32 hexadecimal characters are accepted. The row's rotating `sessionId`
-is not part of the URL identity.
+slug plus a short id, such as `deploy-monitor-6db92d48`. Within the agent named
+in the path, the short id is authoritative: at least eight lowercase hexadecimal
+characters from the start of the key's trailing UUID, with UUID dashes omitted.
+Longer prefixes up to all 32 hexadecimal characters are accepted. The row's
+rotating `sessionId` is not part of the URL identity.
 
 The Control UI generates links with all 32 UUID characters by default, so a
 selected session keeps its identity even when another session shares its prefix
@@ -114,18 +114,26 @@ route. It follows ordinary session lookup; if no existing session matches, it sh
 The following parts are stable URL contracts:
 
 - The `/chat` and `/dashboard` namespace words.
-- The key UUID short id in short-id URLs.
+- The agent id and key UUID short id together in short-id URLs.
 - The arity and short-versus-literal parsing rules above.
 
-In short-id form, the agent segment is decorative and the slug is almost
-decorative. Neither identifies the session on its own, and both may change
-without notice. The one exception is a tie: if the short id matches more than
-one session and exactly one of them still carries the slug in the link, that
-session is used, so a generated link keeps working even when two ids happen to
-share a prefix. A slug that matches none or several of the tied sessions is
-ignored and the disambiguation view is shown. After resolution, the Control UI
-replaces the address bar with the current agent id and current display-name slug
-without adding a browser-history entry.
+In short-id form, the agent segment scopes session lookup; it is not decorative.
+Changing it can make the link stop resolving or select a different visible session
+with the same UUID prefix. This applies even when the link contains all 32 UUID
+characters. Changing an agent's display name does not change its id in the URL.
+
+The slug is an optional display-name hint. A stale slug does not invalidate a
+unique UUID-prefix match within the selected agent. If several visible sessions
+match the prefix, matching slugs narrow the candidates. Exactly one remaining
+candidate resolves; otherwise the disambiguation view is shown. A slug that
+matches none of the candidates is ignored. After resolution, the Control UI
+replaces the address bar with the canonical session path and current display-name
+slug without adding a browser-history entry.
+
+Renaming a session or rotating its `sessionId` does not break an otherwise unique
+short-id link. Moving a session to a different agent id is not covered by this
+stability guarantee; use its current canonical link. A URL does not bypass
+session authorization or enable public access.
 
 In literal-key form, the agent segment is authoritative because it is part of
 the reconstructed session key. The remaining literal segments are authoritative
@@ -234,7 +242,20 @@ Signing in returns to the same thread and applies the person's existing
 permissions; it does not grant editing or access to other sessions. A signed-in
 person without private access can still read the public version. Private,
 missing, and ambiguous anonymous targets show the same unavailable page without
-revealing names or candidate sessions.
+revealing names or candidate sessions. While the protected login handoff checks
+access, a private-thread page shows **Loading conversation**, not an unavailable
+error. A failed access check offers reload or login instead of claiming access
+was denied. Without JavaScript, the generic unavailable page remains readable.
+
+Token/password operators with a saved credential for this Gateway automatically
+continue into the Control UI when reopening, reloading, or following a chat link.
+The browser uses its session token or paired-device credential; passwords remain
+in memory only. This also works on loopback HTTP, which permits public readers.
+The anonymous private-thread document initially returns `404`, then the browser
+opens the app through the session-entry handoff with a `200` response. No extra
+**Log in** click is needed. Without a saved credential, **Log in** opens the normal
+login gate. On non-secure ingress where public transcripts are unavailable,
+token/password deployments serve the app shell directly.
 
 Assigning another owner does not transfer public-sharing authority. If the
 controls are unavailable, confirm that the session is saved, is not incognito,

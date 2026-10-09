@@ -41,8 +41,7 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   ].join("\n");
 }
 
-export async function noteMacLaunchAgentOverrides() {
-  const warning = collectMacLaunchAgentOverrideWarning();
+function noteMacGatewayWarning(warning: string | null) {
   if (warning) {
     note(warning, "Gateway (macOS)");
   }
@@ -93,13 +92,6 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
     "  launchctl remove <label>",
     `  ${formatCliCommand("openclaw gateway restart")}`,
   ].join("\n");
-}
-
-export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
-  if (warning) {
-    note(warning, "Gateway (macOS)");
-  }
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
@@ -156,11 +148,10 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
-export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
-  const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
-  if (warning) {
-    note(warning, "Gateway (macOS)");
-  }
+export async function noteMacGatewayPlatformWarnings(cfg: OpenClawConfig): Promise<void> {
+  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
+  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
+  noteMacGatewayWarning(await collectMacLaunchctlGatewayEnvOverrideWarning(cfg));
 }
 
 async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.ProcessEnv> {

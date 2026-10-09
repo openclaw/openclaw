@@ -132,6 +132,42 @@ It may return `void` or `Promise<void>`; observer throws and rejections do not
 replace the termination error or release custody, and closure does not wait for
 the observer.
 
+Bundled pools use the host sizing policy through a `workerClass` or a prepared
+numeric budget when constructing `WorkerTaskPool`. The host sizes the pool once
+from `os.availableParallelism()`, reserving one CPU when
+possible: `reader` admits up to two workers, `file-reader` up to two for small
+file reads, `compute` up to four, and `writer`
+or `singleton` exactly one. Workers are created on demand. Choose `singleton`
+for worker-local continuation state, generation-wide callbacks, or deliberately
+shared native heaps; independent requests do not make those owners parallel-safe.
+Choose `writer` when the pool owns serial side effects. SQLite's writer broker
+still owns one writer per physical database; its cross-database worker budget
+does not create additional writers for a database.
+
+Foreground transcript history and context each retain half the host's CPU
+headroom, capped at eight workers per pool. Background transcript owners remain
+serial. Shared-state readers retain a minimum of two workers so a held settlement
+read can admit a fresh catalog read before release.
+Inventory hashing retains its CPU and available-memory admission budget,
+including its in-process fallback on low-memory and Bun/Linux hosts.
+
+Reader, file-reader, and compute classes default to a 512 MiB V8 old-generation limit per
+worker. An explicit `workerOptions.resourceLimits` overrides the corresponding
+limits; native allocations, buffers, and WASM memory remain the caller's
+responsibility. Existing numeric `maxWorkers` remains supported. When both are
+supplied, `workerClass` takes precedence; a published plugin can retain its numeric
+limit for older supported hosts until its minimum host version includes class
+sizing. FIFO task admission remains unchanged; parallel tasks may finish
+out of order, so owners requiring serial completion must use a serial class.
+This policy adds no operator configuration or storage migration.
+
+Pools can set `burstIdleTimeoutMs` to retire workers beyond their first usable slot
+sooner than `idleTimeoutMs`. Retiring these surplus workers does not extend the
+first worker's adaptive warm window. Image processing uses at most two workers
+under shared compute admission and retires surplus capacity after five idle
+seconds. Control UI file reads use their own bounded two-worker pool so shared
+compute contention cannot block asset reads.
+
 `prepareWorker()` can return `temporaryDirectory` for disposable scratch files
 and an optional asynchronous `releaseResources()` callback for producer-owned
 resources. Both remain retained until Worker exit is confirmed; cleanup also

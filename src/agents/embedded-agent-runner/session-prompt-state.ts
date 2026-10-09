@@ -1,8 +1,5 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
-import {
-  splitSystemPromptCacheBoundary,
-  SYSTEM_PROMPT_CACHE_BOUNDARY,
-} from "@openclaw/ai/internal/shared";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -99,7 +96,7 @@ function promptDelta(previous: string, current: string): string[] {
   ];
 }
 
-/** Restore only a matching effective prompt; a changed restart input begins a fresh series. */
+/** Restore the admitted series; refreshed instructions append after its conversation prefix. */
 export function prepareSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
@@ -109,8 +106,7 @@ export function prepareSessionSystemPrompt(params: {
   const { permissionNotice, systemPrompt: prompt } = extractAttemptPermissionNotice(
     params.systemPrompt,
   );
-  const split = splitSystemPromptCacheBoundary(prompt);
-  const renderedPrefix = split?.stablePrefix ?? prompt;
+  const renderedPrefix = prompt;
   const historyId =
     params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
     null;
@@ -138,7 +134,7 @@ export function prepareSessionSystemPrompt(params: {
       isRecord(data) &&
       typeof data.prefix === "string" &&
       data.hash === sha256Hex(data.prefix) &&
-      data.renderedPrefix === renderedPrefix &&
+      typeof data.renderedPrefix === "string" &&
       data.routeKey === params.routeKey &&
       data.historyId === historyId &&
       !afterCheckpoint.some((later) => later.type === "model_change")
@@ -146,7 +142,7 @@ export function prepareSessionSystemPrompt(params: {
       series = {
         prefix: data.prefix,
         hash: data.hash,
-        renderedPrefix,
+        renderedPrefix: data.renderedPrefix,
         routeKey: params.routeKey,
         historyId,
         permissionNotice:
@@ -157,7 +153,13 @@ export function prepareSessionSystemPrompt(params: {
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
-  const sections = !restart && series ? promptDelta(series.renderedPrefix, renderedPrefix) : [];
+  const sections =
+    !restart && series
+      ? promptDelta(
+          stripSystemPromptCacheBoundary(series.renderedPrefix),
+          stripSystemPromptCacheBoundary(renderedPrefix),
+        )
+      : [];
   if (permissionNotice && (restart || permissionNotice !== series?.permissionNotice)) {
     sections.push(permissionNotice);
   }
@@ -174,9 +176,7 @@ export function prepareSessionSystemPrompt(params: {
     : { ...series!, renderedPrefix, permissionNotice, restart: false };
   let committed = false;
   return {
-    systemPrompt: split
-      ? `${next.prefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}${split.dynamicSuffix}`
-      : next.prefix,
+    systemPrompt: next.prefix,
     update: sections.length
       ? buildSystemUpdateMessage(
           restart
@@ -248,27 +248,18 @@ const sessionActiveProjects = resolveGlobalSingleton(
   () => new Map<string, string[]>(),
 );
 
-export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map(),
-    frozen: new Set<string>(),
-    ambiguousBaseKeys: new Set<string>(),
-    sourceHashByKey: new Map<string, string>(),
-    restoredCacheTtl: new Map(),
-  };
-}
-
-export function cloneToolResultPromptProjectionState(
-  state: ToolResultPromptProjectionState,
+export function createToolResultPromptProjectionState(
+  source?: ToolResultPromptProjectionState,
 ): ToolResultPromptProjectionState {
   return {
-    replacements: new Map(state.replacements),
-    frozen: new Set(state.frozen),
-    ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
-    sourceHashByKey: new Map(state.sourceHashByKey),
-    restoredCacheTtl: new Map(state.restoredCacheTtl),
-    cacheTtlCheckpoint: state.cacheTtlCheckpoint,
-    cacheTtlRevision: state.cacheTtlRevision,
+    replacements: new Map(source?.replacements),
+    frozen: new Set(source?.frozen),
+    ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
+    sourceHashByKey: new Map(source?.sourceHashByKey),
+    restoredCacheTtl: new Map(source?.restoredCacheTtl),
+    ...(source
+      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
+      : {}),
   };
 }
 
@@ -294,16 +285,15 @@ export function recordToolResultPromptProjection(
 
 export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
-  if (existing) {
-    sessionPromptStates.delete(sessionId);
-    sessionPromptStates.set(sessionId, existing);
-    return existing;
-  }
-  const created: EmbeddedSessionPromptState = {
+  const current: EmbeddedSessionPromptState = existing ?? {
     activeAttempts: 0,
     toolResults: createToolResultPromptProjectionState(),
   };
-  sessionPromptStates.set(sessionId, created);
+  sessionPromptStates.delete(sessionId);
+  sessionPromptStates.set(sessionId, current);
+  if (existing) {
+    return current;
+  }
   for (const [key, state] of sessionPromptStates) {
     if (sessionPromptStates.size <= MAX_SESSION_PROMPT_STATES) {
       break;
@@ -312,7 +302,7 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
       sessionPromptStates.delete(key);
     }
   }
-  return created;
+  return current;
 }
 
 /** Overlapping cleanup keeps the next attempt's state until its own settlement. */
@@ -375,20 +365,17 @@ export async function persistToolResultProjections(
   if (!marker && !cacheTouch) {
     return;
   }
+  let committedCheckpoint: CacheTtlCheckpoint | null = null;
   try {
     await appendEntry("openclaw.cache-ttl", { ...cacheTouch, ...marker });
-  } catch (error) {
+    committedCheckpoint = checkpoint;
+  } finally {
     // Rejection can follow a durable commit; the next write must re-establish the full base.
+    // A branch restore during the write owns its new baseline.
     if ((state.cacheTtlRevision ?? 0) === revision) {
-      state.cacheTtlCheckpoint = null;
+      state.cacheTtlCheckpoint = committedCheckpoint;
       state.cacheTtlRevision = revision + 1;
     }
-    throw error;
-  }
-  // A branch restore during the write owns its new baseline.
-  if ((state.cacheTtlRevision ?? 0) === revision) {
-    state.cacheTtlCheckpoint = checkpoint;
-    state.cacheTtlRevision = revision + 1;
   }
 }
 

@@ -4,6 +4,7 @@ import type {
   ReclamationDatabaseOptions,
   SessionMaintenanceMetadataCommand,
   SessionMaintenanceLiveProtection,
+  SessionMaintenanceReadCommand,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
@@ -27,6 +28,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
   assertFileIdentity(): void;
   openWriter(): OpenClawAgentDatabase;
+  readPreparedDatabase(): OpenClawAgentDatabase;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
 }) {
   const preparations = new Map<
@@ -52,6 +54,18 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     }
   };
   const operations = {
+    "session.maintenance.read": (plan: SessionMaintenanceReadCommand) => {
+      context.assertFileIdentity();
+      const kernel = expectDefined(maintenance, "Session maintenance kernel");
+      return {
+        kind: "session-maintenance-read" as const,
+        result: kernel.readSessionMaintenanceInWorker(
+          { ...plan, databaseOptions: context.databaseOptions },
+          context.readPreparedDatabase(),
+        ),
+        workerThreadId: threadId,
+      };
+    },
     "session.maintenance.release": ({ id }: { id: string }) => releasePreparation(id),
     "session.maintenance.prepare": (input: PreparationInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");

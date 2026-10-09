@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -68,12 +68,52 @@ import {
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
+import { registerWindowsTaskAdmissionTests } from "./update-cli/update-command-windows-preflight.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
+
+let resetNativeLoader: (() => void) | undefined;
+beforeAll(async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  // Match fs-safe's Windows simulation: retain native publication, add host identity facts.
+  const nativeUrl = new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href;
+  const {
+    __loadBundledNativeForTest: loadBundledNative,
+    __setNativeLoaderForTest: setNativeLoader,
+    __resetNativeLoaderForTest: resetLoader,
+  } = await vi.importActual<{
+    __loadBundledNativeForTest: () => Record<string, unknown>;
+    __setNativeLoaderForTest: (loader: () => Record<string, unknown>) => void;
+    __resetNativeLoaderForTest: () => void;
+  }>(nativeUrl);
+  const binding = loadBundledNative();
+  setNativeLoader(() => ({
+    ...binding,
+    fstatIdentity(fd: number) {
+      const stat = fsSync.fstatSync(fd);
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        mode: stat.mode,
+        nlink: stat.nlink,
+        size: stat.size,
+        isFile: stat.isFile(),
+        isDirectory: stat.isDirectory(),
+        isSymbolicLink: stat.isSymbolicLink(),
+      };
+    },
+  }));
+  resetNativeLoader = resetLoader;
+});
+afterAll(() => resetNativeLoader?.());
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const fixture = createUpdateCliFixture();
+
+  registerWindowsTaskAdmissionTests(fixture);
 
   registerFailureSelectorTests({
     updateCommand,
@@ -477,7 +517,6 @@ describe("update-cli", () => {
   it("restores package files without re-enabling Windows autostart after interruption", async () => {
     await fixture.useFileBackedConfig();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const processOnSpy = vi.spyOn(process, "on");
     const exitCalled = createDeferred();
     const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
       exitCalled.resolve();
@@ -498,16 +537,19 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
       if (argv[2] === "doctor") {
         await fs.unlink(path.join(root, "dist", "index.js"));
-        const listener = processOnSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
-        if (typeof listener !== "function") {
-          throw new Error("missing signal handler");
+        const listeners = process
+          .listeners("SIGINT")
+          .filter((listener) => !priorSigintListeners.has(listener));
+        expect(listeners.length).toBeGreaterThan(0);
+        for (const listener of listeners) {
+          listener("SIGINT");
         }
-        listener();
         throw new Error("interrupted lifecycle");
       }
       return runFixtureCommand(argv, options);
     });
 
+    const priorSigintListeners = new Set(process.listeners("SIGINT"));
     await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
     await exitCalled.promise;
     expect(processExitSpy).toHaveBeenCalledWith(130);

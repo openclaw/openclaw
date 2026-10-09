@@ -362,10 +362,7 @@ export function createSubagentControllerRead(params: {
     }
     ids.set(request.key, selected);
   };
-  const prepare = (): Promise<void> | undefined => {
-    if (pending) {
-      return pending;
-    }
+  const nextRequest = (): ReadRequest | undefined => {
     try {
       read();
       return undefined;
@@ -373,25 +370,25 @@ export function createSubagentControllerRead(params: {
       if (!(error instanceof ControllerReadRequired)) {
         throw error;
       }
+      return error.request;
+    }
+  };
+  const prepare = (): Promise<void> | undefined => {
+    if (!pending) {
+      let request = nextRequest();
+      if (!request) {
+        return undefined;
+      }
       pending = (async () => {
-        let request = error.request;
-        for (;;) {
+        while (request) {
           await prepareRequest(request);
-          try {
-            read();
-            return;
-          } catch (next) {
-            if (!(next instanceof ControllerReadRequired)) {
-              throw next;
-            }
-            request = next.request;
-          }
+          request = nextRequest();
         }
       })().finally(() => {
         pending = undefined;
       });
-      return pending;
     }
+    return pending;
   };
   return {
     // Actor grants use this source guard, then read their supplied transaction facts.

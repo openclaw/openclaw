@@ -111,15 +111,12 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     );
 
     // Report USER.md's fixed cap separately from tunable per-file limits.
-    const fixedUserCapApplied = analysis.truncatedFiles.some(
-      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
-    );
-    const fixedUserCapNearLimit = analysis.nearLimitFiles.some(isFixedUserCapFile);
-    const fixedUserCapRelevant = fixedUserCapApplied || fixedUserCapNearLimit;
-    const needsPerFileTip =
-      analysis.truncatedFiles.some(
-        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
-      ) || analysis.nearLimitFiles.some((file) => !isFixedUserCapFile(file));
+    const perFileWarnings = [
+      ...analysis.truncatedFiles.filter((file) => file.causes.includes("per-file-limit")),
+      ...analysis.nearLimitFiles,
+    ];
+    const fixedUserCapRelevant = perFileWarnings.some(isFixedUserCapFile);
+    const needsPerFileTip = perFileWarnings.some((file) => !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;

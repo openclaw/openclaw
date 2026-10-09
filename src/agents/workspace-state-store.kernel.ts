@@ -19,7 +19,7 @@ import {
 } from "./workspace-state-identity.js";
 
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
-export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
@@ -441,22 +441,22 @@ export function deleteWorkspaceStateRowsInDatabase(
       kysely.deleteFrom("migration_sources").where("source_key", "in", receiptKeys),
     );
     const runIds = [...new Set(receiptRows.map((row) => row.last_run_id))];
-    const referencedRunIds = new Set(
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("migration_sources")
-          .select("last_run_id")
-          .where("last_run_id", "in", runIds),
-      ).rows.map((row) => row.last_run_id),
+    executeSqliteQuerySync(
+      database.db,
+      kysely
+        .deleteFrom("migration_runs")
+        .where("id", "in", runIds)
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("migration_sources")
+                .select("source_key")
+                .whereRef("migration_sources.last_run_id", "=", "migration_runs.id"),
+            ),
+          ),
+        ),
     );
-    const orphanedRunIds = runIds.filter((runId) => !referencedRunIds.has(runId));
-    if (orphanedRunIds.length > 0) {
-      executeSqliteQuerySync(
-        database.db,
-        kysely.deleteFrom("migration_runs").where("id", "in", orphanedRunIds),
-      );
-    }
   }
   executeSqliteQuerySync(
     database.db,

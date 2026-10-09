@@ -246,6 +246,7 @@ export async function runAcpHarnessAttempt(params: {
       }
     };
     const requestId = `${admission.entryId}:acp:${randomUUID()}`;
+    const assistantItemId = `${requestId}:acp:assistant`;
     // Prose labels keep file paths and literal user text out of native slash-command dispatch.
     const turn: AcpRuntimeTurnInput &
       Pick<AcpxRuntimeTurnInput, "onPermissionRequest" | "assertActive"> = {
@@ -297,7 +298,10 @@ export async function runAcpHarnessAttempt(params: {
               assertActive();
             }
             text += event.text;
-            const update = { stream: "assistant", data: { text, delta: event.text } };
+            const update = {
+              stream: "assistant",
+              data: { text, delta: event.text, itemId: assistantItemId },
+            };
             emitAgentEvent({
               runId: input.runId,
               sessionKey,
@@ -357,13 +361,12 @@ export async function runAcpHarnessAttempt(params: {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
     };
-    const key = `${requestId}:acp:assistant`;
     const written = await appendSessionTranscriptMessageByIdentityStrict({
       ...transcript,
       config: input.config,
       runId: input.runId,
       updateMode: "inline",
-      message: { ...assistant, idempotencyKey: key },
+      message: { ...assistant, idempotencyKey: assistantItemId },
       beforeFreshMessageCommit: createNativeSessionBindingAuthority(
         [],
         input.hostCapabilities.assertActive,
@@ -373,7 +376,7 @@ export async function runAcpHarnessAttempt(params: {
       throw new Error("ACP assistant transcript was not committed");
     }
     assistant = written.result.message;
-    assistantIdempotencyKey = key;
+    assistantIdempotencyKey = assistantItemId;
     terminalAnchor = written.result.anchor;
     messages = (
       await SessionManager.openModelContextAsync(transcript, {

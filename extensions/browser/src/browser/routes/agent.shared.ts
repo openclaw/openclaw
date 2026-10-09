@@ -33,15 +33,24 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
   return asNonArrayRecord(req.body);
 }
 
-export function handleRouteError(res: BrowserResponse, err: unknown) {
+export function handleRouteError(
+  res: BrowserResponse,
+  err: unknown,
+  options?: { formatMessage?: (err: unknown) => string; mapBrowserError?: boolean },
+) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
   }
-  const browserMapped = toBrowserErrorResponse(err);
+  const browserMapped =
+    options?.mapBrowserError === false ? undefined : toBrowserErrorResponse(err);
   if (browserMapped) {
     return jsonBrowserError(res, browserMapped);
   }
-  jsonError(res, 500, redactCdpErrorText(String(err)));
+  jsonError(
+    res,
+    500,
+    options?.formatMessage ? options.formatMessage(err) : redactCdpErrorText(String(err)),
+  );
 }
 
 export function resolveProfileContext(

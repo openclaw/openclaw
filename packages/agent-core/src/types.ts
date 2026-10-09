@@ -184,9 +184,10 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
-/** @internal Mutable one-shot budget shared by prompt retries in one Agent run. */
+/** @internal Mutable loop safety evidence shared by prompt retries in one Agent run. */
 export type ToolLoopRecoveryState = {
   criticalToolLoopSeen: boolean;
+  repeatedToolError?: { signature: string; count: number };
 };
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
@@ -310,7 +311,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     toolResults: ToolResultMessage[];
   }) => boolean;
 
-  /** @internal Preserves the one-shot recovery budget across Agent.continue() retries. */
+  /** @internal Preserves loop safety evidence across Agent.continue() retries. */
   toolLoopRecoveryState?: ToolLoopRecoveryState;
 
   /**

@@ -2,13 +2,14 @@ import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js"
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { applySessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
-import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
+import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import type {
   IncognitoEntryPatchOperations,
   IncognitoEntryPatchResult,
 } from "./session-incognito-entry-patch-contract.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 
 export function createIncognitoEntryPatchWorker(
   database: OpenClawAgentDatabase,
@@ -17,7 +18,11 @@ export function createIncognitoEntryPatchWorker(
   admit: (
     stage: "transaction" | "commit",
     keys: readonly string[],
-    receipt: { guarded: boolean; value?: IncognitoEntryPatchResult },
+    receipt: {
+      guarded: boolean;
+      value?: IncognitoEntryPatchResult;
+      sourceValidation?: SessionSourceValidation;
+    },
   ) => void,
 ) {
   return {
@@ -42,22 +47,29 @@ export function createIncognitoEntryPatchWorker(
             throw new Error("Incognito entry patch lost its native owner");
           }
           let guarded = false;
+          let sourceValidation: SessionSourceValidation | undefined;
           admit("transaction", keys, { guarded });
           let result: IncognitoEntryPatchResult = { entry: null, wrote: false };
-          if (sessionEntryPatchPredicateMatches(database, sessionKey, input.shouldCommitIf)) {
+          const predicate = readSessionEntryPatchPredicate(
+            database,
+            sessionKey,
+            input.shouldCommitIf,
+          );
+          if (predicate.matches) {
             const mutation = applySessionEntryPatchInDatabase(database, {
               ...input,
               readSnapshot: (owner) => readSessionEntryPatchSnapshot(owner, selection),
               options: {
                 consumePendingReset: input.consumePendingReset,
                 providerReviewMutation: input.providerReviewMutation,
-                workerGuard: { cliHistory: input.cliHistory },
+                workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
                 assertCommitAllowed() {
-                  const refusedSource = readRefusedSessionSource(
+                  sourceValidation = readSessionSourceValidation(
                     database,
                     input.sources,
                     incarnation,
                   );
+                  const { refusedSource } = sourceValidation;
                   if (refusedSource) {
                     admit("commit", keys, {
                       guarded: false,
@@ -66,13 +78,20 @@ export function createIncognitoEntryPatchWorker(
                     throw new Error("Session source refusal was not rejected");
                   }
                   guarded = true;
-                  admit("transaction", keys, { guarded });
+                  admit("transaction", keys, { guarded, sourceValidation });
                 },
               },
             });
-            result = { entry: mutation.entry, wrote: Boolean(mutation.identity) };
+            result = {
+              entry: mutation.entry,
+              wrote: Boolean(mutation.identity),
+              transcriptPredicate:
+                mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId
+                  ? predicate.transcriptPredicate
+                  : undefined,
+            };
           }
-          admit("commit", keys, { guarded, value: result });
+          admit("commit", keys, { guarded, value: result, sourceValidation });
           return result;
         },
         { agentId: database.agentId, path: database.path, env },

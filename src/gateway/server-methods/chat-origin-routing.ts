@@ -194,31 +194,21 @@ export function resolveChatSendOriginatingRoute(params: {
   };
 }
 
-function isAcpSessionKey(sessionKey: string | undefined): boolean {
-  return Boolean(sessionKey?.split(":").includes("acp"));
-}
-
-function resolveExplicitOriginBinding(origin: ChatSendExplicitOrigin | undefined) {
-  if (!origin?.accountId || origin.originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
-    return undefined;
-  }
-  return getSessionBindingService().resolveByConversation({
-    channel: origin.originatingChannel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-}
-
-export function explicitOriginTargetsAcpSession(
+export async function resolveExplicitOriginBindingTargets(
   origin: ChatSendExplicitOrigin | undefined,
-): boolean {
-  return isAcpSessionKey(resolveExplicitOriginBinding(origin)?.targetSessionKey);
-}
-
-export function explicitOriginTargetsPluginBinding(
-  origin: ChatSendExplicitOrigin | undefined,
-): boolean {
-  return isPluginOwnedSessionBindingRecord(resolveExplicitOriginBinding(origin));
+): Promise<{ acp: boolean; plugin: boolean }> {
+  const binding =
+    origin?.accountId && origin.originatingChannel !== INTERNAL_MESSAGE_CHANNEL
+      ? await getSessionBindingService().resolveByConversationAsync({
+          channel: origin.originatingChannel,
+          accountId: origin.accountId,
+          conversationId: origin.originatingTo,
+        })
+      : undefined;
+  return {
+    acp: Boolean(binding?.targetSessionKey?.split(":").includes("acp")),
+    plugin: isPluginOwnedSessionBindingRecord(binding),
+  };
 }
 
 export function normalizeOptionalChatSystemReceipt(

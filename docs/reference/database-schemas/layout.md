@@ -14,6 +14,12 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
+On Windows, plain drive/UNC paths and their extended-length (`\\?\`) spellings
+identify the same shared-state database owner. Opens, write admission, retained
+connections, and cleanup use the same path identity; native SQLite opens still
+support long filenames. This requires no schema or stored-data migration and
+does not change update backups or rollback.
+
 The shared-state database retains `task_runs`, `task_delivery_state`, and `flow_runs`, including their existing columns and indexes. The Tasks and TaskFlow runtime, tools, and UI are removed; their non-Cron rows remain untouched and unused by the runtime. Cron owns only the `runtime = 'cron'` rows in `task_runs` through its history store. It does not move history to another table. Native execution and completion remain with the subagent registry and harness-binding owners; native Codex pending assignments use metadata in the existing parent binding, not a new table. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 In agent schema 23, `transcript_events` retains original event JSON as either
@@ -449,6 +455,22 @@ The normal handoff parent prepares this database before launching its sealed
 helper. The helper receives the captured database identity and operates only on
 that existing database, without resolving installation packages or recreating
 missing or empty state.
+Package recovery helpers are also self-contained: their status and recovery
+commands do not need neighboring installation assets or service controllers.
+
+Current update, Doctor, and handoff owners serialize coordinator writes before
+pinning a read snapshot. They prepare an existing-directory capability and use
+the coordinator's existing lock file, carrying the remaining five-second wait
+budget into SQLite. Other installations can still inspect their leases while a
+writer is active. SQLite admission remains non-waiting while the protective
+snapshot is held, so it cannot deadlock a writer's commit or replay a hot journal.
+Already-published synchronous helpers retain that conservative SQLite refusal;
+the new serialization does not change their protocol or lease rows.
+When an older update or Doctor holds SQLite, the current caller explains the
+contention and asks the operator to wait for it to finish, then rerun the command.
+If a holder removes its lock during inspection, admission re-observes the absent
+slot through the same directory capability and remaining budget. A replacement
+sidecar that is still present or a changed directory identity is refused.
 
 File creation applies private permissions before SQLite opens the file, including
 a protected ACL on Windows. Initialization follows the existing directory-durability

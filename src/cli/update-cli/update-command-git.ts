@@ -37,7 +37,6 @@ import {
   normalizeFallbackFailureReason,
   reportUpdateStepCompletion,
 } from "../../infra/update-runner-command.js";
-import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import {
   readBranchName,
   readGitTargetSchemaVersions,
@@ -64,6 +63,7 @@ import {
 } from "./shared.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
+import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 
 export async function retireStandaloneGitWrapper(params: {
@@ -272,11 +272,7 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
     if (!match) {
       return null;
     }
-    const tag = match[1];
-    if (!tag) {
-      return null;
-    }
-    (match[2] ? peeled : direct).set(tag, sha);
+    (match[2] ? peeled : direct).set(match[1]!, sha);
   }
   return new Map([...direct, ...peeled]);
 }
@@ -401,6 +397,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
 
 export async function updateGitInstall(params: {
   root: string;
+  restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
   installKind: "git" | "package" | "unknown";
@@ -449,21 +446,25 @@ export async function updateGitInstall(params: {
     ? resolveNpmLifecyclePolicyGate(installTarget)
     : { policy: null, error: null };
 
+  const failed = async (
+    reason: string,
+    steps: UpdateRunResult["steps"],
+    recovery = readOriginalUpdateRecovery(params, effectiveTimeout),
+  ): Promise<UpdateRunResult> => ({
+    status: "error",
+    mode: "git",
+    root: params.root,
+    reason,
+    recovery: await recovery,
+    steps,
+    durationMs: Date.now() - params.startedAt,
+  });
+
   // Package-to-Git updates must settle package-manager policy before cloning or
   // updating the checkout; carry this exact decision into the later install.
   if (npmLifecycleGate.error) {
     defaultRuntime.error(npmLifecycleGate.error);
-    return {
-      status: "error",
-      mode: "git",
-      root: params.root,
-      reason: "npm-lifecycle-policy-preflight",
-      recovery: await (params.installKind === "git"
-        ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
-        : verifyPackageUpdateRecovery(params.root)),
-      steps: [],
-      durationMs: Date.now() - params.startedAt,
-    };
+    return failed("npm-lifecycle-policy-preflight", []);
   }
 
   const checkSnapshot = async () => {
@@ -498,15 +499,11 @@ export async function updateGitInstall(params: {
   };
   const snapshotBeforeClone = params.switchToGit ? await checkSnapshot() : undefined;
   if (snapshotBeforeClone && snapshotBeforeClone.exitCode !== 0) {
-    return {
-      status: "error",
-      mode: "git",
-      root: params.root,
-      reason: "snapshot-capacity-insufficient",
-      steps: [snapshotBeforeClone],
-      recovery: await verifyPackageUpdateRecovery(params.root),
-      durationMs: Date.now() - params.startedAt,
-    };
+    return failed(
+      "snapshot-capacity-insufficient",
+      [snapshotBeforeClone],
+      verifyPackageUpdateRecovery(params.root),
+    );
   }
 
   const previousPackage = installTarget
@@ -618,17 +615,10 @@ export async function updateGitInstall(params: {
     updateRoot = checkout?.checkoutDir ?? updateRoot;
 
     if (cloneStep && cloneStep.exitCode !== 0) {
-      return {
-        status: "error",
-        mode: "git",
-        root: params.root,
-        reason: "git-clone-failed",
-        recovery: await (params.installKind === "git"
-          ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
-          : verifyPackageUpdateRecovery(params.root)),
-        steps: [...(snapshotBeforeClone ? [snapshotBeforeClone] : []), cloneStep],
-        durationMs: Date.now() - params.startedAt,
-      };
+      return await failed("git-clone-failed", [
+        ...(snapshotBeforeClone ? [snapshotBeforeClone] : []),
+        cloneStep,
+      ]);
     }
 
     const updateResult = stagedUpdateResult ?? (await runUpdate(updateRoot));

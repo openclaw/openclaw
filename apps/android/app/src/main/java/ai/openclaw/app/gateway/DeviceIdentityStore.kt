@@ -117,20 +117,12 @@ class DeviceIdentityStore private constructor(
   private fun load(): DeviceIdentity? = readIdentity(prefs.getString(identityKey))
 
   private fun readIdentity(raw: String?): DeviceIdentity? {
-    return try {
-      if (raw == null) return null
-      val decoded = json.decodeFromString(DeviceIdentity.serializer(), raw)
-      if (decoded.deviceId.isBlank() ||
-        decoded.publicKeyRawBase64.isBlank() ||
-        decoded.privateKeyPkcs8Base64.isBlank()
-      ) {
-        null
-      } else {
-        decoded
+    if (raw == null) return null
+    return runCatching {
+      json.decodeFromString(DeviceIdentity.serializer(), raw).takeIf {
+        it.deviceId.isNotBlank() && it.publicKeyRawBase64.isNotBlank() && it.privateKeyPkcs8Base64.isNotBlank()
       }
-    } catch (_: Throwable) {
-      null
-    }
+    }.getOrNull()
   }
 
   private fun migrateLegacyIdentity() {

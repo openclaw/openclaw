@@ -52,13 +52,10 @@ function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): 
 }
 
 function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
-  const primary = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
-  if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
-    return true;
-  }
-  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
-    normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`),
-  );
+  return [
+    resolvePrimaryStringValue(cfg.agents?.defaults?.model),
+    ...Object.keys(cfg.agents?.defaults?.models ?? {}),
+  ].some((key) => normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`));
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -70,15 +67,12 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   } catch (error) {
     return hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable";
   }
-  try {
-    fs.accessSync(dirPath, fs.constants.R_OK);
-  } catch {
-    return "unreadable";
-  }
-  try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
-  } catch {
-    return "readonly";
+  for (const mode of [fs.constants.R_OK, fs.constants.W_OK]) {
+    try {
+      fs.accessSync(dirPath, mode);
+    } catch {
+      return mode === fs.constants.R_OK ? "unreadable" : "readonly";
+    }
   }
   return "present";
 }
@@ -92,13 +86,11 @@ function formatDirectoryProblemLine(
   if (health === "present" || health === "missing") {
     return null;
   }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
+  const problem =
+    health === "not_directory"
+      ? "exists but is not a directory."
+      : `is not ${health === "unreadable" ? "readable" : "writable"} by this user.`;
+  return `- ${label}: ${display} ${problem}`;
 }
 
 function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
@@ -116,19 +108,11 @@ function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   return [];
 }
 
-type ClaudeCliWorkspaceTarget = {
-  agentId: string;
-  workspaceDir: string;
-  projectDir: string;
-  workspaceHealth: ClaudeCliDirHealth;
-  projectDirHealth: ClaudeCliDirHealth;
-};
-
 function resolveClaudeCliWorkspaceTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
-}): ClaudeCliWorkspaceTarget[] {
+}) {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
   const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
   return agentIds.map((agentId) => {
@@ -141,10 +125,10 @@ function resolveClaudeCliWorkspaceTargets(params: {
     });
     return {
       agentId,
-      workspaceDir,
-      projectDir,
-      workspaceHealth: probeDirectoryHealth(workspaceDir),
-      projectDirHealth: probeDirectoryHealth(projectDir),
+      directories: [
+        [workspaceDir, probeDirectoryHealth(workspaceDir), "workspace"],
+        [projectDir, probeDirectoryHealth(projectDir), "Claude project dir"],
+      ] as const,
     };
   });
 }
@@ -209,40 +193,24 @@ export function noteClaudeCliHealth(
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    const workspaceProblem = formatDirectoryProblemLine(
-      target.workspaceDir,
-      target.workspaceHealth,
-      agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
-    );
-    if (workspaceProblem) {
-      lines.push(workspaceProblem);
-    }
-    if (
-      target.workspaceHealth === "readonly" ||
-      target.workspaceHealth === "unreadable" ||
-      target.workspaceHealth === "not_directory"
-    ) {
-      fixHints.push(
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s workspace` : "the workspace"
-        } a readable, writable directory for the gateway user.`,
-      );
-    }
-
-    const projectDirProblem = formatDirectoryProblemLine(
-      target.projectDir,
-      target.projectDirHealth,
-      agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
-    );
-    if (projectDirProblem) {
-      lines.push(projectDirProblem);
-    }
-    if (target.projectDirHealth === "unreadable" || target.projectDirHealth === "not_directory") {
-      fixHints.push(
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
-        } readable, or remove the broken path and let Claude recreate it.`,
-      );
+    for (const [dirPath, health, subject] of target.directories) {
+      const workspace = subject === "workspace";
+      const label = agentLabel
+        ? `Agent ${agentLabel} ${subject}`
+        : workspace
+          ? "Workspace"
+          : subject;
+      const problem = formatDirectoryProblemLine(dirPath, health, label);
+      if (problem) {
+        lines.push(problem);
+        if (workspace || health !== "readonly") {
+          const targetLabel = agentLabel ? `agent ${agentLabel}'s ${subject}` : `the ${subject}`;
+          const remedy = workspace
+            ? "a readable, writable directory for the gateway user."
+            : "readable, or remove the broken path and let Claude recreate it.";
+          fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
+        }
+      }
     }
   }
 

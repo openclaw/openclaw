@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import { shouldEnableNodeDiagnosticReports } from "../../scripts/lib/node-diagnostic-report.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { waitForPidFile } from "../../test/helpers/process-wait.js";
@@ -136,10 +137,9 @@ describe("runCliProcessChild", () => {
         runningChild.stdin.end();
       },
     });
-    const reportCleanup =
-      process.platform !== "win32" && !process.versions.bun
-        ? (reportCleanupHooks.afterEach[0] ?? reportCleanupHooks.finished[firstFinishedHook]!)()
-        : undefined;
+    const reportCleanup = shouldEnableNodeDiagnosticReports()
+      ? (reportCleanupHooks.afterEach[0] ?? reportCleanupHooks.finished[firstFinishedHook]!)()
+      : undefined;
     const failure = await childRun.catch((error: unknown) => error);
     await reportCleanup;
 
@@ -149,7 +149,7 @@ describe("runCliProcessChild", () => {
     expect(child?.stderr.closed).toBe(true);
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toMatch(/500ms deadlock guard[\s\S]*partial/u);
-    if (process.platform !== "win32" && !process.versions.bun) {
+    if (shouldEnableNodeDiagnosticReports()) {
       expect(String(failure)).toContain('"Timeout":1');
       expect(String(failure)).toContain('"activeHandles"');
       expect(String(failure)).toMatch(/"pendingPromises":\{"tracked":[1-9]/u);
@@ -170,7 +170,7 @@ describe("runCliProcessChild", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  it.skipIf(!shouldEnableNodeDiagnosticReports())(
     "arms reports without producing one for a normally exiting child",
     async () => {
       const result = await runCliProcessChild({
@@ -188,7 +188,7 @@ describe("runCliProcessChild", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  it.skipIf(!shouldEnableNodeDiagnosticReports())(
     "keeps a timeout failure when the child exits during diagnostic grace",
     async () => {
       await expect(
@@ -200,11 +200,13 @@ describe("runCliProcessChild", () => {
           env: process.env,
           timeoutMs: 500,
         }),
-      ).rejects.toThrow(/500ms deadlock guard[\s\S]*received/u);
+      ).rejects.toThrow(
+        /500ms deadlock guard[\s\S]*Child diagnostics: SIGQUIT requested;[^\n]*; received\./u,
+      );
     },
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun)).each([
+  it.skipIf(process.platform === "win32").each([
     { label: "busy", block: "while (true) {}", state: "R" },
     { label: "stopped", block: "process.kill(process.pid, 'SIGSTOP')", state: "T" },
   ])(
@@ -402,7 +404,7 @@ describe("runCliProcessChild", () => {
         for (const cleanup of reportCleanupHooks.finished.slice(firstFinishedHook)) {
           await cleanup();
         }
-        if (shape === "finite" || process.platform === "win32" || process.versions.bun) {
+        if (shape === "finite" || !shouldEnableNodeDiagnosticReports()) {
           expect(() => owner.assertReleased()).not.toThrow();
         } else {
           expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");

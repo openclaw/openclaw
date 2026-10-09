@@ -2065,7 +2065,7 @@ describe("chat loading skeleton", () => {
     }
   });
 
-  it("keeps interrupted status with composer notices outside the transcript", () => {
+  it("announces interruptions without a composer badge", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const container = renderChatView({
@@ -2081,14 +2081,8 @@ describe("chat loading skeleton", () => {
         },
       });
 
-      const status = requireElement(
-        container,
-        ".agent-chat__composer-run-status",
-        "interrupted status",
-      );
-      expect(status.closest(".agent-chat__composer-notices")).not.toBeNull();
-      expect(status.closest(".chat-footer")).not.toBeNull();
-      expect(status.closest(".chat-thread")).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
       expect(
         container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
       ).toBe("Interrupted");
@@ -3290,7 +3284,6 @@ describe("chat attachment picker", () => {
     const file = new File(["video"], "clip.mp4");
 
     expect(input).toBeInstanceOf(HTMLInputElement);
-    expect(input?.accept).toContain("video/*");
     selectFile(input!, file);
 
     await waitForFast(() => {

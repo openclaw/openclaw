@@ -391,21 +391,15 @@ export async function handleCompactCommand(
 
   const tokensAfterCompaction = result.result?.tokensAfter;
   const didCompact = result.ok && result.compacted;
-  const compactLabel =
-    result.ok || isBenignCompactionSkipResult(result)
-      ? didCompact
-        ? result.compactionKind === "server-endpoint" &&
-          typeof tokensAfterCompaction === "number" &&
-          result.result?.tokensBefore != null
-          ? `Server-side compaction (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-          : typeof tokensAfterCompaction !== "number"
-            ? "Compaction finished (resulting context unknown)"
-            : result.result?.tokensBefore != null
-              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-              : "Compacted"
-        : "Compaction skipped"
-      : "Compaction failed";
+  let compactLabel =
+    result.ok || isBenignCompactionSkipResult(result) ? "Compaction skipped" : "Compaction failed";
   if (didCompact) {
+    compactLabel =
+      typeof tokensAfterCompaction !== "number"
+        ? "Compaction finished (resulting context unknown)"
+        : result.result?.tokensBefore != null
+          ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+          : "Compacted";
     const compactionCount = await runtime.incrementCompactionCount({
       agentId: sessionAgentId,
       sessionEntry: expectedSession,
@@ -434,9 +428,7 @@ export async function handleCompactCommand(
     contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);
-  const line = reason
-    ? `${compactLabel}: ${reason} • ${contextSummary}`
-    : `${compactLabel} • ${contextSummary}`;
+  const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
   runtime.enqueueSystemEvent(line, {
     sessionKey: resolveSystemEventQueueKey(params.sessionKey, sessionAgentId),
   });

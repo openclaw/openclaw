@@ -74,13 +74,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     thinkLevelOverride,
     thinkingCatalog,
     skillsSnapshot,
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    promptMedia,
-    inboundMediaIndexes,
-    currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
     preparedSessionState,
@@ -97,6 +90,15 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     authProfileId,
     authProfileIdSource,
   } = state;
+  const {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    media: promptMedia,
+    inboundMediaIndexes,
+    currentInboundContext,
+  } = state.promptBodies;
   const {
     params,
     runtimePolicySessionKey,
@@ -139,8 +141,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     sessionStore,
     sessionKey,
     storePath,
-  } = params;
-  const {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -149,19 +149,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     elevatedAllowed,
   } = params;
 
-  const runHasStoredSessionModelOverride = Boolean(
-    preparedSessionState.sessionEntry?.modelOverrideSource !== "default" &&
-    (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
-      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
-  );
+  const runModelOverrideSource = preparedSessionState.sessionEntry?.modelOverrideSource;
   const runHasSessionModelOverride =
-    runHasStoredSessionModelOverride &&
+    runModelOverrideSource !== "default" &&
+    Boolean(
+      normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+    ) &&
     !hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
-  const runModelOverrideSource = runHasSessionModelOverride
-    ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
-      ? undefined
-      : preparedSessionState.sessionEntry?.modelOverrideSource
-    : undefined;
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
     hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
@@ -173,9 +168,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   // - plain user_request without lifecycle: deliberately detach from the
   //   source/active-lane signal so a superseded parent abort does not cancel a
   //   still-valid queued user turn.
-  const hasQueuedOwnershipLifecycle = Boolean(opts?.turnAdoptionLifecycle);
   const queuedFollowupAbortSignal =
-    hasQueuedOwnershipLifecycle || inboundEventKind === "room_event"
+    opts?.turnAdoptionLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ??
         opts?.turnAdoptionLifecycle?.abortSignal ??
         opts?.abortSignal)
@@ -376,7 +370,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   if (queuedToolsAllow && queuedToolIntersections) {
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
-  const admittedSessionSettings = opts?.admittedSessionSettings;
+  const admittedSessionSettings =
+    opts?.admittedSessionSettings ?? preparedSessionState.sessionEntry;
   const groupTurn = getGroupThreadTurn();
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
@@ -411,6 +406,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       onModelSelected: opts?.onModelSelected,
       prepareAssistantTranscriptMessage: opts?.prepareAssistantTranscriptMessage,
       resolveReplyDelivery: opts?.resolveReplyDelivery,
+      onDeliberateSilentTerminalReply: opts?.onDeliberateSilentTerminalReply,
     },
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
@@ -448,6 +444,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      internalEventExecution: opts?.internalEventExecution,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       agentDir,
@@ -492,21 +489,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cwd:
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),
-      permissionMode: admittedSessionSettings
-        ? admittedSessionSettings.permissionMode
-        : preparedSessionState.sessionEntry?.permissionMode,
+      permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: admittedSessionSettings
-        ? admittedSessionSettings.toolOverrides
-        : preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
       requestedRouteResolution,
       modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
-      modelOverrideSource: runModelOverrideSource,
+      modelOverrideSource: runHasSessionModelOverride ? runModelOverrideSource : undefined,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
       // Visible spawn children keep dashboard keys; declared spawn lineage routes
       // them to the subagent fallback ladder like hidden subagent sessions.
@@ -575,11 +568,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       skipProviderRuntimeHints: useFastReplyRuntime,
       terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
-      ...(opts?.skillWorkshopProposalRevision
-        ? {
-            skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
-          }
-        : {}),
       ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })

@@ -41,11 +41,7 @@ class PermissionRequester internal constructor(
   private data class ActivityHost(
     val activity: ComponentActivity,
     val permissionRequestLauncher: (Array<String>, Int) -> Unit,
-  )
-
-  private data class ActiveActivityHost(
-    val host: ActivityHost,
-    val activation: Long,
+    val activation: Long? = null,
   )
 
   private data class PendingPermissionRequest(
@@ -67,8 +63,7 @@ class PermissionRequester internal constructor(
   private val permissionRequestsLock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
   private val activityHosts = IdentityHashMap<ComponentActivity, ActivityHost>()
-  private val activeActivitySequences = IdentityHashMap<ComponentActivity, Long>()
-  private val activeActivityHost = MutableStateFlow<ActiveActivityHost?>(null)
+  private val activeActivityHost = MutableStateFlow<ActivityHost?>(null)
   private var nextActivityActivation = 0L
   private val pendingPermissionRequests = mutableMapOf<Int, PendingPermissionRequest>()
 
@@ -79,30 +74,29 @@ class PermissionRequester internal constructor(
     },
   ) {
     synchronized(activityHostLock) {
-      activityHosts[activity] = ActivityHost(activity, permissionRequestLauncher)
+      activityHosts[activity] = ActivityHost(activity, permissionRequestLauncher, activityHosts[activity]?.activation)
       publishActiveActivityHostLocked()
     }
   }
 
   internal fun activate(activity: ComponentActivity) {
     synchronized(activityHostLock) {
-      check(activityHosts.containsKey(activity)) { "permission Activity must attach before activation" }
+      val host = checkNotNull(activityHosts[activity]) { "permission Activity must attach before activation" }
       nextActivityActivation += 1
-      activeActivitySequences[activity] = nextActivityActivation
+      activityHosts[activity] = host.copy(activation = nextActivityActivation)
       publishActiveActivityHostLocked()
     }
   }
 
   internal fun deactivate(activity: ComponentActivity) {
     synchronized(activityHostLock) {
-      activeActivitySequences.remove(activity)
+      activityHosts[activity]?.let { activityHosts[activity] = it.copy(activation = null) }
       publishActiveActivityHostLocked()
     }
   }
 
   internal fun detach(activity: ComponentActivity) {
     synchronized(activityHostLock) {
-      activeActivitySequences.remove(activity)
       activityHosts.remove(activity)
       publishActiveActivityHostLocked()
     }
@@ -186,22 +180,18 @@ class PermissionRequester internal constructor(
 
   private fun publishActiveActivityHostLocked() {
     activeActivityHost.value =
-      activeActivitySequences.entries.maxByOrNull { it.value }?.let { entry ->
-        activityHosts[entry.key]?.let { host ->
-          ActiveActivityHost(host = host, activation = entry.value)
-        }
-      }
+      activityHosts.values.maxWithOrNull(compareBy(ActivityHost::activation))?.takeIf { it.activation != null }
   }
 
   private suspend fun awaitActiveActivityHost(
     timeoutMs: Long,
-    rejected: ActiveActivityHost? = null,
-  ): ActiveActivityHost =
+    rejected: ActivityHost? = null,
+  ): ActivityHost =
     withTimeout(timeoutMs) {
       activeActivityHost
         .filterNotNull()
         .first { active ->
-          active != rejected && !active.host.activity.isFinishing && !active.host.activity.isDestroyed
+          active != rejected && !active.activity.isFinishing && !active.activity.isDestroyed
         }
     }
 
@@ -213,7 +203,7 @@ class PermissionRequester internal constructor(
     withActiveActivityHost(timeoutMs, rejectHostOnRetry = true) { active ->
       withContext(Dispatchers.Main) {
         if (!isCurrentActiveHost(active)) return@withContext null
-        active.host.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
+        active.permissionRequestLauncher(permissions.toTypedArray(), requestCode)
         Unit
       }
     }
@@ -228,7 +218,7 @@ class PermissionRequester internal constructor(
         withContext(Dispatchers.Main) {
           if (!isCurrentActiveHost(active)) return@withContext null
           permissions.any { permission ->
-            ActivityCompat.shouldShowRequestPermissionRationale(active.host.activity, permission)
+            ActivityCompat.shouldShowRequestPermissionRationale(active.activity, permission)
           }
         } ?: return@withActiveActivityHost null
       if (!needsRationale) return@withActiveActivityHost true
@@ -252,7 +242,7 @@ class PermissionRequester internal constructor(
             .filterValues { granted -> !granted }
             .keys
             .filter { permission ->
-              !ActivityCompat.shouldShowRequestPermissionRationale(active.host.activity, permission)
+              !ActivityCompat.shouldShowRequestPermissionRationale(active.activity, permission)
             }
         } ?: return@withActiveActivityHost null
       if (denied.isEmpty()) return@withActiveActivityHost Unit
@@ -264,10 +254,10 @@ class PermissionRequester internal constructor(
   private suspend fun <T : Any> withActiveActivityHost(
     timeoutMs: Long,
     rejectHostOnRetry: Boolean = false,
-    action: suspend (ActiveActivityHost) -> T?,
+    action: suspend (ActivityHost) -> T?,
   ): T =
     withTimeout(timeoutMs) {
-      var rejected: ActiveActivityHost? = null
+      var rejected: ActivityHost? = null
       while (true) {
         val active = awaitActiveActivityHost(timeoutMs, rejected)
         action(active)?.let { return@withTimeout it }
@@ -276,13 +266,13 @@ class PermissionRequester internal constructor(
       error("unreachable")
     }
 
-  private fun isCurrentActiveHost(active: ActiveActivityHost): Boolean =
+  private fun isCurrentActiveHost(active: ActivityHost): Boolean =
     activeActivityHost.value == active &&
-      !active.host.activity.isFinishing &&
-      !active.host.activity.isDestroyed
+      !active.activity.isFinishing &&
+      !active.activity.isDestroyed
 
   private suspend fun showRationaleDialog(
-    active: ActiveActivityHost,
+    active: ActivityHost,
     permissions: List<String>,
   ): PermissionDialogResult =
     showPermissionDialog(active) { activity, finish ->
@@ -297,7 +287,7 @@ class PermissionRequester internal constructor(
     }
 
   private suspend fun showSettingsDialog(
-    active: ActiveActivityHost,
+    active: ActivityHost,
     permissions: List<String>,
   ): PermissionDialogResult =
     showPermissionDialog(active) { activity, finish ->
@@ -325,12 +315,12 @@ class PermissionRequester internal constructor(
     }
 
   private suspend fun showPermissionDialog(
-    active: ActiveActivityHost,
+    active: ActivityHost,
     buildDialog: (ComponentActivity, (PermissionDialogResult) -> Unit) -> AlertDialog,
   ): PermissionDialogResult =
     withContext(Dispatchers.Main) {
       if (!isCurrentActiveHost(active)) return@withContext PermissionDialogResult.HostLost
-      val activity = active.host.activity
+      val activity = active.activity
       suspendCancellableCoroutine { cont ->
         val lifecycle = activity.lifecycle
         var dialog: AlertDialog? = null

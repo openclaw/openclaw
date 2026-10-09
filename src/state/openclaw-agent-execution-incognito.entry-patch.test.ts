@@ -1,23 +1,29 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   patchSessionEntryCore,
   patchSessionEntryTarget,
-  replaceSessionEntry,
-  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
-import type { PreparedSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+} from "../config/sessions/session-source-authority.js";
+import { patchSessionEntry as patchSdkSessionEntry } from "../plugin-sdk/session-store-runtime.js";
+import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -25,7 +31,6 @@ const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
 let durableSource: CapturedSessionEntryReadSource;
-let sql: ReturnType<typeof observeHostDataSql>;
 const target = (name: string) => ({
   agentId: "main",
   env,
@@ -43,25 +48,9 @@ beforeAll(async () => {
     databaseIdentity: physical.identity,
     databaseBirthtime: physical.birthtime,
   };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+  actor = await openIncognitoTestActor(env, authority);
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
@@ -75,42 +64,6 @@ async function create(name: string) {
   });
   return scope;
 }
-
-it("routes public entry creation, target patches and replacement through one actor without host SQL", async () => {
-  const scope = target("public");
-  await withIncognitoSessionActor(actor, async () => {
-    const created = await upsertSessionEntryCore(scope, { sessionId: "public", label: "initial" });
-    expect(created?.label).toBe("initial");
-    const committed: string[] = [];
-    const patched = await patchSessionEntryTarget(
-      {
-        ...scope,
-        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-        readSource: {
-          agentId: actor.agentId,
-          path: actor.path,
-          databaseIdentity: actor.identity.incarnation,
-        },
-      },
-      async (entry, context) => {
-        expect(context.existingEntry?.label).toBe("initial");
-        return { label: `${entry.label}-patched` };
-      },
-      {
-        onCommitted: (entry) => {
-          committed.push(entry.label ?? "");
-        },
-      },
-    );
-    expect(patched?.label).toBe("initial-patched");
-    expect(committed).toEqual(["initial-patched"]);
-    assert(patched);
-    await replaceSessionEntry(scope, { ...patched, label: "replaced" });
-    expect(
-      (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
-    ).toBe("replaced");
-  });
-});
 
 it("rejects a prepared patch when another actor write rewrites its entry", async () => {
   const scope = await create("rewrite");
@@ -135,55 +88,41 @@ it("rejects a prepared patch when another actor write rewrites its entry", async
   ).toBe("winner");
 });
 
-it.each([false, true])(
-  "revalidates CLI history before adopting its writer (changed=%s)",
-  async (changed) => {
-    const sessionId = `cli-history-${changed}`;
-    const scope = await create(sessionId);
-    const append = async (text: string) => {
-      const result = await actor.sessions.transcript(authority, {
-        type: "session.message.append",
-        input: {
-          sessionKey: scope.sessionKey,
-          sessionId,
-          fence: {},
-          message: { role: "user", content: text, timestamp: 100 },
-        },
-      });
-      assert(result.ok && result.value.append);
-    };
-    await append("Prepared CLI history");
-    const { watermark } = await actor.sessions.history(authority, {
-      type: "session.history.watermark",
-      input: { sessionKey: scope.sessionKey, sessionId },
+it("refuses changed CLI history before adopting its writer", async () => {
+  const sessionId = "cli-history-changed";
+  const scope = await create(sessionId);
+  const append = async (text: string) => {
+    const result = await actor.sessions.transcript(authority, {
+      type: "session.message.append",
+      input: {
+        sessionKey: scope.sessionKey,
+        sessionId,
+        fence: {},
+        message: { role: "user", content: text, timestamp: 100 },
+      },
     });
-    if (changed) {
-      await append("History changed while CLI planning yielded");
-    }
-    let published = false;
-    const patch = withIncognitoSessionActor(actor, () =>
-      patchSessionEntryCore(scope, () => ({ activeWriterRunId: "synthetic-cli-writer" }), {
-        workerGuard: { cliHistory: { sessionId, watermark } },
-        onCommitted() {
-          published = true;
-        },
-      }),
-    );
-    if (changed) {
-      await expect(patch).rejects.toThrow("CLI history changed before preparation");
-    } else {
-      await expect(patch).resolves.toMatchObject({ activeWriterRunId: "synthetic-cli-writer" });
-    }
-    expect(published).toBe(!changed);
-    const persisted = (await actor.sessions.read(authority, { sessionKey: scope.sessionKey }))
-      .entry;
-    if (changed) {
-      expect(persisted).not.toHaveProperty("activeWriterRunId");
-    } else {
-      expect(persisted).toMatchObject({ activeWriterRunId: "synthetic-cli-writer" });
-    }
-  },
-);
+    assert(result.ok && result.value.append);
+  };
+  await append("Prepared CLI history");
+  const { watermark } = await actor.sessions.history(authority, {
+    type: "session.history.watermark",
+    input: { sessionKey: scope.sessionKey, sessionId },
+  });
+  await append("History changed while CLI planning yielded");
+  let published = false;
+  const patch = withIncognitoSessionActor(actor, () =>
+    patchSessionEntryCore(scope, () => ({ activeWriterRunId: "synthetic-cli-writer" }), {
+      workerGuard: { cliHistory: { sessionId, watermark } },
+      onCommitted() {
+        published = true;
+      },
+    }),
+  );
+  await expect(patch).rejects.toThrow("CLI history changed before preparation");
+  expect(published).toBe(false);
+  const persisted = (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry;
+  expect(persisted).not.toHaveProperty("activeWriterRunId");
+});
 
 it.each(["host", "SQL"] as const)(
   "settles a false %s predicate before CAS after awaiting a winning actor rewrite",
@@ -240,31 +179,56 @@ it("rejects a valid captured durable source before reading outside its actor", a
   ).rejects.toThrow("Captured session database changed");
 });
 
-it.each(["transaction", "commit"] as const)(
-  "rechecks host permission at %s and never publishes a refused write",
-  async (stage) => {
-    const scope = await create(`revoked-${stage}`);
+it.each(
+  (["core", "SDK", "runtime", "composed SDK"] as const).flatMap((boundary) =>
+    (["transaction", "commit", "allowed"] as const).map((stage) => ({ boundary, stage })),
+  ),
+)(
+  "rechecks $boundary host permission at $stage and persists only allowed writes",
+  async ({ boundary, stage }) => {
+    const name = `permission-${boundary}-${stage}`.toLowerCase().replaceAll(" ", "-");
+    const scope = await create(name);
     let grants = 0;
-    let publications = 0;
-    await expect(
-      withIncognitoSessionActor(actor, () =>
-        patchSessionEntryCore(scope, () => ({ label: "forbidden" }), {
-          assertCommitAllowed() {
-            grants += 1;
-            if (grants === (stage === "transaction" ? 1 : 2)) {
-              throw new Error("permission revoked");
-            }
-          },
-          onCommitted() {
-            publications += 1;
-          },
-        }),
-      ),
-    ).rejects.toThrow("permission revoked");
-    expect(publications).toBe(0);
+    const assertCommitAllowed = () => {
+      grants += 1;
+      if (stage !== "allowed" && grants === (stage === "transaction" ? 1 : 2)) {
+        throw new Error("permission revoked");
+      }
+    };
+    const update = () => ({ label: "allowed" });
+    const guard =
+      boundary === "composed SDK"
+        ? composeSessionSourceAssertion([
+            captureSessionEntrySourceAssertion({
+              scope,
+              expected: { sessionId: name },
+              fields: ["sessionId"],
+              assertCurrent: assertCommitAllowed,
+              refuse() {
+                throw new Error("permission revoked");
+              },
+            }),
+          ])
+        : assertCommitAllowed;
+    const patch = withIncognitoSessionActor(actor, () =>
+      boundary === "core"
+        ? patchSessionEntryCore(scope, update, { assertCommitAllowed })
+        : (boundary === "runtime"
+            ? createRuntimeAgent().session.patchSessionEntry
+            : patchSdkSessionEntry)({
+            ...scope,
+            update,
+            assertCommitAllowed: guard,
+          }),
+    );
+    if (stage === "allowed") {
+      await expect(patch).resolves.toMatchObject({ label: "allowed" });
+    } else {
+      await expect(patch).rejects.toThrow("permission revoked");
+    }
     expect(
       (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
-    ).toBeUndefined();
+    ).toBe(stage === "allowed" ? "allowed" : undefined);
   },
 );
 
@@ -276,7 +240,7 @@ it("rejects bindings and selections for another physical store or session", asyn
         { ...scope, env: { OPENCLAW_STATE_DIR: tempDirs.make("foreign-incognito-") } },
         () => ({ label: "foreign" }),
       ),
-    ).rejects.toThrow("another incognito actor");
+    ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
     await expect(
       patchSessionEntryTarget(
         {

@@ -85,7 +85,7 @@ export function resolveCodexAppServerHomeScope(params: {
 export function createCodexAppServerConfig({
   resolveProviderIdForAuth,
 }: Pick<PluginRuntime["modelAuth"], "resolveProviderIdForAuth">) {
-  function resolveCodexAppServerRuntimeOptions(
+  function resolveRuntimeOptions(
     params: {
       pluginConfig?: unknown;
       execMode?: OpenClawExecMode;
@@ -104,13 +104,14 @@ export function createCodexAppServerConfig({
       hostName?: string;
       openClawSandboxActive?: boolean;
       managedCommandOrder?: CodexManagedCommandOrder;
-    } = {},
+    },
+    connectionScope: "harness" | "supervision",
   ): CodexAppServerRuntimeOptions {
     const env = params.env ?? process.env;
     const pluginConfig = readCodexPluginConfig(params.pluginConfig);
     const config = pluginConfig.appServer ?? {};
     const transport = config.transport ?? "stdio";
-    const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
+    const homeScope = resolveCodexAppServerHomeScope({ appServer: config, connectionScope });
     if (transport !== "stdio" && pluginConfig.sessionCatalog?.homes?.length) {
       throw new Error(
         "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
@@ -306,6 +307,7 @@ export function createCodexAppServerConfig({
       },
       connectionClass,
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
+      ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
       codeModeOnly: config.codeModeOnly === true,
       loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
       requestTimeoutMs: resolvePositiveTimerTimeoutMs(config.requestTimeoutMs, 60_000),
@@ -322,26 +324,14 @@ export function createCodexAppServerConfig({
     };
   }
 
-  /** Resolves the passive supervision control connection without changing harness defaults. */
-  function resolveCodexSupervisionAppServerRuntimeOptions(
-    params: NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]> = {},
-  ): CodexAppServerRuntimeOptions {
-    const pluginConfig = readCodexPluginConfig(params.pluginConfig);
-    const appServer = pluginConfig.appServer ?? {};
-    const homeScope = resolveCodexAppServerHomeScope({
-      appServer,
-      connectionScope: "supervision",
-    });
-    return resolveCodexAppServerRuntimeOptions({
-      ...params,
-      pluginConfig: {
-        ...pluginConfig,
-        appServer: { ...appServer, homeScope },
-      },
-    });
-  }
-
-  return { resolveCodexAppServerRuntimeOptions, resolveCodexSupervisionAppServerRuntimeOptions };
+  return {
+    resolveCodexAppServerRuntimeOptions: (
+      params: Parameters<typeof resolveRuntimeOptions>[0] = {},
+    ) => resolveRuntimeOptions(params, "harness"),
+    resolveCodexSupervisionAppServerRuntimeOptions: (
+      params: Parameters<typeof resolveRuntimeOptions>[0] = {},
+    ) => resolveRuntimeOptions(params, "supervision"),
+  };
 }
 
 /**

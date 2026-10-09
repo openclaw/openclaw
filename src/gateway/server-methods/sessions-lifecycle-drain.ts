@@ -37,12 +37,17 @@ import {
   type AcceptedWorkerInferenceSessionDrain,
   type WorkerInferenceSessionDrain,
 } from "../worker-environments/inference-control-internal.js";
-import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import type {
+  WorkerSessionPlacementStore,
+  WorkerSessionPlacementRecord,
+} from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "../worker-environments/placement-workspace-result.types.js";
 import {
   prepareSessionWorkerPlacementArchiveCheckAsync,
   prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
+  readSessionWorkerPlacementAsync,
 } from "../worker-environments/session-placement-lifecycle.js";
 import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
@@ -91,13 +96,7 @@ function hasAuthoritativeSessionWork(
     resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
     hasSessionLifecycleQueueWork(queueTarget) ||
-    hasGatewaySessionAbortOwner({
-      context: params.context,
-      sessionKeys: params.sessionKeys,
-      sessionId,
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-    }) ||
+    hasGatewaySessionAbortOwner(params) ||
     Boolean(
       sessionId &&
       params.context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)?.turnClaim,
@@ -241,11 +240,24 @@ export async function prepareSessionLifecycleDrain(
     }
 
     params.authorize?.();
+    const placementService: LifecyclePlacementService | undefined =
+      params.context.workerSessionPlacementService;
+    let placement: WorkerSessionPlacementRecord | undefined;
     if (params.sessionId) {
-      const placements = params.context.workerSessionPlacementService;
-      const pending = (await placements?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
-      params.authorize?.();
-      const placement = placements?.getMany([params.sessionId]).get(params.sessionId);
+      const preparedPlacement = await placementService?.prepareRuntimeRefresh?.(params.sessionId);
+      let pending: WorkerWorkspacePendingResult | undefined;
+      try {
+        pending = preparedPlacement
+          ? preparedPlacement.pendingResult
+          : (await placementService?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
+        placement = preparedPlacement
+          ? preparedPlacement.placement
+          : await readSessionWorkerPlacementAsync(params);
+        params.authorize?.();
+        preparedPlacement?.assertCurrent();
+      } finally {
+        preparedPlacement?.release();
+      }
       if (
         pending &&
         pending.workspaceAcceptedAtMs === null &&
@@ -285,11 +297,6 @@ export async function prepareSessionLifecycleDrain(
     const embeddedWork = params.sessionId
       ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
       : Promise.resolve(true);
-    const placementService: LifecyclePlacementService | undefined =
-      params.context.workerSessionPlacementService;
-    const placement = params.sessionId
-      ? placementService?.getMany([params.sessionId]).get(params.sessionId)
-      : undefined;
     const placementWork = placement?.turnClaim
       ? placementService?.waitForTurnClaimRelease
         ? placementService

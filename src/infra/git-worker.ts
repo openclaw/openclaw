@@ -30,12 +30,8 @@ import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./work
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
-type GitWorkerRuntime = {
-  reads?: GitPool;
-  content?: GitPool;
-  workspace?: GitPool;
-  worktrees?: GitPool;
-  worktreeMaintenance?: GitPool;
+const POOL_OWNERS = ["reads", "content", "workspace", "worktrees", "worktreeMaintenance"] as const;
+type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> & {
   pending: Set<Promise<unknown>>;
   closing?: Promise<void>;
 };
@@ -89,20 +85,12 @@ function runtime(): GitWorkerRuntime {
     () => ({ pending: new Set() }),
     (state) => {
       state.closing ??= (async () => {
-        await Promise.all([
-          state.reads?.close(),
-          state.content?.close(),
-          state.workspace?.close(),
-          state.worktrees?.close(),
-          state.worktreeMaintenance?.close(),
-        ]);
+        await Promise.all(POOL_OWNERS.map((owner) => state[owner]?.close() ?? Promise.resolve()));
         // Worker termination alone does not settle its parent-owned Git processes.
         await Promise.allSettled(state.pending);
-        state.reads = undefined;
-        state.content = undefined;
-        state.workspace = undefined;
-        state.worktrees = undefined;
-        state.worktreeMaintenance = undefined;
+        for (const owner of POOL_OWNERS) {
+          state[owner] = undefined;
+        }
       })().finally(() => {
         state.closing = undefined;
       });
@@ -136,10 +124,15 @@ function poolFor(
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
   return (state[owner] ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
-    maxWorkers:
-      owner === "content" || owner === "workspace"
-        ? Math.max(1, Math.min(2, os.availableParallelism() - 1))
-        : 1,
+    workerClass:
+      owner === "reads" || owner === "content"
+        ? "reader"
+        : owner === "workspace"
+          ? "compute"
+          : "writer",
+    // Overlay retains three maximum-size manifests plus its decoded result.
+    workerOptions:
+      owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
     sharedCompute: owner === "workspace",
     idleTimeoutMs: 30_000,
   }));
@@ -232,10 +225,14 @@ async function executeOperation(
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;
-  const contentGit =
-    contentRead ||
-    command.type === "worktree.snapshot" ||
-    command.type === "worktree.snapshot-verify-exact";
+  const snapshot =
+    command.type === "worktree.snapshot" || command.type === "worktree.snapshot-verify-exact";
+  const contentGit = contentRead || snapshot;
+  if (snapshot) {
+    // Missing snapshot objects must preserve the checkout, never start a promisor fetch.
+    baseEnv.GIT_NO_LAZY_FETCH = "1";
+    baseEnv.GIT_ALLOW_PROTOCOL = "";
+  }
   let gitCommandCount = 0;
   let summedGitWallMs = 0;
   let summedGitQueueWaitMs = 0;

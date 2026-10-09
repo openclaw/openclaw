@@ -165,9 +165,17 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
     : "unknown";
 }
 
+const ELIGIBILITY_PROBE_ERRORS = {
+  expired: "token credentials are expired.",
+  invalid_expires: "token expires must be a positive Unix ms timestamp.",
+  missing_credential: "no inline credential or SecretRef is configured.",
+  unresolved_ref: "configured SecretRef could not be resolved.",
+  ineligible_profile: "profile is incompatible with provider config.",
+};
+
 function mapEligibilityReasonToProbeReasonCode(
   reasonCode: AuthProfileEligibilityReasonCode,
-): AuthProbeReasonCode {
+): keyof typeof ELIGIBILITY_PROBE_ERRORS {
   switch (reasonCode) {
     case "missing_credential":
     case "expired":
@@ -177,23 +185,6 @@ function mapEligibilityReasonToProbeReasonCode(
     default:
       return "ineligible_profile";
   }
-}
-
-function formatMissingCredentialProbeError(reasonCode: AuthProbeReasonCode): string {
-  const legacyLine = "Auth profile credentials are missing or expired.";
-  if (reasonCode === "expired") {
-    return `${legacyLine}\n↳ Auth reason [expired]: token credentials are expired.`;
-  }
-  if (reasonCode === "invalid_expires") {
-    return `${legacyLine}\n↳ Auth reason [invalid_expires]: token expires must be a positive Unix ms timestamp.`;
-  }
-  if (reasonCode === "missing_credential") {
-    return `${legacyLine}\n↳ Auth reason [missing_credential]: no inline credential or SecretRef is configured.`;
-  }
-  if (reasonCode === "unresolved_ref") {
-    return `${legacyLine}\n↳ Auth reason [unresolved_ref]: configured SecretRef could not be resolved.`;
-  }
-  return `${legacyLine}\n↳ Auth reason [ineligible_profile]: profile is incompatible with provider config.`;
 }
 
 function resolveProbeSecretRef(profile: ProfileEntry, cfg: OpenClawConfig) {
@@ -213,59 +204,44 @@ function formatUnresolvedRefProbeError(refLabel: string): string {
   return `${legacyLine}\n↳ Auth reason [unresolved_ref]: could not resolve SecretRef "${refLabel}".`;
 }
 
-function withDirectCredential(
-  cfg: OpenClawConfig,
-  provider: string,
-  value: string,
-  mode: string | undefined,
-): OpenClawConfig {
-  const providers = cfg.models?.providers ?? {};
-  const configuredEntry = resolveMergedModelProviderEntry(cfg, provider);
-  const configKey = configuredEntry?.providerKey ?? provider;
-  const configured = configuredEntry?.providerConfig;
-  if (!configured) {
-    return withoutProfileFallback(cfg, provider);
+function createProbeConfig(cfg: OpenClawConfig, target: AuthProbeTarget): OpenClawConfig {
+  if (!target.useRuntimeAuth && !target.boundValue) {
+    return cfg;
   }
-  const auth = mode === "oauth" || mode === "token" ? mode : "api-key";
+  const value = target.useRuntimeAuth ? undefined : target.boundValue;
+  const entry = value ? resolveMergedModelProviderEntry(cfg, target.provider) : undefined;
   const next: OpenClawConfig = {
     ...cfg,
-    models: {
-      ...cfg.models,
-      providers: {
-        ...providers,
-        [configKey]: {
-          ...configured,
-          apiKey: value,
-          auth,
-        },
-      },
-    },
+    ...(entry?.providerConfig
+      ? {
+          models: {
+            ...cfg.models,
+            providers: {
+              ...cfg.models?.providers,
+              [entry.providerKey]: {
+                ...entry.providerConfig,
+                apiKey: value,
+                auth: target.mode === "oauth" || target.mode === "token" ? target.mode : "api-key",
+              },
+            },
+          },
+        }
+      : {}),
     auth: {
       ...cfg.auth,
       order: {
         ...cfg.auth?.order,
-        [provider]: [],
+        [target.provider]: [],
       },
     },
   };
-  copyConfigResolutionFactsExcept(cfg, next, [
-    `${appendConfigPathSegment("models.providers", configKey)}.apiKey`,
-  ]);
-  return next;
-}
-
-function withoutProfileFallback(cfg: OpenClawConfig, provider: string): OpenClawConfig {
-  const next: OpenClawConfig = {
-    ...cfg,
-    auth: {
-      ...cfg.auth,
-      order: {
-        ...cfg.auth?.order,
-        [provider]: [],
-      },
-    },
-  };
-  copyConfigResolutionFacts(cfg, next);
+  if (entry?.providerConfig) {
+    copyConfigResolutionFactsExcept(cfg, next, [
+      `${appendConfigPathSegment("models.providers", entry.providerKey)}.apiKey`,
+    ]);
+  } else {
+    copyConfigResolutionFacts(cfg, next);
+  }
   return next;
 }
 
@@ -456,14 +432,28 @@ export async function buildProbeTargets(params: {
 
     const appendDirectTargets = () => {
       if (includeConfigKey) {
+        const target = {
+          provider: providerKey,
+          model,
+          ...(configuredReference.kind === "profile" ||
+          configuredReference.kind === "profile-incompatible"
+            ? { profileId: configuredReference.profileId }
+            : {}),
+          label: "config",
+          source: "models.json" as const,
+          mode: configuredMode,
+        };
+        const unresolvedResult = (error: string): AuthProbeResult => ({
+          ...target,
+          model: model ? `${model.provider}/${model.model}` : undefined,
+          status: model ? "unknown" : "no_model",
+          reasonCode: model ? "unresolved_ref" : "no_model",
+          error: model ? error : "No model available for check",
+        });
         if (configuredReference.kind === "profile-incompatible") {
           results.push({
-            provider: providerKey,
+            ...target,
             model: model ? `${model.provider}/${model.model}` : undefined,
-            profileId: configuredReference.profileId,
-            label: "config",
-            source: "models.json",
-            mode: configuredMode,
             status: "unknown",
             reasonCode: "ineligible_profile",
             error: "Configured API key references an incompatible auth profile.",
@@ -472,50 +462,21 @@ export async function buildProbeTargets(params: {
           if (!profileIds.includes(configuredReference.profileId)) {
             if (configuredBinding?.kind === "profile-resolved" && model) {
               targets.push({
-                provider: providerKey,
-                model,
+                ...target,
                 profileId: configuredBinding.auth.profileId,
-                label: "config",
-                source: "models.json",
                 mode: configuredBinding.auth.mode,
                 boundValue: configuredBinding.auth.apiKey,
               });
             } else {
-              results.push({
-                provider: providerKey,
-                model: model ? `${model.provider}/${model.model}` : undefined,
-                profileId: configuredReference.profileId,
-                label: "config",
-                source: "models.json",
-                mode: configuredMode,
-                status: model ? "unknown" : "no_model",
-                reasonCode: model ? "unresolved_ref" : "no_model",
-                error: model
-                  ? "Configured auth profile could not be resolved."
-                  : "No model available for check",
-              });
+              results.push(unresolvedResult("Configured auth profile could not be resolved."));
             }
           }
         } else if (!configuredValue) {
-          results.push({
-            provider: providerKey,
-            model: model ? `${model.provider}/${model.model}` : undefined,
-            label: "config",
-            source: "models.json",
-            mode: configuredMode,
-            status: model ? "unknown" : "no_model",
-            reasonCode: model ? "unresolved_ref" : "no_model",
-            error: model
-              ? "Configured API key could not be resolved."
-              : "No model available for check",
-          });
+          results.push(unresolvedResult("Configured API key could not be resolved."));
         } else {
           appendTarget({
-            provider: providerKey,
-            model,
+            ...target,
             label: configuredTargetLabel,
-            source: "models.json",
-            mode: configuredMode,
             boundValue: configuredValue,
             ...(configuredReference.kind === "marker" ? { useRuntimeAuth: true } : {}),
           });
@@ -583,17 +544,13 @@ export async function buildProbeTargets(params: {
           includeConfigKey &&
           configuredReference.kind === "profile" &&
           profileId === configuredReference.profileId;
+        let issue: { reasonCode: AuthProbeReasonCode; error: string } | null;
         if (!isConfigBoundProfile && explicitOrder && !explicitOrder.includes(profileId)) {
-          results.push(
-            buildProbeResult(target, {
-              status: "unknown",
-              reasonCode: "excluded_by_auth_order",
-              error: "Excluded by auth.order for this provider.",
-            }),
-          );
-          continue;
-        }
-        if (!isConfigBoundProfile && allowedProfiles && !allowedProfiles.has(profileId)) {
+          issue = {
+            reasonCode: "excluded_by_auth_order",
+            error: "Excluded by auth.order for this provider.",
+          };
+        } else if (!isConfigBoundProfile && allowedProfiles && !allowedProfiles.has(profileId)) {
           const eligibility = resolveAuthProfileEligibility({
             cfg,
             store,
@@ -601,31 +558,18 @@ export async function buildProbeTargets(params: {
             profileId,
           });
           const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);
-          results.push(
-            buildProbeResult(target, {
-              status: "unknown",
-              reasonCode,
-              error: formatMissingCredentialProbeError(reasonCode),
-            }),
-          );
-          continue;
+          issue = {
+            reasonCode,
+            error: `Auth profile credentials are missing or expired.\n↳ Auth reason [${reasonCode}]: ${ELIGIBILITY_PROBE_ERRORS[reasonCode]}`,
+          };
+        } else {
+          issue = await maybeResolveUnresolvedRefIssue({ cfg, profile, cache: refResolveCache });
         }
-        const unresolvedRefIssue = await maybeResolveUnresolvedRefIssue({
-          cfg,
-          profile,
-          cache: refResolveCache,
-        });
-        if (unresolvedRefIssue) {
-          results.push(
-            buildProbeResult(target, {
-              status: "unknown",
-              reasonCode: unresolvedRefIssue.reasonCode,
-              error: unresolvedRefIssue.error,
-            }),
-          );
-          continue;
+        if (issue) {
+          results.push(buildProbeResult(target, { status: "unknown", ...issue }));
+        } else {
+          appendTarget(target);
         }
-        appendTarget(target);
       }
       appendDirectTargets();
       continue;
@@ -692,11 +636,7 @@ async function probeTarget(params: {
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
   // failover. Direct bound values instead pin an isolated synthetic profile.
-  const probeConfig = target.useRuntimeAuth
-    ? withoutProfileFallback(cfg, target.provider)
-    : !target.boundValue
-      ? cfg
-      : withDirectCredential(cfg, target.provider, target.boundValue, target.mode);
+  const probeConfig = createProbeConfig(cfg, target);
   if (!target.model) {
     return buildNoModelProbeResult(target);
   }

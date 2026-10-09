@@ -17,6 +17,7 @@ import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
 import { extractRawResponseItemText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
+import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
@@ -54,8 +55,6 @@ export class CodexAssistantProjection {
   private readonly rawPromotedAssistantItemIds = new Set<string>();
   private assistantStarted = false;
   private responseModel: string | undefined;
-  private streamedPartialAssistantItemId: string | undefined;
-  private streamedPartialAssistantItemReplaceable = false;
   // Native handoffs retire earlier finals; terminal summaries contain only the last answer.
   private persistableAssistantBarrier = 0;
   // A completed answer mirrored before a steer is already durable. Do not
@@ -113,29 +112,20 @@ export class CodexAssistantProjection {
     if (knownFinalAnswer) {
       this.emitAnswerCandidate(itemId, "candidate");
     }
-    const replace =
-      this.streamedPartialAssistantItemId !== undefined &&
-      this.streamedPartialAssistantItemId !== itemId;
-    // Codex defines final_answer as terminal text. Replacement mode is for
-    // phase-unknown/provisional items; append-only consumers cannot retract bytes.
-    if (replace && (!knownFinalAnswer || this.streamedPartialAssistantItemReplaceable)) {
-      this.streamedPartialAssistantItemReplaceable = true;
-    } else if (this.streamedPartialAssistantItemId === undefined) {
-      this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
-    }
-    this.streamedPartialAssistantItemId = itemId;
-    const replaceable = this.streamedPartialAssistantItemReplaceable;
-    const replacement = replace && replaceable;
+    const { occurrenceId, replacement, replaceable } = this.steeringSegments.recordStream(
+      itemId,
+      knownFinalAnswer,
+    );
     const streamPayload = {
       text,
       delta: replacement ? "" : delta,
       ...(replacement ? { replace: true as const } : {}),
     };
-    this.steeringSegments.recordStream(itemId, replacement);
     this.emitAgentEvent({
       stream: "assistant",
       data: {
         itemId,
+        occurrenceId,
         ...streamPayload,
         ...(replaceable ? { replaceable: true as const } : {}),
       },
@@ -189,63 +179,53 @@ export class CodexAssistantProjection {
 
   recordItemCompleted(
     item: CodexThreadItem | undefined,
-    itemId: string | undefined,
-    activeItemIds: ReadonlySet<string>,
+    notification?: { itemId: string | undefined; activeItemIds: ReadonlySet<string> },
   ): { itemId: string; message: AssistantMessage; text: string } | undefined {
     this.adoptSteeringPrefixForCompletion(item);
-    if (itemId && item?.type === "agentMessage") {
-      this.steeringSegments.recordCompletion(itemId);
+    if (item?.type === "agentMessage" && (!notification || notification.itemId)) {
+      this.steeringSegments.recordCompletion(notification?.itemId ?? item.id);
     }
-    this.noteNativeWorkBarrier(item);
+    if (notification) {
+      this.noteNativeWorkBarrier(item);
+    }
     this.rememberAssistantPhase(item);
-    if (
-      item?.type === "agentMessage" &&
-      itemId &&
-      !this.isNonTerminalAssistantItem(itemId) &&
-      itemId !== this.pendingRawTerminalAssistantEchoItemId
-    ) {
-      this.pendingRawTerminalAssistantEchoItemId = undefined;
-    }
-    if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
-      this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
-      this.pendingRawTerminalAssistantEchoItemId = item.id;
-    } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
-      this.markTerminalAssistantCandidateSupersededBy(itemId, {
-        preserveEarlierActiveItem: true,
-      });
-      if (this.latestTerminalAssistantCandidateSuperseded) {
+    if (notification) {
+      const { itemId, activeItemIds } = notification;
+      if (
+        item?.type === "agentMessage" &&
+        itemId &&
+        !this.isNonTerminalAssistantItem(itemId) &&
+        itemId !== this.pendingRawTerminalAssistantEchoItemId
+      ) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
+      }
+      if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
+        this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
+        this.pendingRawTerminalAssistantEchoItemId = item.id;
+      } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
+        this.markTerminalAssistantCandidateSupersededBy(itemId, {
+          preserveEarlierActiveItem: true,
+        });
+        if (this.latestTerminalAssistantCandidateSuperseded) {
+          this.pendingRawTerminalAssistantEchoItemId = undefined;
+        }
       }
     }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (this.isCommentaryAssistantItem(item.id)) {
-        this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
-        this.pendingRawCommentaryEchoes += 1;
-      } else if (
-        item.text &&
-        !this.isAsyncAssistantItem(item.id) &&
-        this.isFinalAnswerAssistantItem(item.id)
-      ) {
-        this.emitAnswerCandidate(item.id, "candidate");
+      if (notification) {
+        if (this.isCommentaryAssistantItem(item.id)) {
+          this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
+          this.pendingRawCommentaryEchoes += 1;
+        } else if (
+          item.text &&
+          !this.isAsyncAssistantItem(item.id) &&
+          this.isFinalAnswerAssistantItem(item.id)
+        ) {
+          this.emitAnswerCandidate(item.id, "candidate");
+        }
       }
-      return this.createAsyncDelivery(item.id);
-    }
-    return undefined;
-  }
-
-  recordSnapshotItem(
-    item: CodexThreadItem,
-  ): { itemId: string; message: AssistantMessage; text: string } | undefined {
-    this.adoptSteeringPrefixForCompletion(item);
-    if (item.type === "agentMessage") {
-      this.steeringSegments.recordCompletion(item.id);
-    }
-    this.rememberAssistantPhase(item);
-    if (item.type === "agentMessage" && typeof item.text === "string") {
-      this.rememberAssistantItem(item.id);
-      this.assistantTextByItem.set(item.id, item.text);
       return this.createAsyncDelivery(item.id);
     }
     return undefined;
@@ -300,7 +280,7 @@ export class CodexAssistantProjection {
       text &&
       phase !== "commentary" &&
       candidateWasSupersededBeforeRaw &&
-      itemId !== this.streamedPartialAssistantItemId &&
+      itemId !== this.steeringSegments.streamedPartialAssistantItemId &&
       !isIdlessTerminalAssistantAfterCompletedWork
     ) {
       return;
@@ -355,6 +335,13 @@ export class CodexAssistantProjection {
     });
   }
 
+  collectTerminalAssistantItemIds(): string[] {
+    // A settled terminal row supersedes orphan previews as well as selected items.
+    return this.steeringSegments.collectOccurrenceIds(
+      this.assistantItemOrder.filter((itemId) => !this.isNonTerminalAssistantItem(itemId)),
+    );
+  }
+
   private readCommentaryMessage(itemId: string): AssistantMessage | undefined {
     const text = this.assistantTextByItem.get(itemId)?.trim();
     const timestamp = this.assistantTimestampByItem.get(itemId);
@@ -389,7 +376,10 @@ export class CodexAssistantProjection {
       if (!segment) {
         return [];
       }
-      const message = this.createAssistantMessage(segment.text, options);
+      const message = attachCodexAssistantItemIds(
+        this.createAssistantMessage(segment.text, options),
+        segment.occurrenceIds,
+      );
       message.timestamp = segment.split
         ? this.nextTranscriptTimestamp()
         : (this.assistantTimestampByItem.get(itemId) ?? message.timestamp);
@@ -505,7 +495,7 @@ export class CodexAssistantProjection {
   }
 
   private adoptSteeringPrefixForCompletion(item: AssistantCompletion | undefined): void {
-    const sourceId = this.streamedPartialAssistantItemId;
+    const sourceId = this.steeringSegments.streamedPartialAssistantItemId;
     if (
       item?.type !== "agentMessage" ||
       !sourceId ||
@@ -528,7 +518,7 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
     }
     this.assistantTextByItem.delete(sourceId);
-    this.streamedPartialAssistantItemId = item.id;
+    this.steeringSegments.streamedPartialAssistantItemId = item.id;
   }
 
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
@@ -574,12 +564,19 @@ export class CodexAssistantProjection {
     text: string;
     phase: "update" | "end";
   }): void {
-    const progressText = params.text.trim();
+    const cleared = this.steeringSegments.clearProvisionalStream(params.itemId);
+    if (cleared) {
+      this.emitAgentEvent({ stream: "assistant", data: cleared });
+    }
+    const progressText = params.text.trimEnd();
     // Codex completes an item with the same text as its last delta. Channels
     // need that boundary before their first notifying post, so agents must not
     // collapse completion into a text-only duplicate or invent a timer instead.
     const previous = this.lastCommentaryProgressEventByItem.get(params.itemId);
-    if (!progressText || (previous?.phase === params.phase && previous.text === progressText)) {
+    if (
+      !progressText.trim() ||
+      (previous?.phase === params.phase && previous.text === progressText)
+    ) {
       return;
     }
     this.lastCommentaryProgressEventByItem.set(params.itemId, {

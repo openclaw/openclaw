@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -40,32 +41,27 @@ describe("MCP OAuth pending authorization store", () => {
           .get("mcp_oauth_pending_authorizations");
       expect(pendingTable()).toBeUndefined();
       const store = operatorMcpOAuthIdentity("Pending grants", "https://pending.example.test/mcp");
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       await withMcpOAuthTestLease(store.storeKey, async (lease, context) => {
         const options = { storeKey: store.storeKey, lease, context };
         for (const stage of ["transaction", "commit"] as const) {
           let current = true;
           let observedGrant = false;
           const refusal = new Error(`Synthetic pending authority retired at ${stage}`);
-          const admission = vi
-            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                const facts = request.facts;
-                if (
-                  request.stage === stage &&
-                  isRecord(facts) &&
-                  facts.kind === "state-lease" &&
-                  isRecord(facts.identity) &&
-                  facts.identity.key === store.storeKey
-                ) {
-                  // Dispatch has passed; retire authority at the actual grant port.
-                  current = false;
-                  observedGrant = true;
-                }
-                admit(request, grant);
-              }, attachment),
-            );
+          const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+            const facts = request.facts;
+            if (
+              request.stage === stage &&
+              isRecord(facts) &&
+              facts.kind === "state-lease" &&
+              isRecord(facts.identity) &&
+              facts.identity.key === store.storeKey
+            ) {
+              // Dispatch has passed; retire authority at the actual grant port.
+              current = false;
+              observedGrant = true;
+            }
+            admit(request, grant);
+          });
           try {
             await expect(
               writeMcpOAuthPendingAuthorization(options, `refused-${stage}`, {

@@ -14,6 +14,7 @@ import type {
   SessionTranscriptTurnPersistOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
@@ -49,6 +50,7 @@ export type SqliteSessionTurnOptions = {
   initialSessionEntry?: SessionEntry;
   messages: readonly SessionTranscriptTurnMessageAppend[];
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   sessionFile: string;
@@ -58,9 +60,15 @@ export type SqliteSessionTurnOptions = {
 export type SessionTurnPlan = {
   agentId: string;
   sessionKey: string;
+  prepareColdTranscript?: true;
   options: Omit<
     SqliteSessionTurnOptions,
-    "messages" | "onMessageCommitted" | "assertCurrent" | "sessionTurnMutation" | "config"
+    | "messages"
+    | "onMessageCommitted"
+    | "onCommittedSource"
+    | "assertCurrent"
+    | "sessionTurnMutation"
+    | "config"
   > & {
     sessionTurnMutation?: Omit<SessionTranscriptTurnMutation, "assertCurrent">;
     messages: Array<

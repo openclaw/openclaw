@@ -8,17 +8,29 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import type {
+  OpenClawAgentDatabase,
+  OpenClawAgentDatabaseOptions,
+} from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "../../state/openclaw-agent-db-readonly-open.js";
-import type { SessionSourcePredicate } from "./session-source-authority.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import type { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import type { SessionColdLockedGuard } from "./session-cold-storage-guard.types.js";
+import type {
+  SessionSourcePredicate,
+  SessionSourceValidation,
+} from "./session-source-authority.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 import type { InternalSessionEntry } from "./types.js";
 
-type SourceRefusal = NonNullable<ReturnType<typeof readRefusedSessionSource>>;
+export type SessionColdSourceMatches = { index: number; matches: Int32Array<SharedArrayBuffer> }[];
+
+type SourceRefusal = NonNullable<ReturnType<typeof readSessionSourceValidation>["refusedSource"]>;
 
 export class SessionColdSourceRefusedError extends Error {
   constructor(readonly refusal: SourceRefusal) {
@@ -30,6 +42,7 @@ export class SessionColdSourceRefusedError extends Error {
 export function prepareSessionColdSourceGuard(
   target: OpenClawAgentDatabaseOptions & { path: string },
   sources: readonly SessionSourcePredicate[] = [],
+  acceptedMatches?: SessionColdSourceMatches,
 ) {
   const targetIdentity = sources.some(({ source }) => source.path !== target.path)
     ? readDatabasePathIdentitySync(target.path).key
@@ -74,9 +87,10 @@ export function prepareSessionColdSourceGuard(
     throw error;
   }
   const read = (
-    database?: Parameters<typeof readRefusedSessionSource>[0],
+    database?: Parameters<typeof readSessionSourceValidation>[0],
     entries?: ReadonlyMap<string, InternalSessionEntry | undefined>,
-  ): SourceRefusal | undefined => {
+  ): SessionSourceValidation => {
+    const validation: SessionSourceValidation = { conversationMatches: [] };
     for (const [index, predicate] of sources.entries()) {
       const foreign = isForeign(predicate);
       const foreignReader = readers.get(String(predicate.source.databaseIdentity));
@@ -90,36 +104,86 @@ export function prepareSessionColdSourceGuard(
           assertOpenClawAgentDatabaseIdentity(foreignReader, expected);
         }
       } catch {
-        return { index, facts: { entry: undefined } };
+        return { ...validation, refusedSource: { index, facts: { entry: undefined } } };
       }
       if (!foreign && !database) {
         continue;
       }
       const reader = foreign ? foreignReader : database;
       if (!reader || reader.agentId !== predicate.source.agentId) {
-        return { index, facts: { entry: undefined } };
+        return { ...validation, refusedSource: { index, facts: { entry: undefined } } };
       }
       const readPredicate = () =>
-        readRefusedSessionSource(reader, [predicate], undefined, foreign ? undefined : entries);
-      const refused = foreign
+        readSessionSourceValidation(reader, [predicate], undefined, foreign ? undefined : entries);
+      const current = foreign
         ? runSqliteDeferredTransactionSync(reader.db, () =>
             runSqliteReadOperationSync(reader.db, readPredicate, "fresh"),
           )
         : readPredicate();
-      if (refused) {
-        return { ...refused, index };
+      if (current.refusedSource) {
+        return { ...validation, refusedSource: { ...current.refusedSource, index } };
+      }
+      for (const { alternatives } of current.conversationMatches) {
+        validation.conversationMatches.push({ index, alternatives });
       }
     }
-    return undefined;
+    return validation;
   };
   return {
     read,
     assertForeign() {
-      const refused = read();
-      if (refused) {
-        throw new SessionColdSourceRefusedError(refused);
+      const current = read();
+      if (current.refusedSource) {
+        throw new SessionColdSourceRefusedError(current.refusedSource);
+      }
+      for (const match of current.conversationMatches) {
+        const accepted = acceptedMatches?.find(({ index }) => index === match.index)?.matches;
+        if (
+          !accepted ||
+          !match.alternatives.some((index) => Atomics.load(accepted, index + 1) === 1)
+        ) {
+          throw new SessionColdSourceRefusedError({
+            index: match.index,
+            facts: { entry: undefined },
+          });
+        }
       }
     },
     [Symbol.dispose]: close,
   };
+}
+
+/** Keep the write-owner predicate out of the shared read worker's import closure. */
+export function readSessionColdLockedValidation(
+  params: {
+    database: OpenClawAgentDatabase;
+    sessionId: string;
+    guard: SessionColdLockedGuard;
+    sourceGuard: ReturnType<typeof prepareSessionColdSourceGuard> | undefined;
+  },
+  resolveWriterRefusal: typeof resolveTranscriptAppendRefusal,
+): { sourceValidation: SessionSourceValidation; writerRefusal?: TranscriptAppendRefusal } {
+  const { database, sessionId, guard, sourceGuard } = params;
+  const { agentId, sessionKey, fence, sources } = guard;
+  const fenced =
+    fence.expectedOwner !== undefined ||
+    fence.expectedLifecycleRevision !== undefined ||
+    fence.expectedWriterRunId !== undefined;
+  // Unfenced locks can read historical or orphaned windows without a current entry.
+  const entry = fenced ? readSessionEntryRow(database, sessionKey)?.entry : undefined;
+  const entries = fenced ? new Map([[sessionKey, entry]]) : undefined;
+  const sourceValidation = sourceGuard
+    ? sourceGuard.read(database, entries)
+    : readSessionSourceValidation(database, sources, undefined, entries);
+  if (sourceValidation.refusedSource) {
+    return { sourceValidation };
+  }
+  if (fenced) {
+    const target = { agentId, sessionKey, sessionId };
+    const refusal = resolveWriterRefusal(entry, target, { ...target, ...fence });
+    if (refusal) {
+      return { sourceValidation, writerRefusal: refusal };
+    }
+  }
+  return { sourceValidation };
 }

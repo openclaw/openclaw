@@ -20,14 +20,8 @@ import {
 } from "./native-subagent-recovery-coordinator.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
 import {
-  acceptNativeSubmission,
   createNativeSubagentSubmissionCalls,
-  hasSubmissionCallCustody,
-  observeSubmissionPredecessor,
-  readObservedSubmissionTurn,
-  settleSubmissionModelInput,
   type NativeSubmissionCallDependencies,
-  pruneSubmissionCalls,
   type NativeSubagentSubmissionCall as SubmissionCall,
 } from "./native-subagent-submission-call.js";
 import { readCodexNativeSubmissionTurn } from "./native-subagent-submission-history.js";
@@ -55,18 +49,10 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
     assignment: NativeSubagentAssignment,
     options: { admitAssignment: true; completionCustody?: AgentHarnessCompletionCustody },
   ) => ChildState | undefined;
-  admitFollowup: (known: KnownChild, threadId: string) => ChildState | undefined;
+  admitFollowup: (known: KnownChild) => ChildState | undefined;
   resumeChild: (child: ChildState) => void;
   completeChild: (notification: CodexServerNotification, child: ChildState) => Promise<void>;
   retain: (state: ParentState, childThreadId: string) => () => void;
-  hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
-  acceptContinuation: (
-    state: ParentState,
-    owner: ParentOwner,
-    childThreadId: string,
-    call: SubmissionCall,
-    modelOwner?: ParentOwner,
-  ) => void;
   recordPendingAssignment: (
     state: ParentState,
     receipt: CodexNativeSubagentSubmission,
@@ -87,9 +73,12 @@ export class CodexNativeSubagentSubmissionOwner {
 
   constructor(private readonly dependencies: SubmissionDependencies) {
     this.pollDelays = dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
-    this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, (state) =>
-      this.isCurrent(state),
-    );
+    this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, {
+      isCurrent: (state) => this.isCurrent(state),
+      capture: (state, receipt, owner, persist, completionCustody) =>
+        this.capture(state, receipt, owner, persist, completionCustody),
+      observeKnownChild: (threadId) => this.observeKnownChild(threadId),
+    });
   }
 
   private isCurrent(state: ParentState): boolean {
@@ -149,17 +138,17 @@ export class CodexNativeSubagentSubmissionOwner {
       : undefined;
     if (!submissionId) {
       call.closed = true;
-      settleSubmissionModelInput(call, false, this.dependencies);
+      this.modelInputs.settleSubmissionModelInput(call, false);
       return;
     }
     call.submissionId = submissionId;
-    this.accept(state, call);
+    this.modelInputs.acceptNativeSubmission(state, call);
   }
 
   bind(state: ParentState, turnId: string): void {
     for (const call of this.calls.get(state)?.values() ?? []) {
       if (call.parentTurnId === turnId && call.submissionId) {
-        this.accept(state, call);
+        this.modelInputs.acceptNativeSubmission(state, call);
       }
     }
   }
@@ -195,7 +184,7 @@ export class CodexNativeSubagentSubmissionOwner {
     return (
       Boolean(this.pending.get(state)?.size || this.writes.get(state)?.size) ||
       [...(this.calls.get(state)?.values() ?? [])].some((call) =>
-        hasSubmissionCallCustody(state, call, this.dependencies.hasObservationBacking),
+        this.modelInputs.hasSubmissionCallCustody(state, call),
       )
     );
   }
@@ -208,7 +197,7 @@ export class CodexNativeSubagentSubmissionOwner {
       [...(this.calls.get(state)?.values() ?? [])].some(
         (call) =>
           call.targets.some((target) => target.childThreadId === childThreadId) &&
-          hasSubmissionCallCustody(state, call, this.dependencies.hasObservationBacking),
+          this.modelInputs.hasSubmissionCallCustody(state, call),
       )
     );
   }
@@ -221,7 +210,7 @@ export class CodexNativeSubagentSubmissionOwner {
 
   async drain(state: ParentState): Promise<void> {
     const calls = this.calls.get(state);
-    pruneSubmissionCalls(state, calls, this.dependencies);
+    this.modelInputs.pruneSubmissionCalls(state, calls);
     if (!calls?.size) {
       this.calls.delete(state);
     }
@@ -242,7 +231,7 @@ export class CodexNativeSubagentSubmissionOwner {
 
   retire(state: ParentState): void {
     for (const call of this.calls.get(state)?.values() ?? []) {
-      settleSubmissionModelInput(call, false, this.dependencies);
+      this.modelInputs.settleSubmissionModelInput(call, false);
       call.completionCustody?.release();
     }
     this.calls.delete(state);
@@ -262,33 +251,13 @@ export class CodexNativeSubagentSubmissionOwner {
     }
   }
 
-  private accept(state: ParentState, call: SubmissionCall): void {
-    acceptNativeSubmission(state, call, {
-      ...this.dependencies,
-      isCurrent: (parent) => this.isCurrent(parent),
-      capture: (parent, receipt, owner, persist) => this.capture(parent, receipt, owner, persist),
-      observeKnownChild: (threadId) => this.observeKnownChild(threadId),
-    });
-  }
-
   observeKnownChild(threadId: string, turn?: JsonObject): void {
     for (const [state, calls] of this.calls) {
       if (!this.isCurrent(state)) {
         continue;
       }
       for (const call of calls.values()) {
-        observeSubmissionPredecessor({
-          state,
-          call,
-          threadId,
-          turn,
-          known: this.dependencies.knownChildren.get(threadId),
-          hasObservationBacking: this.dependencies.hasObservationBacking,
-          acceptContinuation: (owner) =>
-            this.dependencies.acceptContinuation(state, owner, threadId, call),
-          capture: (receipt, owner) =>
-            this.capture(state, receipt, owner, true, call.completionCustody),
-        });
+        this.modelInputs.observeSubmissionPredecessor(state, call, threadId, turn);
       }
       this.dependencies.onSettled(state);
     }
@@ -350,11 +319,10 @@ export class CodexNativeSubagentSubmissionOwner {
         })(),
       );
     }
-    const observed = readObservedSubmissionTurn(
+    const observed = this.modelInputs.readObservedSubmissionTurn(
       state,
       receipt.childThreadId,
       receipt.submissionId,
-      this.dependencies,
     );
     if (observed) {
       this.promote(state, custody, observed);
@@ -372,14 +340,7 @@ export class CodexNativeSubagentSubmissionOwner {
   ): void {
     if (
       !this.isObserving(state, custody) ||
-      !this.admitTurn(
-        state,
-        custody.receipt,
-        turn,
-        custody.owner,
-        historyValidated,
-        custody.completionCustody,
-      )
+      !this.admitTurn(state, custody, turn, historyValidated)
     ) {
       return;
     }
@@ -479,11 +440,9 @@ export class CodexNativeSubagentSubmissionOwner {
 
   private admitTurn(
     state: ParentState,
-    receipt: CodexNativeSubagentSubmission,
+    { receipt, owner, completionCustody }: SubmissionCustody,
     turn: JsonObject,
-    owner: ParentOwner | undefined,
     historyValidated: boolean,
-    completionCustody: AgentHarnessCompletionCustody | undefined,
   ): boolean {
     if (
       readString(turn, "id") !== receipt.submissionId ||
@@ -558,7 +517,7 @@ export class CodexNativeSubagentSubmissionOwner {
         pending.admittedOwner = owner;
         owner.onDirectChildAccepted?.();
       }
-      this.dependencies.admitFollowup(known, receipt.childThreadId);
+      this.dependencies.admitFollowup(known);
     }
     const child = this.dependencies.currentChild(receipt.childThreadId);
     if (child?.runId !== runId) {

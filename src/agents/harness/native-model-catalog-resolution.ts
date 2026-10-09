@@ -35,15 +35,21 @@ export type ReadyNativeModelCatalogSelection = {
  */
 export async function resolveReadyNativeModelCatalogEntry(params: {
   snapshot: PreparedModelRuntimeSnapshot | undefined;
+  isCurrent?: () => boolean;
   harness: AgentHarness;
   provider: string;
   modelId: string;
   authProfileId?: string;
 }): Promise<ReadyNativeModelCatalogSelection | undefined> {
   const { snapshot, harness, provider, modelId, authProfileId } = params;
-  if (!snapshot || !harness.loadModelCatalog || !snapshot.isCurrent()) {
+  const isCurrent = params.isCurrent ?? snapshot?.isCurrent;
+  if (!snapshot || !harness.loadModelCatalog || !isCurrent?.()) {
     return undefined;
   }
+  const readFullCatalog = () =>
+    params.isCurrent && params.isCurrent !== snapshot.isCurrent
+      ? snapshot.modelCatalog
+      : (snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog);
   const ownerHarness = snapshot.pluginRegistry?.agentHarnesses.find(
     (registration) => registration.harness.id === harness.id,
   )?.harness;
@@ -55,7 +61,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     return undefined;
   }
 
-  let catalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
+  let catalog = readFullCatalog();
   let entry =
     authProfileId || catalog.authoritative === false
       ? undefined
@@ -90,7 +96,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         loaded = await waitForPreparedModelCatalogForeground({
           acquisition,
           waitMs: 12_000,
-          fallback: () => snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog,
+          fallback: readFullCatalog,
         });
       } finally {
         waitingForSelection = false;
@@ -113,7 +119,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         // A config-selected account row cannot authorize a session-pinned profile.
         return undefined;
       } else {
-        catalog = snapshot.readFullModelCatalog?.() ?? loaded;
+        catalog = readFullCatalog() ?? loaded;
         entry =
           catalog.authoritative === false
             ? undefined
@@ -122,7 +128,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     } catch {
       return undefined;
     }
-    if (!snapshot.isCurrent()) {
+    if (!isCurrent()) {
       return undefined;
     }
   } else if (!entry && !authProfileId && snapshot.loadFullModelCatalog) {
@@ -133,11 +139,11 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         foregroundWaitMs: 12_000,
       });
       const refreshedEntry = findOwnedEntry(loaded, provider, modelId, harness.id);
-      catalog = refreshedEntry ? loaded : (snapshot.readFullModelCatalog?.() ?? loaded);
+      catalog = refreshedEntry ? loaded : (readFullCatalog() ?? loaded);
     } catch {
       return undefined;
     }
-    if (!snapshot.isCurrent()) {
+    if (!isCurrent()) {
       return undefined;
     }
     entry =
@@ -145,7 +151,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         ? undefined
         : findOwnedEntry(catalog, provider, modelId, harness.id);
   }
-  if (!entry || !snapshot.isCurrent()) {
+  if (!entry || !isCurrent()) {
     return undefined;
   }
   const authStore = getPreparedModelRuntimeAuthStore(snapshot);
@@ -165,7 +171,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     pluginRegistry: snapshot.pluginRegistry,
     observationConfig: snapshot.observationConfig,
     ...(authProfileId ? { nativeAuthProfileId: authProfileId } : {}),
-    isCurrent: snapshot.isCurrent,
+    isCurrent,
   });
   const variants = catalog.routeVariants.filter(
     (variant) =>
@@ -182,7 +188,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
     pluginRegistry: snapshot.pluginRegistry,
   });
   if (
-    !snapshot.isCurrent() ||
+    !isCurrent() ||
     !decisions.isCurrent() ||
     evaluation.availability !== true ||
     evaluation.availabilityAuthoritative !== true ||
@@ -210,7 +216,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
       return undefined;
     }
   }
-  if (!snapshot.isCurrent() || !decisions.isCurrent()) {
+  if (!isCurrent() || !decisions.isCurrent()) {
     return undefined;
   }
   try {

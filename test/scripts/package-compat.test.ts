@@ -102,9 +102,7 @@ openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout 5s node "$OPENCLA
 const sweepFixtureLoader = `
 source() {
   if [[ "$1" == scripts/e2e/lib/plugins/fixtures.sh ]]; then
-    pack_fixture_plugin() { :; }
-    pack_fixture_plugin_with_cli_registry_dependency() { :; }
-    pack_fake_is_number_package() { :; }
+    pack_fixture_archive() { :; }
     pack_fixture_plugin_with_invalid_extension_entry() { :; }
     start_npm_fixture_registry() { :; }
     openclaw_plugins_cleanup_fixture_servers() { :; }

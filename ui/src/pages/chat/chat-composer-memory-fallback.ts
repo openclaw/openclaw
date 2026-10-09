@@ -47,15 +47,10 @@ function resolveChatComposerMemoryFallback(
       fallbackSourceKeys.add(key);
     }
   }
-  const candidates = [...fallbackSourceKeys]
-    .map((candidateScopeKey) => ({
-      fallback: state.chatComposerFallbackByScope[candidateScopeKey],
-      scopeKey: candidateScopeKey,
-    }))
-    .filter(
-      (candidate): candidate is { fallback: ChatComposerMemoryFallback; scopeKey: string } =>
-        candidate.fallback !== undefined,
-    );
+  const candidates = [...fallbackSourceKeys].flatMap((candidateScopeKey) => {
+    const fallback = state.chatComposerFallbackByScope[candidateScopeKey];
+    return fallback === undefined ? [] : [{ fallback, scopeKey: candidateScopeKey }];
+  });
   const newest = candidates.toSorted(
     (left, right) => right.fallback.sequence - left.fallback.sequence,
   )[0];
@@ -159,12 +154,10 @@ export function retainChatComposerMemoryFallback(
   if (existing && fallbackMatches(existing, composer)) {
     return { sequence: existing.sequence };
   }
-  if (
-    existing?.storageFailed &&
-    !existing.message.trim() &&
-    !existing.replyTarget &&
-    existing.attachments.length === 0
-  ) {
+  const hasInput =
+    existing &&
+    Boolean(existing.message.trim() || existing.replyTarget || existing.attachments.length > 0);
+  if (existing?.storageFailed && !hasInput) {
     state.chatComposerFallbackByScope = {
       ...state.chatComposerFallbackByScope,
       [scopeKey]: {
@@ -177,13 +170,7 @@ export function retainChatComposerMemoryFallback(
     };
     return { sequence: existing.sequence };
   }
-  if (
-    existing &&
-    (existing.storageFailed ||
-      existing.message.trim() ||
-      existing.replyTarget ||
-      existing.attachments.length > 0)
-  ) {
+  if (existing && (existing.storageFailed || hasInput)) {
     return undefined;
   }
   return storeChatComposerMemoryFallback(state, scope, composer);

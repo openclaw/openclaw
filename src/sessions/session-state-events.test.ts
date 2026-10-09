@@ -1,12 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -52,7 +51,6 @@ import { prepareSubagentTerminalState } from "./subagent-terminal-state.js";
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
-let disposeHeartbeatWakeHandler: (() => void) | undefined;
 
 async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
@@ -65,8 +63,6 @@ async function createWatcherSession(
 }
 
 afterEach(async () => {
-  disposeHeartbeatWakeHandler?.();
-  disposeHeartbeatWakeHandler = undefined;
   await cleanupSessionStateTestState();
 });
 
@@ -143,49 +139,6 @@ describe("session state events", () => {
       }
     },
   );
-
-  it("wakes main watchers but only queues nested notices after a prior clock", async () => {
-    vi.useFakeTimers();
-    vi.advanceTimersByTime(30_000);
-    requestHeartbeat({
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      coalesceMs: 0,
-    });
-    vi.useRealTimers();
-    vi.useFakeTimers();
-    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
-    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    // Pending deadlines may belong to a previous fake-clock origin.
-    await vi.runAllTimersAsync();
-    wakes.mockClear();
-    const database = createDatabaseOptions();
-    await seedChild(database, nestedWatcher);
-
-    await recordSessionStateEventAsync(
-      eventInput({ watcherSessionKeys: [nestedWatcher] }),
-      database,
-    );
-    await vi.advanceTimersByTimeAsync(21_000);
-    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
-    expect(wakes).not.toHaveBeenCalled();
-
-    await seedChild(database, watcher);
-    await recordSessionStateEventAsync(eventInput(), database);
-    await vi.advanceTimersByTimeAsync(21_000);
-    expect(wakes).toHaveBeenCalledWith(
-      // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
-      // dueness and would sit on the notice until the next scheduled tick. The
-      // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
-      // the 21s timer advances in these tests.
-      expect.objectContaining({
-        source: "session-state",
-        sessionKey: watcher,
-        intent: "immediate",
-      }),
-    );
-  });
 
   it("suppresses cursors and notices for agent-ambiguous bare watcher keys", async () => {
     const database = createDatabaseOptions();

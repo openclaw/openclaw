@@ -61,6 +61,16 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
+    // Only the authenticated agent bridge can bind completion delivery. Payload
+    // route hints are approval replay metadata, not source-conversation authority.
+    const turnSource = client?.internal?.agentRuntimeIdentity
+      ? {
+          channel: p.turnSourceChannel,
+          to: p.turnSourceTo,
+          accountId: p.turnSourceAccountId,
+          threadId: p.turnSourceThreadId,
+        }
+      : undefined;
     const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
       method: "node.invoke",
       requestParams: p,
@@ -391,6 +401,12 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             return;
           }
         }
+        const runtimeAuthorityError = () =>
+          resolveNodeInvokeRuntimeAuthorityError({
+            context,
+            client,
+            approvalAuthority: forwardedParams.approvalAuthority,
+          });
         const isForwardedApprovalAuthorityActive = () =>
           isUploadAllowed() &&
           isForwardedNodeInvokeApprovalAuthorityActive({
@@ -487,11 +503,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         }
         // Policy, pairing, and approval checks above may await. Revalidate the
         // exact runtime capability at the final raw transport handoff.
-        const authorityError = resolveNodeInvokeRuntimeAuthorityError({
-          context,
-          client,
-          approvalAuthority: forwardedParams.approvalAuthority,
-        });
+        const authorityError = runtimeAuthorityError();
         if (authorityError) {
           respond(
             false,
@@ -511,6 +523,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           expectedPairingGeneration: generation.key,
           command,
           params: forwardedParams.params,
+          turnSource,
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
@@ -523,11 +536,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           isDispatchAuthorized: () =>
             isUploadAllowed() &&
             (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-            resolveNodeInvokeRuntimeAuthorityError({
-              context,
-              client,
-              approvalAuthority: forwardedParams.approvalAuthority,
-            }) === undefined,
+            runtimeAuthorityError() === undefined,
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);

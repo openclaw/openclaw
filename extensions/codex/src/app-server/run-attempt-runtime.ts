@@ -24,7 +24,6 @@ import {
 } from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
-import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   assertScheduledCodexAppAuthorityRuntime,
@@ -33,6 +32,8 @@ import {
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 import {
   createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
@@ -95,7 +96,22 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     abandonSignal: runAbortController.signal,
     timeoutMs: appServer.requestTimeoutMs,
   };
-  prewarmCodexAttemptClient({ connection, clientOptions });
+  if (
+    !connection.options.clientFactory &&
+    attemptClientFactory === getLeasedSharedCodexAppServerClient &&
+    !connection.runtimeArtifactRequest
+  ) {
+    // Startup later leases this same keyed client. Start process/auth initialization
+    // while tools and prompt context are still being prepared.
+    void getSharedCodexAppServerClient({
+      ...clientOptions,
+      // Process startup retains the existing synchronous boot-admission guard.
+      assertCurrent: connection.assertLegacyCurrent,
+    }).catch((error: unknown) => {
+      // Startup owns retry/error handling; prewarm failure cannot fail the turn early.
+      embeddedAgentLog.debug("codex app-server client prewarm failed", { error });
+    });
+  }
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -171,9 +187,8 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
             agentDir,
             config: params.config,
           });
-  const startupEnvApiKeyCacheKey = usesSupervisionConnection
-    ? undefined
-    : startupPreparedAuth || startupAuthProfileId
+  const startupEnvApiKeyCacheKey =
+    usesSupervisionConnection || startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");

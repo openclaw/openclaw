@@ -7,6 +7,11 @@ import type { NewSessionPreference, NewSessionWhere } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
 export type DraftPlaceRestoreState = {
+  deviceId: string;
+  autoDevice: boolean;
+  cloudProfileId: string;
+  freshWorkspace: boolean;
+  folderSelectedByUser: boolean;
   preferredWhereRestore: NewSessionWhere | null;
   preferredProjectRestore: string;
   preferredRemoteProjectRestore: DraftRemoteProject | null;
@@ -18,6 +23,11 @@ export type DraftPlaceRestoreState = {
 
 export function createDraftPlaceRestoreState(): DraftPlaceRestoreState {
   return {
+    deviceId: "",
+    autoDevice: false,
+    cloudProfileId: "",
+    freshWorkspace: true,
+    folderSelectedByUser: false,
     preferredWhereRestore: null,
     preferredProjectRestore: "",
     preferredRemoteProjectRestore: null,
@@ -85,11 +95,6 @@ export function restoreDraftPlacePreferences(params: {
   isAdmin: () => boolean;
   persistPreference: (patch: Parameters<DraftGatewayState["persistPreference"]>[2]) => void;
   requestUpdate: () => void;
-  setDeviceId: (value: string) => void;
-  setAutoDevice: (value: boolean) => void;
-  setCloudProfileId: (value: string) => void;
-  setFreshWorkspace: (value: boolean) => void;
-  setFolderSelectedByUser: (value: boolean) => void;
 }) {
   const {
     state,
@@ -100,11 +105,6 @@ export function restoreDraftPlacePreferences(params: {
     isAdmin,
     persistPreference,
     requestUpdate,
-    setDeviceId,
-    setAutoDevice,
-    setCloudProfileId,
-    setFreshWorkspace,
-    setFolderSelectedByUser,
   } = params;
   let changed = false;
   const preferredWhere = state.whereSelectedByUser ? null : state.preferredWhereRestore;
@@ -161,7 +161,7 @@ export function restoreDraftPlacePreferences(params: {
     state.projectSelectedByUser || !browser.projectsReady
       ? null
       : restoringConfiguredRemoteProject
-        ? configuredDefaultReady && configuredDefaultAllowed
+        ? configuredDefaultAllowed
           ? state.preferredRemoteProjectRestore
           : null
         : (state.preferredRemoteProjectRestore ??
@@ -188,18 +188,18 @@ export function restoreDraftPlacePreferences(params: {
       !preferredWhere &&
       params.where.kind === "local"
     ) {
-      setDeviceId("");
-      setAutoDevice(false);
-      setCloudProfileId(configuredProfileId);
+      state.deviceId = "";
+      state.autoDevice = false;
+      state.cloudProfileId = configuredProfileId;
     }
     browser.selectProject({ kind: "remote", project: preferredRemoteProject });
-    setFreshWorkspace(false);
-    setFolderSelectedByUser(false);
+    state.freshWorkspace = false;
+    state.folderSelectedByUser = false;
     if (
       (selectingConfiguredRemoteProject && !restoringConfiguredRemoteProject) ||
       (!repositoryState.baseRef && preferredRemoteProject.defaultBranch)
     ) {
-      repositoryState.setBaseRef(preferredRemoteProject.defaultBranch ?? "", false);
+      repositoryState.setDetail("baseRef", preferredRemoteProject.defaultBranch ?? "", false);
     }
     state.preferredRemoteProjectRestore = null;
     changed = true;
@@ -209,39 +209,35 @@ export function restoreDraftPlacePreferences(params: {
     const project = browser.projects.find((candidate) => candidate.id === preferredProject);
     if (project) {
       browser.selectProject({ kind: "local", id: project.id });
-      setFolderSelectedByUser(false);
-      state.preferredProjectRestore = "";
-      changed = true;
-    } else if (browser.projectsReady) {
+      state.folderSelectedByUser = false;
+    }
+    if (project || browser.projectsReady) {
       state.preferredProjectRestore = "";
       changed = true;
     }
   }
 
-  if (
-    (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
-    gateway.cloudProfilesReady
-  ) {
-    setAutoDevice(preferredWhere.kind === "auto-device");
-    setDeviceId(preferredWhere.kind === "device" ? preferredWhere.id : "");
-    setCloudProfileId("");
-    state.preferredWhereRestore = null;
-    changed = true;
-  } else if (preferredWhere?.kind === "cloud" && gateway.cloudProfilesReady) {
-    const preferredProfile = gateway.cloudProfiles.find(
-      (profile) => profile.id === preferredWhere.id,
-    );
-    if (
-      isAdmin() &&
-      preferredProfile &&
-      !modelControl.cloudRuntimeUnsupportedReason(preferredProfile)
-    ) {
-      setDeviceId("");
-      setAutoDevice(false);
-      setCloudProfileId(preferredWhere.id);
+  if (preferredWhere && preferredWhere.kind !== "local" && gateway.cloudProfilesReady) {
+    if (preferredWhere.kind === "cloud") {
+      const preferredProfile = gateway.cloudProfiles.find(
+        (profile) => profile.id === preferredWhere.id,
+      );
+      if (
+        isAdmin() &&
+        preferredProfile &&
+        !modelControl.cloudRuntimeUnsupportedReason(preferredProfile)
+      ) {
+        state.deviceId = "";
+        state.autoDevice = false;
+        state.cloudProfileId = preferredWhere.id;
+      } else {
+        state.cloudProfileId = "";
+        persistPreference({ where: { kind: "local" } });
+      }
     } else {
-      setCloudProfileId("");
-      persistPreference({ where: { kind: "local" } });
+      state.autoDevice = preferredWhere.kind === "auto-device";
+      state.deviceId = preferredWhere.kind === "device" ? preferredWhere.id : "";
+      state.cloudProfileId = "";
     }
     state.preferredWhereRestore = null;
     changed = true;

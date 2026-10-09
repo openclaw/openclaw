@@ -403,21 +403,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
       if (branchFromId !== null && !this.byId.has(branchFromId)) {
         await this.ensureCompletePersistedHistoryAsync();
       }
-      const branchTargetId =
-        branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
-      if (branchTargetId === undefined) {
-        throw new Error(`Entry ${branchFromId} not found`);
-      }
-      const entry: BranchSummaryEntry = {
-        type: "branch_summary",
-        id: generateSessionEntryId(),
-        parentId: branchTargetId,
-        timestamp: new Date().toISOString(),
-        fromId: branchTargetId ?? "root",
-        summary,
-        details,
-        fromHook,
-      };
+      const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
       await this.appendEntryAsync(
         entry,
         {
@@ -440,11 +426,24 @@ export class SessionManagerEntries extends SessionManagerAppend {
     if (branchFromId !== null && !this.byId.has(branchFromId)) {
       this.ensureCompletePersistedHistory();
     }
+    const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
+    return entry.id;
+  }
+
+  private createBranchSummary(
+    branchFromId: string | null,
+    summary: string,
+    details: unknown,
+    fromHook: boolean | undefined,
+  ): BranchSummaryEntry {
     const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    const entry: BranchSummaryEntry = {
+    return {
       type: "branch_summary",
       id: generateSessionEntryId(),
       parentId: branchTargetId,
@@ -454,9 +453,5 @@ export class SessionManagerEntries extends SessionManagerAppend {
       details,
       fromHook,
     };
-    this.appendEntry(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
   }
 }

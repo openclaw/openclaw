@@ -79,11 +79,6 @@ function createCaptureRuntime(): CaptureRuntime {
   };
 }
 
-function formatOperationError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return `That did not go through: ${message}`;
-}
-
 export function redactSensitiveCommandText(text: string): string {
   const operation = parseSystemAgentOperation(text);
   if (isInvalidConfigSetOperation(operation)) {
@@ -573,7 +568,8 @@ export class ChatTurnRouter {
         throw error;
       }
       if (!(error instanceof SystemAgentOperationExitError)) {
-        capture.error(formatOperationError(error));
+        const message = error instanceof Error ? error.message : String(error);
+        capture.error(`That did not go through: ${message}`);
       }
       return undefined;
     }

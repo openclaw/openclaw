@@ -314,15 +314,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   if (
                     toolResultProgressCallback &&
-                    forceToolResultProgress &&
-                    !isFastModeAutoProgress
-                  ) {
-                    return;
-                  }
-                  if (
-                    toolResultProgressCallback &&
-                    isFastModeAutoProgress &&
-                    (toolResultProgressVisible || !shouldDeliverFastModeAutoProgress)
+                    (isFastModeAutoProgress
+                      ? toolResultProgressVisible || !shouldDeliverFastModeAutoProgress
+                      : forceToolResultProgress)
                   ) {
                     return;
                   }
@@ -362,10 +356,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   const deliveryPayload = bypassToolSummarySuppression
                     ? normalizedPayload
                     : await resolveToolDeliveryPayload(normalizedPayload);
-                  if (!deliveryPayload) {
-                    return;
-                  }
-                  if (isDispatchOperationAborted()) {
+                  if (!deliveryPayload || isDispatchOperationAborted()) {
                     return;
                   }
                   if (
@@ -396,7 +387,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   state.assertProgressCurrent();
                   if (shouldRouteToOriginating) {
-                    await sendPayloadAsync(deliveryPayload, undefined, false);
+                    await sendPayloadAsync(deliveryPayload);
                   } else {
                     const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
                     if (hasAskUserPayload(deliveryPayload)) {

@@ -7,7 +7,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { retainUserProfileCatalog } from "./user-profile-list.js";
+import { prepareUserProfileCatalog } from "./user-profile-list.js";
 import { setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "./user-profiles-avatar.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
@@ -41,7 +41,7 @@ it("evicts the least recently used avatar at the byte budget while preserving un
     expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
     return profile;
   });
-  releases.push(retainUserProfileCatalog(options));
+  releases.push((await prepareUserProfileCatalog(options)).release);
   const load = async (index: number) => {
     const profile = profiles[index];
     assert(profile);
@@ -76,7 +76,7 @@ it.each(["database close and reopen", "avatar replacement"] as const)(
     const profile = ensureProfileForEmail("lifetime@example.test", options);
     let bytes = new Uint8Array([1, 2, 3]);
     expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    const release = retainUserProfileCatalog(options);
+    const release = (await prepareUserProfileCatalog(options)).release;
     releases.push(release);
     const warm = await createProfileAvatarReader(profile.id, options).inspect();
     expect((await warm.loadBytes())?.bytes).toEqual(bytes);

@@ -1,7 +1,9 @@
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -24,6 +26,7 @@ import {
   resolveAgentHarnessNativeToolPolicyRestricted,
 } from "../../harness/execution-environment.js";
 import { resolveReadyNativeModelCatalogEntry } from "../../harness/native-model-catalog-resolution.js";
+import type { ReadyNativeModelCatalogSelection } from "../../harness/native-model-catalog-resolution.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
@@ -33,8 +36,13 @@ import type { AgentHarness } from "../../harness/types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../../prepared-model-runtime-generation-scope.js";
 import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { capturePreparedModelRuntimeLifetime } from "../../prepared-model-runtime.lifecycle.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -130,6 +138,26 @@ async function prepareNativeSessionRuntime(
       };
       if (isIncognitoSessionKey(admission.sessionKey)) {
         return consume(loadSessionEntryReadOnly(admission), () => {});
+      }
+      const reader = getReplyOperationSessionReader(runParams.replyOperation);
+      if (reader) {
+        publication.prepareSource(
+          reader.database,
+          readDatabasePathIdentitySync(reader.database.path),
+        );
+        return await reader.withRead(
+          {
+            sessionKeys: [admission.sessionKey],
+            lifecycleSessionKey: admission.sessionKey,
+            snapshotFields: [],
+          },
+          assertCallerCurrent,
+          (read, assertCurrent) =>
+            consume(
+              read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+              assertCurrent,
+            ),
+        );
       }
       return await withSessionEntriesFromStoresInWorker(
         [
@@ -341,33 +369,44 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
 
-  const nativeCatalogSelection = nativeSessionRuntime
-    ? undefined
-    : await resolveReadyNativeModelCatalogEntry({
-        snapshot: params.preparedModelRuntime,
-        harness: agentHarness,
-        provider,
-        modelId,
-        ...(runParams.authProfileIdSource && runParams.authProfileId
-          ? { authProfileId: runParams.authProfileId }
-          : {}),
-      });
-  const nativeCatalogEntry = nativeCatalogSelection?.entry;
-  runParams.abortSignal?.throwIfAborted();
-  if (!nativeSessionRuntime && nativeCatalogSelection && params.preparedModelRuntime) {
-    assertPreparedModelRuntimeInputCurrent(
-      params.preparedModelRuntime,
-      params.preparedModelRuntime.isCurrent,
-    );
+  let nativeCatalogSelection: ReadyNativeModelCatalogSelection | undefined;
+  if (!nativeSessionRuntime) {
+    const preparedRuntime = params.preparedModelRuntime;
+    const assertRuntimeCurrent = capturePreparedModelRuntimeLifetime();
+    const generation = getPreparedModelRuntimePluginGeneration();
+    const borrowedSnapshot = generation
+      ? getPreparedModelRuntimeBorrowedSnapshot(generation)
+      : undefined;
+    // Run projections add prompt-project facts while keeping the owner's native operation.
+    const isCurrent =
+      generation &&
+      borrowedSnapshot?.loadNativeModelCatalog === preparedRuntime?.loadNativeModelCatalog
+        ? () => getPreparedModelRuntimeBorrowedSnapshot(generation) === borrowedSnapshot
+        : preparedRuntime?.isCurrent;
+    nativeCatalogSelection = await resolveReadyNativeModelCatalogEntry({
+      snapshot: params.preparedModelRuntime,
+      isCurrent,
+      harness: agentHarness,
+      provider,
+      modelId,
+      ...(runParams.authProfileIdSource && runParams.authProfileId
+        ? { authProfileId: runParams.authProfileId }
+        : {}),
+    });
+    runParams.abortSignal?.throwIfAborted();
+    params.assertCurrent();
+    assertRuntimeCurrent();
+    if (preparedRuntime && isCurrent) {
+      assertPreparedModelRuntimeInputCurrent(preparedRuntime, isCurrent);
+    }
   }
+  const nativeCatalogEntry = nativeCatalogSelection?.entry;
   const nativeModelOwned = nativeSessionRuntime !== undefined || nativeCatalogEntry !== undefined;
   const modelConfigProvider = provider;
   let resolvedModelProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {
     const nativeModel = createNativeModelOwnedRuntimeModel({ provider, modelId });
-    // Keep native transport ownership while carrying only the capabilities the
-    // current native inventory actually reported.
     const catalogModel = nativeCatalogEntry
       ? {
           ...nativeModel,

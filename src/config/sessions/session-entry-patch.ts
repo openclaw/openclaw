@@ -28,15 +28,19 @@ import {
   withSessionEntryWorker,
   type SessionEntryWorkerPreparation,
 } from "./session-accessor.sqlite-replacement-worker.js";
+import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
+  SessionEntryPatchCommitObserver,
   SessionEntryPatchGuard,
+  SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
 import {
-  prepareSessionSourceAuthority,
+  acceptSessionSourceValidation,
   type PreparedSessionSourceAuthority,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -48,8 +52,9 @@ export async function patchSessionEntryInWorker(params: {
   assertCurrent: () => void;
   guard?: SessionEntryPatchGuard;
   preparedSource?: PreparedSessionSourceAuthority;
+  reduction?: SessionEntryPatchReduction;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
-  onCommitted?: (entry: SessionEntry) => void;
+  onCommitted?: SessionEntryPatchCommitObserver;
 }): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
   let source = params.preparedSource;
   const sourceChecks = source?.checks ?? [];
@@ -58,7 +63,7 @@ export async function patchSessionEntryInWorker(params: {
     source = undefined;
     return held?.release?.();
   };
-  let input: SessionEntryPatchCommit | undefined;
+  let input: SessionEntryPatchCommit | SessionEntryPatchReduction | undefined = params.reduction;
   return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
     { entry: SessionEntry | null; wrote: boolean }
@@ -66,6 +71,13 @@ export async function patchSessionEntryInWorker(params: {
     ...params,
     releaseSource,
     candidateKind: "session-entry-patch",
+    onTransactionFacts(facts) {
+      if (source && isRecord(facts) && facts.kind === "session-entry-patch-validated") {
+        // SAFETY: The paired kernel supplies the source indices from this transaction.
+        acceptSessionSourceValidation(source, facts.sourceValidation as SessionSourceValidation);
+      }
+      return false;
+    },
     assertPrepared: () => {
       params.guard?.assertCurrent?.();
       source?.assertCurrent();
@@ -80,29 +92,31 @@ export async function patchSessionEntryInWorker(params: {
         source?.assertCurrent();
       }
     },
-    prepareWorker: (execution, executionSource) => ({
-      async prepare() {
-        params.assertCurrent();
-        params.guard?.assertCurrent?.();
-        source?.assertCurrent();
-        const snapshot = await runOpenClawAgentWorkerWrite(params.database, () =>
-          execution.runExisting(executionSource, (worker) =>
-            worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
-          ),
-        );
-        if (!snapshot) {
-          throw new Error("Session database disappeared before patching");
-        }
-        params.assertCurrent();
-        params.guard?.assertCurrent?.();
-        // The foreground FIFO stays held; async planners may read through it before commit.
-        input = await params.prepare(snapshot);
-        params.assertCurrent();
-        params.guard?.assertCurrent?.();
-      },
-      beforeWrite() {},
-      async release() {},
-    }),
+    prepareWorker: params.reduction
+      ? undefined
+      : (execution, executionSource) => ({
+          async prepare() {
+            params.assertCurrent();
+            params.guard?.assertCurrent?.();
+            source?.assertCurrent();
+            const snapshot = await runOpenClawAgentWorkerWrite(params.database, () =>
+              execution.runExisting(executionSource, (worker) =>
+                worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
+              ),
+            );
+            if (!snapshot) {
+              throw new Error("Session database disappeared before patching");
+            }
+            params.assertCurrent();
+            params.guard?.assertCurrent?.();
+            // The foreground FIFO stays held; async planners may read through it before commit.
+            input = await params.prepare(snapshot);
+            params.assertCurrent();
+            params.guard?.assertCurrent?.();
+          },
+          beforeWrite() {},
+          async release() {},
+        }),
     async run(worker, commit) {
       const prepared = input;
       if (!prepared) {
@@ -117,7 +131,12 @@ export async function patchSessionEntryInWorker(params: {
     async onCommitted(committed, published, identity) {
       try {
         if (committed.publication && committed.entry) {
-          params.onCommitted?.(structuredClone(committed.entry));
+          const entry = structuredClone(committed.entry);
+          if (committed.transcriptPredicate) {
+            params.onCommitted?.(entry, committed.transcriptPredicate);
+          } else {
+            params.onCommitted?.(entry);
+          }
         }
       } finally {
         if (published) {
@@ -130,11 +149,8 @@ export async function patchSessionEntryInWorker(params: {
           );
         }
       }
+      // This write may change its source; callers authorize subsequent effects separately.
       await releaseSource();
-      if (committed.entry !== null && params.guard?.source) {
-        source = await prepareSessionSourceAuthority(params.guard.source);
-        source.assertCurrent();
-      }
       return { entry: committed.entry, wrote: Boolean(committed.publication) };
     },
   });
@@ -179,6 +195,7 @@ export async function runSessionEntryWorkerOperation<
     candidate: Candidate,
     published: ReturnType<ReturnType<typeof retainSessionEntryWorkerPublication>["settle"]>,
     identity: string,
+    context: SessionEntryCommitContext,
   ): Result | Promise<Result>;
 }): Promise<Result> {
   let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
@@ -206,7 +223,7 @@ export async function runSessionEntryWorkerOperation<
     params.database,
     params.databaseIdentity,
     params.assertCurrent,
-    async (execution, source) => {
+    async (execution, source, context) => {
       await execution.prepare(source);
       params.assertCurrent();
       params.assertPrepared?.();
@@ -259,7 +276,12 @@ export async function runSessionEntryWorkerOperation<
               const published = publication?.settle(committed?.publication, unknown);
               if (committed) {
                 publishedResult = {
-                  value: await params.onCommitted(committed, published, identity.physicalIdentity),
+                  value: await params.onCommitted(
+                    committed,
+                    published,
+                    identity.physicalIdentity,
+                    context,
+                  ),
                 };
               }
             } catch (error) {
@@ -315,6 +337,7 @@ export async function runSessionEntryWorkerOperation<
           receipt.changedKeys,
           receipt.membershipInvalidatedKeys,
           receipt.sharingUnchangedKeys,
+          receipt.generationUnchangedKeys,
         );
       }
     },

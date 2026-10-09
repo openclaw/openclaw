@@ -218,17 +218,15 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
-  const commandError = formatCommandErrorForUser(trimmed);
-  if (commandError) {
-    return commandError;
-  }
-  const execDenied = formatExecDeniedUserMessage(trimmed);
-  if (execDenied) {
-    return execDenied;
-  }
-  const diskSpace = formatDiskSpaceErrorCopy(trimmed);
-  if (diskSpace) {
-    return diskSpace;
+  for (const format of [
+    formatCommandErrorForUser,
+    formatExecDeniedUserMessage,
+    formatDiskSpaceErrorCopy,
+  ]) {
+    const copy = format(trimmed);
+    if (copy) {
+      return copy;
+    }
   }
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
@@ -506,6 +504,32 @@ export function renderMissingApiKeyReplyCopy(params?: {
   return provider === "openai"
     ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
     : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
+}
+
+const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
+  /\bcodex app-server client closed before turn completed\b/iu;
+const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
+  /\bcodex session generation is no longer current\b/iu;
+const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
+  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
+
+export function renderCodexAppServerFailureCopy(message: string): string | null {
+  const normalizedMessage = message.trim();
+  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
+    return "⚠️ This Codex session changed before your message could run. Please send it again.";
+  }
+  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
+    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
+  }
+  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
+    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+  }
+  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
+    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
+  }
+  return null;
 }
 
 const CLI_BACKEND_NO_OUTPUT_STALL_RE =

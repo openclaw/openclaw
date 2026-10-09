@@ -440,12 +440,20 @@ describe("repairCanonicalSqliteIndexes", () => {
     }
   });
 
-  it.each(["sql", "tbl_name"])(
-    "preserves %s authorization errors when all expected indexes are absent",
-    (deniedColumn) => {
+  it.each([
+    { deniedColumn: "sql", empty: false },
+    { deniedColumn: "tbl_name", empty: false },
+    { deniedColumn: "sql", empty: true },
+    { deniedColumn: "tbl_name", empty: true },
+  ])(
+    "preserves $deniedColumn authorization errors with absent indexes (empty=$empty)",
+    ({ deniedColumn, empty }) => {
       const db = createDatabase();
       try {
         db.exec("DROP INDEX idx_records_identity; DROP INDEX idx_records_active_lookup;");
+        if (empty) {
+          db.exec("DROP TABLE records; DROP TABLE unindexed;");
+        }
         db.setAuthorizer((action, table, column, schema) => {
           if (
             action === constants.SQLITE_READ &&

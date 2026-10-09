@@ -56,6 +56,8 @@ function writeSessionFixture(
   return patchSessionEntryCore(scope, () => patch, {
     skipMaintenance: true,
     fallbackEntry: createFallbackSessionEntry(patch),
+    // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+    assertCommitAllowed: () => {},
   });
 }
 
@@ -317,6 +319,8 @@ describe("direct session model catalogs", () => {
         await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
           preserveActivity: true,
           skipMaintenance: true,
+          // Keep the pending reader's lifetime independent of an idle writer generation.
+          assertCommitAllowed: () => {},
         });
         expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
         expect(readRow()).toEqual({
@@ -346,6 +350,7 @@ describe("direct session model catalogs", () => {
     "catalog owner",
   ] as const)("revalidates the selected model catalog after %s", async (change) => {
     await withOpenClawTestState(isolated, async (state) => {
+      let closedStorePath: string | undefined;
       const f = fixture();
       await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
@@ -382,6 +387,7 @@ describe("direct session model catalogs", () => {
             openOpenClawAgentDatabase(scope);
           } else {
             closeOpenClawAgentDatabaseByPath(database.path);
+            closedStorePath = database.path;
           }
         } else if (change === "profile alias change") {
           publishUserProfileAliasChange();
@@ -417,6 +423,10 @@ describe("direct session model catalogs", () => {
             retryAfterMs: 0,
           }),
         );
+        if (closedStorePath) {
+          // Synchronous revocation precedes the async resource owner's settlement.
+          await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
+        }
       }
       await rotateDatabaseWorkers(projectionLane);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);

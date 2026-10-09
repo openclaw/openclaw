@@ -138,10 +138,12 @@ export function shellCompletionStatusToRepairEffects(
   status: ShellCompletionStatus,
 ): readonly HealthRepairEffect[] {
   const effects: HealthRepairEffect[] = [];
-  if (status.usesSlowPattern && !status.cacheExists) {
+  if (!status.cacheExists && (status.usesSlowPattern || status.profileInstalled)) {
     effects.push({
       kind: "state",
-      action: "would-generate-completion-cache",
+      action: status.usesSlowPattern
+        ? "would-generate-completion-cache"
+        : "would-regenerate-completion-cache",
       target: status.cachePath,
       dryRunSafe: true,
     });
@@ -153,20 +155,9 @@ export function shellCompletionStatusToRepairEffects(
       target: status.shell,
       dryRunSafe: false,
     });
-  } else if (status.profileInstalled && !status.cacheExists) {
-    effects.push({
-      kind: "state",
-      action: "would-regenerate-completion-cache",
-      target: status.cachePath,
-      dryRunSafe: true,
-    });
   }
   return effects;
 }
-
-type DoctorCompletionOptions = {
-  nonInteractive?: boolean;
-};
 
 /**
  * Repairs shell completion setup when doctor runs interactively.
@@ -176,35 +167,20 @@ type DoctorCompletionOptions = {
  */
 export async function doctorShellCompletion(
   prompter: DoctorPrompter,
-  options: DoctorCompletionOptions = {},
+  options: { nonInteractive?: boolean } = {},
 ): Promise<void> {
   const status = await checkShellCompletionStatus(CLI_NAME);
+  const regenerate = !status.usesSlowPattern && status.profileInstalled;
+  const [finding] = shellCompletionStatusToHealthFindings(status);
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
-  if (status.usesSlowPattern) {
+  if (finding) {
     note(
-      `Your ${status.shell} profile uses slow dynamic completion (source <(...)).\nUpgrading to cached completion for faster shell startup...`,
+      `${finding.message}\n${status.usesSlowPattern ? "Upgrading to cached completion for faster shell startup..." : "Regenerating cache..."}`,
       "Shell completion",
     );
-  } else if (status.profileInstalled) {
-    if (status.cacheExists) {
-      return;
-    }
-    note(
-      `Shell completion is configured in your ${status.shell} profile but the cache is missing.\nRegenerating cache...`,
-      "Shell completion",
-    );
-    const generated = await generateCompletionCache({ generationMode: "core-only" });
-    if (generated) {
-      note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
-    } else {
-      note(
-        `Failed to regenerate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
-        "Shell completion",
-      );
-    }
-    return;
   } else if (
+    status.profileInstalled ||
     options.nonInteractive ||
     !(await prompter.confirm({
       message: `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
@@ -218,11 +194,15 @@ export async function doctorShellCompletion(
     const generated = await generateCompletionCache({ generationMode: "core-only" });
     if (!generated) {
       note(
-        `Failed to generate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
+        `Failed to ${regenerate ? "regenerate" : "generate"} completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
         "Shell completion",
       );
       return;
     }
+  }
+  if (regenerate) {
+    note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
+    return;
   }
   await installCompletionForDoctor(
     status,

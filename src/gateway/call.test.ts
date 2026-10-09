@@ -131,15 +131,15 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity-async.js")>();
   return {
     ...actual,
-    loadOrCreateDeviceIdentity: () => {
+    loadOrCreateDeviceIdentityAsync: () => {
       loadOrCreateDeviceIdentityMock();
       return deviceIdentityState.value;
     },
-    loadDeviceIdentityIfPresent: () => {
+    loadDeviceIdentityIfPresentAsync: () => {
       loadDeviceIdentityIfPresentMock();
       return deviceIdentityState.value;
     },

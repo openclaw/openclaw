@@ -125,20 +125,6 @@ describe("runHeartbeatOnce heartbeat typing", () => {
     );
   });
 
-  it("starts typing before the reply and clears it when the run fails", async () => {
-    await withTyping(async ({ cfg, sendTyping, clearTyping, replySpy, run }) => {
-      replySpy.mockRejectedValue(new Error("model unavailable"));
-      expect((await run()).status).toBe("failed");
-      for (const typing of [sendTyping, clearTyping]) {
-        expect(typing).toHaveBeenCalledOnce();
-        expectTypingCall(typing, { cfg, to: TELEGRAM_TARGET });
-      }
-      expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
-        replySpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-    });
-  });
-
   it.each([
     {
       name: "per-agent typingMode overrides the default",

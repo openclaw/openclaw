@@ -1,5 +1,6 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -14,7 +15,6 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
-  assertCodexInferenceRouteConfig,
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
@@ -48,7 +48,6 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
-import { buildThreadResumeParams } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -71,16 +70,21 @@ type CodexLiveThreadReleaseParams = {
   threadId: string;
   assertCurrent?: () => void;
   withCurrent?: (write: () => void) => Promise<void>;
+  signal?: AbortSignal;
 };
 
 /** Preserves the caller's abort reason across thread ownership transitions. */
 export function throwIfCodexThreadLifecycleAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) {
-    return;
+  if (signal?.aborted) {
+    throw codexThreadLifecycleAbortError(signal);
   }
+}
+
+// Converts an aborted lifecycle signal into the error its caller observes.
+function codexThreadLifecycleAbortError(signal: AbortSignal): Error {
   const reason = signal.reason;
   if (reason instanceof Error) {
-    throw reason;
+    return reason;
   }
   const error = new Error(
     typeof reason === "string" && reason.length > 0
@@ -88,7 +92,7 @@ export function throwIfCodexThreadLifecycleAborted(signal?: AbortSignal): void {
       : "codex app-server thread lifecycle aborted",
   );
   error.name = "AbortError";
-  throw error;
+  return error;
 }
 
 /** Releases consumed subscription ownership or retires an unsafe client. */
@@ -175,7 +179,15 @@ export async function releaseCodexBoundLiveThread(
     });
   } finally {
     // Rejection must free the lane so the claimed run can still be stopped.
-    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId));
+    const retiredExit = previous?.release(
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId),
+    );
+    // Writer handoff waits for the retired owner to exit, but other leases can
+    // keep it alive indefinitely. This runs under the thread queue and binding
+    // lease, so cancellation must end the wait without proceeding to a write.
+    if (retiredExit) {
+      await racePromiseWithAbortSignal(retiredExit, options.signal, codexThreadLifecycleAbortError);
+    }
   }
 }
 
@@ -190,12 +202,9 @@ export async function tryReuseCodexLiveThread(
     clientId,
     dynamicToolsFingerprint,
     environmentSelectionFingerprint,
-    hostSystemAgentActive,
     lifecycleTiming,
     ringZeroActive,
     restrictedToolSurface,
-    restrictedToolSurfaceInheritedMcpServerNames,
-    startModelProvider,
     startModelSelection,
     throwIfAborted,
   } = options;
@@ -210,13 +219,16 @@ export async function tryReuseCodexLiveThread(
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
-      await params.buildFinalConfigPatch?.({
-        action: "resume",
-        binding,
-        ...(options.nativeModelInputTools
-          ? { nativeModelInputTools: options.nativeModelInputTools }
-          : {}),
-      });
+      await params.buildFinalConfigPatch?.(
+        {
+          action: "resume",
+          binding,
+          ...(options.nativeModelInputTools
+            ? { nativeModelInputTools: options.nativeModelInputTools }
+            : {}),
+        },
+        params.client,
+      );
       throwIfAborted();
       params.assertCurrent?.();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
@@ -310,27 +322,14 @@ export async function tryReuseCodexLiveThread(
       prebuiltFinalConfigPatch.configPatch,
     );
     const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
-      buildThreadResumeParams(params.params, {
-        ...params,
-        threadId: binding.threadId,
-        authProfileId: resumeAuthProfileId,
-        model: startModelSelection.model,
-        modelProvider: startModelProvider,
-        preserveNativeModel: binding.preserveNativeModel === true,
-        config: resumeConfig,
-        hostSystemAgentActive,
-        restrictedToolSurfaceInheritedMcpServerNames,
-      }),
+      options.buildResumeParams(binding, resumeAuthProfileId, resumeConfig),
     );
-    assertCodexInferenceRouteConfig(
-      params.client,
-      params.inferenceRoute,
+    options.assertInferenceConfig(
       resumeParams.config,
       resumeParams.modelProvider ??
         (binding.preserveNativeModel
           ? nativeThread?.modelProvider?.trim() || binding.modelProvider
           : undefined),
-      params.inferenceProviderRoutes,
     );
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint

@@ -379,22 +379,19 @@ function sourcePluginAppFactWithInventory(
   if (!installedApp) {
     return app;
   }
-  if (!info) {
-    return installedApp.enabled
-      ? { ...app, isAccessible: false, isEnabled: true }
-      : { ...app, isEnabled: false };
-  }
-  if (!installedApp.enabled) {
-    return { ...app, isAccessible: true, isEnabled: false };
-  }
-  return {
-    ...app,
+  const fact: SourcePluginRuntimeAppFact = { ...app };
+  if (info) {
     // Metadata proves authorization, but only the committed runtime proves
     // that this enabled app actually exposes a model-callable tool.
-    isAccessible: installedApp.callable,
-    isEnabled: installedApp.enabled,
-    ...(!installedApp.callable ? { isCallable: false as const } : {}),
-  };
+    fact.isAccessible = !installedApp.enabled || installedApp.callable;
+  } else if (installedApp.enabled) {
+    fact.isAccessible = false;
+  }
+  fact.isEnabled = installedApp.enabled;
+  if (info && installedApp.enabled && !installedApp.callable) {
+    fact.isCallable = false;
+  }
+  return fact;
 }
 
 function appInventoryMigrationBlock(

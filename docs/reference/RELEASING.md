@@ -166,6 +166,12 @@ packages. These records identify the tested version and the files that shipped.
 Later documentation updates may improve the release notes without rebuilding
 or replacing packages.
 
+Beta release notes show changes since the version selected by npm's `beta`
+channel before publication. That baseline can be a stable version when `beta`
+and `latest` select the same package; it is not necessarily the last GitHub
+prerelease. Each beta freezes its own changelog and contribution record.
+Stable release notes remain cumulative since the previous stable release.
+
 For dependency review, see [Dependency locking](/gateway/security/dependency-locking).
 Release dependency archives include npm-format locks separately from the
 package tarballs.
@@ -259,6 +265,13 @@ runbook. Former section links below lead to their corresponding procedures.
 <a id="stable-main-closeout" />
 
 [Stable main closeout](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/stable-main-closeout.md).
+
+After every stable release, regenerate the committed shipped Plugin SDK surface
+on `main` with `pnpm plugin-sdk:shipped-surface:gen -- --release <stable tag>`,
+then run `pnpm plugin-sdk:surface:check`. Commit the generated
+`scripts/lib/plugin-sdk-shipped-surface.json` as part of stable closeout; do not
+edit it by hand. The inventory records the stable tag's typed public declarations
+so later export-budget reductions cannot authorize their removal.
 
 <a id="post-release-documentation-publication" />
 

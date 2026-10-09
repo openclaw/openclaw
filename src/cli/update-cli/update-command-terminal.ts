@@ -57,6 +57,10 @@ type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
   onTerminalRecord?: PublishedRecord;
 };
 
+function unexpectedUpdateFailure(cause: unknown) {
+  return { mode: "unknown" as const, durationMs: 0, failure: { cause } };
+}
+
 /** Finalization prepares a report; the outer invocation owns its publication. */
 export function deferUpdateCommandTerminalResult(
   run: Run | undefined,
@@ -80,11 +84,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
   opts: UpdateCommandOptions & { run: Run },
   onPublishedRecord?: PublishedRecord,
 ): Promise<UpdateCommandFailure> {
-  const failure = {
-    mode: "unknown" as const,
-    durationMs: 0,
-    failure: { cause: error },
-  };
+  const failure = unexpectedUpdateFailure(error);
   let fact: UpdateFailureFact;
   try {
     const recorded = failUpdateCommandRun(error, opts.run);
@@ -139,11 +139,7 @@ export async function withUpdateCommandTerminalResult<T>(
         const input =
           error instanceof UpdateCommandFailure
             ? error.result
-            : createUpdateCommandFailureResult({
-                mode: "unknown",
-                durationMs: 0,
-                failure: { cause: error },
-              });
+            : createUpdateCommandFailureResult(unexpectedUpdateFailure(error));
         const result = recordMutableUpdateInterruption({ run }, input);
         if (result !== input || result.reason === "interrupted") {
           // Uncertain writers prohibit state reads and recovery, not a detached failure report.
@@ -210,8 +206,7 @@ async function settleUpdateCommandTerminalResult<T>(
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
-          (error): error is UpdateActivationTimeoutError =>
-            error instanceof UpdateActivationTimeoutError,
+          (error) => error instanceof UpdateActivationTimeoutError,
         )
       : undefined;
   if (run && activationTimeout && !owner.publish) {
@@ -267,7 +262,6 @@ async function settleUpdateCommandTerminalResult<T>(
               })
             : error,
       };
-      published = undefined;
     }
     if (published) {
       notifyResult(published);
@@ -306,13 +300,8 @@ async function settleUpdateCommandTerminalResult<T>(
       throw error;
     }
     const causes = collectNestedErrorCandidates(error);
-    const primaryFailure = causes.find(
-      (cause): cause is UpdateCommandFailure => cause instanceof UpdateCommandFailure,
-    );
-    const admission = causes.find(
-      (cause): cause is UnreportedUpdateAdmissionOutcome =>
-        cause instanceof UnreportedUpdateAdmissionOutcome,
-    );
+    const primaryFailure = causes.find((cause) => cause instanceof UpdateCommandFailure);
+    const admission = causes.find((cause) => cause instanceof UnreportedUpdateAdmissionOutcome);
     let failure: UpdateCommandFailure;
     try {
       if (
@@ -352,11 +341,7 @@ async function settleUpdateCommandTerminalResult<T>(
       throw new UpdateCommandPendingRecoveryFailure(
         primaryFailure?.result ??
           admissionResult ??
-          createUpdateCommandFailureResult({
-            mode: "unknown",
-            durationMs: 0,
-            failure: { cause: error },
-          }),
+          createUpdateCommandFailureResult(unexpectedUpdateFailure(error)),
         admissionReport?.nextAction ?? admissionReport?.message ?? formatErrorMessage(cause),
         { cause: error },
       );
@@ -388,7 +373,7 @@ export async function resolveSettledUpdateCommandResult(
     (!(failure instanceof UpdateCommandFailure) ||
       failure instanceof UpdateCommandPendingRecoveryFailure);
   const activationTimeout = collectNestedErrorCandidates(failure).find(
-    (error): error is UpdateActivationTimeoutError => error instanceof UpdateActivationTimeoutError,
+    (error) => error instanceof UpdateActivationTimeoutError,
   );
   const failedStep: UpdateStepResult | undefined = settlementFailed
     ? {
@@ -518,7 +503,6 @@ export async function recordUpdatePackageCompletion(
       { cause: cleanupFailure },
     );
   }
-  return undefined;
 }
 
 function resolveUnreportedUpdateAdmissionReport(
@@ -540,7 +524,7 @@ function resolveUnreportedUpdateAdmissionReport(
     ],
     stepResult: outcome.report.stepResult ? { steps: outcome.report.stepResult.steps } : undefined,
     message: collectNestedErrorCandidates(error)
-      .filter((candidate): candidate is Error => candidate instanceof Error)
+      .filter((candidate) => candidate instanceof Error)
       .slice(0, 8)
       .map((candidate) => formatErrorMessage(candidate).slice(0, 2_000))
       .join("\n"),
@@ -552,8 +536,7 @@ async function publishUnreportedUpdateAdmissionOutcome(
   run?: Run,
 ): Promise<{ result: UpdateRunResult; exitCode: number }> {
   const outcome = collectNestedErrorCandidates(error).find(
-    (candidate): candidate is UnreportedUpdateAdmissionOutcome =>
-      candidate instanceof UnreportedUpdateAdmissionOutcome,
+    (candidate) => candidate instanceof UnreportedUpdateAdmissionOutcome,
   );
   if (!outcome) {
     throw error;

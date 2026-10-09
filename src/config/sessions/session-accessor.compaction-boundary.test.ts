@@ -8,6 +8,7 @@ import {
 } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -22,10 +23,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites,
-} from "./transcript-write-context.js";
+import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-boundary-");
 
@@ -67,10 +65,8 @@ describe("awaited compaction persistence", () => {
             maxBytes: 1024,
           },
         });
-        // A separate retarget operation does not inherit the compaction writer's authority.
-        await runWithoutOwnedSessionTranscriptWrites(() =>
-          manager.setSessionTargetAsync(replacement),
-        );
+        // The independent retarget must not inherit the compaction's physical writer admission.
+        await runInDetachedAsyncContext(() => manager.setSessionTargetAsync(replacement));
         return committed;
       },
       () => manager.appendCompactionAsync("summary", keptId, 100),
@@ -84,6 +80,7 @@ describe("awaited compaction persistence", () => {
       committedVersion: receipt.after,
     });
     expect(isRecordedModelFallbackStop(failure)).toBe(true);
+    expect(manager.getSessionTarget()).toMatchObject(replacement);
     expect(() => manager.getEntries()).toThrow("Session entry committed");
     expect(loadTranscriptEventsSync(scope).at(-1)).toMatchObject({
       id: receipt.result.id,

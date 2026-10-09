@@ -4,7 +4,7 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -12,6 +12,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admissionOwner from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import {
   claimOpenClawAgentDatabaseLease,
@@ -237,25 +238,20 @@ describe("reconciliation cleanup transport native custody", () => {
           },
         };
         const pool = createPool();
-        const createAdmission = admissionOwner.createSqliteWorkerOperationAdmission;
         let reachedAdmission = false;
-        const admissions = vi
-          .spyOn(admissionOwner, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (
-                request.stage === "prepare" &&
-                typeof request.facts === "object" &&
-                request.facts !== null &&
-                "kind" in request.facts &&
-                request.facts.kind === "transcript-reconciliation"
-              ) {
-                reachedAdmission = true;
-                revoked = true;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const admissions = probe.admission(admissionOwner, (request, grant, admit) => {
+          if (
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "transcript-reconciliation"
+          ) {
+            reachedAdmission = true;
+            revoked = true;
+          }
+          admit(request, grant);
+        });
         const observation = observe(context);
         try {
           await expect(

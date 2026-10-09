@@ -379,25 +379,20 @@ internal class SnapshotGenerationStore<T>(
   }
 }
 
+private fun Path.gesture(durationMs: Long): GestureDescription =
+  GestureDescription
+    .Builder()
+    .addStroke(GestureDescription.StrokeDescription(this, 0, durationMs))
+    .build()
+
 private fun tapGesture(
   x: Int,
   y: Int,
-): GestureDescription {
-  val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
-  return GestureDescription
-    .Builder()
-    .addStroke(GestureDescription.StrokeDescription(path, 0, 1))
-    .build()
-}
+): GestureDescription = Path().apply { moveTo(x.toFloat(), y.toFloat()) }.gesture(1)
 
-private fun swipeGesture(action: MobileUiAction.Swipe): GestureDescription {
-  val path =
-    Path().apply {
+private fun swipeGesture(action: MobileUiAction.Swipe): GestureDescription =
+  Path()
+    .apply {
       moveTo(action.x1.toFloat(), action.y1.toFloat())
       lineTo(action.x2.toFloat(), action.y2.toFloat())
-    }
-  return GestureDescription
-    .Builder()
-    .addStroke(GestureDescription.StrokeDescription(path, 0, action.durationMs))
-    .build()
-}
+    }.gesture(action.durationMs)

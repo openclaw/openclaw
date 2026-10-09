@@ -38,11 +38,12 @@ export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(
     lease: InstalledPluginIndexWriteLease;
   },
 ): Promise<InstalledPluginIndexWriteReceipt> {
-  return refreshPersistedInstalledPluginIndexWithLeaseSync({
+  const { index: _index, ...receipt } = refreshPersistedInstalledPluginIndexWithLeaseSync({
     ...options,
     reason: "source-changed",
     installRecords: records,
   });
+  return receipt;
 }
 
 /** Returns config with plugin install records attached at the canonical config path. */

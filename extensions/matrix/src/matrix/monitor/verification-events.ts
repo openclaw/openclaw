@@ -251,27 +251,17 @@ async function resolveVerificationSasNoticeForSignal(
     sasNoticeRetryDelayMs?: number;
   },
 ): Promise<{ summary: MatrixVerificationSummary | null; sasNotice: string | null }> {
-  const summary = await resolveVerificationSummaryForSignal(client, params);
-  const immediateNotice =
-    summary && isActiveVerificationSummary(summary) ? formatVerificationSasNotice(summary) : null;
-  if (immediateNotice || (params.stage !== "ready" && params.stage !== "start")) {
-    return {
-      summary,
-      sasNotice: immediateNotice,
-    };
+  for (let attempt = 0; ; attempt += 1) {
+    const summary = await resolveVerificationSummaryForSignal(client, params);
+    const sasNotice =
+      summary && isActiveVerificationSummary(summary) ? formatVerificationSasNotice(summary) : null;
+    if (sasNotice || attempt > 0 || (params.stage !== "ready" && params.stage !== "start")) {
+      return { summary, sasNotice };
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
+    });
   }
-
-  await new Promise((resolve) => {
-    setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
-  });
-  const retriedSummary = await resolveVerificationSummaryForSignal(client, params);
-  return {
-    summary: retriedSummary,
-    sasNotice:
-      retriedSummary && isActiveVerificationSummary(retriedSummary)
-        ? formatVerificationSasNotice(retriedSummary)
-        : null,
-  };
 }
 
 function trackBounded(set: Set<string>, value: string): boolean {
@@ -356,6 +346,21 @@ export function createMatrixVerificationEventRouter(params: {
     return false;
   }
 
+  async function canRouteVerificationNotice(
+    roomId: string,
+    senderId: string,
+    source: "event" | "summary",
+  ): Promise<boolean> {
+    const { isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
+    if (!(await isStrictDirectRoom({ client: params.client, roomId, remoteUserId: senderId }))) {
+      params.logVerboseMessage(
+        `matrix: ignoring verification ${source} outside strict DM room=${roomId} sender=${senderId}`,
+      );
+      return false;
+    }
+    return await isVerificationNoticeAuthorized(senderId);
+  }
+
   async function resolveActiveDirectRoomId(remoteUserId: string): Promise<string | null> {
     const { inspectMatrixDirectRooms } = await loadMatrixDirectRoomDeps();
     const inspection = await inspectMatrixDirectRooms({
@@ -437,21 +442,7 @@ export function createMatrixVerificationEventRouter(params: {
     if (!roomId || !isActiveVerificationSummary(summary)) {
       return;
     }
-    if (
-      !(await (
-        await loadMatrixDirectRoomDeps()
-      ).isStrictDirectRoom({
-        client: params.client,
-        roomId,
-        remoteUserId: summary.otherUserId,
-      }))
-    ) {
-      params.logVerboseMessage(
-        `matrix: ignoring verification summary outside strict DM room=${roomId} sender=${summary.otherUserId}`,
-      );
-      return;
-    }
-    if (!(await isVerificationNoticeAuthorized(summary.otherUserId))) {
+    if (!(await canRouteVerificationNotice(roomId, summary.otherUserId, "summary"))) {
       return;
     }
     const sasNotice = formatVerificationSasNotice(summary);
@@ -486,20 +477,7 @@ export function createMatrixVerificationEventRouter(params: {
       const flowId = signal.flowId;
       const sourceEventId = normalizeNullableString(event?.event_id);
       const sourceFingerprint = sourceEventId ?? `${senderId}:${event.type}:${flowId ?? "none"}`;
-      const shouldRouteInRoom = await (
-        await loadMatrixDirectRoomDeps()
-      ).isStrictDirectRoom({
-        client: params.client,
-        roomId,
-        remoteUserId: senderId,
-      });
-      if (!shouldRouteInRoom) {
-        params.logVerboseMessage(
-          `matrix: ignoring verification event outside strict DM room=${roomId} sender=${senderId}`,
-        );
-        return;
-      }
-      if (!(await isVerificationNoticeAuthorized(senderId))) {
+      if (!(await canRouteVerificationNotice(roomId, senderId, "event"))) {
         return;
       }
       rememberVerificationUserRoom(senderId, roomId);

@@ -65,7 +65,10 @@ export async function runCliRecovery<TAttempt>(params: {
     attempt: TAttempt,
     fallbackCliSessionId?: string,
   ) => Promise<EmbeddedAgentRunResult>;
-  finishDeliveredFailure: (error: unknown) => Promise<EmbeddedAgentRunResult | undefined>;
+  finishDeliveredFailure: (
+    error: unknown,
+    bindingReplacedDuringRun: boolean,
+  ) => Promise<EmbeddedAgentRunResult | undefined>;
   onTerminalFailure: (error: unknown) => Promise<void>;
 }): Promise<EmbeddedAgentRunResult> {
   const { context } = params;
@@ -93,7 +96,10 @@ export async function runCliRecovery<TAttempt>(params: {
       reusableCliSessionId,
     );
   } catch (err) {
-    const deliveredFailure = await params.finishDeliveredFailure(err);
+    const deliveredFailure = await params.finishDeliveredFailure(
+      err,
+      retryableSessionId !== reusableCliSessionId,
+    );
     if (deliveredFailure) {
       return deliveredFailure;
     }
@@ -151,7 +157,10 @@ export async function runCliRecovery<TAttempt>(params: {
           }),
         );
       } catch (retryError) {
-        const deliveredRetryFailure = await params.finishDeliveredFailure(retryError);
+        const deliveredRetryFailure = await params.finishDeliveredFailure(
+          retryError,
+          retryableSessionId !== reusableCliSessionId,
+        );
         if (deliveredRetryFailure) {
           return deliveredRetryFailure;
         }

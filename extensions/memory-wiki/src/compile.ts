@@ -1044,14 +1044,19 @@ async function compileMemoryWikiVaultUnlocked(
       compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
     },
   });
-  const reservedIdentity = await loadMemoryWikiVaultIdentity(rootDir);
-  if (
-    reservedIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
-    reservedIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
-    reservedIdentity.compiledCachePublicationId !== compiledInputIdentity.compiledCachePublicationId
-  ) {
-    throw new Error("Memory Wiki vault changed before its compiled cache scan began.");
-  }
+  const assertCompilationCurrent = (identity: typeof compiledInputIdentity, message: string) => {
+    if (
+      identity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+      identity.compiledCacheReservationId !== compiledCacheReservationId ||
+      identity.compiledCachePublicationId !== compiledInputIdentity.compiledCachePublicationId
+    ) {
+      throw new Error(message);
+    }
+  };
+  assertCompilationCurrent(
+    await loadMemoryWikiVaultIdentity(rootDir),
+    "Memory Wiki vault changed before its compiled cache scan began.",
+  );
   const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -1087,41 +1092,29 @@ async function compileMemoryWikiVaultUnlocked(
   const compiledCachePublicationId = randomUUID();
   let compiledCacheSourceGeneration: string | undefined;
 
-  const rootIndexPath = path.join(rootDir, "index.md");
-  if (
-    await writeManagedMarkdownFile({
-      rootDir,
-      relativePath: "index.md",
-      title: "Wiki Index",
-      startMarker: "<!-- openclaw:wiki:index:start -->",
-      endMarker: "<!-- openclaw:wiki:index:end -->",
-      body: buildRootIndexBody({ config, pages, counts }),
-      ...(options?.signal ? { signal: options.signal } : {}),
-    })
-  ) {
-    updatedFiles.push(rootIndexPath);
-  }
-
-  for (const group of WIKI_PAGE_GROUPS) {
-    const relativePath = path.join(group.dir, "index.md").replace(/\\/g, "/");
-    const filePath = path.join(rootDir, relativePath);
-    if (
-      await writeManagedMarkdownFile({
-        rootDir,
-        relativePath,
-        title: group.heading,
-        startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
-        endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
-        body: renderWikiPageLinks({
+  for (const group of [undefined, ...WIKI_PAGE_GROUPS]) {
+    const relativePath = group ? path.join(group.dir, "index.md").replace(/\\/g, "/") : "index.md";
+    const marker = group ? `${group.dir}:index` : "index";
+    const body = group
+      ? renderWikiPageLinks({
           config,
           pages: pages.filter((page) => page.kind === group.kind),
           emptyText: `No ${normalizeLowercaseStringOrEmpty(group.heading)} yet.`,
           sourceRelativeTo: `${group.dir}/index.md`,
-        }),
+        })
+      : buildRootIndexBody({ config, pages, counts });
+    if (
+      await writeManagedMarkdownFile({
+        rootDir,
+        relativePath,
+        title: group?.heading ?? "Wiki Index",
+        startMarker: `<!-- openclaw:wiki:${marker}:start -->`,
+        endMarker: `<!-- openclaw:wiki:${marker}:end -->`,
+        body,
         ...(options?.signal ? { signal: options.signal } : {}),
       })
     ) {
-      updatedFiles.push(filePath);
+      updatedFiles.push(path.join(rootDir, relativePath));
     }
   }
 
@@ -1136,15 +1129,10 @@ async function compileMemoryWikiVaultUnlocked(
     compiledInputIdentity.compiledCachePublicationId,
     async () => {
       options?.signal?.throwIfAborted();
-      const currentIdentity = await loadMemoryWikiVaultIdentity(rootDir);
-      if (
-        currentIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
-        currentIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
-        currentIdentity.compiledCachePublicationId !==
-          compiledInputIdentity.compiledCachePublicationId
-      ) {
-        throw new Error("Memory Wiki vault changed while its compiled cache was being built.");
-      }
+      assertCompilationCurrent(
+        await loadMemoryWikiVaultIdentity(rootDir),
+        "Memory Wiki vault changed while its compiled cache was being built.",
+      );
       const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
       const verifiedScan = await readPageSummaries(rootDir, options?.signal);
       const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
@@ -1158,15 +1146,10 @@ async function compileMemoryWikiVaultUnlocked(
         throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
       }
       compiledCacheSourceGeneration = sourceGenerationAfterScan;
-      const verifiedIdentity = await loadMemoryWikiVaultIdentity(rootDir);
-      if (
-        verifiedIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
-        verifiedIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
-        verifiedIdentity.compiledCachePublicationId !==
-          compiledInputIdentity.compiledCachePublicationId
-      ) {
-        throw new Error("Memory Wiki vault changed while its compiled cache was being verified.");
-      }
+      assertCompilationCurrent(
+        await loadMemoryWikiVaultIdentity(rootDir),
+        "Memory Wiki vault changed while its compiled cache was being verified.",
+      );
       options?.signal?.throwIfAborted();
     },
     async () => {

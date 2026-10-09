@@ -35,7 +35,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -698,35 +698,46 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         touchSessionEntry: false,
       });
     }
-    const preparations: Array<(value: typeof prepared) => void> = [];
-    prepare.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          preparations.push(resolve);
-        }),
-    );
+    const firstPreparations = createDeferred<typeof prepared>();
+    const nextPreparation = createDeferred<typeof prepared>();
+    const slotsOccupied = createDeferred();
+    const slotReused = createDeferred();
+    prepare
+      .mockImplementationOnce(() => firstPreparations.promise)
+      .mockImplementationOnce(() => {
+        slotsOccupied.resolve();
+        return firstPreparations.promise;
+      })
+      .mockImplementation(() => {
+        slotReused.resolve();
+        return nextPreparation.promise;
+      });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       service.ensure(target);
       service.ensure(secondTarget);
       service.ensure(thirdTarget);
-      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+      await withinTest(slotsOccupied.promise, testSignal);
+      expect(prepare).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(20_000);
       expect(view()?.state).toBe("updating");
       expect(prepare).toHaveBeenCalledTimes(2);
-      for (const resolve of preparations) {
-        resolve(prepared);
-      }
-      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(3));
-      expect(complete).not.toHaveBeenCalled();
-      const disposal = service.dispose();
-      preparations[2]!(prepared);
-      await vi.advanceTimersByTimeAsync(0);
-      await disposal;
+      firstPreparations.resolve(prepared);
+      await withinTest(slotReused.promise, testSignal);
+      expect(prepare).toHaveBeenCalledTimes(3);
       expect(complete).not.toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      const disposal = service.dispose();
+      // A source read already in flight can still reach a mock during disposal.
+      firstPreparations.resolve(prepared);
+      nextPreparation.resolve(prepared);
+      try {
+        await disposal;
+      } finally {
+        vi.useRealTimers();
+      }
     }
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("keeps a replacement owner's pending status when the old service disposes", async () => {

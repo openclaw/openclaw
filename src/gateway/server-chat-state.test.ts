@@ -151,6 +151,8 @@ describe("createChatRunState", () => {
       data: { kind: "preamble", progressText: "Inspecting" },
     });
 
+    state.updateBuffer("run-1", { itemId: "reused", text: "Saved." });
+    state.retireBuffer("run-1", ["reused"]);
     state.clearRun("run-1");
 
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
@@ -161,6 +163,8 @@ describe("createChatRunState", () => {
       abortMarker: expect.any(Object),
       toolRecipient: expect.any(Object),
     });
+    state.updateBuffer("run-1", { itemId: "reused", text: "New reply." });
+    expect(state.resolveBuffer("run-1").text).toBe("New reply.");
   });
 
   it.each(["full", "summary"] as const)(

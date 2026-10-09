@@ -405,8 +405,9 @@ function renderCloudConfiguration(params: {
           ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
               >${fixedOs.label}</span
             >`
-          : renderCloudOsMenuItems({
-              operatingSystems,
+          : renderCloudChoiceMenuItems({
+              kind: "os",
+              choices: operatingSystems,
               selectedId: params.selectedOs,
               suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
               submitting: params.submitting,
@@ -419,8 +420,9 @@ function renderCloudConfiguration(params: {
       () =>
         fixedMachine
           ? renderFixedMachine(fixedMachine)
-          : renderCloudMachineMenuItems({
-              machines: params.machines,
+          : renderCloudChoiceMenuItems({
+              kind: "machine",
+              choices: params.machines,
               selectedId: params.selectedMachine,
               suggestedId: params.suggested
                 ? defaultCloudMachine(params.profile, params.selectedOs)?.id
@@ -453,51 +455,32 @@ function renderFixedMachine(machine: WorkerMachineOption) {
 }
 
 // The move-session dialog retains its existing menu-based choices.
-export function renderCloudMachineMenuItems(params: {
-  machines: readonly WorkerMachineOption[];
+export function renderCloudChoiceMenuItems(params: {
+  kind: "machine" | "os";
+  choices: readonly (WorkerMachineOption & WorkerOperatingSystem)[];
   selectedId: string;
   suggestedId?: string;
   submitting: boolean;
-  onSelect: (machineId: string) => void;
+  onSelect: (id: string) => void;
 }) {
-  return params.machines.map((machine) =>
+  return params.choices.map((choice) =>
     renderSessionMenuItem(
       {
-        suggested: params.suggestedId === machine.id,
-        value: `machine:${machine.id}`,
-        label: machine.label,
-        sub: machineShapeText(machine),
+        suggested: params.suggestedId === choice.id,
+        value: `${params.kind}:${choice.id}`,
+        label: choice.label,
+        ...(params.kind === "machine"
+          ? { sub: machineShapeText(choice) }
+          : {
+              description: choice.disabledReason,
+              disabled: Boolean(choice.disabledReason),
+              title: choice.disabledReason,
+            }),
         checked:
-          params.selectedId === machine.id ||
-          (!params.selectedId && params.suggestedId === machine.id),
+          params.selectedId === choice.id ||
+          (!params.selectedId && params.suggestedId === choice.id),
         keepOpen: true,
-        onSelect: () => params.onSelect(machine.id),
-      },
-      params.submitting,
-    ),
-  );
-}
-
-export function renderCloudOsMenuItems(params: {
-  operatingSystems: readonly WorkerOperatingSystem[];
-  selectedId: string;
-  suggestedId?: string;
-  submitting: boolean;
-  onSelect: (osId: string) => void;
-}) {
-  return params.operatingSystems.map((os) =>
-    renderSessionMenuItem(
-      {
-        suggested: params.suggestedId === os.id,
-        value: `os:${os.id}`,
-        label: os.label,
-        description: os.disabledReason,
-        disabled: Boolean(os.disabledReason),
-        title: os.disabledReason,
-        checked:
-          params.selectedId === os.id || (!params.selectedId && params.suggestedId === os.id),
-        keepOpen: true,
-        onSelect: () => params.onSelect(os.id),
+        onSelect: () => params.onSelect(choice.id),
       },
       params.submitting,
     ),

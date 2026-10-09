@@ -463,17 +463,10 @@ private fun nodeStatusText(node: GatewayNodeSummary): String =
   }
 
 private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
-  when (node.approvalState) {
-    GatewayNodeCapabilityApproval.Approved -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
-
-    is GatewayNodeCapabilityApproval.PendingApproval,
-    is GatewayNodeCapabilityApproval.PendingReapproval,
-    GatewayNodeCapabilityApproval.Unapproved,
-    -> ClawStatus.Warning
-
-    GatewayNodeCapabilityApproval.Loading,
-    GatewayNodeCapabilityApproval.Unsupported,
-    -> if (node.connected) ClawStatus.Neutral else ClawStatus.Warning
+  when {
+    !node.connected || nodeCapabilityApprovalNeedsUserAction(node.approvalState) -> ClawStatus.Warning
+    node.approvalState == GatewayNodeCapabilityApproval.Approved -> ClawStatus.Success
+    else -> ClawStatus.Neutral
   }
 
 private fun nodeApprovalSubtitle(approvalState: GatewayNodeCapabilityApproval): String? =
@@ -524,21 +517,11 @@ internal fun formatDeviceList(
   values: List<String>,
   kind: DeviceListKind,
 ): String? =
-  when (values.size) {
-    0 -> {
-      null
-    }
-
-    1 -> {
-      values.first()
-    }
-
-    else -> {
-      when (kind) {
-        DeviceListKind.Role -> nativeString("\${values.size} roles", values.size)
-        DeviceListKind.Scope -> nativeString("\${values.size} scopes", values.size)
-      }
-    }
+  when {
+    values.isEmpty() -> null
+    values.size == 1 -> values.first()
+    kind == DeviceListKind.Role -> nativeString("\${values.size} roles", values.size)
+    else -> nativeString("\${values.size} scopes", values.size)
   }
 
 internal fun relativeDeviceTime(

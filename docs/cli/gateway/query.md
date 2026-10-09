@@ -219,6 +219,11 @@ openclaw gateway status --require-rpc
 openclaw gateway status --port 19001
 ```
 
+From a source checkout, `pnpm openclaw gateway status` reuses current prepared
+runtime artifacts when their recorded input bytes still match, even if Git marks
+those inputs dirty. Changed inputs or missing outputs still require a refresh;
+status does not bypass the live Gateway's artifact-publication safeguards.
+
 <a id="param-url-1"></a>
 
 <ParamField path="--url <url>" type="string">
@@ -384,6 +389,10 @@ Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdent
 ### `gateway call <method>`
 
 Low-level RPC helper.
+
+This command loads only the configuration needed to select and authenticate the
+Gateway connection. It does not validate unrelated settings or preload plugin runtimes;
+use `openclaw config validate` to check the full configuration.
 
 Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
 without changing URL selection or authentication. The CLI compares the exact

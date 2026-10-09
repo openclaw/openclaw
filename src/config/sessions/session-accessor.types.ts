@@ -12,6 +12,7 @@ import type {
 } from "./goals-operations.types.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntryProjection } from "./session-entry-snapshots.js";
@@ -82,9 +83,13 @@ export type SessionEntryListScope = Partial<
   Omit<SessionEntryReadScope, "sessionKey" | "projection">
 > & {
   projection?: "full" | "list";
+  /** Retain the physical source assertion independently of this synchronous read. */
+  captureSource?: (assertCurrent: () => void) => void;
   /** Select exact persisted keys after validating the complete listing snapshot. */
   sessionKeys?: readonly string[];
-  /** Retain full cron-run entries for deletion guards, and only metadata for ordinary sessions. */
+  /** Set false for readers that do not consume derived participant identities or counts. */
+  includeParticipants?: boolean;
+  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
   cronRetention?: true;
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
@@ -343,7 +348,7 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
 export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate> &
-  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision">;
+  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision" | "assistantItemIds">;
 
 export type LatestTranscriptAssistantText = {
   id?: string;
@@ -353,6 +358,7 @@ export type LatestTranscriptAssistantText = {
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
+  publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   appendMessage: <TMessage>(
     options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
@@ -794,11 +800,7 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry; transcriptEvents?: readonly TranscriptEvent[] }
   | { ok: false; error: TError };
 
-/** Original physical writer custody; captured facts are not a new admission. */
-export type SessionEntryCommitContext = {
-  readonly env: NodeJS.ProcessEnv;
-  assertCurrent: () => void;
-};
+export type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 
 export type SessionEntryCreationPhase =
   | "snapshot"

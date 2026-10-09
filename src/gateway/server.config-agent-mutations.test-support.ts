@@ -55,8 +55,9 @@ export function registerAgentConfigMutationTests({
     "agents.delete preserves newer writes across a large shrink (authority revoked: %s)",
     async (revoke) => {
       const configFactory = await import("../config/io.factory.js");
-      const { readAgentDeletionJournal, removeAgentDeletionJournal } =
-        await import("../state/agent-deletion-journal.js");
+      const { readAgentDeletionJournal } = await import("../state/agent-deletion-journal.js");
+      const { removeAgentDeletionJournal } =
+        await import("../test-utils/agent-deletion-journal.js");
       const original = await getCurrentConfigObject();
       const seed = await rpc("config.patch", {
         raw: JSON.stringify({ logging: { level: "warn" } }),

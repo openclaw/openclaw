@@ -1760,7 +1760,7 @@ class ChatComposerLayoutTest {
         viewModel.chatComposerState.reportAttachmentOmission(owner, 1)
       }
       val steps = List(20) { "Compact viewport progress step ${it + 1}" }
-      showProgressCard(steps)
+      showProgressCard(viewModel, steps)
       val editor = composerEditor()
       val draft = "Editable first line\nSecond line\nThird line\nFourth line\nFifth line\nSixth line"
       editor.performClick()
@@ -2894,7 +2894,7 @@ class ChatComposerLayoutTest {
     withBranchRequests(hold = "sessions.branches.switch") { _, calls, release ->
       val old = openBranchSheet(calls)
       branchRow(2).performClick()
-      composeRule.waitUntil { calls.any { it.method == "sessions.branches.switch" } }
+      awaitBranchSwitch(calls, BranchSwitchPhase.Admitted)
       composeRule.runOnUiThread {
         runBlocking {
           sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
@@ -2946,15 +2946,23 @@ class ChatComposerLayoutTest {
     return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
   }
 
+  private enum class BranchSwitchPhase { Admitted, Completed }
+
   /**
-   * Drains the admitted selection until its coroutine completes. Its Room work resumes from the
+   * Waits for selection admission or completion. Its Room work resumes from the
    * database's IO context, which Compose idling cannot see, so a wall-clock poll races slow hosts.
    */
-  private fun awaitBranchSwitch(calls: Collection<BranchRequest>) {
+  private fun awaitBranchSwitch(
+    calls: Collection<BranchRequest>,
+    phase: BranchSwitchPhase = BranchSwitchPhase.Completed,
+  ) {
     val selection =
       object : IdlingResource {
         override val isIdleNow: Boolean
-          get() = calls.lastOrNull { it.method == "sessions.branches.switch" }?.job?.isCompleted == true
+          get() {
+            val request = calls.lastOrNull { it.method == "sessions.branches.switch" } ?: return false
+            return phase == BranchSwitchPhase.Admitted || request.job.isCompleted
+          }
 
         override fun getDiagnosticMessageIfBusy(): String =
           "Branch switch requests=${calls.count { it.method == "sessions.branches.switch" }} " +
@@ -2966,7 +2974,9 @@ class ChatComposerLayoutTest {
     } finally {
       composeRule.unregisterIdlingResource(selection)
     }
-    assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
+    if (phase == BranchSwitchPhase.Completed) {
+      assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
+    }
   }
 
   private fun awaitPostHistoryBranchList(hold: BranchPostHistoryListReplyHold) {
@@ -5307,9 +5317,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun longProgressPlanKeepsEditorAndStopVisibleAndLastStepReachable() {
-    showChat()
+    val viewModel = showChat()
     val steps = List(20) { index -> "Step ${index + 1}: verify the Android chat behavior and document the result." }
-    showProgressCard(steps)
+    showProgressCard(viewModel, steps)
 
     assertComposerControlsVisible()
     if (composeRule.onAllNodesWithContentDescription("Expand progress card").fetchSemanticsNodes().isNotEmpty()) {
@@ -5322,10 +5332,10 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
-    showChat()
-    showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
+    val viewModel = showChat()
+    showProgressCard(viewModel, listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
-    val card = composeRule.onNodeWithTag("chat-progress-card")
+    val card = composeRule.onNodeWithTag("chat-progress-card", useUnmergedTree = true)
     val composer = composeRule.onNodeWithTag("chat-composer-surface")
     val editor = composerEditor()
     val collapsedCard = card.getUnclippedBoundsInRoot()
@@ -5363,8 +5373,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardRendersProgressMarkupAsANativeBar() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5403,8 +5414,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardKeepsWarningAfterDisclosure() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5424,8 +5436,9 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardRendersAdjacentBarsWithoutLeakingMarkup() {
-    showChat()
+    val viewModel = showChat()
     showProgressCard(
+      viewModel = viewModel,
       steps = emptyList(),
       markdown =
         """
@@ -5469,7 +5482,7 @@ class ChatComposerLayoutTest {
           """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
         )
       }
-      showProgressCard(listOf("Keep voice-note progress independent"))
+      showProgressCard(viewModel, listOf("Keep voice-note progress independent"))
       composeRule
         .onNode(
           SemanticsMatcher("voice-note long press") { node ->
@@ -5586,6 +5599,7 @@ class ChatComposerLayoutTest {
   }
 
   private fun showProgressCard(
+    viewModel: MainViewModel,
     steps: List<String>,
     markdown: String? = null,
   ) {
@@ -5641,16 +5655,16 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
       )
     }
-    // The controller publishes from IO, outside Compose's automatic synchronization.
+    // The UI's ViewModel bridge publishes after the controller's IO result.
     val progressCardRefresh =
       object : IdlingResource {
         override val isIdleNow: Boolean
           get() =
-            controller.progressCard.value
-              ?.steps
-              ?.size == steps.size
+            viewModel.chatProgressCard.value?.let { card ->
+              card.revision == 1 && card.markdown == markdown && card.steps.map { it.step } == steps
+            } == true
 
-        override fun getDiagnosticMessageIfBusy(): String = "Progress card steps=${controller.progressCard.value?.steps?.size} expected=${steps.size}"
+        override fun getDiagnosticMessageIfBusy(): String = "Rendered progress card=${viewModel.chatProgressCard.value} expected steps=$steps markdown=$markdown"
       }
     composeRule.registerIdlingResource(progressCardRefresh)
     try {
@@ -5659,11 +5673,11 @@ class ChatComposerLayoutTest {
       composeRule.unregisterIdlingResource(progressCardRefresh)
     }
     assertEquals(
-      "The progress card must publish all fixture steps",
-      steps.size,
-      controller.progressCard.value
+      "The rendered progress card must publish all fixture steps",
+      steps,
+      viewModel.chatProgressCard.value
         ?.steps
-        ?.size,
+        ?.map { it.step },
     )
   }
 

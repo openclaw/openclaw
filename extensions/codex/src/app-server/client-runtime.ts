@@ -140,10 +140,8 @@ export function ensureCodexAppServerClientRuntime(
     // Pending releases may settle after close; their continuations must never
     // resurrect subscriptions or eviction timers on a dead physical client.
     runtime.closed = true;
-    if (runtime.evictionTimer) {
-      clearTimeout(runtime.evictionTimer);
-      runtime.evictionTimer = undefined;
-    }
+    clearTimeout(runtime.evictionTimer);
+    runtime.evictionTimer = undefined;
     for (const threadId of new Set([
       ...runtime.retainedThreads.keys(),
       ...runtime.claimedThreads.keys(),
@@ -241,10 +239,8 @@ function scheduleRetainedThreadEviction(
   client: CodexAppServerClient,
   runtime: ClientRuntime,
 ): void {
-  if (runtime.evictionTimer) {
-    clearTimeout(runtime.evictionTimer);
-    runtime.evictionTimer = undefined;
-  }
+  clearTimeout(runtime.evictionTimer);
+  runtime.evictionTimer = undefined;
   if (runtime.closed) {
     return;
   }

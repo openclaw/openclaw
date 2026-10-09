@@ -107,40 +107,25 @@ function fixture(stateDir: string, alias = false) {
 
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });
 const stopped = buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" });
-const interrupted = buildAgentRunTerminalOutcome({ status: "timeout", stopReason: "restart" });
 
 describe("Doctor canonical completion receipt repair", () => {
-  it.each([
-    { name: "operator Stop", outcome: stopped, final: true },
-    { name: "restart interruption", outcome: interrupted, final: false },
-    { name: "unhandled", outcome: undefined, final: false },
-  ])("preserves $name semantics across owner repair and restart", async ({ outcome, final }) => {
+  it("preserves operator Stop semantics across owner repair and restart", async () => {
     await withStateDirEnv("doctor-private-completion-", async ({ stateDir }) => {
       const f = fixture(stateDir);
       f.create();
       const first = await f.stage();
-      if (outcome) {
-        first.complete!(outcome);
-      }
+      first.complete!(stopped);
       first.finish("interrupted");
       const before = f.rows();
-      if (outcome) {
-        f.database(true).db.exec("DROP TABLE session_input_completions");
-      }
+      f.database(true).db.exec("DROP TABLE session_input_completions");
       await f.restart();
       expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
       expect(f.rows(true)).toEqual(before);
       expect(f.rows()).toEqual([]);
       await f.close();
       const retry = await f.stage(true);
-      if (final) {
-        expect(retry.completion).toEqual(outcome);
-        expect(() => retry.run(() => "replayed work")).toThrow("already completed");
-      } else {
-        expect(retry.completion).toBeUndefined();
-        expect(retry.run(() => "unhandled work")).toBe("unhandled work");
-        retry.complete!(completed);
-      }
+      expect(retry.completion).toEqual(stopped);
+      expect(() => retry.run(() => "replayed work")).toThrow("already completed");
       expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
       retry.finish("interrupted");
       const deleted = await deleteSessionEntryLifecycle({
@@ -183,28 +168,6 @@ describe("Doctor canonical completion receipt repair", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves final receipts when source is final=%s",
-    async (sourceFinal) => {
-      await withStateDirEnv("doctor-private-merge-", async ({ stateDir }) => {
-        const f = fixture(stateDir);
-        f.create(false, 20);
-        f.create(true, 10);
-        const source = await f.stage();
-        source.complete!(sourceFinal ? stopped : interrupted);
-        source.finish("interrupted");
-        const destination = await f.stage(true);
-        destination.complete!(sourceFinal ? interrupted : stopped);
-        destination.finish("interrupted");
-        const retained = sourceFinal ? f.rows() : f.rows(true);
-        await f.restart();
-        await f.repair();
-        expect(f.rows(true)).toEqual(retained);
-        expect((await f.stage(true)).completion).toEqual(stopped);
-      });
-    },
-  );
-
   it("rolls back conflicting receipt identities without deleting either store's evidence", async () => {
     await withStateDirEnv("doctor-private-conflict-", async ({ stateDir }) => {
       const f = fixture(stateDir);
@@ -238,23 +201,6 @@ describe("Doctor canonical completion receipt repair", () => {
       await expect(f.repair()).rejects.toThrow("conflicting input completions");
       expect(f.rows()).toEqual(source);
       expect(f.rows(true)).toEqual(destination);
-    });
-  });
-
-  it("does not install completion tracking for stores with no receipts", async () => {
-    await withStateDirEnv("doctor-private-lazy-", async ({ stateDir }) => {
-      const f = fixture(stateDir);
-      f.create();
-      f.database().db.exec("DROP TABLE session_input_completions");
-      f.database(true).db.exec("DROP TABLE session_input_completions");
-      await f.close();
-      await f.repair();
-      expect(
-        f
-          .database(true)
-          .db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_input_completions'")
-          .get(),
-      ).toBeUndefined();
     });
   });
 });

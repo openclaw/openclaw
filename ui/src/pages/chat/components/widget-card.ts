@@ -410,16 +410,14 @@ function handleWidgetExportAction(
   title: string | undefined,
 ) {
   const value = event.detail.item.value;
+  const dropdown = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   if (value === "raw-details") {
-    const dropdown = event.currentTarget;
-    const host =
-      dropdown instanceof HTMLElement ? dropdown.closest(".chat-tool-card__widget-host") : null;
+    const host = dropdown?.closest(".chat-tool-card__widget-host");
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
     toggle?.click();
-    const label =
-      dropdown instanceof HTMLElement ? dropdown.querySelector("[data-raw-label]") : null;
+    const label = dropdown?.querySelector("[data-raw-label]");
     label?.replaceChildren(
       t(
         toggle && toggle.getAttribute("aria-expanded") === "true"
@@ -432,13 +430,9 @@ function handleWidgetExportAction(
   if (value !== "copy" && value !== "download") {
     return;
   }
-  const dropdown = event.currentTarget;
-  const frame =
-    dropdown instanceof HTMLElement
-      ? dropdown
-          .closest(".chat-tool-card__preview")
-          ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame")
-      : null;
+  const frame = dropdown
+    ?.closest(".chat-tool-card__preview")
+    ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
   if (!frame) {
     showToast({ message: t("chat.toolCards.widgetExportFailed") });
     return;
@@ -492,6 +486,19 @@ function widgetActionsPlacementRef() {
   };
 }
 
+function renderWidgetAction(value: "copy" | "download" | "raw-details") {
+  const { icon, labelKey } = {
+    copy: { icon: icons.copyImage, labelKey: "chat.toolCards.copyAsImage" },
+    download: { icon: icons.download, labelKey: "chat.toolCards.downloadAsImage" },
+    "raw-details": { icon: icons.fileText, labelKey: "chat.toolCards.showRawDetails" },
+  }[value];
+  const label = t(labelKey);
+  return html`<wa-dropdown-item class="session-menu__item" value=${value}>
+    <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+    <span class="session-menu__text" ?data-raw-label=${value === "raw-details"}>${label}</span>
+  </wa-dropdown-item>`;
+}
+
 function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
   if (!canExportImage && !hasRawDetails) {
@@ -514,35 +521,8 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
       >
         ${icons.moreHorizontal}
       </button>
-      ${
-        canExportImage
-          ? (
-              [
-                ["copy", icons.copyImage, "chat.toolCards.copyAsImage"],
-                ["download", icons.download, "chat.toolCards.downloadAsImage"],
-              ] as const
-            ).map(
-              ([value, icon, label]) => html`
-                <wa-dropdown-item class="session-menu__item" value=${value}>
-                  <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-                  <span class="session-menu__text">${t(label)}</span>
-                </wa-dropdown-item>
-              `,
-            )
-          : nothing
-      }
-      ${
-        hasRawDetails
-          ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                >${icons.fileText}</span
-              >
-              <span class="session-menu__text" data-raw-label
-                >${t("chat.toolCards.showRawDetails")}</span
-              >
-            </wa-dropdown-item>`
-          : nothing
-      }
+      ${canExportImage ? (["copy", "download"] as const).map(renderWidgetAction) : nothing}
+      ${hasRawDetails ? renderWidgetAction("raw-details") : nothing}
     </wa-dropdown>
   `;
 }
