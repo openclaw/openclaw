@@ -1564,7 +1564,6 @@
 ["extensions/sms/src/send.test.ts","./credential-availability.js","7d6a5d1bbf68e76d3fe4f05ae69b1a5fa06ec0cca6397d216822d43e0704fd33",1]
 ["extensions/sms/src/webhook.boundary.test.ts","./ingress-spool.js","7e7460e4714bbb0662cd946689fc2f40625e612bf7fd37872156580dd407f63d",1]
 ["extensions/sms/src/webhook.test.ts","./credential-availability.js","7d6a5d1bbf68e76d3fe4f05ae69b1a5fa06ec0cca6397d216822d43e0704fd33",1]
-["extensions/sms/src/webhook.wire.test.ts","./credential-availability.js","7d6a5d1bbf68e76d3fe4f05ae69b1a5fa06ec0cca6397d216822d43e0704fd33",1]
 ["extensions/synology-chat/src/channel.test-mocks.ts","./client.js","c737ba3e99731bc0ac8c3564adca220e7bfc8513cc5ffdd749166f074cec3843",1]
 ["extensions/synology-chat/src/channel.test-mocks.ts","./runtime.js","89b914e9fd202727c9c0af1e82616d30ee2cde436ffd2d6fad3970bb40a0d0c4",1]
 ["extensions/synology-chat/src/channel.test.ts","./outbound-media.js","840426ca019c6efbe23fa188e863ab30b65fd8017a2f64c852a6dcfde8dcdc05",1]
