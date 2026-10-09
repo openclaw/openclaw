@@ -2,11 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveAgentMainSessionKey,
-  resolveExplicitAgentSessionKey,
-} from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   loadVoiceWakeRoutingConfig,
@@ -14,7 +10,7 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { classifySessionKeyShape, isAcpSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
@@ -43,6 +39,7 @@ import {
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { resolveVoiceWakeSessionTarget } from "../voicewake-session-target.js";
 import { formatForLog } from "../ws-log.js";
 import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
 import type { AgentTurnContext } from "./types.js";
@@ -184,35 +181,16 @@ export async function prepareAgentContentPhase(params: {
         trigger: voiceWakeTrigger || undefined,
         config: await loadVoiceWakeRoutingConfig(),
       });
-      if ("agentId" in route) {
-        if (params.knownAgents.includes(route.agentId)) {
-          agentId = route.agentId;
-          requestedSessionKey = resolveExplicitAgentSessionKey({ cfg: params.cfg, agentId });
-        } else {
-          params.context.logGateway.warn(
-            `voicewake routing ignored unknown agentId="${route.agentId}" trigger="${voiceWakeTrigger}"`,
-          );
-        }
-      } else if ("sessionKey" in route) {
-        if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
-          const canonicalKey = loadSessionEntry(route.sessionKey, {
-            clone: false,
-            projection: "list",
-          }).canonicalKey;
-          const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
-          if (params.knownAgents.includes(routedAgentId)) {
-            requestedSessionKey = canonicalKey;
-            agentId = routedAgentId;
-          } else {
-            params.context.logGateway.warn(
-              `voicewake routing ignored unknown session agent="${routedAgentId}" sessionKey="${canonicalKey}" trigger="${voiceWakeTrigger}"`,
-            );
-          }
-        } else {
-          params.context.logGateway.warn(
-            `voicewake routing ignored malformed sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
-          );
-        }
+      const target = resolveVoiceWakeSessionTarget({
+        route,
+        cfg: params.cfg,
+        knownAgents: params.knownAgents,
+        trigger: voiceWakeTrigger,
+        warn: (message) => params.context.logGateway.warn(message),
+      });
+      if (target) {
+        agentId = target.agentId;
+        requestedSessionKey = target.sessionKey;
       }
     } catch (err) {
       params.context.logGateway.warn(`voicewake routing load failed: ${formatForLog(err)}`);

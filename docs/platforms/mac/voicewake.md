@@ -60,10 +60,11 @@ voice settings. Microphone and speech permissions are under
 - Trigger words are Gateway settings on the **Talk** page and remain editable in a regular browser. The Mac's wake runtime uses the Primary Gateway's trigger words; opening another Gateway window does not retarget that runtime.
 - If a selected microphone disconnects, the voice runtime temporarily uses the system default and retains the selection for when it returns.
 - Trigger and send chime toggles turn each sound on or off. The page also controls whether wake starts Talk Mode, push-to-talk, Talk phase sounds, Shift-to-stop, and realtime relay.
+- When wake starts Talk Mode, it resolves the matched trigger's Gateway routing rule before listening and keeps that session for the Talk conversation, including follow-ups. A `current` rule keeps the usual active-chat/main-session selection. If the route cannot be resolved, Talk does not start in a different session.
 
 ## Forwarding behavior
 
-- On forward, `VoiceWakeForwarder.selectedSessionOptions` picks the active WebChat session key if one is set, otherwise the gateway's main session key.
+- For one-shot forwarding, `VoiceWakeForwarder.forwardToSelectedSession` starts with the active WebChat session key if one is set, otherwise the gateway's main session key. The Gateway applies any matched trigger routing rule to the agent turn.
 - It looks up that session via `sessions.list` and derives the delivery channel and target from the session's delivery context (falling back to its last channel/target, then to a parsed session key), defaulting to WebChat if nothing resolves.
 - If delivery fails, the error is logged (`voicewake.forward` category) and the run is still visible via WebChat/session logs.
 

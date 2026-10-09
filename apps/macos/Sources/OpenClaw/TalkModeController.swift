@@ -50,7 +50,7 @@ final class TalkModeController {
         self?.updateSpeakingLevel(level)
     }
 
-    func setEnabled(_ enabled: Bool) async {
+    func setEnabled(_ enabled: Bool, sessionKeyOverride: String? = nil) async {
         guard !enabled || self.state() != nil else { return }
         let owners = self.owners
         let transitionID = UUID()
@@ -87,7 +87,7 @@ final class TalkModeController {
         guard self.transitionID == transitionID else { return }
         await shutdown?.value
         if enabled, self.transitionID == transitionID {
-            await owners.runtime.setEnabled(true)
+            await owners.runtime.setEnabled(true, sessionKeyOverride: sessionKeyOverride)
         }
 
         guard self.transitionID == transitionID else { return }

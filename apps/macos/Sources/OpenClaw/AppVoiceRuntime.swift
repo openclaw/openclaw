@@ -20,6 +20,7 @@ final class AppVoiceRuntime {
     typealias Forward = @Sendable (String, String?) async -> Result<Void, VoiceWakeForwarder.VoiceWakeForwardError>
     typealias PublishTalk = @Sendable (Bool, String) async -> Void
     typealias Bootstrap = @Sendable () async throws -> GatewayConnection.RealtimeTalkBootstrap
+    typealias ResolveWakeSession = @Sendable (String) async throws -> String?
 
     struct Environment: Sendable {
         let appStatePermissions: VoicePermissions
@@ -35,6 +36,7 @@ final class AppVoiceRuntime {
         let stopSystem: @Sendable () async -> Void
         let stopMLX: @Sendable () async -> Void
         let talkBootstrap: Bootstrap
+        let resolveWakeSession: ResolveWakeSession
         let publishTalk: PublishTalk
         let forward: Forward
         let wakePresentation: VoiceWakeOverlayController.Presentation
@@ -57,6 +59,7 @@ final class AppVoiceRuntime {
             stopSystem: { await TalkSystemSpeechSynthesizer.shared.stop() },
             stopMLX: { await TalkMLXSpeechSynthesizer.shared.cancelCurrent() },
             talkBootstrap: AppVoiceRuntime.liveBootstrap,
+            resolveWakeSession: { try await GatewayConnection.shared.resolveVoiceWakeTalkSession(trigger: $0) },
             publishTalk: AppVoiceRuntime.livePublishTalk,
             forward: {
                 await VoiceWakeForwarder.forwardToSelectedSession(transcript: $0, voiceWakeTrigger: $1)
@@ -113,7 +116,8 @@ final class AppVoiceRuntime {
             sessions: sessions,
             overlay: overlay,
             permissions: environment.wakePermissions,
-            forward: environment.forward)
+            forward: environment.forward,
+            resolveWakeSession: environment.resolveWakeSession)
         let ptt = VoicePushToTalk(
             state: stateProvider, wake: wake, sessions: sessions, permissions: environment.pttPermissions)
         let hotkey = VoicePushToTalkHotkey(

@@ -196,6 +196,8 @@ actor GatewayConnection: Observable {
         case skillsStatus = "skills.status"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
+        case voicewakeRoutingGet = "voicewake.routing.get"
+        case voicewakeRoutingResolve = "voicewake.routing.resolve"
         case nodePairApprove = "node.pair.approve"
         case nodePairReject = "node.pair.reject"
         case devicePairList = "device.pair.list"

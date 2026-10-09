@@ -722,4 +722,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.workshop.changes", "skills", "operator.read", "2026.9"],
   ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
   ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
+  ["voicewake.routing.resolve", "voicewake-routing", "operator.read", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

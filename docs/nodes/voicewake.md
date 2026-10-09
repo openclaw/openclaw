@@ -30,9 +30,10 @@ Wake words and routing rules live in the Gateway state database, `~/.openclaw/st
 
 ### Routing (trigger to target)
 
-| Method                  | Params | Result                               |
-| ----------------------- | ------ | ------------------------------------ |
-| `voicewake.routing.get` | none   | `{ config: VoiceWakeRoutingConfig }` |
+| Method                      | Params                | Result                               |
+| --------------------------- | --------------------- | ------------------------------------ |
+| `voicewake.routing.get`     | none                  | `{ config: VoiceWakeRoutingConfig }` |
+| `voicewake.routing.resolve` | `{ trigger: string }` | `{ sessionKey: string \| null }`     |
 
 ```json
 {
@@ -49,6 +50,8 @@ Each route `target` supports exactly one of:
 - `{ "agentId": "main" }`
 - `{ "sessionKey": "agent:main:main" }`
 
+`voicewake.routing.resolve` applies the same Gateway-owned trigger matching and session validation used by one-shot Voice Wake forwarding. It returns `null` for a `current` target; an explicit route whose agent is unavailable fails rather than silently selecting another session.
+
 Limits: at most 32 routes, trigger text at most 64 characters. Route triggers are normalized for matching and duplicate detection by lowercasing, stripping leading/trailing punctuation from each word, and collapsing whitespace (`"Hey, Bot!!"` and `"hey bot"` match and count as duplicates) — this is a stricter normalization than the plain trim used for the global trigger list above.
 
 ### Events
@@ -62,7 +65,7 @@ Both broadcast to every WebSocket client with read scope (macOS app, WebChat, an
 
 ## Client behavior
 
-- **macOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to stay in sync with other clients.
+- **macOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to stay in sync with other clients. When a wake phrase starts Talk Mode, it calls `voicewake.routing.resolve` and binds that Talk conversation to the returned session.
 - **iOS**: calls `voicewake.set`/`voicewake.get` and listens for `voicewake.changed` to keep local wake-word detection responsive.
 - **Android**: calls `voicewake.set`/`voicewake.get`, listens for `voicewake.changed`, and advertises `voiceWake` while enabled. Recognition stays on-device and foreground-only; it pauses while Talk, manual dictation, voice-note capture, or message speech owns audio.
 

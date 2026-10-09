@@ -14,19 +14,22 @@ actor VoiceWakeRuntime {
     private let overlay: VoiceWakeOverlayController
     private let permissions: VoicePermissions
     private let forward: AppVoiceRuntime.Forward
+    private let resolveWakeSession: AppVoiceRuntime.ResolveWakeSession
 
     init(
         state: @escaping AppVoiceRuntime.State,
         sessions: VoiceSessionCoordinator,
         overlay: VoiceWakeOverlayController,
         permissions: VoicePermissions,
-        forward: @escaping AppVoiceRuntime.Forward)
+        forward: @escaping AppVoiceRuntime.Forward,
+        resolveWakeSession: @escaping AppVoiceRuntime.ResolveWakeSession)
     {
         self.state = state
         self.sessions = sessions
         self.overlay = overlay
         self.permissions = permissions
         self.forward = forward
+        self.resolveWakeSession = resolveWakeSession
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
@@ -669,15 +672,7 @@ actor VoiceWakeRuntime {
         // Pause the wake listener to avoid two audio pipelines competing on the mic
         // (mirrors the push-to-talk coordination pattern).
         if config.triggersTalkMode {
-            self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
-            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
-            let lease = UUID()
-            self.pauseForPushToTalk(lease: lease)
-            if config.triggerChime != .none {
-                await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
-            }
-            await self.state()?.setTalkEnabled(true)
-            await self.resumeAfterPushToTalk(lease: lease)
+            await self.startTalkMode(triggerWord: triggerWord, triggerChime: config.triggerChime)
             return
         }
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
@@ -717,6 +712,26 @@ actor VoiceWakeRuntime {
         self.captureTask = Task { [weak self] in
             await self?.monitorCapture(config: config)
         }
+    }
+
+    func startTalkMode(triggerWord: String?, triggerChime: VoiceWakeChime) async {
+        self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
+        let lease = UUID()
+        self.pauseForPushToTalk(lease: lease)
+        let wakeGeneration = self.refreshGeneration
+        if triggerChime != .none {
+            await MainActor.run { VoiceWakeChimePlayer.play(triggerChime, reason: "voicewake.trigger") }
+        }
+        do {
+            let sessionKey = try await self.resolveWakeSession(triggerWord ?? "")
+            if !Task.isCancelled, wakeGeneration == self.refreshGeneration {
+                await self.state()?.setTalkEnabled(true, sessionKeyOverride: sessionKey)
+            }
+        } catch {
+            self.logger.error("voicewake Talk route unavailable: \(error.localizedDescription, privacy: .public)")
+        }
+        await self.resumeAfterPushToTalk(lease: lease)
     }
 
     private func monitorCapture(config: RuntimeConfig) async {

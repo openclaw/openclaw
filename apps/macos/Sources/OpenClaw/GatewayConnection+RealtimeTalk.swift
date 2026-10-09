@@ -29,6 +29,47 @@ private actor RealtimeTalkEventIterator {
 extension GatewayConnection {
     // MARK: - VoiceWake
 
+    private struct VoiceWakeTalkRoute: Decodable {
+        let sessionKey: String?
+    }
+
+    private struct VoiceWakeRoutingSnapshot: Decodable {
+        struct Target: Decodable { let mode: String? }
+        struct Route: Decodable { let target: Target }
+        struct Config: Decodable {
+            let defaultTarget: Target
+            let routes: [Route]
+        }
+
+        let config: Config
+
+        var isCurrentOnly: Bool {
+            self.config.defaultTarget.mode == "current" && self.config.routes.allSatisfy { $0.target.mode == "current" }
+        }
+    }
+
+    func resolveVoiceWakeTalkSession(trigger: String) async throws -> String? {
+        do {
+            let data = try await self.request(
+                method: Method.voicewakeRoutingResolve.rawValue,
+                params: ["trigger": AnyCodable(trigger)],
+                timeoutMs: 8000)
+            return try JSONDecoder().decode(VoiceWakeTalkRoute.self, from: data).sessionKey
+        } catch {
+            // Older Gateways cannot resolve routes. Preserve the old current-session
+            // behavior only when their routing config has no explicit target.
+            let routeError = error
+            guard let data = try? await self.request(
+                method: Method.voicewakeRoutingGet.rawValue,
+                params: nil,
+                timeoutMs: 8000),
+                let snapshot = try? JSONDecoder().decode(VoiceWakeRoutingSnapshot.self, from: data),
+                snapshot.isCurrentOnly
+            else { throw routeError }
+            return nil
+        }
+    }
+
     func voiceWakeSetTriggers(_ triggers: [String]) async {
         try? await self.requestVoid(
             method: .voicewakeSet,

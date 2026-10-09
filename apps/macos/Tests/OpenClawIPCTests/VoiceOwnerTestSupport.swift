@@ -161,7 +161,10 @@ final class VoiceOwnerFixture {
         self.shutdown = VoiceOwnerGate("shutdown.buffered", value: (), log: log)
     }
 
-    func environment(appPermissionGranted: Bool = true) -> AppVoiceRuntime.Environment {
+    func environment(
+        appPermissionGranted: Bool = true,
+        resolveWakeSession: @escaping AppVoiceRuntime.ResolveWakeSession = { _ in nil }) -> AppVoiceRuntime.Environment
+    {
         let log = self.log
         return .init(
             appStatePermissions: .init(
@@ -199,6 +202,7 @@ final class VoiceOwnerFixture {
             talkBootstrap: { [self] in await self.bootstrap.request()
                 return try await self.makeBootstrap()
             },
+            resolveWakeSession: resolveWakeSession,
             publishTalk: { log.record("publish:\($0):\($1)") },
             forward: { text, _ in log.record("forward:\(text)")
                 return .success(())
@@ -233,6 +237,9 @@ final class VoiceOwnerFixture {
             subscribeServerEvents: { _ in events.stream },
             request: { method, params, _ in
                 if method == "talk.session.create" {
+                    if let sessionKey = params?["sessionKey"]?.stringValue {
+                        log.record("relay.session:\(sessionKey)")
+                    }
                     let id = "relay-\(log.record("relay.create"))"
                     log.record("relay.created:\(id)")
                     await create.request()
@@ -326,6 +333,7 @@ final class VoiceOwnerFixture {
 func withVoiceOwnerFixture(
     activate: Bool = true,
     appPermissionGranted: Bool = true,
+    resolveWakeSession: @escaping AppVoiceRuntime.ResolveWakeSession = { _ in nil },
     _ body: (VoiceOwnerFixture, AppState, StatusMenuController) async throws -> Void) async throws
 {
     try await TestIsolation.withIsolatedState(
@@ -334,7 +342,8 @@ func withVoiceOwnerFixture(
     {
         let fixture = VoiceOwnerFixture()
         let state = AppState(preview: true, voiceEnvironment: fixture.environment(
-            appPermissionGranted: appPermissionGranted))
+            appPermissionGranted: appPermissionGranted,
+            resolveWakeSession: resolveWakeSession))
         state.voiceWakeLocaleID = "en-US"
         state.voiceWakeTriggerChime = .none
         state.voiceWakeSendChime = .none

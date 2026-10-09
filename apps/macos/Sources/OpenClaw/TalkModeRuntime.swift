@@ -71,6 +71,7 @@ actor TalkModeRuntime {
     private var silenceTask: Task<Void, Never>?
     var phase: TalkModePhase = .idle
     var isEnabled = false
+    var sessionKeyOverride: String?
     var isPaused = false
     var lifecycleGeneration: Int = 0
 
@@ -130,8 +131,9 @@ actor TalkModeRuntime {
 
     // MARK: - Lifecycle
 
-    func setEnabled(_ enabled: Bool) async {
+    func setEnabled(_ enabled: Bool, sessionKeyOverride: String? = nil) async {
         guard enabled != self.isEnabled else { return }
+        self.sessionKeyOverride = enabled ? sessionKeyOverride : nil
         self.isEnabled = enabled
         self.lifecycleGeneration &+= 1
         resetRealtimeRecoveryState()
@@ -236,6 +238,13 @@ actor TalkModeRuntime {
 
     func isCurrent(_ generation: Int) -> Bool {
         generation == self.lifecycleGeneration && self.isEnabled
+    }
+
+    func selectedSessionKey() async -> String? {
+        if let sessionKeyOverride = self.sessionKeyOverride {
+            return sessionKeyOverride
+        }
+        return await self.dependencies.selectedSession()
     }
 
     func detachResourcesForRealtimeStop() -> RealtimeTalkRelaySession? {
@@ -564,7 +573,7 @@ extension TalkModeRuntime {
         await reloadConfig()
         guard self.isCurrent(gen) else { return }
         let prompt = self.buildPrompt(transcript: transcript)
-        let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
+        let activeSessionKey = await self.selectedSessionKey()
         let sessionKey: String = if let activeSessionKey {
             activeSessionKey
         } else {

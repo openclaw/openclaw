@@ -353,7 +353,7 @@ extension TalkModeRuntime {
         guard isCurrent(lifecycleGeneration), !isPaused,
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
-        let activeSessionKey = await self.dependencies.selectedSession()
+        let activeSessionKey = await self.selectedSessionKey()
         let realtime = self.config?.snapshot.realtime
         let options = RealtimeTalkRelaySession.Options(
             sessionKey: activeSessionKey ?? bootstrap.sessionKey,

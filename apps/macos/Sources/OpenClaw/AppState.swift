@@ -91,6 +91,7 @@ final class AppState {
     private var suppressVoiceWakeGlobalSync = false
     @ObservationIgnored private var voiceWakeEnableGeneration: UInt64 = 0
     @ObservationIgnored private var talkEnableGeneration: UInt64 = 0
+    @ObservationIgnored private var talkSessionKeyOverride: String?
     @ObservationIgnored private var talkTransitionTask: Task<Void, Never>?
     @ObservationIgnored private var locationModeGeneration: UInt64 = 0
     @ObservationIgnored private let voiceWakeGlobalSyncScheduler = VoiceWakeGlobalSyncScheduler()
@@ -213,6 +214,7 @@ final class AppState {
 
     var talkEnabled: Bool {
         didSet {
+            if !self.talkEnabled { self.talkSessionKeyOverride = nil }
             self.persistPreference(self.talkEnabled, key: talkEnabledKey)
             self.applyTalkEnabled()
         }
@@ -1004,14 +1006,16 @@ extension AppState {
     private func applyTalkEnabled() {
         guard self.voiceRuntime.isActive else { return }
         let enabled = self.talkEnabled
+        let sessionKeyOverride = self.talkSessionKeyOverride
         self.talkTransitionTask = Task { [controller = self.voiceRuntime.talkController] in
-            await controller.setEnabled(enabled)
+            await controller.setEnabled(enabled, sessionKeyOverride: sessionKeyOverride)
         }
     }
 
-    func setTalkEnabled(_ enabled: Bool) async {
+    func setTalkEnabled(_ enabled: Bool, sessionKeyOverride: String? = nil) async {
         self.talkEnableGeneration &+= 1
         let generation = self.talkEnableGeneration
+        self.talkSessionKeyOverride = enabled ? sessionKeyOverride : nil
         self.talkEnabled = enabled && self.voiceEnvironment.appStatePermissions.supported()
         guard self.voiceRuntime.isActive else { return }
         var transition = self.talkTransitionTask

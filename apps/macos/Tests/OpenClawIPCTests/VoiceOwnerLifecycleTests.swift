@@ -10,6 +10,32 @@ struct VoiceOwnerLifecycleTests {
         case bootstrap
     }
 
+    @Test func `wake started Talk keeps its routed session and manual Talk returns to selection`() async throws {
+        try await withVoiceOwnerFixture(resolveWakeSession: { trigger in
+            guard trigger == "robot wake" else { throw VoiceOwnerTimeout(operation: "wrong wake trigger") }
+            return "agent:main:home-voice"
+        }) { fixture, state, _ in
+            await state.voiceRuntime.wake.startTalkMode(triggerWord: "robot wake", triggerChime: .none)
+            #expect(fixture.log.count("relay.session:agent:main:home-voice") == 1)
+            #expect(await state.voiceRuntime.talkRuntime.selectedSessionKey() == "agent:main:home-voice")
+
+            await state.setTalkEnabled(false)
+            #expect(await state.voiceRuntime.talkRuntime.selectedSessionKey() == nil)
+            await state.setTalkEnabled(true)
+            #expect(fixture.log.count("relay.session:main") == 1)
+        }
+    }
+
+    @Test func `failed wake route never opens Talk in the selected session`() async throws {
+        try await withVoiceOwnerFixture(resolveWakeSession: { _ in
+            throw VoiceOwnerTimeout(operation: "wake route unavailable")
+        }) { fixture, state, _ in
+            await state.voiceRuntime.wake.startTalkMode(triggerWord: "robot wake", triggerChime: .none)
+            #expect(!state.talkEnabled)
+            #expect(fixture.log.count("relay.create") == 0)
+        }
+    }
+
     @Test func `preview graph construction does not activate voice`() async throws {
         try await withVoiceOwnerFixture(activate: false) { fixture, state, _ in
             #expect(state.isPreview)
