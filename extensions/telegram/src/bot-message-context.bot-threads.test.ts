@@ -133,7 +133,7 @@ describe("Telegram bot-created topic mention policy", () => {
     },
   );
 
-  it("requires mentions for text and media replies while preserving authorized text commands", async () => {
+  it("requires mentions for text and media replies while preserving addressed text commands", async () => {
     const cfg = config({ requireMention: false, requireMentionInBotThreads: true });
     const bot = await createBot(false, true, cfg);
     await receive(bot, {
@@ -168,12 +168,18 @@ describe("Telegram bot-created topic mention policy", () => {
       ...topicMessage("/status"),
       entities: [{ type: "bot_command", offset: 0, length: 7 }],
     });
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    const addressedCommand = "/status@openclaw_bot";
+    await receive(bot, {
+      ...topicMessage(addressedCommand),
+      entities: [{ type: "bot_command", offset: 0, length: addressedCommand.length }],
+    });
     expect(harness.replySpy.mock.calls[1]?.[0]).toMatchObject({
       CommandBody: "/status",
       CommandSource: "text",
       CommandAuthorized: true,
       CommandTurn: { kind: "text-slash", source: "text", body: "/status", authorized: true },
-      ExplicitlyMentionedBot: false,
+      ExplicitlyMentionedBot: true,
       GroupRequireMention: true,
       MessageThreadId: 99,
     });

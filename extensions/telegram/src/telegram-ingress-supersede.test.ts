@@ -289,6 +289,50 @@ describe("telegram ingress supersede policy", () => {
     expect(unauthorized).toBe(false);
   });
 
+  it("does not supersede on an untargeted command in a mention-only group", async () => {
+    const groupAuth = {
+      cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "open" as const,
+            groupAllowFrom: [OWNER_ID],
+            groups: { "-1001": { requireMention: true } },
+          },
+        },
+      },
+      accountId: "default",
+      botUsername: "mybot",
+      botId: 1234,
+    };
+    const shouldSupersedeGroup = createShouldSupersedeTelegramSpooledPending(groupAuth);
+    const pending = claim(
+      "1",
+      messageUpdate({
+        updateId: 1,
+        text: "prior",
+        senderId: OWNER_ID,
+        chatId: -1001,
+        chatType: "supergroup",
+      }),
+    );
+    const candidate = (text: string) =>
+      record(
+        "2",
+        messageUpdate({
+          updateId: 2,
+          text,
+          senderId: OWNER_ID,
+          chatId: -1001,
+          chatType: "supergroup",
+          ...(text.includes("@mybot")
+            ? { entities: [{ type: "bot_command", offset: 0, length: text.length }] }
+            : {}),
+        }),
+      );
+    expect(await shouldSupersedeGroup(candidate("/stop"), pending)).toBe(false);
+    expect(await shouldSupersedeGroup(candidate("/stop@mybot"), pending)).toBe(true);
+  });
+
   it.each([
     { senderId: OWNER_ID, messageSenderId: STRANGER_ID, expected: true },
     { senderId: STRANGER_ID, messageSenderId: OWNER_ID, expected: false },
@@ -454,6 +498,7 @@ describe("telegram ingress supersede policy", () => {
             groups: {
               "-1001": {
                 allowFrom: ["*"],
+                requireMention: false,
                 topics: {
                   "10": {
                     allowFrom: [OWNER_ID],

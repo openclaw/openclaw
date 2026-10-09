@@ -114,7 +114,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Test from the group with `@<bot_username> ping`. Plain group messages do not trigger the bot while `requireMention: true`.
+    Test from the group with `@<bot_username> ping`. Plain group messages and bare slash commands do not trigger the bot while `requireMention: true`. Address commands as `/status@<bot_username>` or mention the bot in the same message. Direct messages continue to accept bare commands without a mention; groups with `requireMention: false` do too. A group's `/activation mention` and `/activation always` setting also applies to commands.
 
     Allow any member in one specific group:
 
@@ -198,7 +198,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    This option applies only when OpenClaw knows that the receiving bot created the forum topic. A topic's `requireMentionInBotThreads` overrides the selected group setting. Set it to `true` to require a mention in those topics, even when ordinary `requireMention` is `false` or the message replies to the bot. Native and authorized control commands keep their existing behavior. Omit the option to preserve the existing mention policy.
+    This option applies only when OpenClaw knows that the receiving bot created the forum topic. A topic's `requireMentionInBotThreads` overrides the selected group setting. Set it to `true` to require a mention in those topics, even when ordinary `requireMention` is `false` or the message replies to the bot. Native and authorized control commands follow the effective mention policy. Omit the option to preserve the selected group mention policy.
 
     Telegram must deliver ordinary group messages for `false` to work: disable privacy mode or make the bot a group admin. See [Privacy mode and group visibility](/channels/telegram/setup#privacy-mode-and-group-visibility). Group and sender authorization, group silence policy, and visible-reply policy still apply. See [Bot-created forum topics](/channels/telegram/threads-and-sessions#bot-created-forum-topics) for ownership tracking and its limits.
 

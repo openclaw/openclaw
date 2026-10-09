@@ -344,7 +344,7 @@ describe("registered native command routing through the message pipeline", () =>
     },
   );
 
-  it("treats an authorized native command as a mention even with unsupported arguments", async () => {
+  it("requires group native commands to address the bot when mentions are required", async () => {
     const bot = await createBot(true, true, {
       commands: { native: true },
       channels: {
@@ -359,11 +359,37 @@ describe("registered native command routing through the message pipeline", () =>
       update_id: 1001,
       message: { ...commandMessage("/stop later"), chat: groupChat },
     });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await bot.handleUpdate({
+      update_id: 1002,
+      message: { ...commandMessage("/stop@openclaw_bot later"), chat: groupChat },
+    });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
       CommandSource: "native",
       CommandBody: "/stop later",
       WasMentioned: true,
     });
+  });
+
+  it("keeps bare native commands in always-active groups and DMs", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groupAllowFrom: [String(from.id)],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: { ...commandMessage("/status"), chat: groupChat },
+    });
+    await bot.handleUpdate({ update_id: 1002, message: commandMessage("/status") });
+    expect(harness.replySpy).toHaveBeenCalledTimes(2);
   });
 
   it("does not dispatch the same update twice", async () => {

@@ -288,7 +288,7 @@ export function createTelegramInboundMedia({
       policy: {
         isGroup,
         requireMention: true,
-        allowTextCommands: true,
+        allowTextCommands: false,
         hasControlCommand: hasControlCommandInMessage,
         commandAuthorized: commandGate.authorized,
       },

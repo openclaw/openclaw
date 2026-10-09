@@ -292,7 +292,7 @@ export async function resolveTelegramInboundBody(params: {
     });
   const wasMentioned =
     options?.forceWasMentioned === true ||
-    (commandSource === "native" && commandAuthorized) ||
+    (commandSource === "native" && commandAuthorized && (!isGroup || !requireMention)) ||
     computedWasMentioned;
 
   if (
@@ -332,7 +332,7 @@ export async function resolveTelegramInboundBody(params: {
     policy: {
       isGroup,
       requireMention: Boolean(requireMention),
-      allowTextCommands: true,
+      allowTextCommands: !isGroup || !requireMention,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
     },
