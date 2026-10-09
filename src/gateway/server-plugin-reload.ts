@@ -23,7 +23,7 @@ import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   getGatewayRestartDrainSignal,
   waitForGatewayRestartFenceSettlement,
@@ -45,6 +45,7 @@ import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
 } from "./server-plugin-reload-recovery.js";
+import { createPluginReloadServices } from "./server-plugin-reload-services.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
@@ -87,7 +88,6 @@ export async function reloadGatewayPlugins(
     baseMethods,
     resolvePluginGatewayContext,
     channelManager,
-    broadcastPluginEvent,
     clients,
     broadcast,
   } = runtime;
@@ -174,6 +174,7 @@ export async function reloadGatewayPlugins(
       throw new GatewayConfigReloadSupersededError();
     }
   };
+  const services = createPluginReloadServices(runtime, stopPreviousServices);
   const checkpoint = async () => {
     // Reconcile this operation's file watcher echoes before checking source ownership.
     await params.checkpoint?.();
@@ -303,8 +304,11 @@ export async function reloadGatewayPlugins(
     const stopOwner = (strict: boolean, label: string, run: () => Promise<void>) =>
       strict ? attempt(stopErrors, run) : cleanup(label, run);
     await channels.stopPrevious(resourceHandoffIds, stopErrors, cleanup);
-    await stopOwner(resourceHandoffIds.size > 0, "Plugin service cleanup failed", () =>
-      stopPreviousServices(previousServices, resourceHandoffIds.size > 0),
+    const strictServiceStop =
+      resourceHandoffIds.size > 0 || memoryReplacement.retainedPluginIds.size > 0;
+    const serviceStopIds = new Set([...changedPluginIds, ...memoryReplacement.retainedPluginIds]);
+    await stopOwner(strictServiceStop, "Plugin service cleanup failed", () =>
+      stopPreviousServices(previousServices, strictServiceStop, serviceStopIds),
     );
     // Finish admitted work before legacy stop hooks can close shared connections.
     // Removal has no replacement to protect and keeps its bounded, deferred cleanup.
@@ -350,20 +354,13 @@ export async function reloadGatewayPlugins(
     );
     await channels.stopAdditional(nextRegistry, changedPluginIds);
     await checkpoint();
-    const startedServices = await withPluginRegistryPreparationScope(nextRegistry, () =>
-      startPluginServices({
-        scheduler: runtime.scheduler,
-        registry: nextRegistry,
-        config: params.nextConfig,
-        workspaceDir: pluginWorkspaceDir,
-        broadcastPluginEvent,
-        getCronService: kernel.getCronService,
-        previous: previousServices,
-        onHandle: (handle) => {
-          candidateServices = handle;
-        },
-        throwOnStartError: true,
-      }),
+    const startedServices = await services.start(
+      nextRegistry,
+      params.nextConfig,
+      (handle) => {
+        candidateServices = handle;
+      },
+      memoryReplacement.retainedPluginIds,
     );
     await checkpoint();
     // Publication owns every independent activation tail, even when an earlier one fails.
@@ -426,7 +423,9 @@ export async function reloadGatewayPlugins(
       await Promise.allSettled(activationCleanup);
     }
     if (committed) {
-      await attempt(activationErrors, () => memoryReplacement!.commit(nextRegistry));
+      await attempt(activationErrors, () =>
+        services.resumeMemory(memoryReplacement, params.nextConfig),
+      );
       for (const sidecar of sidecarReplacements) {
         await attempt(activationErrors, () => sidecar.resume(params.nextConfig));
       }
@@ -567,23 +566,18 @@ export async function reloadGatewayPlugins(
             );
             await withPluginRegistryPreparationScope(restoredRegistry, async () => {
               await attempt(recoveryErrors, async () => {
-                await startPluginServices({
-                  scheduler: runtime.scheduler,
-                  registry: restoredRegistry,
-                  config: previousConfig,
-                  workspaceDir: pluginWorkspaceDir,
-                  broadcastPluginEvent,
-                  getCronService: kernel.getCronService,
-                  previous: kernel.pluginRuntimeGeneration.currentServices(),
-                  onHandle: (handle) => {
+                await services.start(
+                  restoredRegistry,
+                  previousConfig,
+                  (handle) => {
                     recoveredServices = handle;
                     kernel.pluginRuntimeGeneration.publishServices(
                       kernel.pluginRuntimeGeneration.currentClaim(),
                       handle,
                     );
                   },
-                  throwOnStartError: true,
-                });
+                  memoryReplacement?.retainedPluginIds,
+                );
               });
               try {
                 attached.publish();
@@ -593,7 +587,9 @@ export async function reloadGatewayPlugins(
                 await Promise.allSettled(recoveryActivationCleanup);
               }
             });
-            await attempt(recoveryErrors, () => memoryReplacement?.commit(restoredRegistry));
+            await attempt(recoveryErrors, () =>
+              services.resumeMemory(memoryReplacement, previousConfig),
+            );
             broadcast(
               "plugins.changed",
               { generation: getPluginRegistryVersion(restoredRegistry) },
@@ -603,7 +599,9 @@ export async function reloadGatewayPlugins(
             // Restored preparation must be able to retain the still-callable instances.
             releaseResourceHandoff?.();
             resumeInstances();
-            await attempt(recoveryErrors, () => memoryReplacement?.rollback());
+            await attempt(recoveryErrors, () =>
+              services.resumeMemory(memoryReplacement, previousConfig, true),
+            );
           }
           for (const sidecar of sidecarReplacements) {
             await attempt(recoveryErrors, () => sidecar.resume(previousConfig));
