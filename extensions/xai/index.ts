@@ -45,7 +45,7 @@ import {
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
-import { wrapXaiProviderStream } from "./stream.js";
+import { wrapXaiProviderStream, wrapXaiSimpleCompletionStream } from "./stream.js";
 import { fetchXaiUsage } from "./usage.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import {
@@ -286,6 +286,10 @@ export default defineSingleProviderPluginEntry({
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
     wrapStreamFn: (ctx) =>
       wrapXaiProviderStream(ctx, {
+        clientVersion: pluginApi.runtime.version,
+      }),
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      wrapXaiSimpleCompletionStream(ctx, {
         clientVersion: pluginApi.runtime.version,
       }),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
