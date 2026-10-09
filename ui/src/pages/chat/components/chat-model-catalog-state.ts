@@ -38,6 +38,7 @@ export function renderChatModelCatalogState(
   onModelSetup?: () => void,
   errorLabel = t("chat.modelControls.modelsUnavailable"),
   retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
+  emptyLabel?: string,
 ) {
   if (!state) {
     return nothing;
@@ -60,11 +61,12 @@ export function renderChatModelCatalogState(
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
         : status === "ready" && !checking
-          ? t(
+          ? (emptyLabel ??
+            t(
               state.modelSelectionPolicy?.restricted
                 ? "chat.modelControls.noPermittedModels"
                 : "chat.modelControls.noModelsAvailable",
-            )
+            ))
           : t("chat.modelControls.loadingModels");
   return html`
     <div

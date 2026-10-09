@@ -1,4 +1,3 @@
-// Source-routed skill installation and its reconnect/publication authority.
 import {
   buildClawHubTrustErrorDetails,
   ErrorCodes,
@@ -18,23 +17,8 @@ import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ClawHubInstallResult = Awaited<ReturnType<typeof installSkillFromClawHub>>;
-type ClawHubInstallParams = Parameters<typeof installSkillFromClawHub>[0];
 
 const clawHubInstallsInFlight = new Map<string, Promise<ClawHubInstallResult>>();
-
-function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawHubInstallResult> {
-  // A WebSocket can disappear after the request reached the Gateway. Keep one
-  // exact install per workspace in flight so a reconnect can safely reattach.
-  const key = JSON.stringify([
-    params.workspaceDir,
-    params.slug,
-    params.version ?? null,
-    params.force ?? false,
-  ]);
-  return getOrCreatePromise(clawHubInstallsInFlight, key, () => installSkillFromClawHub(params), {
-    evictOnSettled: true,
-  });
-}
 
 export const handleSkillsInstall: GatewayRequestHandler = async ({
   params,
@@ -51,19 +35,31 @@ export const handleSkillsInstall: GatewayRequestHandler = async ({
     respond(false, undefined, resolved.error);
     return;
   }
-  const cfg = resolved.cfg;
-  const workspaceDirRaw = resolved.workspaceDir;
+  const { cfg, workspaceDir: workspaceDirRaw } = resolved;
   // Skill installs are intentionally routed by source; each source owns its
   // validation, provenance checks, and result payload shape.
   if ("source" in p && p.source === "clawhub") {
-    const result = await installClawHubSkillDeduped({
+    const input = {
       workspaceDir: workspaceDirRaw,
       slug: p.slug,
       version: p.version,
       force: Boolean(p.force),
       logger: context.logGateway,
       config: cfg,
-    });
+    };
+    // A reconnect reattaches to the exact in-flight install instead of starting it again.
+    const key = JSON.stringify([
+      input.workspaceDir,
+      input.slug,
+      input.version ?? null,
+      input.force,
+    ]);
+    const result = await getOrCreatePromise(
+      clawHubInstallsInFlight,
+      key,
+      () => installSkillFromClawHub(input),
+      { evictOnSettled: true },
+    );
     const errorDetails = result.ok ? undefined : buildClawHubTrustErrorDetails(result);
     respond(
       result.ok,
@@ -110,26 +106,21 @@ export const handleSkillsInstall: GatewayRequestHandler = async ({
         log: context.logGateway,
         beforePersistentApply: assertCommitAllowed,
       });
-      if (!result.ok) {
-        // Install owners return failure envelopes after rollback/lease cleanup. Retain
-        // their original policy refusal instead of flattening it to UNAVAILABLE.
-        assertCommitAllowed?.();
+      if (result.ok) {
+        respond(true, result, undefined);
+        return;
       }
+      // Install owners return failure envelopes after rollback/lease cleanup. Retain
+      // their original policy refusal instead of flattening it to UNAVAILABLE.
+      assertCommitAllowed?.();
       const errorCode =
-        !result.ok && result.errorKind === "invalid-request"
+        result.errorKind === "invalid-request"
           ? ErrorCodes.INVALID_REQUEST
           : ErrorCodes.UNAVAILABLE;
-      const responseResult = result.ok
-        ? result
-        : {
-            ok: false,
-            error: result.error,
-            errorCode,
-          };
       respond(
-        result.ok,
-        responseResult,
-        result.ok ? undefined : errorShape(errorCode, result.error),
+        false,
+        { ok: false, error: result.error, errorCode },
+        errorShape(errorCode, result.error),
       );
     } catch (error) {
       if (!(error instanceof SessionMutationAuthorizationChangedError)) {

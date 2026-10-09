@@ -12,6 +12,7 @@ import {
   type IncognitoSessionActor,
   type IncognitoSessionRunner,
 } from "../config/sessions/session-incognito-actor.js";
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import { forkIncognitoSessionFromParent } from "../config/sessions/session-incognito-lifecycle.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -44,26 +45,14 @@ import type {
   AgentDatabaseIncognitoAuthority,
   AgentDatabaseIncognitoIdentity,
   AgentDatabaseIncognitoOpen,
-  AgentDatabaseIncognitoOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-type Store = SqliteWorkerStore<AgentDatabaseIncognitoOperations>;
+type Store = SqliteWorkerStore<IncognitoSessionOperations>;
 export type IncognitoAgentDatabaseExecution = IncognitoSessionActor & {
   readonly acp: IncognitoAcpSessionAccess;
-  /** Retains the actor across preparation/publication, independently of its writer turn. */
-  run<T>(
-    authority: AgentDatabaseIncognitoAuthority,
-    operation: (
-      scope: Pick<
-        SqliteWorkerStore<Pick<AgentDatabaseIncognitoOperations, "database.incognito.memory">>,
-        "execute"
-      >,
-    ) => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T>;
   /** Release this borrow, without idle eviction of the memory database. */
   release(): Promise<void>;
   /** End the whole agent's incognito database, joining accepted work and native cleanup. */
@@ -74,6 +63,7 @@ export type IncognitoAgentExecutionOwner = {
   readonly kind: "ephemeral";
   readonly agentId: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
+  readonly facts: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["captureRead"]>;
   assertCurrent(this: void): void;
   readonly state: "opening" | "live" | "closing" | "lost" | "closed";
   borrow(
@@ -203,7 +193,7 @@ function createIncognitoAgentExecutionOwner(
         signal?.throwIfAborted();
         assertIncognitoAgentDatabasePathAvailable(options.path);
         const opened =
-          await openEphemeralAgentDatabaseSqliteWorkerStore<AgentDatabaseIncognitoOperations>(
+          await openEphemeralAgentDatabaseSqliteWorkerStore<IncognitoSessionOperations>(
             {
               moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
               databasePath: options.path,
@@ -247,6 +237,7 @@ function createIncognitoAgentExecutionOwner(
     kind: "ephemeral",
     agentId: options.agentId,
     identity,
+    facts: sessionFacts.captureRead(assertCurrent),
     assertCurrent,
     get state() {
       return state;
@@ -304,6 +295,7 @@ function createIncognitoAgentExecutionOwner(
       const borrow = {};
       const assertReferenceCurrent = () => {
         assertCurrent();
+        source.assertCurrent();
         if (released) {
           throw new Error("Incognito execution reference is released");
         }
@@ -312,6 +304,7 @@ function createIncognitoAgentExecutionOwner(
         const current = continuations.getStore();
         if (current?.borrow === borrow && current.active) {
           assertRetainedCurrent();
+          source.assertCurrent();
         } else {
           assertReferenceCurrent();
         }
@@ -361,6 +354,9 @@ function createIncognitoAgentExecutionOwner(
           assertBorrowed();
         }
         const assertOperation = () => {
+          if (!cleanup) {
+            source.assertCurrent();
+          }
           currentAuthority.assertCurrent();
           assertRetainedCurrent();
           operationSignal?.throwIfAborted();
@@ -376,7 +372,7 @@ function createIncognitoAgentExecutionOwner(
                     operation,
                     undefined,
                     assertOperation,
-                    createAdmission ?? admission(currentAuthority),
+                    createAdmission ?? admission({ assertCurrent: assertOperation }),
                   );
                   assertOperation();
                   return result;
@@ -399,7 +395,7 @@ function createIncognitoAgentExecutionOwner(
         agentId: options.agentId,
         path: options.path,
         identity,
-        sessions: sessionFacts.bind(run, assertBorrowed, retain),
+        sessions: sessionFacts.bind(run, assertBorrowed, retain, () => source.assertCurrent()),
         acp: {
           prepareEntryRead(params) {
             const readAuthority = params.authority;
@@ -469,8 +465,6 @@ function createIncognitoAgentExecutionOwner(
         },
         assertCurrent: assertBorrowed,
         assertReadable: assertReferenceCurrent,
-        run: (currentAuthority, operation, operationSignal) =>
-          run(currentAuthority, operation, operationSignal),
         release() {
           released = true;
           releasing ??= drain(borrowedWork);
@@ -665,6 +659,7 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
             agentId: owner.agentId,
             storePath: pathname,
             identity: owner.identity,
+            facts: owner.facts,
             assertCurrent: owner.assertCurrent,
           },
         ];

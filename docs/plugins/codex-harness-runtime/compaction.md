@@ -15,10 +15,18 @@ When the selected model uses the Codex harness, Codex app-server owns native
 token-pressure and manual thread compaction. OpenClaw separately owns its
 transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw requires semantic
+heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
 This host compaction does not itself replace or rewrite Codex's canonical
 native thread.
+
+If the context engine declines host compaction or leaves history oversized,
+OpenClaw continues with a bounded projection of recent whole turns. The native
+thread follows that projection so omitted history cannot remain in its context.
+A visible notice asks you to resend any essential earlier details; saved history
+is unchanged. The failure reason is logged at warning level. Failed attempts do
+not count as successful compaction, and suppressed retries still receive bounded
+context. System instructions and the current request remain intact.
 
 After host mirror compaction commits, OpenClaw may request
 `thread/compact/start` to synchronize an eligible native thread. This request

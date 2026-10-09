@@ -170,6 +170,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "reading-indicator" &&
         previous.startedAt === next.startedAt &&
         previous.waitingOn === next.waitingOn &&
+        previous.request?.askedAt === next.request?.askedAt &&
+        previous.request?.runIds.join("\n") === next.request?.runIds.join("\n") &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );

@@ -47,11 +47,13 @@ export function deleteIncognitoSessionLifecycle(
   params: IncognitoLifecycleTarget & {
     target: IncognitoLifecycleEntry;
     reason: "reset" | "deleted";
+    expectedPluginOwnerId?: string;
   },
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.delete"]["output"]> {
   const { actor, authority, scope } = captureLifecycle(params);
   const target = structuredClone(params.target);
   const reason = params.reason;
+  const expectedPluginOwnerId = params.expectedPluginOwnerId;
   return actor.sessions.withSharedState(async () => {
     const [
       { withSqliteSessionDeletions },
@@ -95,6 +97,7 @@ export function deleteIncognitoSessionLifecycle(
             input: {
               target,
               reason,
+              expectedPluginOwnerId,
               admissionIdentities: [
                 ...(collectActiveSessionWorkAdmissions().get(scope.ownerStorePath ?? actor.path) ??
                   []),

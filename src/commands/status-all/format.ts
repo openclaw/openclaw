@@ -87,10 +87,7 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.updateConfigChannel,
-    update: params.update,
-  });
+  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
     channelInfo,
     channelLabel: channelInfo.label,

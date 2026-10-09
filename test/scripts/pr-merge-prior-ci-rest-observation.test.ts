@@ -39,83 +39,113 @@ function expectFinalAuthority(calls: ReturnType<Candidate["state"]>["calls"]) {
 }
 
 describePosix("prior-CI whole REST observation fallback", () => {
-  it.each(["stable", "continuing main", "within read", "stability", "final authority"])(
-    "lands the pinned head after complete REST admission: %s",
-    (stage) => {
-      const f = unknownGraphqlCandidate();
-      const state = f.state();
-      const recalculating = stage === "stability" || stage === "final authority";
-      const main = recalculating ? f.commit(f.tree("before\n", "advanced\n"), [f.base]) : f.base;
-      if (recalculating) {
-        state.restObservations = [
-          ...Array.from({ length: stage === "stability" ? 1 : 3 }, () => ({})),
-          { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-          { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
-        ];
-      } else if (stage === "continuing main") {
-        state.restObservations = [{}, {}, {}, { advanceMain: true }, { advanceMain: true }];
-      } else if (stage === "within read") {
-        state.restObservation = { advanceMain: true };
-      }
-      f.save(state);
-      const result = f.adminPriorCi(f.path);
-      expect(result.status, result.output).toBe(0);
-      const final = f.state();
-      expect(final).toMatchObject({
-        mutations: 1,
-        posts: 1,
-        gates: "fail",
-        restMergePayload: { sha: f.head, merge_method: "squash" },
+  it.each([
+    "stable",
+    "missing REST commit",
+    "continuing main",
+    "within read",
+    "stability",
+    "final authority",
+  ])("lands the pinned head after complete REST admission: %s", (stage) => {
+    const f = unknownGraphqlCandidate();
+    const state = f.state();
+    if (stage === "missing REST commit") {
+      state.restMergeCommit = "missing";
+    }
+    const recalculating = stage === "stability" || stage === "final authority";
+    const main = recalculating ? f.commit(f.tree("before\n", "advanced\n"), [f.base]) : f.base;
+    if (recalculating) {
+      state.restObservations = [
+        ...Array.from({ length: stage === "stability" ? 1 : 3 }, () => ({})),
+        { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+      ];
+    } else if (stage === "continuing main") {
+      state.restObservations = [{}, {}, {}, { advanceMain: true }, { advanceMain: true }];
+    } else if (stage === "within read") {
+      state.restObservation = { advanceMain: true };
+    }
+    f.save(state);
+    const result = f.adminPriorCi(f.path);
+    expect(result.status, result.output).toBe(0);
+    const final = f.state();
+    expect(final).toMatchObject({
+      mutations: 1,
+      posts: 1,
+      gates: "fail",
+      restMergePayload: { sha: f.head, merge_method: "squash" },
+    });
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(
+      stage === "continuing main" || stage === "within read" ? final.mainAdvances[0] : main,
+    );
+    if (recalculating) {
+      expect(final.settlementSleeps).toEqual([1, 1]);
+      expect(f.record().main).toBe(f.base);
+      expectFinalAuthority(readsBeforeDispatch(f));
+    }
+    if (stage === "stable" || stage === "missing REST commit") {
+      const reads = readsBeforeDispatch(f);
+      expect(reads.filter((call) => call.includes(landingSnapshotQuery))).toHaveLength(1);
+      expect(
+        reads.filter((call) => call.includes("repos/fixture/repo/git/ref/heads/main")),
+      ).toHaveLength(8);
+      expect(
+        reads.filter((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
+      ).toHaveLength(2);
+      expectFinalAuthority(reads);
+      expect(f.record()).toMatchObject({
+        route: "admin",
+        transport: "rest",
+        priorCiAdmin: { head: f.head, runId: 501, runAttempt: 2, dispatchTransport: "rest" },
       });
-      expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
-      expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(
-        stage === "continuing main" || stage === "within read" ? final.mainAdvances[0] : main,
-      );
-      if (recalculating) {
-        expect(final.settlementSleeps).toEqual([1, 1]);
-        expect(f.record().main).toBe(f.base);
-        expectFinalAuthority(readsBeforeDispatch(f));
-      }
-      if (stage === "stable") {
-        const reads = readsBeforeDispatch(f);
-        expect(reads.filter((call) => call.includes(landingSnapshotQuery))).toHaveLength(1);
-        expect(
-          reads.filter((call) => call.includes("repos/fixture/repo/git/ref/heads/main")),
-        ).toHaveLength(8);
-        expect(
-          reads.filter((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
-        ).toHaveLength(2);
-        expectFinalAuthority(reads);
-        expect(f.record()).toMatchObject({
-          route: "admin",
+      expect(final.graphqlMergePayloads).toEqual([]);
+      expect(
+        final.observationReads > reads.filter((call) => call.includes(landingSnapshotQuery)).length,
+      ).toBe(stage === "missing REST commit");
+    }
+    if (stage === "within read") {
+      expect(final.mainAdvances).toHaveLength(1);
+      expect(final.restObservationAppliedAt).toBe(1);
+      expect(f.record()).not.toHaveProperty("mainBefore");
+      const prefix = "REST merge observation: ";
+      const diagnostics = result.output
+        .split("\n")
+        .filter((line) => line.startsWith(prefix))
+        .map((line) => JSON.parse(line.slice(prefix.length)));
+      expect(diagnostics).toContainEqual(
+        expect.objectContaining({
           transport: "rest",
-          priorCiAdmin: { head: f.head, runId: 501, runAttempt: 2, dispatchTransport: "rest" },
-        });
-      }
-      if (stage === "within read") {
-        expect(final.mainAdvances).toHaveLength(1);
-        expect(final.restObservationAppliedAt).toBe(1);
-        expect(f.record()).not.toHaveProperty("mainBefore");
-        const prefix = "REST merge observation: ";
-        const diagnostics = result.output
-          .split("\n")
-          .filter((line) => line.startsWith(prefix))
-          .map((line) => JSON.parse(line.slice(prefix.length)));
-        expect(diagnostics).toContainEqual(
-          expect.objectContaining({
-            transport: "rest",
-            requestedGhRoute: "plain",
-            observedGhRoute: "unrecorded",
-            mainBefore: f.base,
-            mainAfter: final.mainAdvances[0],
-            startedAtMs: expect.any(Number),
-            finishedAtMs: expect.any(Number),
-            elapsedMs: expect.any(Number),
-          }),
-        );
-      }
-    },
-  );
+          requestedGhRoute: "plain",
+          observedGhRoute: "unrecorded",
+          mainBefore: f.base,
+          mainAfter: final.mainAdvances[0],
+          startedAtMs: expect.any(Number),
+          finishedAtMs: expect.any(Number),
+          elapsedMs: expect.any(Number),
+        }),
+      );
+    }
+  });
+
+  it("refuses a missing merged receipt during active prior-CI admission", () => {
+    const f = unknownGraphqlCandidate();
+    f.save({
+      ...f.state(),
+      restMergeCommit: "missing",
+      restObservation: {
+        afterRestMainReads: 7,
+        pr: { state: "MERGED", mergeCommit: { oid: f.base } },
+      },
+    });
+    const result = f.adminPriorCi(f.path);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(
+      "merged PR receipt became unavailable during active prior-CI admission",
+    );
+    expect(f.state().observationReads).toBe(1);
+    expectNoDispatch(f);
+  });
 
   it.each([1, 4])(
     "preserves prior-CI admission when GraphQL quota expires after %s known observations",

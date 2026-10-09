@@ -1,5 +1,6 @@
-// Chat-item projection, expansion, reply hydration, and guarded row rendering.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -7,13 +8,9 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
-import { messageRecoveryKey } from "../chat-message-recovery.ts";
+import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
-import {
-  placedSubagentWait,
-  resolveChatSubagentWait,
-  subagentWaitRenderKey,
-} from "../chat-subagent-wait.ts";
+import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -101,8 +98,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const recoveryKey = (messageId: string) =>
     messageRecoveryKey(props.fullMessageAgentId, messageId);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
-  const subagentWait = resolveChatSubagentWait(props);
-  const placedWait = searchFiltering ? undefined : placedSubagentWait(subagentWait);
+  const subagents = projectSubagentStatus(props, searchFiltering);
+  const subagentWait = subagents.wait;
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -132,7 +129,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
-    subagentWait: placedWait,
+    subagentWait: subagents.placedWait,
     questionPrompts: props.questionPrompts,
     loading: props.loading,
     replyPeople: [...sessionPeople].toSorted(),
@@ -218,7 +215,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       }
       const markdown =
         result?.ok && result.message && typeof result.message === "object"
-          ? extractTextCached(result.message)
+          ? (extractTextCached(result.message) ?? "")
           : null;
       setExpansionState(
         expandedAssistantMessages,
@@ -233,6 +230,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       sessionKey: props.sessionKey,
       ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
       messageId,
+      ...(props.messages.some(
+        (message) =>
+          resolveSourceMessageId(message) === messageId &&
+          asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.reason === "oversized",
+      )
+        ? { maxChars: CHAT_MESSAGE_MAX_CHARS }
+        : {}),
     }).then(completeLoad, () => completeLoad(null));
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
@@ -295,7 +299,10 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
     waitingSubagents: subagentWait ?? undefined,
-    onOpenSession: props.onOpenSession,
+    runningSubagents: subagents.running,
+    // Subagents the panel does not list still open as sessions, and have no list to show.
+    onOpenSubagent: (subagents.listed && props.onOpenSubagent) || props.onOpenSession,
+    onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;
@@ -332,6 +339,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
+      subagents: props,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
       assistantTextAvatar: assistantIdentity.textAvatar,
@@ -368,9 +376,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       searchResult: searchFiltering,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
-  // Only the working indicator shows live usage and the subagent wait, so rows
+  // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.
-  const workingUsageKey = JSON.stringify([runOutputTokens, subagentWaitRenderKey(subagentWait)]);
+  const workingUsageKey = JSON.stringify([runOutputTokens, subagents.statusKey]);
   const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "agent-run-frame") {
       const hasWorkingIndicator = item.parts.some(
@@ -543,7 +551,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       content: renderTurnRecapRow(turnRecap),
     });
   }
-  if (subagentWait && !placedWait && !searchFiltering) {
+  if (subagentWait && !subagents.placedWait && !searchFiltering) {
     transcriptRows.push({
       kind: "content",
       key: "waiting-subagents",
@@ -585,6 +593,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       : (props.transcriptVisible ?? true),
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
+    // Launch rows show each subagent's name, state and duration.
+    subagents.rowsKey,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,

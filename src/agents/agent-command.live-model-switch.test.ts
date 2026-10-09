@@ -844,11 +844,9 @@ function makeEmptyResult(provider: string, model: string) {
   return {
     payloads: [],
     meta: {
+      ...makeSuccessResult(provider, model).meta,
       durationMs: 30_000,
-      aborted: false,
-      stopReason: "end_turn",
       agentHarnessResultClassification: "empty",
-      agentMeta: { provider, model },
     },
   };
 }
@@ -920,11 +918,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
+  return expectDefined(mock.mock.calls[callIndex], `mock call ${callIndex}`)[argIndex];
 }
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
@@ -1391,7 +1385,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           const runId = "recovery-run";
           const { entry } = setupStoredSession(
             {
-              status: "running",
               lifecycleRunId: runId,
               restartRecoveryRuns: [{ runId, lifecycleGeneration: "test-generation" }],
               mainRestartRecovery: { cycleId: "recovery-cycle", revision: 4, chargedAttempts: 3 },
@@ -3008,7 +3001,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             to: "discord:dm:123",
             accountId: "main",
           },
-          restartRecoveryDeliveryRunId: "session-1",
+          restartRecoveryRuns: [{ runId: "session-1", lifecycleGeneration: "test-generation" }],
+          restartRecoveryDeliveryRunId: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
         }),
       }),
     );
@@ -3749,15 +3744,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each(["user-switch", "locked"] as const)(
     "does not overwrite a concurrent %s after a primary probe",
     async (change) => {
+      const selection = {
+        providerOverride: "openai",
+        modelOverride: "claude",
+        modelOverrideSource: "auto" as const,
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude",
+      };
       const { store } = setupStoredSession(
-        {
-          updatedAt: Date.now(),
-          providerOverride: "openai",
-          modelOverride: "claude",
-          modelOverrideSource: "auto",
-          modelOverrideFallbackOriginProvider: "anthropic",
-          modelOverrideFallbackOriginModel: "claude",
-        },
+        { updatedAt: Date.now(), ...selection },
         commandPaths.internalStore,
       );
       const locked = change === "locked";
@@ -3803,11 +3798,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       if (locked) {
-        const writes = state.persistSessionEntryMock.mock.calls.filter(([params]) => {
-          const entry = (params as { entry?: SessionEntry }).entry;
-          return entry?.modelOverrideSource === "auto" && entry?.modelOverride === "claude";
-        });
-        expect(writes).toHaveLength(0);
+        const lockedSelection = { ...selection, modelSelectionLocked: true };
+        for (const [params] of state.persistSessionEntryMock.mock.calls) {
+          expectRecordFields(requireRecord(params, "post-probe write").entry, lockedSelection);
+        }
+        expectRecordFields(store["agent:main:main"], lockedSelection);
+        expect(store["agent:main:main"]?.restartRecoveryDeliveryRunId).toBeUndefined();
       } else {
         expectRecordFields(store["agent:main:main"], {
           providerOverride: "google",

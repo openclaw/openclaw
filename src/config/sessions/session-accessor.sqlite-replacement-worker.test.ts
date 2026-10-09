@@ -38,6 +38,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   readCommittedSessionEntryCache,
@@ -54,6 +55,7 @@ import {
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { addSessionMember } from "./session-sharing-store.native.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
 it.each([false, true])(
@@ -324,6 +326,10 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     const targetKey = "agent:main:replacement-moved";
     const original = { sessionId: "publication", updatedAt: 1 };
     writeSessionEntry(database, sessionKey, original);
+    addSessionMember(
+      { agentId: "main", storePath: database.path, sessionKey },
+      { identityId: "member", addedBy: "owner", addedAt: 1 },
+    );
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
       throw new Error("Expected durable fixture");
@@ -333,6 +339,17 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       sessionKey,
       entry: projectSessionSharingEntry(original),
       membership: new Set(["member"]),
+    });
+    const predicate = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${identity}`,
+      sessionKey,
+      entry: original,
+      matches(_before, after) {
+        if (after?.visibility === "read-only") {
+          throw new Error("Synthetic comparison unavailable after COMMIT");
+        }
+        return true;
+      },
     });
     const reader = new OpenClawAgentDatabaseReadOnlyScope();
     let readerDatabase: DatabaseSync | undefined;
@@ -350,20 +367,31 @@ it("publishes committed sharing and reader invalidation before observers, and ro
           visibility: sharing.readCurrent()?.entry?.visibility,
           membership: [...(sharing.readCurrent()?.membership ?? [])],
           cache: readerDatabase && readCommittedSessionEntryCache(readerDatabase),
+          predicateCurrent: predicate.isCurrent(),
         });
       }
     });
     try {
-      await applySessionEntryExactReplacements({
+      const publicationFailure = await applySessionEntryExactReplacements({
         storePath: database.path,
         sessionKeys: [sessionKey],
         update: ([row]) => ({
           result: undefined,
           replacements: [{ sessionKey, entry: { ...row!.entry, visibility: "read-only" } }],
         }),
-      });
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("read-only");
+      expect(publicationFailure).toBeUndefined();
       expect(observed).toEqual([
-        { visibility: "read-only", membership: ["member"], cache: undefined },
+        {
+          visibility: "read-only",
+          membership: ["member"],
+          cache: undefined,
+          predicateCurrent: false,
+        },
       ]);
       const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let current = true;
@@ -417,6 +445,7 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     } finally {
       stop();
       sharing.release();
+      predicate.release();
       reader.close();
     }
   });
@@ -652,6 +681,10 @@ it.each([
       updatedAt: 1,
     };
     writeSessionEntry(database, sessionKey, entry);
+    addSessionMember(
+      { agentId: "main", storePath: database.path, sessionKey },
+      { identityId: "member", addedBy: "owner", addedAt: 1 },
+    );
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
       throw new Error("Expected durable fixture");
@@ -828,13 +861,15 @@ it.each([
       expect(followup).not.toHaveBeenCalled();
       expect(committedLifecycle).toHaveBeenCalledTimes(missingReceipt ? 0 : 1);
       expect(observed).toEqual([
-        missingReceipt ? undefined : { visibility: "read-only", membership: ["member"] },
+        missingReceipt || nativeUnknown
+          ? undefined
+          : { visibility: "read-only", membership: ["member"] },
       ]);
       expect(sharing.readCurrent()?.entry?.visibility).toBe(
-        missingReceipt ? undefined : "read-only",
+        missingReceipt || nativeUnknown ? undefined : "read-only",
       );
       expect(preparedPublications).toHaveLength(1);
-      if (missingReceipt) {
+      if (missingReceipt || nativeUnknown) {
         expect(preparedPublications[0]).toBeUndefined();
       } else {
         expect(preparedPublications[0]?.entry).toMatchObject({

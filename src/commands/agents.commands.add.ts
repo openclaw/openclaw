@@ -200,6 +200,9 @@ export async function agentsAddCommand(
         );
       }
     }
+    if (conflicts.length > 0) {
+      runtime.exit(1);
+    }
     return;
   }
 

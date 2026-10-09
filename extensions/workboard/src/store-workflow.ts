@@ -5,7 +5,6 @@ import type {
   WorkboardCard,
   WorkboardClaim,
   WorkboardMetadata,
-  WorkboardNotification,
   WorkboardRunAttempt,
 } from "@openclaw/workboard-contract";
 import {
@@ -30,7 +29,6 @@ import {
   DEFAULT_CLAIM_TTL_MS,
   isWorkboardClaimReclaimable,
   MAX_CARD_ARTIFACTS,
-  MAX_CARD_NOTIFICATIONS,
   secondsToDurationMs,
 } from "./store-constants.js";
 import type {
@@ -163,7 +161,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
 
   async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
     const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
-    const card = await this.updateMetadata(id, (existing) => {
+    return await this.updateMetadata(id, (existing) => {
       const claim = existing.metadata?.claim;
       if (!claim) {
         throw new Error("card is not claimed.");
@@ -192,7 +190,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         comments: appendComment(metadata.comments, note, now),
       };
     });
-    return card;
   }
 
   async releaseClaim(
@@ -225,7 +222,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardCompleteInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.completeDirect(id, input, scope));
+    return await this.enqueueMutation(() => this.completeDirect(id, input, scope));
   }
 
   private async completeDirect(
@@ -262,30 +259,20 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
-    const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-    const notification: WorkboardNotification = {
-      id: randomUUID(),
+    const finished = this.finishRun(existing, "done", now);
+    const metadata = clearDiagnostics(finished.metadata, ["missing_proof"]);
+    const notifications = this.appendNotification(metadata, now, {
       kind: "completed",
-      createdAt: now,
-      sequence: this.nextNotificationSequence(now),
       message: capText(summary, 240) ?? "Workboard card completed.",
       ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
       ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
-    };
-    const execution =
-      existing.execution?.status === "running"
-        ? { ...existing.execution, status: "done" as const, updatedAt: now }
-        : existing.execution;
+    });
     return await this.updateCard(
       await this.requireCard(id),
       {
-        status: "done",
-        ...(execution ? { execution } : {}),
+        ...finished,
         metadata: {
           ...metadata,
-          claim: undefined,
-          attempts: closeRunningAttempts(metadata.attempts, now, "succeeded"),
-          failureCount: 0,
           automation: normalizeAutomation(
             {
               ...metadata.automation,
@@ -299,9 +286,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
-          notifications: [...(metadata.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
+          notifications,
         },
       },
       {
@@ -317,36 +302,23 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     now: number,
     options: { clearExecutionAssociation?: boolean } = {},
   ): WorkboardCardPatch & { metadata: WorkboardMetadata } {
-    const metadata = existing.metadata ?? {};
-    const notification: WorkboardNotification = {
-      id: randomUUID(),
+    const finished = this.finishRun(existing, "blocked", now, reason);
+    const metadata = finished.metadata;
+    const notifications = this.appendNotification(metadata, now, {
       kind: "failed",
-      createdAt: now,
-      sequence: this.nextNotificationSequence(now),
       message: capText(reason, 240) ?? "Workboard card blocked.",
       ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
       ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
-    };
-    const execution =
-      existing.execution?.status === "running"
-        ? { ...existing.execution, status: "blocked" as const, updatedAt: now }
-        : existing.execution;
+    });
     return {
-      status: "blocked",
+      ...finished,
       ...(options.clearExecutionAssociation
         ? { sessionKey: null, runId: null, execution: null }
-        : execution
-          ? { execution }
-          : {}),
+        : {}),
       metadata: {
         ...metadata,
-        claim: undefined,
-        attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
-        failureCount: (metadata.failureCount ?? 0) + 1,
         comments: appendComment(metadata.comments, reason, now),
-        notifications: [...(metadata.notifications ?? []), notification].slice(
-          -MAX_CARD_NOTIFICATIONS,
-        ),
+        notifications,
       },
     };
   }

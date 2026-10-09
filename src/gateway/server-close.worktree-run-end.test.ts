@@ -7,6 +7,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { prepareWorktreeRegistryGuard } from "../agents/worktrees/registry-read.js";
+import { withWorktreeRunEnd } from "../agents/worktrees/run-end-lifecycle.js";
+import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
   materializeManagedWorktreeFixtures,
@@ -15,6 +18,7 @@ import {
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
@@ -32,8 +36,13 @@ it("joins accepted worktree removals across scheduler cancellation before closin
   const entered = createDeferred();
   const release = createDeferred();
   const parentClosed = createDeferred();
+  const releaseEntered = createDeferred();
+  const releaseLease = createDeferred();
   let closing: Promise<void> | undefined;
   let removing: Promise<unknown> | undefined;
+  let runLease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+  let releasing: Promise<void> | undefined;
+  let acceptedChild: Promise<void> | undefined;
   let restoreWorker: (() => void) | undefined;
   try {
     const port = await fixture.reservePort();
@@ -45,12 +54,19 @@ it("joins accepted worktree removals across scheduler cancellation before closin
       stateDir: fixture.state.statePath(),
       repoRoot,
       now: 1,
-      names: ["first", "second"],
+      names: ["first", "second", "third"],
     });
+    const running = expectDefined(records[2], "Running worktree");
+    runLease = await acquireWorktreeRunLease(running.id, { env: fixture.state.env });
     const first = expectDefined(records[0], "First worktree");
+    const assertPreparedEffect = await prepareWorktreeRegistryGuard(
+      captureOpenClawStateWorkerContext({ env: fixture.state.env }),
+      { predicates: [{ kind: "exact-owner", record: first }] },
+    );
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     let acceptedSignal: AbortSignal | undefined;
     let claimPaused = false;
+    let holdRunLeaseRelease = false;
     const run = stateWorker.runOpenClawStateWorkerOperation;
     const worker = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -60,6 +76,11 @@ it("joins accepted worktree removals across scheduler cancellation before closin
           (scope) =>
             operation({
               execute: async (command, executeOptions) => {
+                if (command.type === "worktrees.releaseRunLease" && holdRunLeaseRelease) {
+                  holdRunLeaseRelease = false;
+                  releaseEntered.resolve();
+                  await releaseLease.promise;
+                }
                 if (command.type === "worktrees.claimRemoval" && !claimPaused) {
                   claimPaused = true;
                   acceptedSignal = getAsyncWorkSignal();
@@ -79,9 +100,9 @@ it("joins accepted worktree removals across scheduler cancellation before closin
       delayMs: 0,
       async run() {
         removing = Promise.all(
-          records.map((record) =>
-            managedWorktrees.remove({ id: record.id, reason: "close-proof" }),
-          ),
+          records
+            .slice(0, 2)
+            .map((record) => managedWorktrees.remove({ id: record.id, reason: "close-proof" })),
         );
         await removing;
       },
@@ -98,6 +119,12 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     );
     expect(acceptedSignal?.aborted).toBe(false);
     kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
+    acceptedChild = withWorktreeRunEnd(fixture.state.env, async () => {
+      await parentClosed.promise;
+      const child = await acquireWorktreeRunLease(running.id, { env: fixture.state.env });
+      await child.release();
+    });
+    void acceptedChild.catch(() => {});
     closing = server.close({ reason: "worktree settlement close regression" });
     await withinTest(
       awaitGateBeforeSettlement(
@@ -109,18 +136,39 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     );
     expect(acceptedSignal?.aborted).toBe(false);
     expect(shared.isOpen).toBe(true);
+    expect(assertPreparedEffect).toThrow("owner or lifecycle changed");
     await expect(managedWorktrees.remove({ id: first.id, reason: "late-close" })).rejects.toThrow(
       "run-end admission is closed",
     );
+    await expect(acquireWorktreeRunLease(running.id, { env: fixture.state.env })).rejects.toThrow(
+      "run-end admission is closed",
+    );
+    await withinTest(acceptedChild, signal);
+    holdRunLeaseRelease = true;
+    releasing = runLease.release();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        releaseEntered.promise,
+        releasing,
+        "Accepted run lease cleanup did not reach its writer",
+      ),
+      signal,
+    );
     release.resolve();
-    await withinTest(Promise.all([removing, closing]), signal);
+    await withinTest(expectDefined(removing, "Accepted removals"), signal);
+    expect(shared.isOpen).toBe(true);
+    releaseLease.resolve();
+    await withinTest(Promise.all([releasing, closing]), signal);
     expect(shared.isOpen).toBe(false);
     const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
       readOnly: true,
     });
     try {
       expect(database.prepare("SELECT id, removed_at FROM worktrees ORDER BY id").all()).toEqual(
-        records.map((record) => ({ id: record.id, removed_at: expect.any(Number) })),
+        records.map((record) => ({
+          id: record.id,
+          removed_at: record.id === running.id ? null : expect.any(Number),
+        })),
       );
       expect(
         database
@@ -133,7 +181,9 @@ it("joins accepted worktree removals across scheduler cancellation before closin
   } finally {
     vi.useRealTimers();
     release.resolve();
-    await Promise.allSettled([removing, closing]);
+    releaseLease.resolve();
+    parentClosed.resolve();
+    await Promise.allSettled([removing, acceptedChild, releasing ?? runLease?.release(), closing]);
     restoreWorker?.();
     await fixture.cleanup();
   }

@@ -108,10 +108,8 @@ async function collectProtocolSchemaChangesSince(
   if (!gitLog || gitLog.code !== 0) {
     return null;
   }
-  if (!gitLog.stdout.trim()) {
-    return [];
-  }
-  return gitLog.stdout.trim().split("\n");
+  const output = gitLog.stdout.trim();
+  return output ? output.split("\n") : [];
 }
 
 export function uiProtocolFreshnessIssueToHealthFinding(
@@ -180,15 +178,10 @@ export async function maybeRepairUiProtocolFreshness(
       note(`Skipping UI ${stale ? "rebuild" : "build"}: ui/ sources not present.`, "UI");
       continue;
     }
-    const shouldRepair = stale
-      ? await prompter.confirmAggressiveAutoFix({
-          message: "Rebuild stale Control UI assets now?",
-          initialValue: true,
-        })
-      : await prompter.confirmAutoFix({
-          message: "Build Control UI assets now?",
-          initialValue: true,
-        });
+    const shouldRepair = await prompter[stale ? "confirmAggressiveAutoFix" : "confirmAutoFix"]({
+      message: stale ? "Rebuild stale Control UI assets now?" : "Build Control UI assets now?",
+      initialValue: true,
+    });
     if (!shouldRepair) {
       continue;
     }
@@ -198,17 +191,13 @@ export async function maybeRepairUiProtocolFreshness(
       force: stale,
       onBuildStart: () =>
         note(
-          stale
-            ? "Rebuilding stale UI assets... (this may take a moment)"
-            : "Building Control UI assets... (this may take a moment)",
+          `${stale ? "Rebuilding stale" : "Building Control"} UI assets... (this may take a moment)`,
           "UI",
         ),
     });
     note(
       result.ok
-        ? stale
-          ? "UI rebuild complete."
-          : "UI build complete."
+        ? `UI ${stale ? "rebuild" : "build"} complete.`
         : (result.message ?? `UI ${stale ? "rebuild" : "build"} failed.`),
       "UI",
     );

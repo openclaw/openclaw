@@ -224,7 +224,7 @@ export function logNonInteractiveOnboardingFailure(params: {
   const lines = [
     output.message,
     classification ? `Classification: ${classification}` : undefined,
-    output.detail ? `Last probe: ${output.detail}` : undefined,
+    output.detail ? `Last check: ${output.detail}` : undefined,
     service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     output.diagnostics?.lastGatewayError

@@ -140,6 +140,14 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               sessionKey,
               requesterProfileId: input.operatorAuthority?.profileId,
               fingerprint,
+              prepareCaller: async (caller) =>
+                prepareReplyToolAuthorityCallerRead(
+                  operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
+                  caller,
+                  fingerprint,
+                  route,
+                  assertQuestionActive,
+                ),
               project: (caller) =>
                 operation
                   ? operation.projectToolAuthorityFingerprint(caller)

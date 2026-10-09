@@ -6,6 +6,7 @@ import type {
   CliBackendParseJsonlEvent,
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
@@ -48,6 +49,7 @@ import { appendCliResultText } from "./cli-output-results.js";
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
+  measureClaudePartialMessage,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
@@ -78,6 +80,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let parseErrorText = "";
   let rawChars = 0;
   let rawLines = 0;
+  let ordinaryClaudeLines = 0;
   const texts: string[] = [];
   let sawCustomJsonlEvent = false;
   let sawGeminiStructuredOutput = false;
@@ -109,9 +112,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   };
 
   const flushPendingClaudeCommentaryText = () => {
-    if (!pendingClaudeText) {
-      return;
-    }
     const text = pendingClaudeText.trim();
     pendingClaudeText = "";
     if (text) {
@@ -199,7 +199,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
   };
 
-  const accountClaudeJsonlLine = (lineChars: number): boolean => {
+  const accountClaudeJsonlLine = (lineChars: number, partialMessage = false): boolean => {
+    if (!partialMessage && ++ordinaryClaudeLines > outputLimits.maxTurnLines) {
+      parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
+      lineBuffer.pending = "";
+      return false;
+    }
     rawChars += lineChars + 1;
     if (rawChars <= outputLimits.maxTurnRawChars) {
       return true;
@@ -559,22 +564,15 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         onToolResult: params.onToolResult,
       });
     }
-    if (!delta) {
+    if (!delta && isGeminiStreamJsonDialect(params)) {
       if (
-        isGeminiStreamJsonDialect(params) &&
         parsed.type === "message" &&
         parsed.role === "assistant" &&
-        typeof parsed.content === "string"
+        typeof parsed.content === "string" &&
+        parsed.content
       ) {
-        const deltaText = parsed.content;
-        if (deltaText) {
-          appendAssistantText(deltaText);
-        }
-      } else if (
-        isGeminiStreamJsonDialect(params) &&
-        parsed.type === "result" &&
-        parsed.status === "success"
-      ) {
+        appendAssistantText(parsed.content);
+      } else if (parsed.type === "result" && parsed.status === "success") {
         output = {
           text: assistantText.trim(),
           sessionId,
@@ -593,7 +591,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
     rawLines += 1;
-    if (rawLines > outputLimits.maxTurnLines) {
+    if (!claudeStreamJson && rawLines > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
       lineBuffer.pending = "";
       return;
@@ -607,15 +605,21 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     const parsedRecords = decodeCliRecords(line);
     if (claudeStreamJson) {
+      const partialChars =
+        parsedRecords.length === 1
+          ? measureClaudePartialMessage(parsedRecords[0]!, rawLine)
+          : undefined;
       const normalized =
         parsedRecords.length === 1
           ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
           : undefined;
-      // Exempt actual media bytes only; JSON serialization must not erase wire whitespace.
-      const retainedChars = normalized
-        ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
-        : rawLine.length;
-      if (!accountClaudeJsonlLine(retainedChars)) {
+      // Neither media omission nor token-envelope discounts may erase wire whitespace.
+      const retainedChars =
+        partialChars ??
+        (normalized
+          ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+          : rawLine.length);
+      if (!accountClaudeJsonlLine(retainedChars, partialChars !== undefined)) {
         return;
       }
     }
@@ -666,7 +670,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     hasTerminalResult() {
       return sawTerminalResult;
     },
-    getOutput() {
+    getOutput(): (CliOutput & { partialOutputRejected?: true }) | null {
       if (parseErrorText) {
         return {
           text: "",
@@ -682,32 +686,41 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (rawLines === 0) {
         return null;
       }
-      if (sawCustomJsonlEvent) {
-        return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
+      let text = texts.join("\n");
+      if (sawCustomJsonlEvent ? !text.trim() : supportsCliJsonlToolEvents(params)) {
+        text = assistantText;
       }
-      if (supportsCliJsonlToolEvents(params) && assistantText.trim()) {
+      const partialOutput = { text: text.trim(), sessionId, usage };
+      // An unfinished stream cannot disambiguate raw protocol from a completed example.
+      if (claudeStreamJson) {
+        const codeRegions = findCodeRegions(text);
+        for (const match of text.matchAll(/(?:^|\n)[ \t]*<(?:invoke|parameter)(?=[\s/>]|$)/gu)) {
+          if (!isInsideCode(match.index + match[0].lastIndexOf("<"), codeRegions)) {
+            return {
+              ...partialOutput,
+              text: "",
+              errorText: "Claude CLI interrupted during raw tool protocol.",
+              partialOutputRejected: true,
+            };
+          }
+        }
+      }
+      if (sawCustomJsonlEvent || partialOutput.text) {
         return {
-          text: assistantText.trim(),
-          sessionId,
-          usage,
-          ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          ...partialOutput,
+          ...(!sawCustomJsonlEvent && resumeCheckpointId ? { resumeCheckpointId } : {}),
         };
       }
       if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
-        return { text: "", sessionId, usage };
+        return partialOutput;
       }
       if (supportsCliJsonlToolEvents(params)) {
         return {
-          text: "",
-          sessionId,
-          usage,
+          ...partialOutput,
           errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
         };
       }
-      const text = texts.join("\n").trim();
-      return text
-        ? { text, sessionId, usage, ...(resumeCheckpointId ? { resumeCheckpointId } : {}) }
-        : null;
+      return null;
     },
   };
 }

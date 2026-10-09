@@ -41,7 +41,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
-export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatHistoryRunObservation = {
   runId: string;

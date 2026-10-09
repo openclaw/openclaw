@@ -504,6 +504,60 @@ describe("session activity semantics", () => {
 });
 
 describe("session activity people filter", () => {
+  it("groups matching connection facts while retaining network differences and person-scoped disclosure", () => {
+    const entry = {
+      ts: 1,
+      host: "openclaw-control-ui",
+      clientId: "openclaw-control-ui",
+      mode: "webchat",
+      deviceFamily: "Mac",
+      platform: "MacIntel",
+      ip: "203.0.113.7",
+      timeZone: "Europe/Vienna",
+    };
+    const person = {
+      id: "online",
+      identity: { type: "profile" as const, id: "online" },
+      watchedSessions: [],
+      entries: [
+        entry,
+        { ...entry, lastInputSeconds: 30 },
+        { ...entry, lastInputSeconds: 5 },
+        { ...entry, ip: "203.0.113.8" },
+      ],
+    };
+    const input = props({
+      filters: { personId: "online", query: "", time: "7d" },
+      presenceViewers: [person],
+    });
+    show(input);
+    expect(container.querySelector(".activity-feed__connection-summary")?.textContent).toBe(
+      "Mac · Web app",
+    );
+    const details = container.querySelector<HTMLDetailsElement>(
+      ".activity-feed__connection-details",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent?.trim()).toBe("Connection details · 4");
+    const groups = details.querySelectorAll(".activity-feed__connection");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.textContent).toContain("3 connections");
+    expect(groups[0]?.textContent).toContain("Last input 5s ago");
+    expect(groups[1]?.textContent).toContain("1 connection");
+    expect(groups[1]?.textContent).toContain("203.0.113.8");
+    details.open = true;
+    show({ ...input, presenceViewers: [{ ...person, entries: [entry] }] });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(details.querySelector("summary")?.textContent?.trim()).toBe("Connection details · 1");
+    show({
+      ...input,
+      filters: { ...input.filters, personId: "other" },
+      presenceViewers: [{ ...person, id: "other", identity: { type: "profile", id: "other" } }],
+    });
+    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
+  });
+
   it.each([false, true])(
     "keeps online identity details and only known watched sessions in recency order (facet present: %s)",
     (hasFacet) => {
@@ -544,11 +598,11 @@ describe("session activity people filter", () => {
       expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
       expect(identity?.textContent).toContain("Online");
       expect(
-        [...container.querySelectorAll(".activity-feed__device-name")].map((device) =>
+        [...container.querySelectorAll(".activity-feed__connection strong")].map((device) =>
           device.textContent?.trim(),
         ),
-      ).toEqual(["Alice's Mac", "Alice's phone"]);
-      const device = identity?.querySelector(".activity-feed__device")?.textContent;
+      ).toEqual(["Mac16,6 · Windows", "Alice's phone"]);
+      const device = identity?.querySelector(".activity-feed__connection")?.textContent;
       expect(device).toContain("203.0.113.7");
       expect(device).toContain("Europe/Vienna");
       expect(

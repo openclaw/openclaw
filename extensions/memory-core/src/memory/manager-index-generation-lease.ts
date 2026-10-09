@@ -238,23 +238,12 @@ export async function acquireMemoryIndexReadGeneration(
   return await acquire(databasePath, excludeMutations ? "retrieval" : "read", signal);
 }
 
-export async function withMemoryIndexMutationGeneration<T>(
+export async function withMemoryIndexGeneration<T>(
   databasePath: string,
+  kind: "mutation" | "write",
   run: () => Promise<T>,
 ): Promise<T> {
-  const release = await acquire(databasePath, "mutation");
-  try {
-    return await run();
-  } finally {
-    await release();
-  }
-}
-
-export async function withMemoryIndexPublishGeneration<T>(
-  databasePath: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const release = await acquire(databasePath, "write");
+  const release = await acquire(databasePath, kind);
   try {
     return await run();
   } finally {

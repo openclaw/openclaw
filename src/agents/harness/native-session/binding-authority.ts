@@ -382,6 +382,7 @@ export function createNativeSessionBindingAuthority(
         sessionEntryCurrent: restriction,
         sessionSource: {
           assertCurrent: assertMutationCurrent,
+          assertPreparedCurrent: assertCurrent,
           checks: sourceChecks,
           nativeSource: nativeChecks.length > 0,
         },

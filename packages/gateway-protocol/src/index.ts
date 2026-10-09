@@ -18,7 +18,6 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/worker-gateway-tool.js";
 export * from "./schema/worker-computer.js";
 export * from "./schema/computer.js";
-export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/plugin-credentials.js";
 export * from "./schema/web-search.js";
@@ -32,14 +31,12 @@ export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
 export * from "./schema/transcripts.js";
 export {
-  SessionConversationLinkSchema,
   SessionCreatedActorSchema,
   SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
-  type SessionConversationLink,
   type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,

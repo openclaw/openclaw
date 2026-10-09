@@ -89,42 +89,24 @@ export async function resolveAcpTargetSessionKey(params: {
 
   const threadBound = await resolveBoundAcpThreadSessionKey(params.commandParams);
   params.commandParams.opts?.abortSignal?.throwIfAborted();
-  if (threadBound) {
-    return {
-      ok: true,
-      ...resolveAcpSessionTarget({
-        cfg: params.commandParams.cfg,
-        sessionKey: threadBound,
-        agentId:
-          threadBound === params.commandParams.sessionKey
-            ? params.commandParams.agentId
-            : undefined,
-      }),
-    };
-  }
-
-  if (token) {
+  const sessionKey =
+    threadBound ||
+    (!token && resolveRequesterSessionKey(params.commandParams, { preferCommandTarget: true }));
+  if (!sessionKey) {
     return {
       ok: false,
-      error: `Unable to resolve session target: ${token}`,
-    };
-  }
-
-  const fallback = resolveRequesterSessionKey(params.commandParams, {
-    preferCommandTarget: true,
-  });
-  if (!fallback) {
-    return {
-      ok: false,
-      error: "Missing session key.",
+      error: token ? `Unable to resolve session target: ${token}` : "Missing session key.",
     };
   }
   return {
     ok: true,
     ...resolveAcpSessionTarget({
       cfg: params.commandParams.cfg,
-      sessionKey: fallback,
-      agentId: params.commandParams.agentId,
+      sessionKey,
+      agentId:
+        threadBound && threadBound !== params.commandParams.sessionKey
+          ? undefined
+          : params.commandParams.agentId,
     }),
   };
 }

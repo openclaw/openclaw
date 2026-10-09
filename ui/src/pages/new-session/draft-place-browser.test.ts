@@ -176,7 +176,7 @@ describe("DraftPlaceBrowser", () => {
         false,
         { host, root },
       );
-      browser.onPopoverShow("project");
+      browser.popoverCallbacks("project").onPopoverShow();
       browse.focus();
       browser.selectGatewayBrowser("/workspace");
       const path = document.createElement("input");
@@ -233,21 +233,21 @@ describe("DraftPlaceBrowser", () => {
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
     onTestFinished(() => writeStorage.mockRestore());
     browser.changeProjectQuery("openclaw");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     browser.changeEnvironmentQuery("runner");
 
     expect(browser.environmentQuery).toBe("runner");
     expect(browser.projectQuery).toBe("openclaw");
     expect(writeStorage).not.toHaveBeenCalled();
 
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("where").onPopoverHide();
     browser.onPopoverAfterHide("where");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     expect(browser.environmentQuery).toBe("");
     expect(browser.projectQuery).toBe("openclaw");
 
     browser.changeEnvironmentQuery("cloud");
-    browser.onPopoverShow("project");
+    browser.popoverCallbacks("project").onPopoverShow();
     expect(browser.environmentQuery).toBe("cloud");
     browser.disconnect();
     expect(browser.environmentQuery).toBe("");
@@ -448,8 +448,8 @@ describe("DraftPlaceBrowser", () => {
   it("tracks overlapping popover hides independently", () => {
     const { browser } = createBrowser(async () => ({}));
 
-    browser.onPopoverHide("project");
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("project").onPopoverHide();
+    browser.popoverCallbacks("where").onPopoverHide();
 
     expect(browser.popoverHiding("project")).toBe(true);
     expect(browser.popoverHiding("where")).toBe(true);

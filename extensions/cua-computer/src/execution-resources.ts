@@ -51,10 +51,6 @@ function resourceError(message: string): Error {
   return new Error(`COMPUTER_INVALID_RESOURCE: ${message}`);
 }
 
-function newHandle(): string {
-  return `${RESOURCE_HANDLE_PREFIX}${randomUUID()}`;
-}
-
 async function requireEntry(
   resources: Map<string, ResourceEntry>,
   executionRoot: SafeRoot,
@@ -117,25 +113,10 @@ async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
     if (existing) {
       return existing;
     }
-    const handle = newHandle();
+    const handle = `${RESOURCE_HANDLE_PREFIX}${randomUUID()}`;
     resources.set(handle, { kind, relativePath });
     handlesByPath.set(relativePath, handle);
     return handle;
-  };
-
-  const removeHandle = async (handle: string) => {
-    const entry = resources.get(handle);
-    if (!entry) {
-      return;
-    }
-    await removePathWithinRoot({
-      rootDir: executionRoot.rootReal,
-      relativePath: entry.relativePath,
-      recursive: true,
-      force: true,
-    });
-    resources.delete(handle);
-    handlesByPath.delete(entry.relativePath);
   };
 
   return {
@@ -197,7 +178,18 @@ async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
     },
     async discard(handle) {
       assertActive();
-      await removeHandle(handle);
+      const entry = resources.get(handle);
+      if (!entry) {
+        return;
+      }
+      await removePathWithinRoot({
+        rootDir: executionRoot.rootReal,
+        relativePath: entry.relativePath,
+        recursive: true,
+        force: true,
+      });
+      resources.delete(handle);
+      handlesByPath.delete(entry.relativePath);
     },
     async dispose(discard) {
       if (disposed) {

@@ -43,7 +43,6 @@ export async function spawnNodeTerminalPty(
   let startupError: Error | undefined;
   let stderr = "";
   let paused = false;
-  let subscribed = false;
   let ptyPid: number | undefined;
   let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
   let helperExit: typeof exited;
@@ -200,21 +199,19 @@ export async function spawnNodeTerminalPty(
     },
     resume: () => {
       paused = false;
-      if (subscribed) {
+      if (stdout.listenerCount("data") > 0) {
         stdout.resume();
       }
     },
     onData: (listener) => {
       stdout.on("data", listener);
-      subscribed = true;
       if (!paused) {
         stdout.resume();
       }
       return {
         dispose() {
           stdout.off("data", listener);
-          subscribed = stdout.listenerCount("data") > 0;
-          if (!subscribed) {
+          if (stdout.listenerCount("data") === 0) {
             stdout.pause();
           }
         },

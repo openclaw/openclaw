@@ -2,13 +2,13 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
-type AgentIdentityGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-};
+type AgentIdentityGatewaySnapshot = Pick<
+  ApplicationGatewaySnapshot,
+  "client" | "phase" | "restartPending" | "suspensionPhase"
+>;
 
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
@@ -162,7 +162,7 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || snapshot.phase !== "connected") {
+      if (!client || !isGatewayAvailable(snapshot)) {
         return;
       }
       const generation = connectionGeneration;

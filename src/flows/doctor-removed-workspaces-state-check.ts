@@ -118,23 +118,18 @@ export const removedWorkspacesStateCheck: HealthCheck = {
       return [];
     }
     const collisions = await configuredAgentWorkspaceCollisions(ctx.cfg, target);
-    if (collisions.length > 0) {
-      return [
-        {
-          checkId: CHECK_ID,
-          severity: "warning",
-          message: collisionWarning(target, collisions),
-          path: target,
-        },
-      ];
-    }
     return [
       {
         checkId: CHECK_ID,
         severity: "warning",
-        message: `Retired Workspaces plugin state remains at ${target}.`,
+        message:
+          collisions.length > 0
+            ? collisionWarning(target, collisions)
+            : `Retired Workspaces plugin state remains at ${target}.`,
         path: target,
-        fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state.",
+        ...(collisions.length > 0
+          ? {}
+          : { fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state." }),
       },
     ];
   },

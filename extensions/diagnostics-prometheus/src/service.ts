@@ -17,11 +17,9 @@ import type {
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 import {
   escapeHelp,
-  formatLabelEntry,
   formatLabels,
   formatPrometheusNumber,
   seconds,
-  sortedLabels,
   type LabelSet,
 } from "./prometheus-format.js";
 import {
@@ -32,6 +30,10 @@ import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import {
+  createGatewayWorkMetricsRecorder,
+  recordSessionDiagnosticEvent,
+} from "./service-sessions.js";
 import { recordWorkerRequest } from "./service-worker.js";
 
 const BYTE_BUCKETS = [
@@ -80,27 +82,16 @@ function renderPrometheusMetrics(store: PrometheusMetricStore): string {
   for (const [key, sample] of snapshot.histograms) {
     const name = key.split("|", 1)[0] ?? "";
     emitHeader(name, "histogram", sample.help);
-    const labels = formatLabels(sample.labels);
-    const bucketLabels = sortedLabels({ ...sample.labels, le: "" });
-    const boundIndex = bucketLabels.findIndex(([labelKey]) => labelKey === "le");
-    const bucketFragments = bucketLabels.map(formatLabelEntry);
-    // Only the bound changes between buckets; reuse sorted, escaped labels within this scrape.
     for (let index = 0; index < sample.buckets.length; index += 1) {
-      const bucket = sample.buckets[index];
-      if (bucket === undefined) {
-        continue;
-      }
-      bucketFragments[boundIndex] = `le="${String(bucket)}"`;
       lines.push(
-        `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
+        `${sample.bucketPrefixes[index]}${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
       );
     }
-    bucketFragments[boundIndex] = 'le="+Inf"';
     lines.push(
-      `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.count)}`,
+      `${sample.bucketPrefixes[sample.buckets.length]}${formatPrometheusNumber(sample.count)}`,
     );
-    lines.push(`${name}_sum${labels} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(`${name}_count${labels} ${formatPrometheusNumber(sample.count)}`);
+    lines.push(`${name}_sum${sample.labels} ${formatPrometheusNumber(sample.sum)}`);
+    lines.push(`${name}_count${sample.labels} ${formatPrometheusNumber(sample.count)}`);
   }
 
   lines.push("");
@@ -440,31 +431,9 @@ function recordDiagnosticEvent(
       return;
     }
     case "session.recovery.requested":
-    case "session.recovery.completed": {
-      const labels = {
-        action:
-          evt.type === "session.recovery.completed"
-            ? normalizeDiagnosticValue(evt.action, "unknown")
-            : evt.allowActiveAbort
-              ? "abort"
-              : "recover",
-        active_work_kind: normalizeDiagnosticValue(evt.activeWorkKind, "none"),
-        state: evt.state,
-        status: evt.type === "session.recovery.completed" ? evt.status : "requested",
-      };
-      store.counter(
-        "openclaw_session_recovery_total",
-        "Session recovery observations by status and action.",
-        labels,
-      );
-      store.histogram(
-        "openclaw_session_recovery_age_seconds",
-        "Age of sessions selected for recovery in seconds.",
-        labels,
-        seconds(evt.ageMs),
-      );
+    case "session.recovery.completed":
+      recordSessionDiagnosticEvent(store, evt);
       return;
-    }
     case "queue.lane.enqueue":
     case "queue.lane.dequeue":
       store.gauge(
@@ -485,45 +454,9 @@ function recordDiagnosticEvent(
       }
       return;
     case "session.state":
-      store.counter("openclaw_session_state_total", "Session state observations.", {
-        reason: normalizeDiagnosticValue(evt.reason, "none"),
-        state: evt.state,
-      });
-      if (evt.queueDepth !== undefined) {
-        store.gauge(
-          "openclaw_session_queue_depth",
-          "Latest observed session queue depth.",
-          {
-            state: evt.state,
-          },
-          numericValue(evt.queueDepth),
-        );
-      }
-      return;
-    case "session.stuck": {
-      const labels = {
-        reason: normalizeDiagnosticValue(evt.reason, "none"),
-        state: evt.state,
-      };
-      store.counter(
-        "openclaw_session_stuck_total",
-        "Stale session bookkeeping observations with no active work.",
-        labels,
-      );
-      store.histogram(
-        "openclaw_session_stuck_age_seconds",
-        "Age of stale session bookkeeping observations in seconds.",
-        labels,
-        seconds(evt.ageMs),
-      );
-      return;
-    }
+    case "session.stuck":
     case "session.turn.created":
-      store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
-        agent: normalizeDiagnosticValue(evt.agentId),
-        channel: normalizeDiagnosticValue(evt.channel),
-        trigger: evt.trigger,
-      });
+      recordSessionDiagnosticEvent(store, evt);
       return;
     case "diagnostic.child_process.spawn":
       recordChildProcessSpawn(store, evt);
@@ -709,6 +642,7 @@ type TrustedExporterDiagnosticsBridge = NonNullable<
 export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeWork: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
   const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
     try {
@@ -747,6 +681,9 @@ export function createDiagnosticsPrometheusExporter() {
           1,
         );
       }
+      unsubscribeWork = ctx.internalDiagnostics?.onGatewayWorkMetrics?.(
+        createGatewayWorkMetricsRecorder(store),
+      );
       unsubscribe = subscribe(
         (event, metadata) => {
           try {
@@ -770,6 +707,8 @@ export function createDiagnosticsPrometheusExporter() {
       });
     },
     stop() {
+      unsubscribeWork?.();
+      unsubscribeWork = undefined;
       unsubscribe?.();
       unsubscribe = undefined;
       reportExporterStatus({

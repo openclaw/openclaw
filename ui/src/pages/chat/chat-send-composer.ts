@@ -317,16 +317,13 @@ export function settleChatCommandComposer(
   completed: boolean,
   attachments: readonly ChatAttachment[] | undefined,
 ): void {
-  if (!completed) {
-    if (!restoreFailedCommandComposer(host, recovery)) {
-      releaseCommandComposerAttachments(host, recovery, attachments);
-    }
-    return;
-  }
-  if (submittedCommandConnectionIsCurrent(host, recovery)) {
+  if (completed && submittedCommandConnectionIsCurrent(host, recovery)) {
     clearOwnedCommandComposerFallback(host, recovery);
   }
-  if (!commandComposerFallbackRetainsAttachments(host, recovery)) {
+  const retained = completed
+    ? commandComposerFallbackRetainsAttachments(host, recovery)
+    : restoreFailedCommandComposer(host, recovery);
+  if (!retained) {
     releaseCommandComposerAttachments(host, recovery, attachments);
   }
 }
@@ -376,8 +373,7 @@ export function cancelChatDelivery(
   }
   if (plan.attachments) {
     host.chatAttachments = snapshot.previousAttachments ?? [];
-  }
-  if (!plan.attachments) {
+  } else {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
   return true;

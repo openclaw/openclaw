@@ -1,4 +1,3 @@
-/** Type contracts for plugin-owned CLI backend integrations. */
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
@@ -6,9 +5,7 @@ import type { ContextEngineHostCapability } from "../context-engine/types.js";
 type CliBackendNoOutputWatchdog = {
   /** Fraction of overall timeout used when fixed timeout is not set. */
   noOutputTimeoutRatio?: number;
-  /** Lower bound for computed watchdog timeout. */
   minMs?: number;
-  /** Upper bound for computed watchdog timeout. */
   maxMs?: number;
 };
 
@@ -20,21 +17,16 @@ export type CliBackendConfig = {
   args?: string[];
   /** Output parsing mode (default: json). */
   output?: "json" | "text" | "jsonl";
-  /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
   jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
-  /** Long-lived CLI process mode. */
   liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
   maxPromptArgChars?: number;
-  /** Extra env vars injected for this CLI. */
   env?: Record<string, string>;
-  /** Env vars to remove before launching this CLI. */
   clearEnv?: string[];
-  /** Flag used to pass model id (e.g. --model). */
   modelArg?: string;
   /** Model aliases mapping (OpenClaw model id → CLI model id). */
   modelAliases?: Record<string, string>;
@@ -46,29 +38,19 @@ export type CliBackendConfig = {
   forkArg?: string;
   /** Argument followed by an assistant checkpoint id to bound one resumed fork. */
   resumeAtArg?: string;
-  /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
   sessionIdFields?: string[];
-  /** Flag used to pass system prompt. */
   systemPromptArg?: string;
-  /** Flag used to pass a system prompt file. */
   systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
-  /** Config override key used to pass a system prompt file. */
   systemPromptFileConfigKey?: string;
-  /** System prompt behavior (append vs replace). */
   systemPromptMode?: "append" | "replace";
-  /** When to send system prompt. */
   systemPromptWhen?: "first" | "always" | "never";
-  /** Flag used to pass image paths. */
   imageArg?: string;
-  /** How to pass multiple images. */
   imageMode?: "repeat" | "list";
-  /** Where staged image files should live before handing them to the CLI. */
   imagePathScope?: "temp" | "workspace";
-  /** Serialize runs for this CLI. */
   serialize?: boolean;
   /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
   reseedFromRawTranscriptWhenUncompacted?: boolean;
@@ -79,13 +61,9 @@ export type CliBackendConfig = {
    * `invalidated-only` retries fresh only when the failure proves the binding expired.
    */
   freshSessionRecovery?: "replace-binding" | "invalidated-only";
-  /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
-    /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
-      /** Fresh/new sessions (non-resume). */
       fresh?: CliBackendNoOutputWatchdog;
-      /** Resume sessions. */
       resume?: CliBackendNoOutputWatchdog;
     };
   };
@@ -448,9 +426,6 @@ type CliBackendPluginBase = {
    * - Gemini: system-level `settings.json`
    */
   bundleMcpMode?: CliBundleMcpMode;
-  /**
-   * Optional config normalizer applied to the registered adapter.
-   */
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
@@ -526,12 +501,6 @@ type CliBackendPluginBase = {
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**
-   * Exact-tool execution suppresses ambient instruction files, skills, hooks,
-   * and plugins so the host-prepared instruction snapshot remains authoritative.
-   * Required for rooted runs; omission keeps those runs unavailable.
-   */
-  isolatesInstructionsWithExactTools?: true;
-  /**
    * Maps the observed native list, intersected with the host selection, to equivalent
    * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.
    * Never infer capabilities decided by unobserved model or sandbox settings.
@@ -584,5 +553,4 @@ type CliBackendNativeCompactionContract =
       manualCompaction?: never;
     };
 
-/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = CliBackendPluginBase & CliBackendNativeCompactionContract;

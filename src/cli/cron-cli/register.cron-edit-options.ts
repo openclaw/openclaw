@@ -78,30 +78,29 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
   const threadId = parseCronThreadIdOption(opts.threadId);
-  const hasDeliveryThreadId = typeof threadId === "number";
-  const hasDeliveryTarget =
-    typeof opts.channel === "string" ||
-    typeof opts.to === "string" ||
-    hasDeliveryThreadId ||
-    Boolean(opts.clearChannel) ||
-    Boolean(opts.clearTo) ||
-    Boolean(opts.clearThreadId);
-  const hasDeliveryAccount = typeof opts.account === "string" || Boolean(opts.clearAccount);
+  const deliveryFields = (
+    [
+      ["channel", "channel", opts.channel, opts.clearChannel],
+      ["to", "to", opts.to, opts.clearTo],
+      ["thread-id", "threadId", threadId, opts.clearThreadId],
+      ["account", "accountId", opts.account, opts.clearAccount],
+    ] as const
+  ).map(([flag, key, value, clear]) => ({
+    flag,
+    key,
+    value,
+    clear,
+    present: key === "threadId" ? typeof value === "number" : typeof value === "string",
+  }));
+  const hasDeliveryTarget = deliveryFields.some((field) => field.present || field.clear);
   const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
-  if (hasWebhookDelivery && (hasDeliveryTarget || hasDeliveryAccount)) {
+  if (hasWebhookDelivery && hasDeliveryTarget) {
     throw new CronCliError("--webhook cannot be combined with chat delivery options.");
   }
-  if (typeof opts.channel === "string" && opts.clearChannel) {
-    throw new CronCliError("Use --channel or --clear-channel, not both");
-  }
-  if (typeof opts.to === "string" && opts.clearTo) {
-    throw new CronCliError("Use --to or --clear-to, not both");
-  }
-  if (hasDeliveryThreadId && opts.clearThreadId) {
-    throw new CronCliError("Use --thread-id or --clear-thread-id, not both");
-  }
-  if (typeof opts.account === "string" && opts.clearAccount) {
-    throw new CronCliError("Use --account or --clear-account, not both");
+  for (const { flag, present, clear } of deliveryFields) {
+    if (present && clear) {
+      throw new CronCliError(`Use --${flag} or --clear-${flag}, not both`);
+    }
   }
 
   // Unlike cwd, command stdin intentionally accepts empty and whitespace strings.
@@ -133,55 +132,39 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (hasTimeoutSeconds && hasSystemEventPatch) {
     assertCronTimeoutSupported("systemEvent");
   }
-  let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
-  if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
+  const requestedPayloadKinds = (
+    [
+      ["systemEvent", hasSystemEventPatch],
+      ["agentTurn", hasAgentTurnSpecificPayloadField],
+      ["command", hasCommandSpecificPayloadField],
+      ["script", hasScriptSpecificPayloadField],
+    ] as const
+  )
+    .filter(([, requested]) => requested)
+    .map(([kind]) => kind);
+  let payloadKind: CronJob["payload"]["kind"] | undefined = requestedPayloadKinds[0];
+  if (requestedPayloadKinds.length === 0 && (hasTimeoutSeconds || hasToolsAllowPatch)) {
+    // Shared policy-only edits preserve the stored execution kind.
     const existingJob = await loadExistingJob();
-    const existingKind = existingJob.payload.kind;
-    assertCronTimeoutSupported(existingKind);
-    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
-      throw new CronCliError(`--timeout-seconds is not supported for ${existingKind} jobs.`);
+    payloadKind = existingJob.payload.kind;
+    if (hasTimeoutSeconds) {
+      assertCronTimeoutSupported(payloadKind);
     }
-    timeoutOnlyPayloadKind = existingKind;
-  }
-  let toolsOnlyPayloadKind: CronJob["payload"]["kind"] | undefined;
-  if (
-    hasToolsAllowPatch &&
-    !hasSystemEventPatch &&
-    !hasAgentTurnSpecificPayloadField &&
-    !hasCommandSpecificPayloadField &&
-    !hasScriptSpecificPayloadField &&
-    !hasTimeoutSeconds
-  ) {
-    // Tool grants are shared by every payload kind; a policy-only edit must
-    // preserve the stored execution kind instead of creating an agent turn.
-    const existingJob = await loadExistingJob();
     if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
-      throw new CronCliError("System-owned cron jobs cannot be edited by cron clients.");
+      throw new CronCliError(
+        hasTimeoutSeconds
+          ? `--timeout-seconds is not supported for ${payloadKind} jobs.`
+          : "System-owned cron jobs cannot be edited by cron clients.",
+      );
     }
-    toolsOnlyPayloadKind = existingJob.payload.kind;
-  }
-  const hasAgentTurnPatch =
-    hasAgentTurnSpecificPayloadField ||
-    timeoutOnlyPayloadKind === "agentTurn" ||
-    (hasToolsAllowPatch && toolsOnlyPayloadKind === "agentTurn");
-  const hasCommandPatch =
-    hasCommandSpecificPayloadField ||
-    timeoutOnlyPayloadKind === "command" ||
-    toolsOnlyPayloadKind === "command";
-  const hasScriptPatch = hasScriptSpecificPayloadField || toolsOnlyPayloadKind === "script";
-  const hasSystemEventOrToolsPatch = hasSystemEventPatch || toolsOnlyPayloadKind === "systemEvent";
-  if (
-    [hasSystemEventOrToolsPatch, hasAgentTurnPatch, hasCommandPatch, hasScriptPatch].filter(Boolean)
-      .length > 1
-  ) {
+  } else if (requestedPayloadKinds.length > 1) {
     throw new CronCliError("Choose at most one payload change");
   }
-
   let payload: Record<string, unknown> | undefined;
-  if (hasSystemEventOrToolsPatch) {
+  if (payloadKind === "systemEvent") {
     payload = { kind: "systemEvent" };
     assignIf(payload, "text", String(opts.systemEvent), hasSystemEventPatch);
-  } else if (hasAgentTurnPatch) {
+  } else if (payloadKind === "agentTurn") {
     payload = { kind: "agentTurn" };
     assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
     assignIf(payload, "model", opts.clearModel ? null : model);
@@ -194,7 +177,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
-  } else if (hasCommandPatch) {
+  } else if (payloadKind === "command") {
     payload = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
     assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
@@ -204,7 +187,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "noOutputTimeoutSeconds", noOutputTimeoutSeconds);
     assignIf(payload, "outputMaxBytes", outputMaxBytes);
-  } else if (hasScriptPatch) {
+  } else if (payloadKind === "script") {
     payload = { kind: "script" };
     if (scriptPath) {
       payload.script = await readCronPayloadScript(scriptPath);
@@ -223,7 +206,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     patch.payload = payload;
   }
 
-  if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+  if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
     const delivery: Record<string, unknown> = {};
     if (hasDeliveryModeFlag) {
       delivery.mode = hasWebhookDelivery
@@ -235,27 +218,12 @@ export async function resolveCronEditPayloadDeliveryPatch(
       // Back-compat: enabling best-effort historically implied announce mode.
       delivery.mode = "announce";
     }
-    if (opts.clearChannel) {
-      delivery.channel = null;
-    } else if (typeof opts.channel === "string") {
-      delivery.channel = normalizeOptionalString(opts.channel);
-    }
-    if (hasWebhookDelivery) {
-      delivery.to = webhookUrl;
-    } else if (opts.clearTo) {
-      delivery.to = null;
-    } else if (typeof opts.to === "string") {
-      delivery.to = normalizeOptionalString(opts.to);
-    }
-    if (opts.clearThreadId) {
-      delivery.threadId = null;
-    } else if (hasDeliveryThreadId) {
-      delivery.threadId = threadId;
-    }
-    if (opts.clearAccount) {
-      delivery.accountId = null;
-    } else if (typeof opts.account === "string") {
-      delivery.accountId = normalizeOptionalString(opts.account);
+    for (const { key, value, present, clear } of deliveryFields) {
+      if (key === "to" && hasWebhookDelivery) {
+        delivery.to = webhookUrl;
+      } else if (clear || present) {
+        delivery[key] = clear ? null : key === "threadId" ? value : normalizeOptionalString(value);
+      }
     }
     if (typeof opts.bestEffortDeliver === "boolean") {
       delivery.bestEffort = opts.bestEffortDeliver;

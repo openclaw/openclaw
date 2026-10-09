@@ -735,6 +735,84 @@ describe("manual Codex transcript byte compaction", () => {
     },
   );
 
+  it("rearms manual host compaction after a failed byte read and one budget of growth", async () => {
+    const maxBytes = 64;
+    const { params, target, hostCompact, publicCompact } = await createCodexFixture(maxBytes);
+    const manager = await sessions.SessionManager.openAsync(target, workspaceDir);
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "old history ".repeat(512),
+      timestamp: 2,
+    });
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "Recorded." }]));
+    await manager.appendMessageAsync({
+      role: "user",
+      content: "Keep this short tail.",
+      timestamp: 3,
+    });
+    await manager.appendMessageAsync(createAssistant(model, [{ type: "text", text: "Kept." }]));
+    const { readSessionTranscriptAccountingAsync } =
+      await import("../../gateway/session-transcript-readers.js");
+    const beforeBytes = (
+      await readSessionTranscriptAccountingAsync(target, {
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    ).byteSize;
+    const { historyLane } =
+      await import("../../config/sessions/session-transcript-worker-resources.js");
+    const run = historyLane.pool.run.bind(historyLane.pool);
+    let failedAccountingReplies = 0;
+    const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
+      let accountingRead = false;
+      return run(async () => {
+        const request = typeof input === "function" ? await input() : input;
+        accountingRead =
+          request.kind === "history-page" && request.request.kind === "active-accounting";
+        return request;
+      }, options).then((snapshot) => {
+        if (accountingRead && hostCompact.mock.calls.length > 0) {
+          failedAccountingReplies++;
+          throw new Error("Post-compaction byte read reply lost");
+        }
+        return snapshot;
+      });
+    });
+    try {
+      await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    } finally {
+      read.mockRestore();
+    }
+    expect(failedAccountingReplies).toBeGreaterThan(0);
+    const staleLatch = accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch;
+    expect(staleLatch?.activeBytes).toBe(beforeBytes);
+    const afterBytes = (
+      await readSessionTranscriptAccountingAsync(target, {
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    ).byteSize;
+    expect(afterBytes).toBeLessThan(beforeBytes!);
+    expect(afterBytes).toBeGreaterThan(maxBytes);
+
+    await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(hostCompact).toHaveBeenCalledOnce();
+    const rebasedLatch = accessor.loadSessionEntryReadOnly(target)?.transcriptByteCompactionLatch;
+    expect(rebasedLatch?.activeBytes).toBeLessThan(staleLatch!.activeBytes);
+    await (
+      await sessions.SessionManager.openAsync(target, workspaceDir)
+    ).appendMessageAsync({
+      role: "user",
+      content: "x".repeat(maxBytes),
+      timestamp: 4,
+    });
+
+    await expect(compactQueued(params)).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(hostCompact).toHaveBeenCalledTimes(2);
+    expect(publicCompact).toHaveBeenCalledTimes(3);
+    expect(accessor.loadSessionEntryReadOnly(target)?.compactionCount).toBe(2);
+  });
+
   it("keeps below-threshold manual requests native-only", async () => {
     const { params, target, hostCompact, publicCompact, privateNativeCompaction } =
       await createCodexFixture("20mb");

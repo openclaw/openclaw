@@ -46,8 +46,9 @@ vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: mocks.policy,
 }));
 vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
+// mock-isolation: Provider status uses catalog fixtures without opening unrelated credential stores.
 vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  createModelCatalogDecisions: mocks.decisions,
+  prepareModelCatalogDecisions: mocks.decisions,
   resolveCatalogDecisionRuntime: mocks.runtime,
 }));
 vi.mock("../../agents/native-web-search.js", () => ({ resolveNativeWebSearchRoute: mocks.native }));
@@ -94,7 +95,7 @@ beforeEach(() => {
   mocks.native.mockReturnValue({ kind: "managed" });
   mocks.runtime.mockReturnValue({ id: "openclaw" });
   mocks.decisions.mockReturnValue({
-    evaluateEntry: async () => ({}),
+    evaluateEntry: () => ({}),
     evaluateNative: (_entry: unknown, host: unknown) => host,
   });
   mocks.catalog.mockResolvedValue({
@@ -162,7 +163,7 @@ describe("Search settings status projection", () => {
   it("uses the authenticated requester's existing model account decision", async () => {
     mocks.decisions.mockImplementation(
       ({ requesterProfileId }: { requesterProfileId?: string }) => ({
-        evaluateEntry: async () => ({
+        evaluateEntry: () => ({
           runtimeAuth: { id: requesterProfileId === "personal" ? "custom-harness" : "openclaw" },
         }),
         evaluateNative: (_entry: unknown, host: unknown) => host,

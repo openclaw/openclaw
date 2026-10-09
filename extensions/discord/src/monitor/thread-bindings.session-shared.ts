@@ -25,15 +25,9 @@ export function resolveBindingIdsForTargetSession(params: {
   targetKind?: ThreadBindingTargetKind;
 }) {
   ensureBindingsLoaded();
-  const targetSessionKey = params.targetSessionKey.trim();
-  if (!targetSessionKey) {
-    return [];
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   return resolveBindingIdsForSession({
-    targetSessionKey,
-    accountId,
-    targetKind: params.targetKind,
+    ...params,
+    accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,
   });
 }
 

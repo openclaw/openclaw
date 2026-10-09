@@ -56,7 +56,6 @@ type TranscriptionRelaySession = {
   cleanupTimer: ReturnType<typeof setTimeout>;
   receivedAudio: boolean;
   draining: boolean;
-  closed: boolean;
 };
 
 type CreateTalkTranscriptionRelaySessionParams = {
@@ -67,14 +66,6 @@ type CreateTalkTranscriptionRelaySessionParams = {
 };
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
-
-function inferSampleRateFromAudioFormat(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const match = value.match(/_(\d+)$/);
-  return match ? readFiniteNumber(match[1]) : undefined;
-}
 
 /** Verifies provider config matches the audio format the browser relay emits. */
 function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProviderConfig): void {
@@ -101,7 +92,9 @@ function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProvid
 
   const sampleRate =
     readFiniteNumber(providerConfig.sampleRate ?? providerConfig.sample_rate) ??
-    inferSampleRateFromAudioFormat(encodingValue);
+    (typeof encodingValue === "string"
+      ? readFiniteNumber(encodingValue.match(/_(\d+)$/)?.[1])
+      : undefined);
   if (sampleRate && sampleRate !== RELAY_INPUT_SAMPLE_RATE_HZ) {
     throw new Error(
       `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
@@ -135,10 +128,9 @@ function closeTranscriptionSession(
   session: TranscriptionRelaySession,
   reason: "completed" | "error",
 ): void {
-  if (session.closed) {
+  if (transcriptionSessions.get(session.id) !== session) {
     return;
   }
-  session.closed = true;
   transcriptionSessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
@@ -296,7 +288,6 @@ export function createTalkTranscriptionRelaySession(
     }, TRANSCRIPTION_SESSION_TTL_MS),
     receivedAudio: false,
     draining: false,
-    closed: false,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();

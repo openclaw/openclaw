@@ -51,7 +51,7 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
-export type PersistedSessionRunStatus = SessionRunStatus;
+export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
 export type SessionOrigin = {
@@ -648,14 +648,14 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
+  /** Original host-admitted operator basis, owned by the exact restart source claim. */
+  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
-export function isTerminalSessionStatus(
-  status: unknown,
-): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+export function isTerminalSessionStatus(status: unknown): status is PersistedSessionRunStatus {
   return (
     status === "done" ||
     status === "failed" ||
@@ -796,9 +796,6 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
-  }
-  if (existing.conversationLink !== undefined) {
-    next.conversationLink = existing.conversationLink;
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;

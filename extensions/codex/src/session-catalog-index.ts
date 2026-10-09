@@ -36,7 +36,7 @@ import {
 } from "./session-catalog-native-page.js";
 import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
-  projectCodexCatalogThread,
+  projectCodexCatalogPage,
   CodexCatalogProjections,
   CodexCatalogProjectionCapacityError,
 } from "./session-catalog-projection.js";
@@ -248,14 +248,12 @@ export class CodexCatalogIndex {
           do {
             observedRevision = await this.hydrate(this.availability.complete);
           } while (observedRevision !== this.sourceRevision);
-          // A complete replacement walk also satisfies a pending snapshot refresh.
-          this.needsNativeRefresh = false;
-        }
-        if (this.needsNativeRefresh) {
+        } else if (this.needsNativeRefresh) {
           await this.reconcile();
           await this.reconcileNative();
-          this.needsNativeRefresh = false;
         }
+        // A complete replacement walk also satisfies a pending snapshot refresh.
+        this.needsNativeRefresh = false;
         this.initialized = true;
         this.failure = undefined;
         this.currency.start();
@@ -512,30 +510,25 @@ export class CodexCatalogIndex {
     }
     try {
       this.currency.requestNativeRefresh();
-      return this.upsertPreparedThread(
-        projectCodexCatalogNativeThread(thread, sanitizeTerminalText),
-      );
+      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+      return this.projections
+        .run(() => {
+          this.observations.mark(prepared.id);
+          const fields = this.captureFields();
+          return this.observations.observe((isCurrent) =>
+            this.projectThread(prepared, isCurrent, fields),
+          );
+        })
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          if (!(error instanceof CodexCatalogProjectionCapacityError)) {
+            throw error;
+          }
+          this.report(error);
+        });
     } catch (error) {
       return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
     }
-  }
-
-  private upsertPreparedThread(prepared: CodexThread): Promise<void> {
-    return this.projections
-      .run(() => {
-        this.observations.mark(prepared.id);
-        const fields = this.captureFields();
-        return this.observations.observe((isCurrent) =>
-          this.projectThread(prepared, isCurrent, fields),
-        );
-      })
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        if (!(error instanceof CodexCatalogProjectionCapacityError)) {
-          throw error;
-        }
-        this.report(error);
-      });
   }
 
   private refreshThread(
@@ -560,12 +553,15 @@ export class CodexCatalogIndex {
   }
 
   private async projectThread(
-    thread: CodexThread,
+    thread: ReturnType<typeof projectCodexCatalogNativeThread>,
     isCurrent: (id: string) => boolean,
     fieldRevision: FieldRevision,
     sourceOrder?: number,
   ): Promise<boolean> {
-    const projected = await projectCodexCatalogThread(thread, this.options.localSessionsRoot);
+    const projected = await projectCodexCatalogPage(
+      { data: [thread] },
+      { localSessionsRoot: this.options.localSessionsRoot, sanitize: sanitizeTerminalText },
+    );
     if (this.closed) {
       return true;
     }

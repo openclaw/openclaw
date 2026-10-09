@@ -29,6 +29,7 @@ import {
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
+import { captureIncognitoSessionHistoryReader } from "../session-transcript-readers.js";
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,
@@ -59,21 +60,30 @@ type ChatHistoryDeltaParams = {
   sessionSnapshot: Record<string, unknown>;
 };
 
+function chatHistoryDeltaLimits(params: ChatHistoryDeltaParams) {
+  return {
+    cursor: params.cursor,
+    maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
+    maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
+  };
+}
+
 export async function readChatHistoryDelta(
   params: ChatHistoryDeltaParams & { incognito?: boolean },
   signal?: AbortSignal,
-  incognito?: IncognitoSessionHistoryReader,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryDeltaRead> {
   signal?.throwIfAborted();
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(params.scope, signal);
   if (incognito) {
     const actorDelta = await incognito.delta(
       params.scope,
-      {
-        cursor: params.cursor,
-        maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
-        maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
-      },
-      (delta, subagents) => projectChatHistoryDelta(params, delta, subagents),
+      chatHistoryDeltaLimits(params),
+      (delta, subagents) =>
+        // A cursor cannot qualify hidden earlier inputs without prepared visibility facts.
+        subagents
+          ? projectChatHistoryDelta(params, delta, subagents)
+          : Promise.resolve<ChatHistoryDeltaRead>({ kind: "reset" }),
     );
     signal?.throwIfAborted();
     return actorDelta;
@@ -94,11 +104,7 @@ export async function readChatHistoryDelta(
       kind: "delta",
       params: {
         target,
-        limits: {
-          cursor: params.cursor,
-          maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
-          maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
-        },
+        limits: chatHistoryDeltaLimits(params),
       },
     },
     signal,
@@ -116,12 +122,7 @@ export async function readChatHistoryDelta(
 async function readLocalChatHistoryDelta(
   params: ChatHistoryDeltaParams,
 ): Promise<ChatHistoryDeltaRead> {
-  const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
-  const result = readTranscriptDisplayDelta(params.scope, {
-    cursor: params.cursor,
-    maxBytes,
-    maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
-  });
+  const result = readTranscriptDisplayDelta(params.scope, chatHistoryDeltaLimits(params));
   if (!isAppendOnlySessionHistoryDelta(result)) {
     return { kind: "reset" };
   }

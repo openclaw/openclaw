@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { cliAssistantItemId } from "../../agents/cli-runner/assistant-identity.js";
 import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
@@ -27,6 +28,7 @@ import type { GetReplyOptions } from "../types.js";
 import {
   createAgentEventBridge,
   createAgentEventDeliveryStartOrder,
+  type AgentEventBridgeParams,
 } from "./agent-event-bridge.js";
 
 type RunCliAgentInternalParams = RunCliAgentParams & {
@@ -116,9 +118,6 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
 }
 
 function readToolEventPayload(evt: AgentEventPayload): CliToolEventPayload | undefined {
-  if (evt.stream !== "tool") {
-    return undefined;
-  }
   const phase = evt.data.phase;
   if (phase !== "start" && phase !== "update" && phase !== "result") {
     return undefined;
@@ -137,12 +136,7 @@ function readToolEventPayload(evt: AgentEventPayload): CliToolEventPayload | und
   };
 }
 
-/**
- * Tracks CLI tool start/result events and renders the same durable tool
- * summaries the embedded runner emits: a formatToolAggregate line per result
- * (args-derived meta captured at start), plus the output block under full
- * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
- */
+/** CLI result summaries use start-event metadata; full verbosity also carries raw output. */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";
   commandDetailsVisible: boolean;
@@ -155,12 +149,13 @@ export function createCliToolSummaryTracker(params: {
     noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
+          const name = stripOpenClawMcpToolPrefix(payload.name);
           toolByCallId.set(payload.toolCallId, {
-            name: payload.name,
-            meta: inferToolMetaFromArgsCore(payload.name, payload.args, {
+            name,
+            meta: inferToolMetaFromArgsCore(name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
-            commandBearing: isCommandBearingToolCall(payload.name, payload.args),
+            commandBearing: isCommandBearingToolCall(name, payload.args),
           });
         }
         return false;
@@ -169,16 +164,14 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
-      const toolName = payload.name ?? storedTool?.name;
+      const toolName =
+        payload.name === undefined ? storedTool?.name : stripOpenClawMcpToolPrefix(payload.name);
       const meta =
         params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
-      if (
-        payload.isError !== true &&
-        isAgentPlanProgressToolName(stripOpenClawMcpToolPrefix(toolName ?? ""))
-      ) {
+      if (payload.isError !== true && isAgentPlanProgressToolName(toolName ?? "")) {
         return false;
       }
       if (!params.shouldEmitToolResult()) {
@@ -315,6 +308,15 @@ async function runCliAgentWithLifecycleInternal(
     suppressed: params.suppressAssistantBridge,
     startOrder: progressStartOrder,
   };
+  const createProgressBridge = <T>(
+    stream: AgentEventPayload["stream"],
+    options: Pick<AgentEventBridgeParams<T>, "read" | "deliver" | "waitForEarlierDeliveries">,
+  ) =>
+    createAgentEventBridge({
+      ...progressBridgeParams,
+      ...options,
+      read: (event) => (event.stream === stream ? options.read(event) : undefined),
+    });
   const { onAssistantText, onCompletedReply } = params;
   let lastAssistantText: string | undefined;
   let finalReasoningText: string | undefined;
@@ -331,8 +333,7 @@ async function runCliAgentWithLifecycleInternal(
           },
         })
       : undefined,
-    createAgentEventBridge<AssistantTextDelivery>({
-      ...progressBridgeParams,
+    createProgressBridge<AssistantTextDelivery>("assistant", {
       waitForEarlierDeliveries: (payload) => payload.completed,
       deliver: async (payload) => {
         if (payload.completed) {
@@ -342,9 +343,6 @@ async function runCliAgentWithLifecycleInternal(
         }
       },
       read: (evt) => {
-        if (evt.stream !== "assistant") {
-          return undefined;
-        }
         if (
           typeof evt.data.completedText === "string" &&
           typeof evt.data.assistantMessageIndex === "number"
@@ -363,12 +361,8 @@ async function runCliAgentWithLifecycleInternal(
         return { text, completed: false };
       },
     }),
-    createAgentEventBridge<ReasoningTextPayload>({
-      ...progressBridgeParams,
+    createProgressBridge<ReasoningTextPayload>("thinking", {
       read: (evt) => {
-        if (evt.stream !== "thinking") {
-          return undefined;
-        }
         const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
         if (text === undefined || text === lastReasoningText) {
           return undefined;
@@ -384,12 +378,8 @@ async function runCliAgentWithLifecycleInternal(
         await params.onReasoningText?.(payload);
       },
     }),
-    createAgentEventBridge({
-      ...progressBridgeParams,
+    createProgressBridge("thinking", {
       read: (evt) => {
-        if (evt.stream !== "thinking") {
-          return undefined;
-        }
         const progressTokens = asPositiveFiniteNumber(evt.data.progressTokens);
         if (progressTokens === undefined || progressTokens === lastProgressTokens) {
           return undefined;
@@ -399,8 +389,7 @@ async function runCliAgentWithLifecycleInternal(
       },
       deliver: params.onReasoningProgress,
     }),
-    createAgentEventBridge<{ phase: "start" } | { completed: boolean; phase: "end" }>({
-      ...progressBridgeParams,
+    createProgressBridge<{ phase: "start" } | { completed: boolean; phase: "end" }>("compaction", {
       deliver: async (event) => {
         if (event.phase === "start") {
           await params.onCompactionStart?.();
@@ -409,9 +398,6 @@ async function runCliAgentWithLifecycleInternal(
         }
       },
       read: (evt) => {
-        if (evt.stream !== "compaction") {
-          return undefined;
-        }
         if (evt.data.phase === "start") {
           return { phase: "start" };
         }
@@ -420,16 +406,14 @@ async function runCliAgentWithLifecycleInternal(
           : undefined;
       },
     }),
-    createAgentEventBridge({
-      ...progressBridgeParams,
+    createProgressBridge("tool", {
       deliver: params.onToolEvent,
       read: readToolEventPayload,
     }),
-    createAgentEventBridge<CommentaryTextPayload>({
-      ...progressBridgeParams,
+    createProgressBridge<CommentaryTextPayload>("item", {
       deliver: params.onCommentaryText,
       read: (evt) => {
-        if (evt.stream !== "item" || evt.data.kind !== "preamble") {
+        if (evt.data.kind !== "preamble") {
           return undefined;
         }
         const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
@@ -438,32 +422,23 @@ async function runCliAgentWithLifecycleInternal(
           : undefined;
       },
     }),
-    createAgentEventBridge({
-      ...progressBridgeParams,
+    createProgressBridge("item", {
       read: (evt) =>
-        evt.stream === "item" &&
-        evt.data.kind !== "preamble" &&
-        Value.Check(AgentActivityItemSchema, evt.data)
+        evt.data.kind !== "preamble" && Value.Check(AgentActivityItemSchema, evt.data)
           ? evt.data
           : undefined,
       deliver: params.onItemEvent ? (item) => params.onItemEvent?.(item) : undefined,
     }),
-    createAgentEventBridge({
-      ...progressBridgeParams,
+    createProgressBridge("plan", {
       deliver: params.onPlanUpdate,
-      read: (evt) =>
-        evt.stream === "plan"
-          ? {
-              phase: normalizeOptionalString(evt.data.phase),
-              title: normalizeOptionalString(evt.data.title),
-              explanation: normalizeOptionalString(evt.data.explanation),
-              ...(evt.data.explanationFormat === "plain"
-                ? { explanationFormat: "plain" as const }
-                : {}),
-              steps: normalizeAgentPlanSteps(evt.data.steps),
-              source: normalizeOptionalString(evt.data.source),
-            }
-          : undefined,
+      read: (evt) => ({
+        phase: normalizeOptionalString(evt.data.phase),
+        title: normalizeOptionalString(evt.data.title),
+        explanation: normalizeOptionalString(evt.data.explanation),
+        ...(evt.data.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
+        steps: normalizeAgentPlanSteps(evt.data.steps),
+        source: normalizeOptionalString(evt.data.source),
+      }),
     }),
     createAgentEventBridge({
       runId: params.runId,
@@ -504,7 +479,7 @@ async function runCliAgentWithLifecycleInternal(
       emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: cliText },
+        data: { itemId: cliAssistantItemId(params.runId), text: cliText },
       });
     }
 
@@ -514,9 +489,6 @@ async function runCliAgentWithLifecycleInternal(
     await params.onErrorBeforeLifecycle?.(err);
     throw err;
   } finally {
-    for (const bridge of bridges) {
-      bridge.unsubscribe();
-    }
     if (
       params.runParams.isFinalFallbackAttempt !== false &&
       params.runParams.fastMode === "auto" &&

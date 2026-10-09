@@ -222,13 +222,9 @@ enum ExecApprovalsStore {
         let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var agents = file.agents ?? [:]
-        if let legacyDefault = agents["default"] {
-            if let main = agents[defaultAgentId] {
-                agents[self.defaultAgentId] = self.mergeAgents(current: main, legacy: legacyDefault)
-            } else {
-                agents[self.defaultAgentId] = legacyDefault
-            }
-            agents.removeValue(forKey: "default")
+        if let legacyDefault = agents.removeValue(forKey: "default") {
+            agents[self.defaultAgentId] = agents[self.defaultAgentId]
+                .map { self.mergeAgents(current: $0, legacy: legacyDefault) } ?? legacyDefault
         }
         agents = agents.mapValues { entry in
             var agent = entry
@@ -570,14 +566,12 @@ extension ExecApprovalsStore {
             let allowlist = currentAllowlist.map { item -> ExecAllowlistEntry in
                 guard let use = usesByKey[self.allowlistEntryMatchKey(item)] else { return item }
                 entryChanged = true
-                return ExecAllowlistEntry(
-                    id: item.id,
-                    pattern: item.pattern,
-                    source: item.source,
-                    argPattern: item.argPattern,
-                    lastUsedAt: now,
-                    lastUsedCommand: item.argPattern?.hasPrefix("sha256:") == true ? nil : command,
-                    lastResolvedPath: use.resolvedPath)
+                var updated = item
+                updated.commandText = nil
+                updated.lastUsedAt = now
+                updated.lastUsedCommand = item.argPattern?.hasPrefix("sha256:") == true ? nil : command
+                updated.lastResolvedPath = use.resolvedPath
+                return updated
             }
             if entryChanged {
                 changed = true

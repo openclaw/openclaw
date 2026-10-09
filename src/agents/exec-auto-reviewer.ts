@@ -1,9 +1,3 @@
-/**
- * Model-backed exec auto-reviewer.
- *
- * This wraps a small reviewer prompt around pending exec requests and converts
- * the model response into allow-once, deny, or ask decisions.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,7 +39,6 @@ const execAutoReviewResponseSchema = z
   })
   .strict();
 
-/** Config for the optional model-backed exec reviewer. */
 export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
 
 type ModelAutoReviewInput = ExecAutoReviewInput | BoardWidgetAutoReviewInput;
@@ -208,34 +201,25 @@ function hasDuplicateJsonObjectKeys(text: string): boolean {
   return false;
 }
 
-/** Parses and validates reviewer JSON into a conservative exec decision. */
+function deferReview(rationale: string): ExecAutoReviewDecision {
+  return { decision: "ask", risk: "unknown", rationale };
+}
+
 function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   const objectText = extractJsonObject(text);
   if (!objectText) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned no parseable JSON",
-    };
+    return deferReview("exec reviewer returned no parseable JSON");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(objectText);
   } catch {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned malformed JSON",
-    };
+    return deferReview("exec reviewer returned malformed JSON");
   }
   // JSON.parse silently keeps the last duplicate key, which can turn an
   // earlier ask or high-risk decision into an unreviewed allow.
   if (hasDuplicateJsonObjectKeys(objectText)) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned ambiguous JSON",
-    };
+    return deferReview("exec reviewer returned ambiguous JSON");
   }
   // Zod ignores JSON's own `__proto__` field even in strict mode, so check
   // actual parsed keys before trusting the closed reviewer response schema.
@@ -244,19 +228,11 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
     parsed !== null &&
     Object.keys(parsed).some((key) => !Object.hasOwn(execAutoReviewResponseSchema.shape, key))
   ) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned an unsupported response",
-    };
+    return deferReview("exec reviewer returned an unsupported response");
   }
   const response = execAutoReviewResponseSchema.safeParse(parsed);
   if (!response.success) {
-    return {
-      decision: "ask",
-      risk: "unknown",
-      rationale: "exec reviewer returned an unsupported response",
-    };
+    return deferReview("exec reviewer returned an unsupported response");
   }
 
   const { decision, risk } = response.data;
@@ -300,24 +276,11 @@ function extractCompletionFailure(
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
 
-/**
- * Resolves a bounded completion budget for the exec auto-reviewer.
- * Uses the default 1,024 tokens while clamping downward to the provider model's
- * advertised maximum output token limit (floored to integer).
- */
 function resolveExecReviewerMaxTokens(modelMaxTokens?: number): number {
   if (typeof modelMaxTokens === "number" && Number.isFinite(modelMaxTokens) && modelMaxTokens > 0) {
     return Math.max(1, Math.floor(Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens)));
   }
   return EXEC_REVIEWER_MAX_TOKENS;
-}
-
-function buildReviewerTimeoutDecision(timeoutMs: number): ExecAutoReviewDecision {
-  return {
-    decision: "ask",
-    risk: "unknown",
-    rationale: `exec reviewer timed out after ${timeoutMs}ms`,
-  };
 }
 
 async function raceWithReviewerTimeout<T>(
@@ -345,7 +308,6 @@ async function raceWithReviewerTimeout<T>(
   }
 }
 
-/** Creates an exec auto-reviewer that uses a configured model when available. */
 export function createModelExecAutoReviewer(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -356,11 +318,7 @@ export function createModelExecAutoReviewer(params: {
   if (!cfg) {
     return (input) =>
       "kind" in input
-        ? {
-            decision: "ask",
-            risk: "unknown",
-            rationale: "no model-backed widget reviewer is configured",
-          }
+        ? deferReview("no model-backed widget reviewer is configured")
         : defaultExecAutoReviewer(input);
   }
   const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
@@ -377,11 +335,9 @@ export function createModelExecAutoReviewer(params: {
       params.signal?.throwIfAborted();
       const serializedInput = stringifyInput(input);
       if (serializedInput.length > MAX_EXEC_REVIEWER_INPUT_CHARS) {
-        return {
-          decision: "ask",
-          risk: "unknown",
-          rationale: "exec reviewer deferred because the request exceeds review input limits",
-        };
+        return deferReview(
+          "exec reviewer deferred because the request exceeds review input limits",
+        );
       }
       if (hasReviewerDirective(input)) {
         return "kind" in input
@@ -437,7 +393,7 @@ export function createModelExecAutoReviewer(params: {
         onTimeout: () => completionController?.abort(),
       });
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
-        return buildReviewerTimeoutDecision(timeoutMs);
+        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
       if ("error" in prepared) {
         return buildExecAutoReviewFailureDecision(
@@ -479,12 +435,11 @@ export function createModelExecAutoReviewer(params: {
         {
           timeoutMs,
           signal: params.signal,
-          // Abort the provider request after the local timeout wins the race.
           onTimeout: () => completionController?.abort(),
         },
       );
       if (result === EXEC_REVIEWER_TIMEOUT) {
-        return buildReviewerTimeoutDecision(timeoutMs);
+        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
       const completionFailure = extractCompletionFailure(result);
       if (completionFailure) {
@@ -497,7 +452,7 @@ export function createModelExecAutoReviewer(params: {
     } catch (err) {
       params.signal?.throwIfAborted();
       if (completionController?.signal.aborted) {
-        return buildReviewerTimeoutDecision(timeoutMs);
+        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
       }
       return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
     } finally {

@@ -52,6 +52,7 @@ import {
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
+import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
@@ -322,7 +323,7 @@ export function resolveGatewaySessionActiveModel(params: {
     sessionId: params.sessionId,
     index: params.projectedAgentRuns,
   });
-  if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
+  if (params.active ?? liveModel !== undefined) {
     return liveModel ?? undefined;
   }
   if (!params.entry?.fallbackNotice) {
@@ -455,6 +456,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
+    sessionModelRevision: sessionModelRevision(entry),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
@@ -507,7 +509,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
     space: entry?.space,
-    conversationLink: entry?.conversationLink,
     chatType: entry?.chatType,
     origin: storedOrigin
       ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)

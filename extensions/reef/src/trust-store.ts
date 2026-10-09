@@ -138,8 +138,7 @@ export class ReefTrustStore {
   }
 
   snapshot(peer: string): ReefPeerStateSnapshot {
-    const value = this.stores.peers.lookup(this.#key(peer));
-    return value === undefined ? { revision: 0 } : ReefPeerStateSchema.parse(value);
+    return this.#parseState(this.stores.peers.lookup(this.#key(peer)));
   }
 
   get(peer: string): ReefPeerTrust | undefined {

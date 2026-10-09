@@ -66,7 +66,6 @@ async function admitCompletion(
   const original: SessionEntry = {
     sessionId: `requester-${name}`,
     lifecycleRevision: "original-revision",
-    status: "running",
     updatedAt: Date.now(),
     ...patch,
   };
@@ -171,7 +170,7 @@ describe("native completion final-send custody", () => {
           );
           await appendInput();
           await replaceSessionEntry(target, entry);
-          const opts = bindCommandHarnessCompletionAssertion({
+          const { opts } = await bindCommandHarnessCompletionAssertion({
             claim,
             persisted: entry,
             sessionKey: key,

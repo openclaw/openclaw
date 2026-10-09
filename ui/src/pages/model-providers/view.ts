@@ -61,7 +61,6 @@ type ModelProvidersViewProps = Omit<DefaultModelsViewProps, "models" | "selectio
     cards: ModelProviderCard[];
     configuredModels: ModelPickerEntry[];
     defaultModels: DefaultModelSelection;
-    /** True while picker-triggered catalog discovery is in flight. */
     catalogDiscovering: boolean;
     /** Retryable error from a picker-triggered catalog discovery. */
     catalogDiscoveryError: string | null;
@@ -211,6 +210,25 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   `;
 }
 
+function renderApiKeyInput(
+  value: string,
+  disabled: boolean,
+  onInput: (value: string) => void,
+  replace = false,
+) {
+  return html`<label class="field">
+    <span>${t("modelProviders.apiKey.label")}</span>
+    <input
+      type="password"
+      autocomplete="off"
+      placeholder=${t(replace ? "modelProviders.apiKey.replacePlaceholder" : "modelProviders.apiKey.placeholder")}
+      .value=${value}
+      ?disabled=${disabled}
+      @input=${(event: Event) => onInput((event.target as HTMLInputElement).value)}
+    />
+  </label>`;
+}
+
 function renderKeyEditor(card: ModelProviderCard, props: ModelProvidersViewProps) {
   if (props.keyEditorProvider !== card.id) {
     return nothing;
@@ -222,22 +240,12 @@ function renderKeyEditor(card: ModelProviderCard, props: ModelProvidersViewProps
   const mutationDisabled = configMutationDisabled(props);
   return html`
     <div class="model-providers__inline-form">
-      <label class="field">
-        <span>${t("modelProviders.apiKey.label")}</span>
-        <input
-          type="password"
-          autocomplete="off"
-          placeholder=${
-            card.apiKey?.source === "config"
-              ? t("modelProviders.apiKey.replacePlaceholder")
-              : t("modelProviders.apiKey.placeholder")
-          }
-          .value=${props.keyDraft}
-          ?disabled=${busy || mutationDisabled || authModeBlocked}
-          @input=${(event: Event) =>
-            props.onKeyDraftChange((event.target as HTMLInputElement).value)}
-        />
-      </label>
+      ${renderApiKeyInput(
+        props.keyDraft,
+        busy || mutationDisabled || authModeBlocked,
+        props.onKeyDraftChange,
+        card.apiKey?.source === "config",
+      )}
       <div class="model-providers__form-actions">
         <button
           class="btn primary btn--sm"
@@ -267,63 +275,54 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const keyBlocked = authModeBlocked
     ? t("modelProviders.apiKey.authModeBlocked", { mode: card.configAuthMode ?? "" })
     : blocked;
+  const actions = [
+    {
+      visible: props.canConnect(card) && card.profiles.length === 0,
+      disabled: mutationDisabled || props.loginBusy,
+      connectProvider: card.id,
+      label: t("modelProviders.login.action"),
+      onClick: () => props.onConnect(card),
+    },
+    {
+      visible: hasProviderCredentials(card),
+      disabled: probeBusy || !props.canMutate || !props.probeAvailable,
+      title: !props.probeAvailable ? t("modelProviders.probe.unavailable") : blocked,
+      label: probeBusy ? t("modelProviders.probe.testing") : t("modelProviders.probe.test"),
+      onClick: () => props.onProbe(card.id, credentialProviders),
+    },
+    {
+      visible: !apiKeyUnsupported,
+      disabled: keyBusy || mutationDisabled || authModeBlocked,
+      title: keyBlocked,
+      label: t("modelProviders.apiKey.set"),
+      onClick: () => props.onOpenKeyEditor(card.id),
+    },
+    {
+      visible:
+        card.hasConfigApiKey ||
+        card.profiles.some((profile) => profile.type === "api_key" && profile.logoutSupported),
+      disabled: keyBusy || mutationDisabled || authModeBlocked,
+      title: keyBlocked,
+      danger: true,
+      label: t("modelProviders.apiKey.remove"),
+      onClick: () => props.onRemoveKey(card.id, card.configKey ?? card.id),
+    },
+  ];
   return html`
     <div class="model-providers__card-actions">
-      ${
-        props.canConnect(card) && card.profiles.length === 0
+      ${actions.map((action) =>
+        action.visible
           ? html`<button
-              class="btn btn--sm"
-              data-models-connect-provider=${card.id}
-              ?disabled=${mutationDisabled || props.loginBusy}
-              @click=${() => props.onConnect(card)}
+              class=${action.danger ? "btn btn--sm danger" : "btn btn--sm"}
+              data-models-connect-provider=${action.connectProvider ?? nothing}
+              ?disabled=${action.disabled}
+              title=${action.title ?? nothing}
+              @click=${action.onClick}
             >
-              ${t("modelProviders.login.action")}
+              ${action.label}
             </button>`
-          : nothing
-      }
-      ${
-        hasProviderCredentials(card)
-          ? html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${probeBusy || !props.canMutate || !props.probeAvailable}
-                title=${!props.probeAvailable ? t("modelProviders.probe.unavailable") : blocked}
-                @click=${() => props.onProbe(card.id, credentialProviders)}
-              >
-                ${probeBusy ? t("modelProviders.probe.testing") : t("modelProviders.probe.test")}
-              </button>
-            `
-          : nothing
-      }
-      ${
-        apiKeyUnsupported
-          ? nothing
-          : html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
-                title=${keyBlocked}
-                @click=${() => props.onOpenKeyEditor(card.id)}
-              >
-                ${t("modelProviders.apiKey.set")}
-              </button>
-            `
-      }
-      ${
-        card.hasConfigApiKey ||
-        card.profiles.some((profile) => profile.type === "api_key" && profile.logoutSupported)
-          ? html`
-              <button
-                class="btn btn--sm danger"
-                ?disabled=${keyBusy || mutationDisabled || authModeBlocked}
-                title=${keyBlocked}
-                @click=${() => props.onRemoveKey(card.id, card.configKey ?? card.id)}
-              >
-                ${t("modelProviders.apiKey.remove")}
-              </button>
-            `
-          : nothing
-      }
+          : nothing,
+      )}
     </div>
   `;
 }
@@ -404,17 +403,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
         </div>
         <div class="model-setup-wizard__body">
           <p>${t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
-          <label class="field">
-            <span>${t("modelProviders.apiKey.label")}</span>
-            <input
-              type="password"
-              autocomplete="off"
-              placeholder=${t("modelProviders.apiKey.placeholder")}
-              .value=${props.addProviderKey}
-              ?disabled=${disabled}
-              @input=${(event: Event) => props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
-            />
-          </label>
+          ${renderApiKeyInput(props.addProviderKey, disabled, props.onAddProviderKeyChange)}
           ${renderMutationMessage(props.messages.add)}
         </div>
         <div class="model-setup-wizard__footer">

@@ -12,8 +12,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { loadDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
 import type { LegacyQueuedDelivery, QueuedDelivery } from "./outbound/delivery-queue-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./outbound/prepared-batch.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";

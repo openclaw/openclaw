@@ -1,10 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-/**
- * Session listing command.
- *
- * It loads one or more agent session stores, enriches rows with model/runtime
- * metadata, and emits JSON or terminal tables.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -242,7 +236,6 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     : undefined;
 }
 
-/** Lists sessions across selected stores with optional JSON output. */
 export async function sessionsCommand(
   opts: {
     json?: boolean;

@@ -1,13 +1,13 @@
 ---
-summary: "Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Probe"
+summary: "Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Check"
 read_when:
   - You are dispatching CI or Full Release Validation by hand
-  - You need the Windows Testbox Probe inputs
+  - You need the Windows Testbox Check inputs
 title: "Manual dispatches"
 sidebarTitle: "Manual dispatches"
 ---
 
-Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Probe. Part of the [CI scope and routing](/ci/scope-and-routing) index.
+Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Check. Part of the [CI scope and routing](/ci/scope-and-routing) index.
 
 ## Manual dispatches
 
@@ -19,7 +19,7 @@ Ordinary canonical manual CI also retains QA Smoke's full profile and Control UI
 performance without owner-path filtering. When the target declares
 `docker-seed-e2e-contract-v1`, it selects `published-upgrade-survivor`, preserving
 the exact `legacy-operator-state` plus `auto-auth` proof used by every admitted
-canonical main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`, `fleet-cache`,
+canonical main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`,
 `mcp-channels`, `mcp-code-mode-gateway`, and `update-channel-switch` through
 `resolveDockerSeedLanes`, including `npm-beta` and `npm-stable` qualification.
 Older targets without the tier selector retain the survivor. Ordinary manual CI
@@ -56,9 +56,11 @@ GitHub finalization untouched. See [Monthly Gateway extended-stable
 publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md)
 for commands and recovery.
 
-### Windows Testbox Probe
+<a id="windows-testbox-probe" />
 
-The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL probing and
+### Windows Testbox Check
+
+The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL checking and
 headless Windows CI on the selected `runner_label`. The `run_windows_ci` input
 (default `false`) requests both headless CI and a separate native Scheduled Task
 proof job on GitHub-hosted `windows-2025` when no installed package binding is
@@ -124,7 +126,8 @@ to a JSON object with `nodeVersion`, `packageManager`, `vitestVersion`,
 `maxWorkers`, `files`, and `projects`. Use an exact Node 24 patch and the
 checkout's complete pnpm integrity pin and Vitest version. `maxWorkers` is an
 integer from 1 through 4. `files` is the original ordered array of literal,
-tracked test paths; `projects` is the original ordered array of
+tracked test paths under `src/`, `test/`, `extensions/`, or `packages/`;
+`projects` is the original ordered array of
 `test/vitest/vitest.<name>.config.ts` paths. Globs, shell text, arbitrary CLI
 arguments, and environment overrides are not accepted.
 
@@ -164,7 +167,7 @@ The existing package owner installs and verifies the exact candidate artifact;
 the native admission gate requires a fresh hosted runner without credentials,
 operator mounts, Tailnet attachment, or managed identity.
 
-The probe authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
+The check authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
 calls their unchanged published repair controllers against the installed candidate
 worker. Version 2026.9.4 delegates its verifying phase; 2026.9.5 also delegates
 validation. Each must receive the deferred unavailable result without provider
@@ -182,7 +185,7 @@ assertion. Original 90-second worker,
 The `windows-installed-startup-<runId>-<attempt>` artifact retains
 `repair-results.json`, the failed or completed cells, native Job observations,
 PID/start identities, exact package/controller/runtime/tooling hashes, synthetic
-provider counts, state effects, and final cleanup. The probe stops after a failed
+provider counts, state effects, and final cleanup. The check stops after a failed
 cell and never substitutes successful runner teardown for worker qualification.
 
 #### Installed Gateway startup measurements
@@ -209,7 +212,7 @@ No synchronous process sampler or startup profiler runs during measurement.
 The `windows-installed-startup-<runId>-<runAttempt>` artifact retains all nine
 sample slots, errors, package/runtime/helper hashes, source and tooling commits,
 runner hardware, the raw installed npm lockfile, and cleanup evidence. A streamed
-`cohort.log` retains the active PID, phase, child output, and completed probe/RPC
+`cohort.log` retains the active PID, phase, child output, and completed check/RPC
 observations even if cancellation prevents the final sample checkpoint. Synthetic databases and compile caches
 stay in the runner's temporary directory. A failed or interrupted cohort has no
 established summary. “Fresh” means new state, not a cold filesystem; dedicated

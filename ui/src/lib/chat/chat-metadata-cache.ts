@@ -13,9 +13,11 @@ import {
 import { readSessionChangedEvent } from "../sessions/reconcile.ts";
 import type { UiSessionDefaultsHost } from "../sessions/session-key.ts";
 
-export type ChatMetadataResult = CommandsListResult;
-export type ChatMetadataResponse = ChatMetadataResult &
-  Partial<Pick<ModelCatalogResult, "models" | "accountSelection" | "modelSelectionPolicy">>;
+export type ChatMetadataResult = CommandsListResult & { revision?: string };
+export type ChatMetadataResponse =
+  | (Partial<ChatMetadataResult> &
+      Partial<Pick<ModelCatalogResult, "models" | "accountSelection" | "modelSelectionPolicy">>)
+  | { revision: string; unchanged: true };
 
 export type ChatMetadataUpdate =
   | { type: "invalidated"; scope: "session" | "full"; refreshSessionFacts: boolean }
@@ -52,6 +54,7 @@ export type ChatMetadataEntry = {
   scope: ChatMetadataParams;
   catalogController: AbortController;
   result?: ChatMetadataResult;
+  invalidated?: boolean;
   activeRequest?: ChatMetadataRequest;
   queuedRequest?: ChatMetadataRequest;
   writer?: object;
@@ -63,6 +66,13 @@ export type ChatMetadataEntry = {
   release: () => void;
 };
 
+export type ChatMetadataInvalidation = {
+  sessionOnly?: boolean;
+  matchesCatalog?: (scope: ChatMetadataParams) => boolean;
+  commandsChanged?: boolean;
+  delayMs?: number;
+};
+
 export const chatMetadataCache = new WeakMap<
   GatewayBrowserClient,
   {
@@ -70,7 +80,7 @@ export const chatMetadataCache = new WeakMap<
     invalidate: (
       scope?: ChatMetadataParams,
       sessionDefaults?: UiSessionDefaultsHost,
-      sessionEvent?: Record<string, unknown> | null,
+      options?: ChatMetadataInvalidation,
     ) => void;
   }
 >();
@@ -80,6 +90,7 @@ export function invalidateChatMetadataStore(
   scope?: ChatMetadataParams,
   sessionDefaults?: UiSessionDefaultsHost,
   catalogInvalidation: ModelCatalogInvalidation | "preserve" = "refresh",
+  commandsChanged = true,
 ): void {
   // Catalog readers share this lifecycle; retire their copies before metadata listeners reload.
   if (catalogInvalidation === "clear") {
@@ -87,7 +98,7 @@ export function invalidateChatMetadataStore(
   } else if (catalogInvalidation === "refresh") {
     invalidateModelCatalogCache(client, scope, sessionDefaults);
   }
-  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults);
+  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, { commandsChanged });
 }
 
 export function invalidateChatMetadataForSessionEvent(
@@ -97,16 +108,56 @@ export function invalidateChatMetadataForSessionEvent(
 ): void {
   const source = asNullableRecord(payload);
   const changed = readSessionChangedEvent(source);
-  const agentId = typeof source?.agentId === "string" ? source.agentId : undefined;
+  const session = asNullableRecord(source?.session);
+  const agent = session?.agentId ?? source?.agentId;
+  const agentId = typeof agent === "string" ? agent : undefined;
   const scope = changed ? { agentId, sessionKey: changed.key } : undefined;
-  invalidateModelCatalogCache(client, scope ?? { agentId, sessionsOnly: true }, sessionDefaults);
-  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, source);
-}
-
-export function isSessionMetadataInvalidation(event?: Record<string, unknown> | null): boolean {
-  return (
-    event?.catalogChanged !== true &&
-    event?.phase !== "reset" &&
-    (event?.reason === "patch" || event?.reason === "command-metadata")
+  const sessionModelRevision =
+    source?.catalogChanged !== true &&
+    source?.phase !== "reset" &&
+    source?.reason !== "reset" &&
+    source?.reason !== "delete" &&
+    source?.reason !== "cleanup" &&
+    typeof session?.sessionModelRevision === "string"
+      ? session.sessionModelRevision
+      : undefined;
+  const matchesCatalog = invalidateModelCatalogCache(
+    client,
+    {
+      ...(scope ?? { agentId, sessionsOnly: true }),
+      sessionModelRevision,
+    },
+    sessionDefaults,
   );
+  // Native owners without a saved-row revision retain lazy activity invalidation.
+  if (
+    !sessionModelRevision &&
+    source?.catalogChanged !== true &&
+    ((!scope && source?.reason !== "delete" && source?.reason !== "cleanup") ||
+      (source?.phase !== "reset" &&
+        ![
+          "reset",
+          "patch",
+          "command-metadata",
+          "create",
+          "new",
+          "delete",
+          "recovery",
+          "cleanup",
+        ].some((reason) => reason === source?.reason)))
+  ) {
+    return;
+  }
+  const delayMs =
+    !sessionModelRevision &&
+    source?.catalogChanged !== true &&
+    source?.phase !== "reset" &&
+    (source?.reason === "patch" || source?.reason === "command-metadata")
+      ? 2_500
+      : 0;
+  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
+    sessionOnly: true,
+    matchesCatalog,
+    delayMs,
+  });
 }

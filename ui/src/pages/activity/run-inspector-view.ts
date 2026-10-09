@@ -64,8 +64,9 @@ function optionalReferenceValue(
   label: string,
   value: string | undefined,
   mono = true,
+  href?: string,
 ): FactValue[] {
-  return value ? [[label, value, mono]] : [];
+  return value ? [[label, value, mono, href]] : [];
 }
 
 function renderFact(fact: IdentityFact) {
@@ -211,19 +212,17 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       values: lineage
         ? [
             ["depth", lineage.depth],
-            ...(lineage.parentRunId
-              ? ([
-                  [
-                    "parentRunReference",
-                    lineage.parentRunId,
-                    true,
-                    activityRunInspectorSelectorHref(
-                      { kind: "run", id: lineage.parentRunId },
-                      basePath,
-                    ),
-                  ],
-                ] satisfies FactValue[])
-              : []),
+            ...optionalReferenceValue(
+              "parentRunReference",
+              lineage.parentRunId,
+              true,
+              lineage.parentRunId
+                ? activityRunInspectorSelectorHref(
+                    { kind: "run", id: lineage.parentRunId },
+                    basePath,
+                  )
+                : undefined,
+            ),
             ...optionalReferenceValue("parentExecutionReference", lineage.parentExecutionId),
             ...optionalReferenceValue("parentContextReference", lineage.parentContextId),
             ...optionalReferenceValue("delegationReference", lineage.delegationRef),

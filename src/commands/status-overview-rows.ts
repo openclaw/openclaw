@@ -179,7 +179,7 @@ export function buildStatusCommandOverviewRows(params: {
       },
       ...buildStatusDegradationRows(params.summary, theme.warn),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
-      { Item: "Probes", Value: probesValue },
+      { Item: "Checks", Value: probesValue },
       { Item: "Events", Value: eventsValue },
       {
         Item: "Backups",

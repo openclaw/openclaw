@@ -302,10 +302,6 @@ function resolveForwardedAttachmentImageUrl(
   }
 }
 
-/**
- * Downloads all files attached to a Slack message and returns them as an array.
- * Returns `null` when no files could be downloaded.
- */
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   client?: SlackWebClient;
@@ -374,7 +370,6 @@ export async function resolveSlackMedia(params: {
   return resolved.length > 0 ? resolved : null;
 }
 
-/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
 export async function resolveSlackAttachmentContent(params: {
   files?: SlackFile[];
   attachments?: SlackAttachment[];

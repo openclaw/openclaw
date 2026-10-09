@@ -683,6 +683,51 @@ describe("voice-call CLI status fallback", () => {
     expect(result.output).toContain('{"word":"café"}\n');
   });
 
+  it("passes a structured brief and routes steering through the Gateway", async () => {
+    callGatewayFromCliMock.mockResolvedValue({ callId: "call-1", success: true });
+    const program = buildProgram({}, { ringTimeoutMs: 1000 });
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(
+        [
+          "voicecall",
+          "call",
+          "--message",
+          "Hello",
+          "--to",
+          "+15550001111",
+          "--brief",
+          '{"task":"Arrange a visit"}',
+        ],
+        { from: "user" },
+      );
+      expect(callGatewayFromCliMock.mock.calls[0]?.[2]).toMatchObject({
+        brief: { task: "Arrange a visit" },
+      });
+      await program.parseAsync(
+        [
+          "voicecall",
+          "steer",
+          "--call-id",
+          "call-1",
+          "--message",
+          "Ask for Tuesday",
+          "--mode",
+          "guidance",
+        ],
+        { from: "user" },
+      );
+      expect(callGatewayFromCliMock).toHaveBeenLastCalledWith(
+        "voicecall.steer",
+        expect.anything(),
+        { callId: "call-1", message: "Ask for Tuesday", mode: "guidance" },
+        expect.anything(),
+      );
+    } finally {
+      capturer.restore();
+    }
+  });
+
   it("caps oversized operation timeouts through the start command", async () => {
     callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
     const program = buildProgram({}, { ringTimeoutMs: Number.MAX_SAFE_INTEGER });

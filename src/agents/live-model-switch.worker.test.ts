@@ -69,6 +69,27 @@ describe("live model switch worker persistence", () => {
       });
       expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
 
+      const withoutPendingSwitch = loadSessionEntry(scope);
+      const writeGrants: string[] = [];
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const observeAdmission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((callback, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "transaction" || request.stage === "commit") {
+              writeGrants.push(request.stage);
+            }
+            callback(request, grant);
+          }, attachment),
+        );
+      try {
+        await apply();
+        expect(writeGrants).toEqual([]);
+        expect(loadSessionEntry(scope)).toEqual(withoutPendingSwitch);
+      } finally {
+        observeAdmission.mockRestore();
+      }
+
       await replaceSessionEntry(scope, { ...initial, modelOverride: "gpt-5.5" });
       await apply();
       expect(loadSessionEntry(scope)).toMatchObject({

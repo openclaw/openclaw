@@ -22,7 +22,10 @@ const deliveryMocks = vi.hoisted(() => ({
   routeReply: vi.fn<typeof import("./route-reply.js").routeReply>(),
 }));
 
-vi.mock("./route-reply.runtime.js", () => deliveryMocks);
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  ...deliveryMocks,
+}));
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: async ({ payload }: { payload: ReplyPayload }) => payload,
 }));
@@ -230,7 +233,7 @@ describe("ACP routed delivery custody", () => {
       ).resolves.toBe(true);
 
       expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-      expect(coordinator.getRoutedCounts().final).toBe(1);
+      expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).final).toBe(1);
       expect(coordinator.hasDeliveredFinalReply()).toBe(true);
       expect(coordinator.hasDeliveredVisibleText()).toBe(true);
       await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("hello");
@@ -274,7 +277,11 @@ describe("ACP routed delivery custody", () => {
       expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
       expect(coordinator.hasDeliveredVisibleText()).toBe(false);
       expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-      expect(coordinator.getRoutedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
+        tool: 0,
+        block: 0,
+        final: 0,
+      });
       await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
     },
   );
@@ -314,7 +321,11 @@ describe("ACP routed delivery custody", () => {
         expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
         expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
         expect(coordinator.hasDeliveredVisibleText()).toBe(false);
-        expect(coordinator.getRoutedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+        expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
+          tool: 0,
+          block: 0,
+          final: 0,
+        });
         await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
         return;
       }
@@ -333,7 +344,11 @@ describe("ACP routed delivery custody", () => {
       expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
       expect(coordinator.hasDeliveredVisibleText()).toBe(true);
       expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-      expect(coordinator.getRoutedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
+        tool: 0,
+        block: 0,
+        final: 1,
+      });
       await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("hello");
     },
   );

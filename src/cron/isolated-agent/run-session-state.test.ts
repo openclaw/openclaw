@@ -554,7 +554,6 @@ describe("createPersistCronSessionEntry", () => {
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
-        status: "running",
         startedAt: 900,
         skillsSnapshot: {
           prompt: "old prompt",
@@ -599,7 +598,6 @@ describe("createPersistCronSessionEntry", () => {
       makeSessionEntry({
         lifecycleRevision: "run-revision",
         label: "Cron: shell-only",
-        status: "running",
       }),
     );
     const persistSessionEntry = vi.fn(async () => {});
@@ -624,7 +622,6 @@ describe("createPersistCronSessionEntry", () => {
         label: "Cron: shell-only",
         lifecycleRevision: "run-revision",
         sessionId: "run-session-id",
-        status: "running",
         updatedAt: 1000,
         systemSent: true,
       },
@@ -804,7 +801,6 @@ describe("createPersistCronSessionEntry", () => {
     const runRevision = crypto.randomUUID();
     const initialSessionEntry = makeSessionEntry({
       lifecycleRevision: initialRevision,
-      status: "running",
       totalTokens: 10,
     });
     const cronSession = {
@@ -845,45 +841,51 @@ describe("createPersistCronSessionEntry", () => {
     });
   });
 
-  it("does not claim the same lifecycle revision after the session id rotates", async () => {
-    const sessionKey = "agent:main:session";
-    const initialRevision = "initial-revision";
-    const runRevision = crypto.randomUUID();
-    const initialSessionEntry = makeSessionEntry({
-      sessionId: "initial-session-id",
-      lifecycleRevision: initialRevision,
-    });
-    const cronSession = {
-      ...makeCronSession(
-        makeSessionEntry({
-          sessionId: "initial-session-id",
-          lifecycleRevision: runRevision,
-        }),
-      ),
-      initialSessionEntry,
-      lifecycleRevision: runRevision,
-    } as MutableCronSession;
-    const rotatedEntry = makeSessionEntry({
-      sessionId: "rotated-session-id",
-      lifecycleRevision: initialRevision,
-      updatedAt: 2000,
-    });
-    const persistedStore: Record<string, SessionEntry> = {
-      [sessionKey]: rotatedEntry,
-    };
-    const persist = createPersistCronSessionEntry({
-      cronSession,
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace",
-      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
-    });
+  it.each([
+    { name: "a minted run revision", reused: false },
+    { name: "a reused in-place revision", reused: true },
+  ])(
+    "does not claim the same lifecycle revision after the session id rotates with $name",
+    async ({ reused }) => {
+      const sessionKey = "agent:main:session";
+      const initialRevision = "initial-revision";
+      const runRevision = reused ? initialRevision : crypto.randomUUID();
+      const initialSessionEntry = makeSessionEntry({
+        sessionId: "initial-session-id",
+        lifecycleRevision: initialRevision,
+      });
+      const cronSession = {
+        ...makeCronSession(
+          makeSessionEntry({
+            sessionId: "initial-session-id",
+            lifecycleRevision: runRevision,
+          }),
+        ),
+        initialSessionEntry,
+        lifecycleRevision: runRevision,
+      } as MutableCronSession;
+      const rotatedEntry = makeSessionEntry({
+        sessionId: "rotated-session-id",
+        lifecycleRevision: initialRevision,
+        updatedAt: 2000,
+      });
+      const persistedStore: Record<string, SessionEntry> = {
+        [sessionKey]: rotatedEntry,
+      };
+      const persist = createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey: sessionKey,
+        workspaceDir: "/tmp/workspace",
+        persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+      });
 
-    await expect(persist()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+      await expect(persist()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
 
-    expect(persistedStore[sessionKey]).toBe(rotatedEntry);
-    expect(cronSession.store[sessionKey]).toBeUndefined();
-    expect(cronSession.sessionEntry.sessionId).toBe("initial-session-id");
-  });
+      expect(persistedStore[sessionKey]).toBe(rotatedEntry);
+      expect(cronSession.store[sessionKey]).toBeUndefined();
+      expect(cronSession.sessionEntry.sessionId).toBe("initial-session-id");
+    },
+  );
 
   it("claims an initial row after a concurrent pin and rename", async () => {
     const sessionKey = "agent:main:session";
@@ -893,7 +895,6 @@ describe("createPersistCronSessionEntry", () => {
       ...makeCronSession(
         makeSessionEntry({
           lifecycleRevision,
-          status: "running",
         }),
       ),
       initialSessionEntry,
@@ -919,9 +920,9 @@ describe("createPersistCronSessionEntry", () => {
       label: "Renamed before claim",
       lifecycleRevision,
       pinnedAt: 2000,
-      status: "running",
       updatedAt: 2000,
     });
+    expect(persistedStore[sessionKey]?.status).toBeUndefined();
   });
 
   it.each([

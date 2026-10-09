@@ -2633,7 +2633,7 @@ outer
       );
       expect(script, path).toContain('rm -rf "$scenario_tmp"');
       expect(script, path).toContain(
-        'MOCK_REQUEST_LOG="$scenario_tmp/' +
+        `MOCK_REQUEST_LOG${label === "npm-onboard-channel-agent" ? "=" : " "}"$scenario_tmp/` +
           (label === "npm-onboard-channel-agent"
             ? "mock-openai-requests.jsonl"
             : "openai-requests.jsonl") +
@@ -2643,7 +2643,7 @@ outer
         expect(script, path).toContain('LOG_DIR="$scenario_tmp/logs"');
       }
       if (label === "release-user-journey" || label === "release-upgrade-user-journey") {
-        expect(script, path).toContain('CLICKCLACK_STATE="$scenario_tmp/clickclack.json"');
+        expect(script, path).toContain('CLICKCLACK_STATE "$scenario_tmp/clickclack.json"');
       }
       expect(script, path).not.toMatch(/\/tmp\/openclaw-release-[\w-]+\.(?:log|json|err|txt)/u);
       expect(script, path).not.toContain("/tmp/openclaw-mock-openai-requests.jsonl");

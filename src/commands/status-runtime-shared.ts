@@ -45,7 +45,7 @@ export async function resolveStatusGatewayHealth(params: {
   const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
-    throw new Error("Gateway probe budget exhausted before health check.");
+    throw new Error("Gateway check budget exhausted before health check.");
   }
   return await callGateway<HealthSummary>({
     method: "health",
@@ -75,7 +75,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
   const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
-    return { error: "Gateway probe budget exhausted before health check." };
+    return { error: "Gateway check budget exhausted before health check." };
   }
   return await callGateway<HealthSummary>({
     method: "health",
@@ -107,7 +107,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
-    return { ok: false, error: "Gateway probe budget exhausted before diagnostics." };
+    return { ok: false, error: "Gateway check budget exhausted before diagnostics." };
   }
   return await callGateway<unknown>({
     method: "diagnostics.stability",

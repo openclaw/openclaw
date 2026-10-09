@@ -221,7 +221,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   }
   const context = host.sessionDataContext;
   const pluginActionSignal = controller.pluginActionLifetime.signal;
-  const currentSession = host.findSidebarSessionByKey(menu.session.key);
+  const currentSession = host.findSidebarMenuSessionByKey(menu.session.key);
   // Read again at dispatch: session updates can arrive before the menu rerenders.
   const currentPluginSession = () =>
     host.sessionData.sessionsResult?.sessions.find(
@@ -244,7 +244,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   const rows = batchRows ?? [session];
   const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
   const deleteAllowed = canDeleteSessionRows(rows, mainKey);
-  const allUnread = rows.every((row) => row.unread);
+  // Hidden runs have no row of their own; their parent menu acknowledges them.
+  const hiddenUnreadRuns = rows.flatMap((row) => row.subagentSummary?.unreadHiddenRuns ?? []);
+  const allUnread = rows.every(
+    (row) => row.unread || (row.subagentSummary?.unreadHiddenRuns?.length ?? 0) > 0,
+  );
   const allArchived = rows.every((row) => row.archived === true);
   const sharedCategory = rows.every((row) => (row.category ?? null) === (rows[0]?.category ?? null))
     ? (rows[0]?.category ?? null)
@@ -282,7 +286,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           isChild: session.isChild,
           pinned: session.pinned,
           pinnable: session.pinnable,
-          unread: batchRows ? allUnread : session.unread,
+          unread: allUnread,
           hiddenFromInvolvingMe: session.hiddenFromInvolvingMe,
           archived: allArchived,
           snoozedUntil: session.snoozedUntil ?? null,
@@ -371,7 +375,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               );
               break;
             case "toggle-unread":
-              void host.sessionOrganizer.patchSession(session, { unread: !session.unread });
+              if (hiddenUnreadRuns.length > 0) {
+                void host.sessionOrganizer.runBatchSessionAction(action, rows, allUnread);
+              } else {
+                void host.sessionOrganizer.patchSession(session, { unread: !session.unread });
+              }
               break;
             case "rename":
               void host.sessionOrganizer.renameSession(session);

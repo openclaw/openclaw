@@ -325,22 +325,13 @@ export function buildSlackProgressStreamChunks(params: {
   const finalTaskIndex = tasks.length - 1;
   const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {
     const recovered = params.finalInProgressStatus === "complete" && task.status === "error";
-    const chunk: TaskUpdateChunk = {
-      type: "task_update",
-      id: task.id,
-      title: recovered ? compactTitle(`Recovered: ${task.title}`) : task.title,
-      status: recovered
-        ? "complete"
-        : task.status === "in_progress"
-          ? (params.finalInProgressStatus ?? task.status)
-          : task.status,
-    };
-    if (task.details) {
-      chunk.details = task.details;
-    }
-    if (task.output) {
-      chunk.output = task.output;
-    }
+    const chunk: TaskUpdateChunk = Object.assign({ type: "task_update" as const }, task);
+    chunk.title = recovered ? compactTitle(`Recovered: ${task.title}`) : task.title;
+    chunk.status = recovered
+      ? "complete"
+      : task.status === "in_progress"
+        ? (params.finalInProgressStatus ?? task.status)
+        : task.status;
     if (index === finalTaskIndex && diffOutput) {
       chunk.output = [task.output, diffOutput].filter(Boolean).join(" · ");
     }
@@ -554,17 +545,26 @@ export function reconcileSlackNativeTaskChunks(params: {
       continue;
     }
     const previousRow = params.previous.tasks.get(chunk.id);
-    const details = resolveTaskFieldDelta(previousRow?.details, chunk.details);
-    const output = resolveTaskFieldDelta(previousRow?.output, chunk.output);
+    const row: SlackNativeTaskRow = { title: chunk.title, status: chunk.status };
+    const update: TaskUpdateChunk = {
+      type: "task_update",
+      id: chunk.id,
+      title: chunk.title,
+      status: chunk.status,
+    };
+    let fieldsChanged = false;
+    for (const key of ["details", "output"] as const) {
+      const { field: nextField, delta } = resolveTaskFieldDelta(previousRow?.[key], chunk[key]);
+      if (nextField) {
+        row[key] = nextField;
+      }
+      if (delta) {
+        update[key] = delta;
+        fieldsChanged = true;
+      }
+    }
     // The session source is a per-turn constant; deliver it once.
     const sourcesChanged = Boolean(chunk.sources) && !previousRow?.sourcesSent;
-    const row: SlackNativeTaskRow = { title: chunk.title, status: chunk.status };
-    if (details.field) {
-      row.details = details.field;
-    }
-    if (output.field) {
-      row.output = output.field;
-    }
     if (sourcesChanged || previousRow?.sourcesSent) {
       row.sourcesSent = true;
     }
@@ -573,23 +573,10 @@ export function reconcileSlackNativeTaskChunks(params: {
       !previousRow ||
       previousRow.title !== chunk.title ||
       previousRow.status !== chunk.status ||
-      Boolean(details.delta) ||
-      Boolean(output.delta) ||
+      fieldsChanged ||
       sourcesChanged;
     if (!rowChanged) {
       continue;
-    }
-    const update: TaskUpdateChunk = {
-      type: "task_update",
-      id: chunk.id,
-      title: chunk.title,
-      status: chunk.status,
-    };
-    if (details.delta) {
-      update.details = details.delta;
-    }
-    if (output.delta) {
-      update.output = output.delta;
     }
     if (sourcesChanged) {
       update.sources = chunk.sources;

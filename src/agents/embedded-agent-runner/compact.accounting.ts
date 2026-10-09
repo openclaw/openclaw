@@ -1,37 +1,27 @@
-import { resolveMaxActiveTranscriptBytes } from "../../auto-reply/reply/memory-flush.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolveMaxActiveTranscriptBytes,
+  refreshTranscriptByteCompactionLatch,
+} from "../../context-engine/transcript-byte-limit.js";
 import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
 import { SessionEntryCommittedError } from "../sessions/session-manager-persistence-error.js";
 import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
-export function hasMatchingTranscriptByteCompactionLatch(
-  entry: SessionEntry,
-  activeBytes: number,
-  maxBytes: number,
-): boolean {
-  const latch = entry.transcriptByteCompactionLatch;
-  return (
-    latch?.sessionId === entry.sessionId &&
-    latch.maxBytes === maxBytes &&
-    activeBytes >= maxBytes &&
-    activeBytes - latch.activeBytes < maxBytes
-  );
-}
-
 /** Apply the ordinary turn's host byte budget before an explicit native compaction. */
 export async function prepareManualTranscriptByteCompaction(
   params: CompactEmbeddedAgentSessionParams,
   host: QueuedCompactionHostOptions,
   target: SessionTranscriptRuntimeTarget,
-  entry: SessionEntry | undefined,
+  initialEntry: SessionEntry | undefined,
   selectedHarnessRuntime: string | undefined,
 ): Promise<{ params: CompactEmbeddedAgentSessionParams; host: QueuedCompactionHostOptions }> {
   const maxBytes = resolveMaxActiveTranscriptBytes(params.config);
+  let entry = initialEntry;
   if (
     params.trigger !== "manual" ||
     !entry ||
@@ -47,11 +37,35 @@ export async function prepareManualTranscriptByteCompaction(
   );
   params.abortSignal?.throwIfAborted();
   host.assertActive?.();
-  if (
-    activeBytes === undefined ||
-    activeBytes < maxBytes ||
-    hasMatchingTranscriptByteCompactionLatch(entry, activeBytes, maxBytes)
-  ) {
+  const latch = entry.transcriptByteCompactionLatch;
+  const refreshedLatch = refreshTranscriptByteCompactionLatch(
+    latch,
+    entry.sessionId,
+    maxBytes,
+    activeBytes,
+  );
+  if (refreshedLatch !== latch) {
+    const sessionStore = { [target.sessionKey]: entry };
+    const count = await incrementCompactionCount({
+      ...target,
+      sessionStore,
+      amount: 0,
+      expectedSession: entry,
+      transcriptByteCompactionLatch: refreshedLatch,
+      authorize: () => {
+        params.abortSignal?.throwIfAborted();
+        host.assertActive?.();
+        return true;
+      },
+    });
+    params.abortSignal?.throwIfAborted();
+    host.assertActive?.();
+    if (count === undefined) {
+      throw new Error("Session changed before byte-compaction progress could be refreshed");
+    }
+    entry = sessionStore[target.sessionKey] ?? entry;
+  }
+  if (activeBytes === undefined || activeBytes < maxBytes || refreshedLatch !== undefined) {
     return { params, host };
   }
   // Native compaction leaves the host mirror unchanged. Repair the same budget
@@ -107,6 +121,10 @@ export function createCompactionAccounting(params: {
       tokensAfter,
       compactionKind,
       expectedSession: acceptedEntry,
+      authorize: () => {
+        params.host.assertActive?.();
+        return true;
+      },
       transcriptByteCompactionLatch:
         postCompactionBytes !== undefined &&
         maxBytes !== undefined &&

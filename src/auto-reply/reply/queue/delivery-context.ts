@@ -10,11 +10,15 @@ import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   resolveReplyOperatorAuthorityKey,
-  resolveReplyScreenToolTarget,
-  resolveReplyThemeProfileId,
+  resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
-import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
+import {
+  FollowupRunDeferredError,
+  isFollowupRunAborted,
+  type FollowupRun,
+  type QueuedFollowupReplyBatch,
+} from "./types.js";
 
 export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (
@@ -35,6 +39,17 @@ export function hasExclusiveTurnAdmission(
   admission: "exclusive";
 } {
   return lifecycle?.admission === "exclusive";
+}
+
+export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
+  const owners = new Set(
+    items.flatMap((item) =>
+      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
+    ),
+  );
+  if (owners.size > 1) {
+    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
+  }
 }
 
 function resolveTurnAdoptionLifecycleDeliveryKey(
@@ -229,10 +244,14 @@ export async function prepareNextDeliveryGroup(
           index < 0
             ? undefined
             : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
+        const storageKey = resolveFollowupDeliveryStorageKey(item);
+        const personalTargets = profile
+          ? resolveReplyPersonalToolTargets(item, profile)
+          : undefined;
         const key = JSON.stringify([
-          resolveFollowupDeliveryStorageKey(item),
-          profile ? stableStringify(resolveReplyScreenToolTarget(item, profile) ?? null) : "null",
-          profile ? (resolveReplyThemeProfileId(item, profile) ?? "") : "",
+          storageKey,
+          personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
+          personalTargets?.themeProfileId ?? "",
         ]);
         if (firstKey !== undefined && key !== firstKey) {
           break;
@@ -287,22 +306,11 @@ type FollowupRuntimeMetadata = Pick<
   | "runObservers"
 >;
 
-function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
-  return (
-    item.currentInboundEventKind === "room_event" ||
-    item.currentInboundAudio === true ||
-    Boolean(item.currentInboundContext)
-  );
-}
-
 function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length === 0) {
-    return undefined;
-  }
-  if (contexts.length === 1) {
+  if (contexts.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -332,11 +340,54 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   };
 }
 
+function collectReplyDisposition(
+  items: FollowupRun[],
+): FollowupRun["queuedFollowupReplyDisposition"] {
+  const primary = items.at(-1)?.queuedFollowupReplyDisposition;
+  const terminalRecipients = items.slice(0, -1).flatMap((item) => {
+    const disposition = item.queuedFollowupReplyDisposition;
+    return disposition?.kind === "deliver" ? [disposition.deliver] : [];
+  });
+  if (terminalRecipients.length === 0) {
+    return primary;
+  }
+  const deliver = primary?.kind === "deliver" ? primary.deliver : undefined;
+  return {
+    kind: "deliver",
+    deliver: Object.assign(
+      async (batch: QueuedFollowupReplyBatch) => {
+        if (batch.completion.kind === "progress") {
+          await deliver?.(batch);
+          return;
+        }
+        // The content owner publishes once; every consumed source receives the outcome.
+        const results = await Promise.allSettled([
+          ...terminalRecipients.map(async (recipient) => recipient({ ...batch, payloads: [] })),
+          Promise.resolve().then(() => deliver?.(batch)),
+        ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
+        }
+      },
+      {
+        ownsCompletion: deliver?.ownsCompletion,
+        createSourceRetry: deliver?.createSourceRetry,
+      },
+    ),
+  };
+}
+
 export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
-  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  const currentTurnSource = items.find(
+    (item) =>
+      item.currentInboundEventKind === "room_event" ||
+      item.currentInboundAudio === true ||
+      Boolean(item.currentInboundContext),
+  );
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
@@ -372,7 +423,7 @@ export function collectRuntimeMetadata(
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
-    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
+    queuedFollowupReplyDisposition: collectReplyDisposition(items),
     runObservers: items.at(-1)?.runObservers,
   };
 }
@@ -384,6 +435,19 @@ export function resolveOverflowSummaryInboundEventKind(
     sources.every((source) => source.currentInboundEventKind === "room_event")
     ? "room_event"
     : undefined;
+}
+
+export function getFollowupOriginRouting(source: FollowupRun) {
+  return {
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+  };
 }
 
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
@@ -407,14 +471,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
-    originatingChannel: source.originatingChannel,
-    originatingTo: source.originatingTo,
-    originatingAccountId: source.originatingAccountId,
-    originatingThreadId: source.originatingThreadId,
-    originatingChatId: source.originatingChatId,
-    originatingReplyToId: source.originatingReplyToId,
-    originatingReplyToMode: source.originatingReplyToMode,
-    originatingChatType: source.originatingChatType,
+    ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,

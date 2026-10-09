@@ -9,6 +9,7 @@ import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-adm
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { heartbeatLog } from "./heartbeat-log.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
 import {
@@ -301,22 +302,16 @@ function createSessionEventWakeRuntime() {
       if (!SLOTS.some((slot) => group[slot])) {
         pending.delete(key);
       }
-      let wakes: PendingWake[];
-      if (picked.task) {
-        // A task turn includes monitor scratch, so it consumes a coincident base tick.
-        const task = picked.scheduled ? merge(picked.scheduled, picked.task) : picked.task;
-        wakes = picked.event
-          ? [task, picked.event].toSorted(
-              (left, right) =>
-                Number(Boolean(right.retainedWork)) - Number(Boolean(left.retainedWork)) ||
-                left.requestedAt - right.requestedAt,
-            )
-          : [task];
-      } else if (picked.event) {
-        wakes = [picked.scheduled ? merge(picked.scheduled, picked.event) : picked.event];
-      } else {
-        wakes = picked.scheduled ? [picked.scheduled] : [];
+      const wakes = [picked.task, picked.event].filter((wake) => wake !== undefined);
+      if (picked.scheduled) {
+        // Task turns include monitor scratch; otherwise the event consumes the base tick.
+        wakes[0] = wakes[0] ? merge(picked.scheduled, wakes[0]) : picked.scheduled;
       }
+      wakes.sort(
+        (left, right) =>
+          Number(Boolean(right.retainedWork)) - Number(Boolean(left.retainedWork)) ||
+          left.requestedAt - right.requestedAt,
+      );
       if (wakes.length) {
         ready.push({ key, wakes });
       }
@@ -325,6 +320,16 @@ function createSessionEventWakeRuntime() {
   }
 
   function settle(wake: PendingWake, result: SessionEventWakeResult): void {
+    if (result.status === "failed") {
+      heartbeatLog.error("session event wake failed; no wake retry scheduled", {
+        source: wake.source,
+        intent: wake.intent,
+        agentId: wake.agentId,
+        sessionKey: wake.sessionKey,
+        wakeReason: wake.reason,
+        error: result.reason,
+      });
+    }
     for (const entry of wake.settlements) {
       entry.settle(result);
     }

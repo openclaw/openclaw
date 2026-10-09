@@ -149,12 +149,8 @@ export function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(state, host, requestUpdate);
     }
-    const cmdName = argMatch[1]?.toLowerCase();
-    const argFilter = argMatch[2]?.toLowerCase();
-    if (cmdName === undefined || argFilter === undefined) {
-      closeSlashMenuIfNeeded(state, requestUpdate);
-      return;
-    }
+    const cmdName = argMatch[1]!.toLowerCase();
+    const argFilter = argMatch[2]!.toLowerCase();
     const cmd = SLASH_COMMANDS.find(
       (entry) => entry.name === cmdName && (host.commandFilter?.(entry) ?? true),
     );
@@ -482,13 +478,12 @@ export function handleSlashMenuKeydown(
 }
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
-  if (!state.slashMenuOpen) {
-    return false;
-  }
-  if (state.slashMenuMode === "args") {
-    return Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0);
-  }
-  return state.slashMenuItems.length > 0;
+  return (
+    state.slashMenuOpen &&
+    (state.slashMenuMode === "args"
+      ? Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0)
+      : state.slashMenuItems.length > 0)
+  );
 }
 
 export function getActiveSlashMenuOptionId(state: SlashMenuState, paneId: string): string | null {

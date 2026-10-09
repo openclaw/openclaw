@@ -1,7 +1,6 @@
 // Admission reads already-loaded state. Recovery may load a bound definition
 // under live custody; neither mode starts a unit or a bus service.
 import { isDeepStrictEqual } from "node:util";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -17,6 +16,11 @@ import type {
   SystemdServiceReadBinding,
   SystemdServiceReadTarget,
 } from "./service-types.js";
+import {
+  decodeSystemdBusProperties,
+  readSystemdBusOwner,
+  readSystemdUnitObjectPath,
+} from "./systemd-bus-query.js";
 import { execBusctlSystem, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { readSystemdUserTransport } from "./systemd-user-transport.js";
@@ -90,36 +94,14 @@ export async function readLoadedSystemdServiceRuntime(
     if (result.code !== 0 || result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
-    const values = result.stdout
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => asOptionalRecord(JSON.parse(line)));
-    if (
-      values.length !== signatures.length ||
-      values.some((value, index) => value?.type !== signatures[index])
-    ) {
-      throw unavailable();
-    }
-    return values.map((value) => value?.data);
+    return decodeSystemdBusProperties(result.stdout, signatures, unavailable);
   };
   const readOwner = async () => {
     if (binding) {
       binding.verify();
       return binding.destination;
     }
-    const [value] = await query(
-      ["call", BUS, "/org/freedesktop/DBus", BUS, "GetNameOwner", "s", MANAGER],
-      ["s"],
-    );
-    if (
-      !Array.isArray(value) ||
-      value.length !== 1 ||
-      typeof value[0] !== "string" ||
-      !/^:[0-9]+\.[0-9]+$/.test(value[0])
-    ) {
-      throw unavailable();
-    }
-    return value[0];
+    return readSystemdBusOwner(query, unavailable);
   };
   try {
     // Address every unit query to the observed unique bus owner, never a newly started manager.
@@ -157,15 +139,7 @@ export async function readLoadedSystemdServiceRuntime(
       ],
       ["o"],
     );
-    if (
-      !Array.isArray(unit) ||
-      unit.length !== 1 ||
-      typeof unit[0] !== "string" ||
-      !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(unit[0])
-    ) {
-      throw unavailable();
-    }
-    const unitPath = unit[0];
+    const unitPath = readSystemdUnitObjectPath(unit, unavailable);
     const readUnit = () =>
       query(
         [

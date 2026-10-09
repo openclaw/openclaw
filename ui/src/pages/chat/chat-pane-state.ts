@@ -68,10 +68,7 @@ export class SessionParticipationTracker {
     // session does not flicker enabled; a completed absence never blocks. The
     // redaction case (a session hidden from a non-owner) is handled once the
     // explicit revocation signal lands (openclaw/openclaw#112760).
-    if (params.listLoading) {
-      return this.lastBlocked.get(params.sessionKey) === true;
-    }
-    return false;
+    return params.listLoading && this.lastBlocked.get(params.sessionKey) === true;
   }
 
   private remember(sessionKey: string, blocked: boolean): void {

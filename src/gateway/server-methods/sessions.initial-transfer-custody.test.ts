@@ -501,10 +501,11 @@ it.each([
         // Generic restoration deliberately reads existing sessions through the
         // read-only owner, without borrowing pending writable admission.
         expect(
-          loadSubagentSessionEntry({ childSessionKey: restored.childSessionKey }),
+          await loadSubagentSessionEntry({ childSessionKey: restored.childSessionKey }),
         ).toMatchObject({
           sessionId: `${restored.childSessionKey}-session`,
         });
+        expect(() => assertAgentDatabaseAdmitted("main")).toThrow(AgentDatabaseAdmissionError);
       }
       const activation = activateSubagentRegistry(context.resolveGatewayContext);
       if (conflicted) {

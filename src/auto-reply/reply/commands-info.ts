@@ -1,4 +1,3 @@
-/** Handles informational commands such as /help, /commands, /tools, and exports. */
 import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
@@ -94,11 +93,9 @@ function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams[
   if (skillCommands.length > 0) {
     const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
     lines.push("", `Available: ${names.join(", ")}`);
-    if (skillCommands.length > names.length) {
-      lines.push(`More: /commands (${skillCommands.length - names.length} more)`);
-    } else {
-      lines.push("More: /commands");
-    }
+    lines.push(
+      `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
+    );
   } else {
     lines.push("", "Use /commands to list available skill commands.");
   }
@@ -160,7 +157,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       hasRepliedRef: undefined,
     });
-    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+    await using acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
       cfg: params.cfg,
       agentId: params.agentId,
       agentDir: sessionBound ? undefined : params.agentDir,
@@ -168,47 +165,43 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       modelProvider: params.provider,
       modelId: params.model,
     });
-    try {
-      return await acquired.run(async (runtimeModelContext) => {
-        const result = await resolveEffectiveToolInventory({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.workspaceDir,
-          agentDir: sessionBound ? undefined : params.agentDir,
-          modelProvider: params.provider,
-          modelId: params.model,
-          modelApi: runtimeModelContext.modelApi,
-          runtimeModel: runtimeModelContext.runtimeModel,
-          messageProvider: params.command.channel,
-          senderId: params.command.senderId,
-          senderName: params.ctx.SenderName,
-          senderUsername: params.ctx.SenderUsername,
-          senderE164: params.ctx.SenderE164,
-          accountId: effectiveAccountId,
-          currentChannelId: threadingContext.currentChannelId,
-          currentThreadTs:
-            typeof params.ctx.MessageThreadId === "string" ||
-            typeof params.ctx.MessageThreadId === "number"
-              ? String(params.ctx.MessageThreadId)
-              : undefined,
-          currentMessageId: threadingContext.currentMessageId,
-          groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
-          groupChannel:
-            targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
-          groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
-          replyToMode: resolveReplyToMode(
-            params.cfg,
-            params.ctx.OriginatingChannel ?? params.ctx.Provider,
-            effectiveAccountId,
-            params.ctx.ChatType,
-          ),
-        });
-        return commandReply(buildToolsMessage(result, { verbose }));
+    return await acquired.run(async (runtimeModelContext) => {
+      const result = await resolveEffectiveToolInventory({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        agentDir: sessionBound ? undefined : params.agentDir,
+        modelProvider: params.provider,
+        modelId: params.model,
+        modelApi: runtimeModelContext.modelApi,
+        runtimeModel: runtimeModelContext.runtimeModel,
+        messageProvider: params.command.channel,
+        senderId: params.command.senderId,
+        senderName: params.ctx.SenderName,
+        senderUsername: params.ctx.SenderUsername,
+        senderE164: params.ctx.SenderE164,
+        accountId: effectiveAccountId,
+        currentChannelId: threadingContext.currentChannelId,
+        currentThreadTs:
+          typeof params.ctx.MessageThreadId === "string" ||
+          typeof params.ctx.MessageThreadId === "number"
+            ? String(params.ctx.MessageThreadId)
+            : undefined,
+        currentMessageId: threadingContext.currentMessageId,
+        groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+        groupChannel:
+          targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+        groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
+        replyToMode: resolveReplyToMode(
+          params.cfg,
+          params.ctx.OriginatingChannel ?? params.ctx.Provider,
+          effectiveAccountId,
+          params.ctx.ChatType,
+        ),
       });
-    } finally {
-      await acquired[Symbol.asyncDispose]();
-    }
+      return commandReply(buildToolsMessage(result, { verbose }));
+    });
   } catch {
     // Inventory resolves in-process after sender authorization; this path cannot receive
     // gateway RPC scope errors, so failures here are local discovery failures.

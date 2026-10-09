@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { inspectCronBackups, readDatabase } from "./observations.mjs";
 
 const fixtureName = "cron-owner-fixture.json";
 const prefix = "owner-proof-";
@@ -68,15 +69,6 @@ function paths() {
   };
 }
 
-function readDatabase(databasePath, run) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
-}
-
 function inspectRows(databasePath, storePath) {
   return readDatabase(databasePath, (db) =>
     db
@@ -88,25 +80,11 @@ function inspectRows(databasePath, storePath) {
   );
 }
 
-function inspectBackups(databasePath) {
-  return fs
-    .readdirSync(path.dirname(databasePath))
-    .filter(
-      (name) =>
-        name.startsWith(`${path.basename(databasePath)}.doctor-cron-`) && name.endsWith(".bak"),
-    )
-    .toSorted()
-    .map((name) => ({
-      name,
-      sha256: hash(fs.readFileSync(path.join(path.dirname(databasePath), name))),
-    }));
-}
-
 function snapshot(fixture) {
   const config = readJson(fixture.configPath);
   return {
     rows: inspectRows(fixture.databasePath, fixture.storePath),
-    backups: inspectBackups(fixture.databasePath),
+    backups: inspectCronBackups(fixture.databasePath),
     historicalMarker: config.agents?.entries?.ops?.default === true,
     legacySourceSha256: fs.existsSync(fixture.storePath)
       ? hash(fs.readFileSync(fixture.storePath))
@@ -490,19 +468,15 @@ function assertUpdated(p, observations, packageRoot) {
   assert(doctor, "Installed updater's candidate Doctor did not perform the owner repair");
   assert.deepEqual(updater.before, fixture.before, "Specimen changed before the installed update");
   assert.equal(doctor.before.legacySourceSha256, fixture.legacySha256);
+  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
+    job_id,
+    agent_id,
+    job_json,
+    state_json,
+  });
   assert.deepEqual(
-    doctor.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
-    fixture.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
+    doctor.before.rows.map(persistedFields),
+    fixture.before.rows.map(persistedFields),
     "Jobs were repaired before candidate Doctor received them",
   );
   for (const receipt of [updater, doctor]) {
@@ -564,12 +538,6 @@ function assertUpdated(p, observations, packageRoot) {
   );
   assert.equal(beforeImport.length, 1, "Missing unique pre-import snapshot");
   assert.equal(beforeOwnership.length, 1, "Missing unique pre-ownership snapshot");
-  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
-    job_id,
-    agent_id,
-    job_json,
-    state_json,
-  });
   assert.deepEqual(
     beforeImport[0].rows.map(persistedFields),
     fixture.before.rows.map(persistedFields),

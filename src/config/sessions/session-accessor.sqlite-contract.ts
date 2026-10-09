@@ -21,13 +21,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
 
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
-
-export type SessionEntryStatusSelection = {
-  statuses: readonly SessionEntryStatus[];
-  presenceOnly?: boolean;
-};
-
 export type TranscriptWriteSnapshot<T> = {
   result: T;
   lifecycleRevision?: string;
@@ -83,7 +76,6 @@ export type SqliteSessionReclamationDiagnostics = {
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
     | "lifecycle-projection-commit"
-    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
     | "maintenance-plan"
@@ -181,6 +173,7 @@ export type SessionTranscriptInstanceListOptions = {
   /** Include empty and internal windows when inspecting recorded source metadata. */
   includeAllWindows?: boolean;
   sessionId?: string;
+  sessionIds?: readonly string[];
 };
 
 export type TranscriptEventAppendOptions = {
@@ -215,7 +208,6 @@ export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,
   SessionAccessScope,
-  SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,

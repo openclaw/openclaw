@@ -36,6 +36,7 @@ import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owne
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
+  captureSessionTranscriptSourcePublication,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -266,7 +267,7 @@ async function appendTranscriptTurnMessages(
   }
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
   for (const append of selectedMessages) {
-    const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+    const { shouldAppend: _shouldAppend, workerPreparation, ...appendOptions } = append;
     const result = await appendTranscriptMessage(
       {
         ...(target.agentId ? { agentId: target.agentId } : {}),
@@ -277,7 +278,7 @@ async function appendTranscriptTurnMessages(
       },
       {
         ...appendOptions,
-        ...appendOptions.workerPreparation,
+        ...workerPreparation,
         message: attachSessionTranscriptRunId(appendOptions.message, options.runId),
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
@@ -309,6 +310,10 @@ async function persistExpectedSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
+  const onCommittedSource = captureSessionTranscriptSourcePublication({
+    ...scope,
+    sessionId: expectedSessionId,
+  });
   const { selectedSessionId, selectedLifecycleRevision, ...target } =
     preparedTarget ??
     (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
@@ -347,6 +352,7 @@ async function persistExpectedSessionTranscriptTurn(
           message: attachSessionTranscriptRunId(append.message, options.runId),
         })),
         onMessageCommitted: options.onMessageCommitted,
+        onCommittedSource,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
         sessionTurnMutation: options.sessionTurnMutation,
         sessionFile: target.sessionKey!,

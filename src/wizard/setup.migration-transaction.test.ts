@@ -85,7 +85,7 @@ function provider(params: {
   onDeferredApply?: (
     itemId: string,
     ctx: MigrationProviderContext,
-  ) => Promise<"already-satisfied" | "error" | "migrated">;
+  ) => Promise<"error" | "migrated">;
 }): MigrationProviderPlugin {
   return {
     id: "claude",
@@ -147,16 +147,9 @@ function provider(params: {
         if (item.applyPhase === "after-promotion") {
           const status = (await params.onDeferredApply?.(item.id, ctx)) ?? "error";
           items.push(
-            status === "already-satisfied"
-              ? {
-                  ...item,
-                  status: "skipped",
-                  deferredCompletion: true,
-                  reason: "already satisfied",
-                }
-              : status === "migrated"
-                ? { ...item, status }
-                : { ...item, status, reason: "activation failed" },
+            status === "migrated"
+              ? { ...item, status }
+              : { ...item, status, reason: "activation failed" },
           );
           continue;
         }
@@ -318,26 +311,6 @@ describe("transactional setup migration import", () => {
     );
     await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
     expect(currentConfig.value).toEqual({});
-  });
-
-  it("accepts an already-satisfied retry-safe deferred effect as complete", async () => {
-    const { root, source, currentConfig } = await createImportFixture();
-    mocks.provider = provider({
-      source,
-      deferred: true,
-      onDeferredApply: async () => "already-satisfied",
-    });
-
-    await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
-      kind: "no-imported-inference",
-    });
-
-    const { report, journal } = await readImportReport(root);
-    expect(report.items.find((item) => item.id === "plugin:calendar")).toMatchObject({
-      status: "skipped",
-      deferredCompletion: true,
-    });
-    expect(journal.status).toBe("completed");
   });
 
   it.each([true, false])(

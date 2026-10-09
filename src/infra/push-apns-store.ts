@@ -15,13 +15,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
-import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
-import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
 import {
   normalizeApnsRelayBaseUrl,
   normalizePersistedApnsRelayBaseUrl,
-} from "./push-apns.relay.js";
+} from "./push-apns-relay-url.js";
+import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
+import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 export { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
@@ -212,7 +212,6 @@ function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   };
 }
 
-/** Normalizes one canonical registration with an explicit transport discriminator. */
 export function normalizeCanonicalApnsRegistration(
   record: unknown,
   env: NodeJS.ProcessEnv = process.env,
@@ -264,7 +263,6 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
   return normalized;
 }
 
-/** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
 ): Promise<ApnsRegistration> {

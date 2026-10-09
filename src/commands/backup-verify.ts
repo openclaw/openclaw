@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -109,6 +110,9 @@ async function extractManifest(params: {
   const content = await manifestContentPromise;
   if (content instanceof Error) {
     throw content;
+  }
+  if (!isUtf8(content)) {
+    throw new Error("Backup manifest must be valid UTF-8.");
   }
   return content.toString("utf8");
 }

@@ -55,27 +55,26 @@ export function resolveSubagentEntryForToken(
     const entry = entries[0];
     return entry ? { entry } : undefined;
   };
+  const matchLabel = (prefix: boolean) => {
+    const matches = (value: string | undefined) => {
+      const label = normalizeLowercaseStringOrEmpty(value);
+      return prefix ? label.startsWith(lowered) : label === lowered;
+    };
+    const ambiguity = `Ambiguous subagent label${prefix ? " prefix" : ""}`;
+    return (
+      match(
+        numericOrder.filter((entry) => matches(entry.taskName)),
+        ambiguity,
+      ) ??
+      match(
+        latest.filter((entry) => matches(formatRunLabel(entry))),
+        ambiguity,
+      )
+    );
+  };
   return (
-    match(
-      numericOrder.filter((entry) => normalizeLowercaseStringOrEmpty(entry.taskName) === lowered),
-      "Ambiguous subagent label",
-    ) ??
-    match(
-      latest.filter((entry) => normalizeLowercaseStringOrEmpty(formatRunLabel(entry)) === lowered),
-      "Ambiguous subagent label",
-    ) ??
-    match(
-      numericOrder.filter((entry) =>
-        normalizeLowercaseStringOrEmpty(entry.taskName).startsWith(lowered),
-      ),
-      "Ambiguous subagent label prefix",
-    ) ??
-    match(
-      latest.filter((entry) =>
-        normalizeLowercaseStringOrEmpty(formatRunLabel(entry)).startsWith(lowered),
-      ),
-      "Ambiguous subagent label prefix",
-    ) ??
+    matchLabel(false) ??
+    matchLabel(true) ??
     match(
       latest.filter((entry) => entry.runId.startsWith(trimmed)),
       "Ambiguous run id prefix",

@@ -218,7 +218,7 @@ async function applyChatSetting(
           setChatError(host, `Failed to set ${settingName}: ${formatUiError(error)}`, true);
         }
       },
-      reconcile: async () => refreshCurrentChatSessionList(host),
+      reconcile: () => refreshCurrentChatSessionList(host),
     });
     synchronize?.();
     receipt = await pending;

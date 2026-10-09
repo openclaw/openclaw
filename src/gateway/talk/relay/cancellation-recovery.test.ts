@@ -15,16 +15,16 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import {
-  cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession,
-  sendTalkRealtimeRelayAudio,
-  stopTalkRealtimeRelaySession,
-} from "./index.js";
-import {
   createIdleRelayProvider,
   drainRelayTestSessions,
   makeRelayTransport,
 } from "./index.test-support.js";
+import {
+  cancelTalkRealtimeRelayTurn,
+  sendTalkRealtimeRelayAudio,
+  stopTalkRealtimeRelaySession,
+} from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions } from "./state.js";
 
 const activeRelaySessions = new Map<string, string>();

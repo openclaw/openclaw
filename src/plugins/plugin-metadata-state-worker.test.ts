@@ -37,7 +37,9 @@ import {
 } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -104,6 +106,60 @@ async function withoutMainThreadSql(run: () => Promise<void>) {
     sql.restore();
   }
 }
+
+it("refreshes current package facts in pinned install roots without parent SQL or lost admissions", async () => {
+  const env = environment();
+  const roots = resolvePluginInstallRoots(env);
+  const redirectedEnv = environment();
+  const rootDir = path.join(roots.extensionsDir, "fixture");
+  fs.mkdirSync(rootDir, { recursive: true });
+  const fixture = createColdPluginFixture({ rootDir, pluginId: "refresh-fixture" });
+  const config = {
+    plugins: {
+      entries: { [fixture.pluginId]: { enabled: true } },
+    },
+  };
+  await seed(env, index());
+  const refresh = () =>
+    withPluginLifecycleLease({ env }, async (lease) => {
+      await withoutMainThreadSql(async () => {
+        await withPluginInstallRoots(roots, () =>
+          refreshPluginRegistry({ config, env: redirectedEnv, lease, reason: "source-changed" }),
+        );
+      });
+    });
+  await refresh();
+  const admission = {
+    signature: "fixture-generation",
+    sourceDigest: "a".repeat(64),
+    nativeArtifacts: {},
+    nativeNamespaces: {},
+  };
+  expect(
+    await createPluginSourceAdmissionPublisher({ env })!({
+      pluginId: fixture.pluginId,
+      rootDir,
+      key: rootDir,
+      receipt: admission,
+    }),
+  ).toBe(true);
+  createColdPluginFixture({ rootDir, pluginId: fixture.pluginId, packageVersion: "2.0.0" });
+  await refresh();
+  await withoutMainThreadSql(async () => {
+    await withPluginCache(createPluginCache(), async () => {
+      const persisted = await readPersistedInstalledPluginIndex({ env });
+      expect(persisted?.plugins).toContainEqual(
+        expect.objectContaining({
+          pluginId: fixture.pluginId,
+          packageVersion: "2.0.0",
+          enabled: true,
+          sourceAdmissions: { [rootDir]: admission },
+        }),
+      );
+    });
+  });
+  expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
+});
 
 it("merges source admissions into the current install without main-thread SQL or stale-owner writes", async () => {
   const env = environment();
