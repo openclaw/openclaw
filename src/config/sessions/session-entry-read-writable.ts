@@ -13,10 +13,12 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import { readAdmittedSessionEntry } from "./session-entry-read-ordered.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
 } from "./session-entry-read-request.js";
+import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionEntry,
@@ -31,7 +33,11 @@ export async function readSessionEntryInWorker(
   assertCallerCurrent: () => void = () => {},
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
+  reader?: SessionEntryCohortReader,
 ) {
+  if (reader) {
+    return readAdmittedSessionEntry(reader, input, assertCallerCurrent, onReadTarget);
+  }
   const { scope, env } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
   const agentId = scope.agentId
@@ -135,9 +141,10 @@ export async function readSessionEntryInWorker(
           await owner.refreshBeforeDispatch(() => execution.assertCurrent());
           execution.assertCurrent();
           await execution.prepare(source);
-          return execution.runExisting(source, (worker) =>
+          const selected = await execution.runExisting(source, (worker) =>
             worker.execute({ type: "session.entry.read", input: { sessionKey } }),
           );
+          return selected?.entries.find((row) => row.sessionKey === sessionKey)?.entry;
         });
         await owner.revalidateTarget();
         assertCurrent();

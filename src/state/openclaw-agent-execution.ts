@@ -43,6 +43,7 @@ import {
   supportsAgentDatabaseExecutionScope,
   supportsOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-scope.js";
+import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
   observeOpenClawDatabaseMaintenanceResource,
   runOutsideOpenClawDatabaseMaintenanceScope,
@@ -192,6 +193,12 @@ function createAgentDatabaseExecution(
   let revoked = false;
   let retainIdle = true;
   let borrowers = 0;
+  const {
+    pending: acceptedWork,
+    cancelReadAdmissions,
+    closeAccepted,
+    settleBorrower,
+  } = createAgentDatabaseAcceptedWork();
   let creationIdentity = expectedCreationIdentity;
   let creationBorrowers = 0;
   let generation: AgentDatabaseNativeGeneration | undefined;
@@ -470,7 +477,7 @@ function createAgentDatabaseExecution(
       };
       let released = false;
       let release: Promise<void> | undefined;
-      const pending = new Set<Promise<unknown>>();
+      const borrower = Symbol("agent database borrower");
 
       const assertBorrowed = () => {
         if (released) {
@@ -519,27 +526,34 @@ function createAgentDatabaseExecution(
             signal,
             preparationOptions?.readmitSchema,
           );
-          pending.add(result);
-          void result.finally(() => pending.delete(result)).catch(() => undefined);
+          acceptedWork.set(result, { borrower });
+          void result.finally(() => acceptedWork.delete(result)).catch(() => undefined);
           await result;
         },
         async runExisting(source, operation, runOptions) {
           const capturedGeneration = released ? undefined : generation;
           const completion = createDeferredCore();
-          pending.add(completion.promise);
+          acceptedWork.set(completion.promise, { borrower });
           try {
             assertBorrowed();
             assertCreationReference(false);
-            return await run(
-              source,
-              operation,
-              (nativeIdentity) => {
-                assertReferenceCurrent(nativeIdentity);
-                assertCreationReference(false);
-              },
-              expectedIdentity,
-              runOptions?.retireNativeOnFailure,
-            );
+            const execute = () =>
+              run(
+                source,
+                operation,
+                (nativeIdentity) => {
+                  assertReferenceCurrent(nativeIdentity);
+                  assertCreationReference(false);
+                },
+                expectedIdentity,
+                runOptions?.retireNativeOnFailure,
+              );
+            if (runOptions?.withAdmission) {
+              const queuedReadAbort = new AbortController();
+              acceptedWork.set(completion.promise, { borrower, queuedReadAbort });
+              return await runOptions.withAdmission(execute, queuedReadAbort.signal);
+            }
+            return await execute();
           } catch (error) {
             if (runOptions?.retireNativeOnFailure && capturedGeneration) {
               try {
@@ -557,14 +571,15 @@ function createAgentDatabaseExecution(
             }
             throw error;
           } finally {
-            pending.delete(completion.promise);
+            acceptedWork.delete(completion.promise);
             completion.resolve();
           }
         },
         release() {
           released = true;
+          cancelReadAdmissions(borrower);
           return (release ??= (async () => {
-            await Promise.allSettled(pending);
+            await settleBorrower(borrower);
             if (
               creatingTarget &&
               --creationBorrowers === 0 &&
@@ -638,6 +653,7 @@ function createAgentDatabaseExecution(
     },
     close() {
       retired = true;
+      cancelReadAdmissions();
       closing ??= (async () => {
         await closeNative();
         finishRetirement();
@@ -656,6 +672,7 @@ function createAgentDatabaseExecution(
   const revoke = () => {
     revoked = true;
     retired = true;
+    cancelReadAdmissions();
     clearIdleTimer();
   };
   const unregisterAgent = () => {
@@ -678,7 +695,7 @@ function createAgentDatabaseExecution(
           agentId,
           path: alias,
           revoke,
-          close: () => owner.close(),
+          close: () => closeAccepted(() => owner.close()),
         },
         options,
       );
@@ -702,7 +719,7 @@ function createAgentDatabaseExecution(
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
       close: async (sharedIdentity) => {
         if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
-          await owner.close();
+          await closeAccepted(() => owner.close());
         }
       },
     });

@@ -5,7 +5,7 @@ import {
   applySessionEntryLifecycleMutation,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
-import { withSessionRegistryEntriesInWorker } from "./session-entry-read-runtime.js";
+import { withSessionRegistryEntriesInWorker } from "./session-entry-read-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { pruneStaleEntries } from "./store-maintenance.js";

@@ -81,6 +81,8 @@ Reader pools cap at two workers even on hosts with many CPUs; extra read isolate
 replicate loaded code and caches without helping workloads whose queues are already
 short. Compute pools retain a four-worker cap, while writers and singletons remain
 serial. Pools create workers on demand and use their existing idle retirement.
+Physical session disk accounting uses the reader limit so independent stores can
+scan concurrently without creating a worker for each store.
 Shared-state readers retain at least two slots so a held settlement read cannot
 block a fresh catalog read. Foreground transcript and SQLite broker pools keep
 their separate sizing policies.

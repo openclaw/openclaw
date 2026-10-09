@@ -724,16 +724,18 @@ export async function httpOk(port, pathName, options = {}) {
   }
 }
 
-async function assertHttpOk(port, pathName) {
+async function assertHttpOk(port, pathName, { parseJson = false, acceptDegraded } = {}) {
   const started = Date.now();
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetchHttpProbeStatus(port, pathName);
-      if (res.ok) {
+      const res = await fetchHttpProbeStatus(port, pathName, { parseJson });
+      if (res.ok || acceptDegraded?.(res)) {
         return;
       }
-      lastError = new Error(`${pathName} returned HTTP ${res.status}`);
+      lastError = new Error(
+        `${pathName} returned HTTP ${res.status}${parseJson ? `: ${formatHttpProbeBody(res)}` : ""}`,
+      );
     } catch (error) {
       lastError = error;
     }
@@ -783,32 +785,20 @@ function formatHttpProbeBody(res) {
 
 export async function assertReadyzProbe(options) {
   const allowedFailures = new Set(options.allowedDegradedReadyzFailures ?? []);
-  const started = Date.now();
-  let lastError;
-  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
-    try {
-      const res = await fetchHttpProbeStatus(options.port, "/readyz", { parseJson: true });
-      if (res.ok) {
-        return;
+  await assertHttpOk(options.port, "/readyz", {
+    parseJson: true,
+    acceptDegraded(res) {
+      if (!isAllowedDegradedReadyz(res, allowedFailures)) {
+        return false;
       }
-      if (isAllowedDegradedReadyz(res, allowedFailures)) {
-        console.log(
-          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz failing ${JSON.stringify(
-            listReadyzFailingComponents(res.body),
-          )}`,
-        );
-        return;
-      }
-      lastError = new Error(`/readyz returned HTTP ${res.status}: ${formatHttpProbeBody(res)}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(Math.min(500, Math.max(1, RPC_READY_TIMEOUT_MS - (Date.now() - started))));
-  }
-  throw toLintErrorObject(
-    lastError ?? new Error("/readyz did not return HTTP 200"),
-    "Non-Error thrown",
-  );
+      console.log(
+        `Runtime readyz smoke degraded for ${options.pluginId}: /readyz failing ${JSON.stringify(
+          listReadyzFailingComponents(res.body),
+        )}`,
+      );
+      return true;
+    },
+  });
 }
 
 export async function rpcCall(method, params, options) {

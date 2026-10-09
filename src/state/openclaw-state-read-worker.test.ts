@@ -3,6 +3,7 @@
 import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import fs from "node:fs";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
@@ -22,6 +23,104 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as const)(
+  "joins asynchronous stream consumption before releasing its reader (%s)",
+  async (finish) => {
+    const { options } = source();
+    const context = captureOpenClawStateWorkerContext(options);
+    const controller = new AbortController();
+    const taskController = new AbortController();
+    const failure = new Error(`stream ${finish}`);
+    let current = true;
+    const authority = {
+      signal: controller.signal,
+      assertCurrent() {
+        controller.signal.throwIfAborted();
+        if (!current) {
+          throw failure;
+        }
+        context.admission.assertCurrent();
+      },
+    };
+    const consumed = createDeferredCore();
+    let chunkSignal: AbortSignal | undefined;
+    const onChunkAsync = vi.fn(async (value: unknown, signal: AbortSignal) => {
+      expect(value).toEqual(["bounded row"]);
+      expect(signal.aborted).toBe(false);
+      chunkSignal = signal;
+      if (finish === "worker-failure") {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      } else {
+        await consumed.promise;
+      }
+    });
+    const task = createRetainedOperation<OpenClawStateReadReply>(() => {});
+    const released = createRetainedOperation<void>(() => {});
+    released.resolve(undefined);
+    mock.runTask.mockReturnValueOnce({ ...task.operation, release: () => released.operation });
+    const transport = captureOpenClawStateReadSource().createTransport(
+      { type: "backup.runs" },
+      undefined,
+      onChunkAsync,
+    );
+    const reading = transport.startRead(
+      { context, location: options.path, checkFreshAdmission: false },
+      authority,
+    );
+    const request = mock.runTask.mock.calls[0]?.[1].onRequest;
+    if (!request) {
+      throw new Error("Stream reader did not admit asynchronous consumption");
+    }
+    const response = request(["bounded row"], {
+      signal: taskController.signal,
+      yieldSignal: new AbortController().signal,
+    });
+    const responseAssertion =
+      finish === "complete"
+        ? expect(response).resolves.toMatchObject({ input: null })
+        : finish === "worker-failure"
+          ? expect(response).rejects.toMatchObject({ name: "AbortError" })
+          : expect(response).rejects.toBe(failure);
+    try {
+      expect(onChunkAsync).toHaveBeenCalledOnce();
+      if (finish === "cancel") {
+        controller.abort(failure);
+      } else if (finish === "revoke") {
+        current = false;
+      } else if (finish === "worker-failure") {
+        taskController.abort();
+        task.reject(failure);
+        expect(chunkSignal?.aborted).toBe(true);
+        expect(controller.signal.aborted).toBe(false);
+        expect(() => authority.assertCurrent()).not.toThrow();
+      }
+      const closing = transport.startClose();
+      closing.service();
+      expect(closing.read()).toEqual({ status: "pending" });
+      if (finish === "consumer-error") {
+        consumed.reject(failure);
+      } else if (finish !== "worker-failure") {
+        consumed.resolve();
+      }
+      await responseAssertion;
+      await closing.result;
+      if (finish === "worker-failure") {
+        await expect(reading.result).resolves.toEqual({ error: failure });
+        expect(controller.signal.aborted).toBe(false);
+      }
+      expect(onChunkAsync).toHaveBeenCalledOnce();
+      expect(mock.runTask).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort(failure);
+      consumed.resolve();
+      task.resolve(emptyReply);
+      await Promise.allSettled([responseAssertion, reading.result, transport.startClose().result]);
+    }
+  },
+);
 
 it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
   const { root, pathname } = source();

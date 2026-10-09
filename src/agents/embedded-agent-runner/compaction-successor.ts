@@ -11,6 +11,7 @@ import {
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
@@ -158,6 +159,7 @@ export type AcceptedCompactionSuccessor = Awaited<
 > & {
   entry: InternalSessionEntry;
   previousSessionId?: string;
+  readonly admissionTransition?: SessionAdmissionTransition;
 };
 
 type CompactionWriterClaim = Readonly<{
@@ -238,7 +240,21 @@ export async function acceptCompactionSuccessor(params: {
         onCommitted: (entry) => {
           // Capture the actual commit before identity observers can abort the caller.
           // This sink records facts only; no authority checks or lifecycle hooks.
-          committed = { ...successor, entry, previousSessionId: currentTarget.sessionId };
+          committed = {
+            ...successor,
+            entry,
+            previousSessionId: currentTarget.sessionId,
+            admissionTransition: Object.freeze({
+              previous: Object.freeze({
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision,
+              }),
+              current: Object.freeze({
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+              }),
+            }),
+          };
           params.onCommitted?.(committed);
         },
       },

@@ -108,6 +108,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testAssistantRepliesNameTheSpeakerWhenTheAvatarIsHidden() throws {
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let reply = app.descendants(matching: .any)["chat-assistant-message-body"].firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        let run = app.descendants(matching: .any)["chat-assistant-run"].firstMatch
+        let named = run.exists ? run : reply
+        let avatar = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Molty avatar")).firstMatch
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertFalse(avatar.exists, "A compact width shows no avatar beside a reply")
+        }
+        // The reply names the assistant exactly where no avatar does.
+        XCTAssertEqual(named.label, avatar.exists ? "" : "Molty")
+    }
+
     func testReleaseAgentScreenshot() {
         self.captureReleaseScreenshot(Self.agentScreenshotTarget)
     }

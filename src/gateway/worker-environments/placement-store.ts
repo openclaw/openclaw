@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -12,6 +12,7 @@ import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
+import { readPublishedPlacementProjection } from "./placement-read-publication.js";
 import { createPlacementReadStore } from "./placement-read-store.js";
 import {
   normalizeEpoch,
@@ -251,6 +252,20 @@ export function createWorkerSessionPlacementStore(
           projection.workspaceRecoveryPendingSessionIds,
         ),
       };
+    },
+
+    readPublishedProjection(change: SessionRowChange) {
+      const projection = readPublishedPlacementProjection(context.admission.identity, change);
+      if (!projection) {
+        return undefined;
+      }
+      try {
+        context.admission.assertCurrent();
+        return projection;
+      } catch {
+        // A replaced reader must use ordinary preparation, never the old receipt.
+        return undefined;
+      }
     },
 
     async readEnvironmentOwner(environmentId: string) {

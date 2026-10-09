@@ -11,6 +11,7 @@ import type { prepareSessionGenerationFacts } from "../../../config/sessions/ses
 import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryReadSourcePreparation } from "../../../config/sessions/session-entry-read-runtime.types.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
@@ -184,6 +185,18 @@ export function createSubagentRegistryMockState() {
       assertCurrent();
       return Promise.resolve({
         assertCurrent,
+        readSessionSettings: () => {
+          assertCurrent();
+          const entry = mocks.entries[input.sessionKey];
+          return {
+            permissionMode: entry?.permissionMode,
+            toolOverrides: entry?.toolOverrides,
+          };
+        },
+        bindCreation: () => {
+          throw new Error("Registry fixtures do not supply committed session creation receipts.");
+        },
+        isCreationAdopted: () => false,
         prepareRead: () => undefined,
         release: () => {
           active = false;
@@ -208,6 +221,7 @@ export function createSubagentRegistryMockState() {
         read: Result<SessionEntry | undefined, unknown>,
         owner: SessionEntryReadWorkerOwner,
       ) => Promise<T>,
+      _prepareSource?: SessionEntryReadSourcePreparation,
     ): Promise<T> => {
       assertCurrent();
       let read: Result<SessionEntry | undefined, unknown>;

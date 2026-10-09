@@ -1120,21 +1120,21 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         refreshError = appendOAuthRefreshCleanupErrors(refreshError, [cleanupError]);
       }
       const claimedGeneration = attemptedCredentials.at(-1) ?? effectiveCredential;
+      const canRecover = (
+        candidate: AuthProfileStore["profiles"][string] | undefined,
+      ): candidate is OAuthCredential =>
+        candidate?.type === "oauth" &&
+        isSafeOAuthPostClaimSettlement(claimedGeneration, candidate) &&
+        canReuseOAuthCredentialAfterRefreshFailure({
+          forceRefresh: params.forceRefresh,
+          attempted: claimedGeneration,
+          candidate,
+        });
       const refreshed = refreshedStore.profiles[params.profileId];
-      if (recoveryStoreLoaded && !recoveryBuildFailed) {
-        if (
-          refreshed?.type === "oauth" &&
-          isSafeOAuthPostClaimSettlement(claimedGeneration, refreshed) &&
-          canReuseOAuthCredentialAfterRefreshFailure({
-            forceRefresh: params.forceRefresh,
-            attempted: claimedGeneration,
-            candidate: refreshed,
-          })
-        ) {
-          const recovered = await buildRecoveryAccess(refreshed);
-          if (recovered) {
-            return recovered;
-          }
+      if (recoveryStoreLoaded && !recoveryBuildFailed && canRecover(refreshed)) {
+        const recovered = await buildRecoveryAccess(refreshed);
+        if (recovered) {
+          return recovered;
         }
       }
       if (recoveryStoreLoaded && params.agentDir && !personalProfile && !recoveryBuildFailed) {
@@ -1143,15 +1143,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             allowKeychainPrompt: false,
           });
           const mainCred = mainStore.profiles[params.profileId];
-          if (
-            mainCred?.type === "oauth" &&
-            isSafeOAuthPostClaimSettlement(claimedGeneration, mainCred) &&
-            canReuseOAuthCredentialAfterRefreshFailure({
-              forceRefresh: params.forceRefresh,
-              attempted: claimedGeneration,
-              candidate: mainCred,
-            })
-          ) {
+          if (canRecover(mainCred)) {
             params.validateCredential?.(mainCred);
             refreshedStore.profiles[params.profileId] = { ...mainCred };
             authProfilesLog.info("inherited fresh OAuth credentials from main agent", {

@@ -58,11 +58,9 @@ export async function prepareUpdateDatabaseRestoreSourceInProcess(params: {
             `SELECT rowid AS restore_rowid, ${selected} FROM update_runs`,
           );
           rows.setReadBigInts(true);
+          const placeholders = Array.from({ length: columns.length + 1 }, () => "?").join(", ");
           const insert = target.prepare(
-            `INSERT INTO update_runs (rowid, ${selected}) VALUES (${columns
-              .map(() => "?")
-              .concat("?")
-              .join(", ")})`,
+            `INSERT INTO update_runs (rowid, ${selected}) VALUES (${placeholders})`,
           );
           target.exec("BEGIN IMMEDIATE");
           try {

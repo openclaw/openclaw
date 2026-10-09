@@ -28,7 +28,14 @@ import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
+  prepareHarnessContextEnginePrompt,
 } from "./context-engine-lifecycle.js";
+import {
+  createContextEngine,
+  sessionParams,
+  textMessage,
+} from "./context-engine-lifecycle.test-support.js";
+import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 
 function registerTestContextEngine(
   id: string,
@@ -37,14 +44,6 @@ function registerTestContextEngine(
   return registerContextEngineForOwner(id, factory, `test:${id}`, {
     allowSameOwnerRefresh: true,
   });
-}
-
-function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
-  return {
-    role,
-    content: [{ type: "text", text }],
-    timestamp,
-  } as AgentMessage;
 }
 
 function runtimeContextMessage(content: string, timestamp: number): AgentMessage {
@@ -60,26 +59,6 @@ function runtimeContextMessage(content: string, timestamp: number): AgentMessage
   } as AgentMessage;
 }
 
-function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  return {
-    info: { id: "test", name: "Test context engine" },
-    ingest: vi.fn(async () => ({ ingested: true })),
-    assemble: vi.fn(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    })),
-    compact: vi.fn(async () => ({ ok: true, compacted: false })),
-    ...overrides,
-  };
-}
-
-const sessionParams = {
-  sessionIdUsed: "session-1",
-  sessionId: "session-1",
-  sessionKey: "agent:main:main",
-  sessionFile: "sessions/main.jsonl",
-};
-
 let configuredProofEngineIdCounter = 0;
 function uniqueConfiguredProofEngineId() {
   configuredProofEngineIdCounter += 1;
@@ -87,6 +66,74 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
+  it.each([false, true])(
+    "bounds oversized assembly without changing stored messages (engine throws=%s)",
+    async (throws) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages = [
+        textMessage("user", "old history ".repeat(500), 1),
+        textMessage("assistant", "old answer", 2),
+        textMessage("user", "recent ask", 3),
+        textMessage("assistant", "recent answer", 4),
+      ];
+      const original = JSON.stringify(messages);
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async ({ messages: input }) => {
+            if (throws) {
+              throw new Error("fixture assembly failure");
+            }
+            return {
+              messages: input,
+              estimatedTokens: 10_000,
+              systemPromptAddition: "Required engine instructions",
+            };
+          },
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+        },
+      });
+      const contextEngine = lease.engine;
+      const params = {
+        ...sessionParams,
+        contextEngine,
+        messages,
+        modelId: "test-model",
+        tokenBudget: 2000,
+      };
+      const bounded = await prepareHarnessContextEnginePrompt({
+        ...params,
+        promptBudget: {
+          contextTokens: 4000,
+          reserveTokens: 1000,
+          systemPrompt: "Required system instructions",
+          prompt: "Current request",
+        },
+        repairToolUseResultPairing: true,
+        isOpenAIResponsesApi: false,
+        warn: vi.fn(),
+      });
+      expect(bounded.messages).toEqual(messages.slice(2));
+      expect(bounded.systemPrompt).toContain("Required system instructions");
+      expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(1024);
+      expect(JSON.stringify(messages)).toBe(original);
+      if (!throws) {
+        const first = await assembleHarnessContextEngine(params);
+        const second = await assembleHarnessContextEngine(params);
+        expect(first?.contextProjection?.mode).toBe("thread_bootstrap");
+        expect(first?.contextProjection).toEqual(second?.contextProjection);
+        expect(first?.systemPromptAddition).toBe("Required engine instructions");
+      }
+      await lease.dispose();
+    },
+  );
+
   it("forwards session keys across bootstrap, assemble, and afterTurn hooks", async () => {
     const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
     const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({

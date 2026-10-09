@@ -152,11 +152,7 @@ describe("worktree Git maintenance", () => {
       expect(repairRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
       // Git honors task order; graph traversal must not starve pack-index repair.
       expect(taskOrders).toEqual(
-        [repo, otherRepo].map(() => [
-          "--task=incremental-repack",
-          "--task=commit-graph",
-          "--task=loose-objects",
-        ]),
+        [repo, otherRepo].map(() => ["--task=commit-graph", "--task=loose-objects"]),
       );
       const warning = await logs.findText("worktree Git maintenance");
       expect(warning).toContain("gc is already running");
@@ -253,6 +249,131 @@ describe("worktree Git maintenance", () => {
     }
   });
 
+  it("consolidates indexed promisor packs without fetching, losing local objects, or removing kept packs", async () => {
+    const root = tempDirs.make("worktree-pack-consolidation-");
+    const source = await initRepo(root);
+    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
+    const repo = path.join(root, "partial");
+    await requireGit(root, [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(source).href,
+      repo,
+    ]);
+    const packDirectory = path.join(repo, ".git", "objects", "pack");
+    const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
+    expect(missing).toContain("?");
+    const objects: string[] = [];
+    const generated: string[] = [];
+    for (let index = 0; index < 18; index++) {
+      const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
+        input: `payload-${index}`,
+      });
+      objects.push(object);
+      const hash = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
+        input: `${object}\n`,
+      });
+      generated.push(`pack-${hash}`);
+      if (index < 17) {
+        await fs.writeFile(path.join(packDirectory, `pack-${hash}.promisor`), "");
+      }
+    }
+    const kept = generated[0]!;
+    await fs.writeFile(path.join(packDirectory, `${kept}.keep`), "retained by another owner");
+    await requireGit(repo, ["prune-packed"]);
+    await repairWorktreePackIndex(repo);
+    await insertRegistryWorktree(env, {
+      id: "consolidate",
+      name: "consolidate",
+      repoFingerprint: "consolidate",
+      repoRoot: repo,
+      path: repo,
+      branch: "main",
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      createdAt: 1,
+      lastActiveAt: 1,
+    });
+    const trace = path.join(root, "pack-trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    try {
+      expect((await new ManagedWorktreeService({ env, now: () => 3 }).gc()).outcome).toBe(
+        "completed",
+      );
+      const remaining = await fs.readdir(packDirectory);
+      expect(remaining.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+      expect(remaining).toContain(`${kept}.pack`);
+      expect(remaining).toContain(`${generated[17]}.pack`);
+      expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+      expect(
+        await requireGit(repo, ["cat-file", "--batch-check"], {
+          input: `${objects.join("\n")}\n`,
+          env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+        }),
+      ).not.toContain("missing");
+      expect(await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"])).toBe(
+        missing,
+      );
+      await requireGit(repo, ["multi-pack-index", "verify"]);
+      expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "removes old abandoned temporary packs only after their open writer closes",
+    async () => {
+      const repo = await initRepo(tempDirs.make("worktree-temporary-packs-"));
+      const directory = path.join(repo, ".git", "objects", "pack");
+      const old = path.join(directory, "tmp_pack_abandoned");
+      const active = path.join(directory, "tmp_pack_active");
+      const young = path.join(directory, "tmp_pack_young");
+      const unrelated = path.join(directory, "operator-note");
+      const link = path.join(directory, "tmp_pack_symlink");
+      for (const file of [old, active, young, unrelated]) {
+        await fs.writeFile(file, "retain or reclaim");
+      }
+      const yesterday = new Date(Date.now() - 48 * 60 * 60_000);
+      for (const file of [old, active, unrelated]) {
+        await fs.utimes(file, yesterday, yesterday);
+      }
+      await fs.symlink(unrelated, link);
+      // A full batch of retained paths must not starve later abandoned packs.
+      for (let index = 0; index < 256; index++) {
+        await fs.symlink(unrelated, path.join(directory, `tmp_pack_aaa${index}`));
+      }
+      await insertRegistryWorktree(env, {
+        id: "temporary",
+        name: "temporary",
+        repoFingerprint: "temporary",
+        repoRoot: repo,
+        path: repo,
+        branch: "main",
+        baseRef: "HEAD",
+        ownerKind: "manual",
+        createdAt: 1,
+        lastActiveAt: 1,
+      });
+      const service = new ManagedWorktreeService({ env, now: () => 3 });
+      const writer = await fs.open(active, "r+");
+      try {
+        await service.gc();
+        await fs.access(active);
+        await expect(fs.access(old)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await writer.close();
+      }
+      await service.gc();
+      await expect(fs.access(old)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(active)).rejects.toMatchObject({ code: "ENOENT" });
+      for (const file of [young, unrelated, link]) {
+        await fs.access(file);
+      }
+    },
+  );
+
   it("preserves shared reflog history and maintains repositories with already-missing reflog objects", async () => {
     const root = tempDirs.make("worktree-maintenance-reflogs-");
     const repo = await initRepo(root);
@@ -339,6 +460,7 @@ describe("worktree GC inventories", () => {
     return (
       args[0] === "maintenance" ||
       args[0] === "multi-pack-index" ||
+      (args[0] === "rev-parse" && args[1] === "--git-common-dir") ||
       (args[0] === "rev-parse" && args[1] === "--git-path" && args[2] === "objects/pack")
     );
   }

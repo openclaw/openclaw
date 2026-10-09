@@ -44,6 +44,7 @@ import {
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
 /** The inspection scope owns private readers until native close and snapshot disposal settle. */
 export function openSqliteReadOnlyDatabase(
@@ -54,21 +55,25 @@ export function openSqliteReadOnlyDatabase(
   if (!scope || !isArtifactPreservingStateRead("agent", pathname)) {
     return openNodeSqliteDatabase(pathname, { ...options, readOnly: true });
   }
-  const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
-  const release = retainSnapshotTempDirectory(
-    snapshot.cleanupRoot ?? path.dirname(snapshot.location),
-  );
+  // The published updater already prepared this image. Keep inspection read-only
+  // and scoped, but do not copy the same database again for each canary check.
+  const snapshot = isUpdateRehearsalPrivateDatabase(pathname, process.env)
+    ? undefined
+    : prepareSqliteReadOnlyLocationSync(pathname);
+  const release = snapshot
+    ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))
+    : undefined;
   const native: { close?: () => void } = {};
   const close = () => {
     native.close?.();
-    release();
-    if (!snapshot.cleanup()) {
+    release?.();
+    if (snapshot && !snapshot.cleanup()) {
       throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
     }
     scope.readers.delete(close);
   };
   scope.readers.add(close);
-  const db = openNodeSqliteDatabase(snapshot.location, { ...options, readOnly: true });
+  const db = openNodeSqliteDatabase(snapshot?.location ?? pathname, { ...options, readOnly: true });
   const dispose = db.close.bind(db);
   native.close = () => {
     if (db.isOpen) {
