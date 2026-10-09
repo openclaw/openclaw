@@ -7,6 +7,8 @@ export function createFileMutationClock(
   hooks: {
     beforeLstat?: (file: fsSync.PathLike) => void;
     beforeLstatSync?: (file: fsSync.PathLike) => void;
+    /** Model libuv without statx, which reports ctime as birthtime on Linux and Android. */
+    birthtimeFromCtime?: boolean;
   } = {},
 ) {
   const times = new Map<string, bigint>();
@@ -15,6 +17,9 @@ export function createFileMutationClock(
       const time = times.get(`${stat.dev}:${stat.ino}`);
       if (time !== undefined) {
         stat.ctimeNs = time;
+      }
+      if (hooks.birthtimeFromCtime) {
+        stat.birthtimeNs = stat.ctimeNs;
       }
     }
     return stat;
