@@ -9102,7 +9102,6 @@
 ["src/node-host/worker-runtime.test.ts","./startup-state-readiness.js","11eaa6259aa5f8d0de177def36f02c7104210bda9634027d1d2f9fd99b44cadf",1]
 ["src/pairing/pairing-store.test.ts","../channels/plugins/pairing.js","9ed916cbc92e4cd8c0128d1a5cdf38b7ee9ef9590f44e0207404793e76f6d715",1]
 ["src/pairing/setup-code.test.ts","../infra/device-bootstrap.js","a0093c68f5e0bca4247849b4fcf0c493d619f810469ef77b7a3a7fc85ac18e80",1]
-["src/pairing/setup-code.trusted-proxy.test.ts","../infra/device-bootstrap.js","a0093c68f5e0bca4247849b4fcf0c493d619f810469ef77b7a3a7fc85ac18e80",1]
 ["src/plugin-activation-boundary.test.ts","./plugin-sdk/facade-loader.js","72497357fb05d6ce89035b3998bc1e0ce3cb2bccc4fb592198c126a4078e3ea0",1]
 ["src/plugin-activation-boundary.test.ts","./plugin-sdk/facade-runtime.js","fdfe53cf2e25be2360054b0e9816100d106b940169e6fb57142a0352d2335dde",1]
 ["src/plugin-activation-boundary.test.ts","./plugins/plugin-registry.js","002297ede76df959f83d8d9ffb68a0400d5d91f1b3be5330ef8fc19b11133cf2",1]
