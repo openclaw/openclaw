@@ -51,8 +51,9 @@ scan. Clean same-version receipts retain the fast path, including owner, schema,
 canonical-index, and background-check requirements. Pending migrations, strict
 update canaries, Doctor, and explicit copied-file verification retain full checks.
 
-Writable agent admission normally runs one full-file `integrity_check` and
-`foreign_key_check` when reusable proof is unavailable. These checks protect
+Writable agent admission runs one full-file `integrity_check` and
+`foreign_key_check` when reusable proof is unavailable, except for the native WAL
+admission classes below. These checks protect
 table and index consistency, uniqueness, cross-table page ownership, unused
 pages, and foreign-key relationships. Per-table checks cannot establish global
 page ownership and are not used for admission. Any non-`ok` check row or
@@ -61,14 +62,25 @@ Gateway startup runs this admission in its native execution Worker; other
 asynchronous openers use a read-only child and retain the lease until it closes.
 No schema, stored data, or configuration changes are required.
 
-Native Gateway admission distinguishes two missing-receipt classes:
+Native Gateway admission distinguishes these missing-receipt classes:
+
+- **No verification receipt:** a native writer with a running background verifier and no prior verification receipt,
+  no revoked runtime proof, and no stale, foreign, or unknown lease validates the
+  current owner, schema, and canonical indexes without scanning database contents.
+  SQLite must open successfully in WAL mode with no rollback journal or pending
+  migration. The existing background verifier runs the full integrity and
+  foreign-key check and retains its normal quarantine policy. This avoids making
+  an otherwise compatible agent wait for a whole-file scan after a receipt was
+  unavailable at shutdown. Physical damage not exposed by metadata reads can be
+  detected after admission; metadata admission does not certify durable integrity.
+  The native opener captures the verifier's lifetime and rechecks it through
+  admission. CLI callers and stopped verifiers retain the foreground check.
 
 - **Process death:** every swept lease belongs to the same Linux host, OS boot,
   PID namespace, OpenClaw version, and physical database file; the recorded
   owner has a known start identity, completed admission, and its PID is definitely dead; no foreign or
   unknown live owner remains. SQLite opens normally in WAL mode with no
-  rollback journal. Page size and schema version are readable, a passive
-  checkpoint succeeds, and the existing owner, current-schema,
+  rollback journal. The recovered schema is readable, and the existing owner, current-schema,
   and canonical-index preflight passes. Admission runs **no synchronous page
   scan**. SQLite's WAL crash-recovery guarantee supplies consistency after a
   process crash; it does not establish freedom from unrelated storage damage.
@@ -82,10 +94,10 @@ Native Gateway admission distinguishes two missing-receipt classes:
 An empty or absent WAL after checkpointing, committed WAL frames awaiting
 backfill, and uncommitted writes interrupted by process death all retain the
 process-death class. SQLite recovers committed frames and discards uncommitted
-transactions on open. `wal_checkpoint(PASSIVE)` works on all supported SQLite
-versions; busy readers or an incomplete checkpoint do not imply corruption.
-Its work can grow with outstanding WAL pages, but admission does not scan the
-whole database or run `quick_check`.
+transactions on open. Busy readers or an incomplete checkpoint do not imply corruption.
+Admission leaves checkpointing to WAL maintenance rather than copying outstanding
+WAL pages before the agent becomes available. It does not scan the whole database
+or run `quick_check` for either deferred class.
 
 Concurrent readers of persisted canonical session proof preserve an in-flight
 native integrity handoff. Recording that read result does not replace the
@@ -148,7 +160,8 @@ update, or rollback contract.
 Each executed admission gate logs its mode, outcome, duration, process, thread,
 and reason. Reasons are
 `process-death` with mode `deferred` and outcome `pending` for the narrowly
-classified crash above, `stale-lease-full` with mode `full` for other unreleased
+classified crash above, `no-proof` with mode `deferred` and outcome `pending`
+for a native WAL opener backed by the live verifier, `stale-lease-full` with mode `full` for other unreleased
 leases, `revoked` for other
 invalidated proof, `dirty-receipt` when verification remains without a certified
 final checkpoint and close, `no-proof` for unavailable or nonmatching proof, and
@@ -177,7 +190,7 @@ for the next admission to diagnose.
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
-| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks without reusable proof; proven same-boot native process-death recovery defers that scan               |
+| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks without reusable proof, except native WAL admission with no receipt or proven same-boot process death |
 | Same-process agent reopen                   | Reuse current file-bound runtime proof without another integrity or quick check; recheck owner, version, schema, and canonical indexes          |
 | Clean same-version agent restart            | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
 | Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |

@@ -14,7 +14,6 @@ import { stripMentions } from "./mentions.js";
 
 type ResolvedSessionResetCommand = {
   matchedResetTriggerLower?: string;
-  normalizedResetBody: string;
   payload?: string;
   softResetMatched: boolean;
   triggerBodyNormalized: string;
@@ -165,11 +164,7 @@ function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | und
   if (params.source[payloadStart] === "@") {
     const suffixStart = payloadStart + 1;
     payloadStart = suffixStart;
-    while (
-      params.source[payloadStart] !== undefined &&
-      params.source[payloadStart] !== ":" &&
-      !/\s/.test(params.source[payloadStart] ?? "")
-    ) {
+    while (/[^:\s]/.test(params.source[payloadStart] ?? "")) {
       payloadStart += 1;
     }
     const suffix = params.source.slice(suffixStart, payloadStart);
@@ -202,12 +197,6 @@ function resolveCommandTextForSession(
   return withoutMentions.replace(/\\n/g, " ").trim();
 }
 
-function isTranscriptOnlyCommand(ctx: MsgContext, commandText: string): boolean {
-  return (
-    typeof ctx.Transcript === "string" && commandText === ctx.Transcript.replace(/\\n/g, " ").trim()
-  );
-}
-
 export function resolveSessionResetCommand(
   params: SessionResetCommandContext & {
     commandText: string;
@@ -222,7 +211,6 @@ export function resolveSessionResetCommand(
   });
   const softResetMatched = parseSoftResetCommand(normalizedResetBody).matched;
   const result = {
-    normalizedResetBody,
     softResetMatched,
     triggerBodyNormalized,
   } satisfies ResolvedSessionResetCommand;
@@ -230,7 +218,8 @@ export function resolveSessionResetCommand(
   if (
     !params.resetAuthorized ||
     softResetMatched ||
-    isTranscriptOnlyCommand(params.ctx, params.commandText)
+    (typeof params.ctx.Transcript === "string" &&
+      params.commandText === params.ctx.Transcript.replace(/\\n/g, " ").trim())
   ) {
     return result;
   }

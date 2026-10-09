@@ -8,7 +8,10 @@ import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
@@ -17,6 +20,7 @@ import {
   readSessionTranscriptAnchorsAsync,
   readSessionTranscriptAnchorsFromSource,
 } from "./session-transcript-anchor-read.js";
+import { retainSessionTranscriptContextGeneration } from "./session-transcript-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -25,6 +29,7 @@ import {
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
@@ -97,6 +102,7 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
       return result.value;
     },
     signal,
+    targetDiscoveryLane,
   );
 }
 
@@ -121,7 +127,13 @@ export function readSessionTranscriptModelContextAsync<T>(
     assertCurrent: () => void,
     binding?: IncognitoSessionHistoryBinding,
     contextAdmission = capturedAdmission,
+    databaseIdentity?: string,
   ): Promise<T> => {
+    const generation = retainSessionTranscriptContextGeneration(
+      scope,
+      context.version,
+      databaseIdentity,
+    );
     const contextValidation = structuredClone({
       version: context.version,
       admission: contextAdmission,
@@ -135,6 +147,7 @@ export function readSessionTranscriptModelContextAsync<T>(
         signal,
         (facts) => {
           assertCurrent();
+          generation.assertCurrent();
           if (
             !facts.contextValidated &&
             (contextValidation.version || contextAdmission || capturedThrough)
@@ -170,12 +183,27 @@ export function readSessionTranscriptModelContextAsync<T>(
       joined = true;
       return (await validate(() => value)).value;
     } finally {
+      generation.release();
       // Initial acceptance can fail after starting a consumer; its owner still joins that work.
       if (consumerSettlement && !joined) {
         await consumerSettlement.catch(() => undefined);
       }
     }
   };
+  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(target);
+  if (source && "kind" in source) {
+    signal?.throwIfAborted();
+    if (capturedAdmission || capturedThrough) {
+      return Promise.reject(
+        new SessionTranscriptReadFenceError("Session transcript is unavailable"),
+      );
+    }
+    return Promise.resolve(consume({ events: [] })).then((result) => {
+      signal?.throwIfAborted();
+      source.assertCurrent();
+      return result;
+    });
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(target);
   if (incognito) {
     const prepared = prepareIncognitoSessionHistoryRead(incognito, target, signal);
@@ -269,7 +297,14 @@ export function readSessionTranscriptModelContextAsync<T>(
         expectedIdentity,
       );
       assertCurrent();
-      return accept(captured, context, assertCurrent);
+      return accept(
+        captured,
+        context,
+        assertCurrent,
+        undefined,
+        capturedAdmission,
+        expectedIdentity?.key.startsWith("file:") ? expectedIdentity.key.slice(5) : undefined,
+      );
     },
     signal,
   );

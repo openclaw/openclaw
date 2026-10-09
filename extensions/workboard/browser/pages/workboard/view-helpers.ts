@@ -17,6 +17,7 @@ import {
   type WorkboardStatus,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
+import type { WorkboardClientContext } from "../../lib/workboard/runtime.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
 import { getCardSessionState } from "../../lib/workboard/session-state.ts";
@@ -167,6 +168,10 @@ export function workboardErrorMessage(
 
 export function canMutate(props: WorkboardProps): boolean {
   return props.canWrite !== false && workboardMutationsReady(getWorkboardState(props.host));
+}
+
+export function workboardMutationContext(props: WorkboardProps): WorkboardClientContext {
+  return { host: props.host, client: props.client, requestUpdate: props.onRequestUpdate };
 }
 
 export function formatEventLabel(event: WorkboardEvent): string {

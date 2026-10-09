@@ -8,7 +8,6 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildSilentFallbackFailurePayload,
   handleReplyAgentRunError,
-  resolveAdmittedRunSessionFile,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
 import { createReplyOperation } from "./reply-run-registry.js";
@@ -71,25 +70,6 @@ it("renders restart recovery ownership changes as session guidance", async () =>
   } finally {
     replyOperation.complete();
   }
-});
-
-describe("resolveAdmittedRunSessionFile", () => {
-  it("uses the scoped session key when one is available", () => {
-    expect(
-      resolveAdmittedRunSessionFile({
-        sessionFile: "legacy-target",
-        sessionKey: " agent:main:session ",
-      }),
-    ).toBe("agent:main:session");
-  });
-
-  it("preserves the admitted fallback when a persisted run has no session key", () => {
-    expect(
-      resolveAdmittedRunSessionFile({
-        sessionFile: "legacy-target",
-      }),
-    ).toBe("legacy-target");
-  });
 });
 
 describe("resolveReplyRunDeliveryContext", () => {

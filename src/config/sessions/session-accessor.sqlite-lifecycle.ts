@@ -73,7 +73,10 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import { deleteIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
@@ -583,6 +586,22 @@ function deleteCapturedIncognitoSession(
   params: DeleteSessionEntryLifecycleParams,
   expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> | undefined {
+  const source = captureIncognitoSessionSource({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (source && "kind" in source) {
+    params.commitGuard?.();
+    source.assertCurrent();
+    return Promise.resolve({
+      deleted: false,
+      archivedTranscripts: [],
+      ...((params.expectedEntry ||
+        params.expectedSessionId != null ||
+        params.expectedLifecycleRevision !== undefined ||
+        params.expectedUpdatedAt !== undefined) && { expectedEntryMismatch: true as const }),
+    });
+  }
   const binding = captureIncognitoSessionOperation({
     ...params,
     sessionKey: params.target.canonicalKey,
@@ -601,9 +620,11 @@ function deleteCapturedIncognitoSession(
       },
     };
     return binding.actor.sessions.withSharedState(async () => {
-      const { entry } = await binding.actor.sessions.read(authority, {
-        sessionKey: captured.target.canonicalKey,
-      });
+      const { entry } = await binding.actor.sessions.read(
+        authority,
+        { sessionKey: captured.target.canonicalKey },
+        binding.admissionSignal,
+      );
       if (
         (captured.expectedEntry && !sqliteSessionEntriesEqual(entry, captured.expectedEntry)) ||
         (captured.expectedSessionId !== undefined &&
@@ -618,6 +639,7 @@ function deleteCapturedIncognitoSession(
       if (!entry) {
         return { deleted: false, archivedTranscripts: [] };
       }
+      binding.admissionSignal?.throwIfAborted();
       return deleteIncognitoSessionLifecycle({
         actor: binding.actor,
         authority,

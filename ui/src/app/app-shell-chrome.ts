@@ -631,7 +631,15 @@ export class ShellChromeOwner {
     this.requestLazyElement(host.execApprovalElement, descriptor);
   };
 
-  private shellEventElementTag(eventType: LazyShellEvent["eventType"]): string {
+  readonly restorePendingLazyAction = (): void => {
+    const event = this.pendingLazyAction;
+    if (
+      !event ||
+      this.host.lazyCustomElements.visibleState ||
+      this.commandPaletteLoading.waitingForComposition
+    ) {
+      return;
+    }
     const host = this.host;
     const elements: Record<LazyShellEvent["eventType"], string> = {
       [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement.tagName,
@@ -645,19 +653,7 @@ export class ShellChromeOwner {
       [HOME_PANEL_TOGGLE_EVENT]: "openclaw-assistant-panel",
       [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement.tagName,
     };
-    return elements[eventType];
-  }
-
-  readonly restorePendingLazyAction = (): void => {
-    const event = this.pendingLazyAction;
-    if (
-      !event ||
-      this.host.lazyCustomElements.visibleState ||
-      this.commandPaletteLoading.waitingForComposition
-    ) {
-      return;
-    }
-    const tagName = this.shellEventElementTag(event.eventType);
+    const tagName = elements[event.eventType];
     if (customElements.get(tagName) && !this.host.querySelector(tagName)) {
       // Loaded but render-gated (e.g. the shell is still booting): nothing can
       // consume the dispatch yet, and re-dispatching re-arms a request/update

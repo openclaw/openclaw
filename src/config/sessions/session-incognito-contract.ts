@@ -13,6 +13,7 @@ import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contr
 import type { IncognitoPendingInputOperations } from "./session-incognito-pending-input-contract.js";
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
 import type { IncognitoTranscriptOperations } from "./session-incognito-transcript-contract.js";
+import type { IncognitoSessionTurnOperations } from "./session-turn.types.js";
 import type { SessionEntry } from "./types.js";
 
 export type {
@@ -38,7 +39,8 @@ export type IncognitoSessionCreate = {
   cwd?: string;
 };
 
-type DomainOperations = IncognitoEntryCreationOperations &
+type DomainOperations = IncognitoSessionTurnOperations &
+  IncognitoEntryCreationOperations &
   IncognitoEntryPatchOperations &
   IncognitoSideDataOperations &
   IncognitoComputeOperations &
@@ -61,6 +63,10 @@ export type IncognitoSessionOperations = {
   "session.entries.read": {
     input: Pick<SessionEntryListScope, "projection">;
     output: { entries: SessionEntrySummary[]; facts: IncognitoSessionFacts[] };
+  };
+  "session.entry.readById": {
+    input: { sessionId: string; orderBy?: "updatedAt" };
+    output: { selected: SessionEntrySummary | undefined; facts: IncognitoSessionFacts[] };
   };
   "session.entry.read": { input: IncognitoSessionRead; output: IncognitoSessionSnapshot };
   "session.entry.create": { input: IncognitoSessionCreate; output: IncognitoSessionSnapshot };

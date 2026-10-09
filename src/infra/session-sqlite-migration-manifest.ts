@@ -532,11 +532,7 @@ function hasUnsupportedV1DirectorySymlink(manifest: SessionSqliteMigrationManife
   const directoryPaths = manifest.targets.flatMap((target) => [
     path.dirname(target.sqlitePath),
     path.dirname(target.storePath),
-    ...target.plannedMoves.flatMap((move) => [
-      path.dirname(move.archivePath),
-      path.dirname(move.sourcePath),
-    ]),
-    ...target.completedMoves.flatMap((move) => [
+    ...[...target.plannedMoves, ...target.completedMoves].flatMap((move) => [
       path.dirname(move.archivePath),
       path.dirname(move.sourcePath),
     ]),

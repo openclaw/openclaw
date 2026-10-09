@@ -103,7 +103,9 @@ describe("chat history cursor revalidation", () => {
     expect(second.chatMessages).toEqual([cached]);
     await loadChatHistory(second);
     expect(second.chatMessages).toEqual([cached, reply]);
-    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-1" }));
+    expect(handler).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: "cursor-1", toolResultMaxChars: 2_000 }),
+    );
   });
 
   it.each(["session", "agent", "transcript", "reset"] as const)(

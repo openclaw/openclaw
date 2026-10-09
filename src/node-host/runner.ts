@@ -515,15 +515,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       await autoUpdateStart?.catch(() => undefined);
       await autoUpdater?.stop();
       const failures: unknown[] = [];
-      try {
-        await client.stop();
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await activeRuntime.close();
-      } catch (error) {
-        failures.push(error);
+      for (const close of [() => client.stop(), () => activeRuntime.close()]) {
+        try {
+          await close();
+        } catch (error) {
+          failures.push(error);
+        }
       }
       throwNodeHostCleanupErrors(failures, "node host shutdown cleanup failed");
     } finally {

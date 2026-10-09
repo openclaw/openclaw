@@ -108,8 +108,6 @@ async function runSystemdServiceAction(
     // otherwise resetting a conflicting manager could mutate the wrong service.
     params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
-  }
-  if (action !== "stop") {
     params.assertCurrent?.();
   }
   if (action === "restart") {

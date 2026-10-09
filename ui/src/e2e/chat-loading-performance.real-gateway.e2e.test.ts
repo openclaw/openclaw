@@ -381,17 +381,6 @@ suite.define(() => {
             ) {
               return;
             }
-            if (
-              ![
-                "chat.startup",
-                "chat.history",
-                "sessions.resolve",
-                "agents.list",
-                "agent.identity.get",
-              ].includes(frame.method)
-            ) {
-              return;
-            }
             const params = isRecord(frame.params) ? frame.params : {};
             const metric: RpcMetric = {
               requestId: frame.id,

@@ -582,7 +582,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       rows,
       dirty,
       matching,
-      acquire: (row) => acquireEntry(row, readSessionRowEntry(row)),
+      acquire: (row) =>
+        acquireEntry(row, row.retainedDatabaseFacts?.entry ?? readSessionRowEntry(row)),
       referenced,
     }),
   });

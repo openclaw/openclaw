@@ -264,8 +264,9 @@ export async function deleteSessionPlacementDraft(
   requests: SessionPlacementRequests,
   key: string,
   agentId: string,
+  recovered = false,
 ): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, false);
+  return deletePlacementDraft(requests, key, agentId, recovered);
 }
 
 async function deletePlacementDraft(
@@ -330,14 +331,6 @@ async function deletePlacementDraft(
     }
     return deleteError;
   }
-}
-
-export async function deleteRecoveredSessionPlacementDraft(
-  requests: SessionPlacementRequests,
-  key: string,
-  agentId: string,
-): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, true);
 }
 
 export async function startSessionPlacementInitialTurn(

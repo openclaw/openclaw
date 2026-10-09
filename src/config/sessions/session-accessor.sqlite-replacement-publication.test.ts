@@ -260,6 +260,7 @@ it.each([
     const sessionKey = "agent:main:replacement-settlement";
     const metadataOnly = boundary.startsWith("metadata");
     const workerVisibility = metadataOnly ? "shared" : "read-only";
+    const workerCategory = metadataOnly ? "before" : "worker";
     const reset =
       boundary === "newer native write after reset" ||
       boundary === "metadata then newer native reset";
@@ -405,7 +406,7 @@ it.each([
                   ...row!.entry,
                   visibility: workerVisibility,
                   label: "worker",
-                  category: "worker",
+                  category: workerCategory,
                   ...(boundary === "newer native write after reset"
                     ? { lifecycleRevision: "next-lifecycle" }
                     : {}),
@@ -491,7 +492,7 @@ it.each([
       }
       await projection.prepare();
       expect([...projection.groupTargets()]).toEqual([
-        [newerNative ? "newer" : "worker", [{ sessionKey, agentId: "main" }]],
+        [newerNative ? "newer" : workerCategory, [{ sessionKey, agentId: "main" }]],
       ]);
       expect(observed).toEqual(
         boundary === "facts then newer native write"

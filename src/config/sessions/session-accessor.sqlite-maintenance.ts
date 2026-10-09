@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -40,7 +41,10 @@ import {
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionBinding,
+  publishIncognitoSessionEntry,
+} from "./session-incognito-binding.js";
 import {
   finalizeSessionMaintenanceInWorker,
   readSessionMaintenanceArchiveSizesInWorker,
@@ -71,6 +75,10 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
 ): Promise<void> {
   const isCurrent = options.isCurrent ?? (() => true);
   if (deletedEntries < SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES || !isCurrent()) {
+    return;
+  }
+  // Private stores have no persistent planner statistics or pages to maintain.
+  if (captureIncognitoSessionBinding({ ...scope, storePath: scope.path })) {
     return;
   }
   const storePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
@@ -385,6 +393,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     ) => Promise<SessionLifecycleArchivedTranscript[]>;
   } = {},
 ): Promise<SessionEntryMaintenanceResult> {
+  const incognito = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
   const isCurrent = options.isCurrent ?? (() => true);
   const committedCounts = {
     archived: plans.reduce((count, plan) => count + plan.archived, 0),
@@ -459,10 +468,20 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       break;
     }
     let archivedTranscripts: SessionLifecycleArchivedTranscript[];
-    let changedEntryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
-    let committedEntryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
+    let removalOutcomes: Array<
+      Pick<
+        SessionEntryMaintenancePlan["entryRemovals"][number],
+        "sessionKey" | "maintenanceReason"
+      > & {
+        previous: Parameters<typeof publishIncognitoSessionEntry>[2];
+      }
+    > = [];
+    let changedEntryRemovals: typeof removalOutcomes;
+    let committedEntryRemovals: typeof removalOutcomes;
     try {
-      const materializedPlans = await materializeSessionStateDeletePlans(batch.stateDeletePlans);
+      const materializedPlans = incognito
+        ? []
+        : await materializeSessionStateDeletePlans(batch.stateDeletePlans);
       if (!isCurrent()) {
         break;
       }
@@ -471,7 +490,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
         batch.entryRemovals.flatMap(({ expectedEntry: entry, sessionKey }) =>
           entry ? [{ entry, sessionKey }] : [],
         ),
-        async (assertCurrent) => {
+        async (assertCurrent, capture) => {
           const assertCommitAllowed = () => {
             options.retainedExecution?.assertCurrent();
             assertCurrent();
@@ -479,6 +498,46 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               throw new Error("SQLite automatic maintenance owner retired");
             }
           };
+          removalOutcomes = batch.entryRemovals.map(
+            ({ sessionKey, maintenanceReason, expectedEntry }) => ({
+              sessionKey,
+              maintenanceReason,
+              previous: expectedEntry && {
+                sessionId: expectedEntry.sessionId,
+                lifecycleRevision: expectedEntry.lifecycleRevision,
+              },
+            }),
+          );
+          if (incognito) {
+            return {
+              kind: "maintenance-finalize" as const,
+              value: await incognito.actor.sessions.lifecycle(
+                { assertCurrent: assertCommitAllowed },
+                {
+                  type: "session.lifecycle.maintenance",
+                  input: {
+                    plan: { entries: batch.entryRemovals, deletePlans: batch.stateDeletePlans },
+                  },
+                },
+                undefined,
+                capture,
+                (committed) => {
+                  for (const index of committed.committedEntryIndices) {
+                    const removal = expectDefined(
+                      removalOutcomes[index],
+                      "Missing committed maintenance entry",
+                    );
+                    publishIncognitoSessionEntry(
+                      incognito.actor,
+                      removal.sessionKey,
+                      removal.previous,
+                      undefined,
+                    );
+                  }
+                },
+              ),
+            };
+          }
           const plan = createSessionMaintenanceFinalizationOperation({
             agentId: scope.agentId,
             databaseOptions: toDatabaseOptions(scope),
@@ -498,13 +557,17 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                 plan,
               });
         },
+        incognito ? { incognito: incognito.actor, callerSettlesReceipts: true } : undefined,
       );
       if (result.kind !== "maintenance-finalize") {
         throw new Error("SQLite maintenance returned another operation's result");
       }
       archivedTranscripts = result.value.archivedTranscripts;
-      changedEntryRemovals = result.value.changedEntries;
-      committedEntryRemovals = result.value.committedEntries;
+      const committedIndices = new Set(result.value.committedEntryIndices);
+      changedEntryRemovals = removalOutcomes.filter((_, index) => !committedIndices.has(index));
+      committedEntryRemovals = result.value.committedEntryIndices.map((index) =>
+        expectDefined(removalOutcomes[index], "Missing committed maintenance entry"),
+      );
     } catch (error) {
       warn("SQLite session maintenance cleanup failed", error, batch.stateDeletePlans);
       break;
@@ -532,6 +595,10 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       } else if (removal.maintenanceReason === "capped") {
         committedCounts.capped += 1;
       }
+    }
+    // Actor plans never produce disk archives or need native archive discovery.
+    if (incognito) {
+      continue;
     }
     try {
       publishedTranscripts.push(

@@ -8,7 +8,11 @@ import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  SessionMutationAuthorization,
+} from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -44,7 +48,8 @@ export type AuthorizedSessionMutationTarget = SessionMutationTarget & {
   sessionId: string | null;
   lifecycleRevision?: string;
   created?: true;
-  absentTarget?: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
+  absentTarget?: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath"> &
+    Pick<SessionSharingTarget, "readSource">;
   projection?: import("./session-row-projection.js").SessionRowProjection;
 };
 
@@ -117,6 +122,7 @@ export function expectedSessionMutationTargetError(
 
 export function prepareAuthorizedSessionMutationFacts(params: {
   expected: AuthorizedSessionMutationTarget;
+  source?: import("../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
   facts: {
     agentId: string;
     storePath: string;
@@ -143,7 +149,7 @@ export function prepareAuthorizedSessionMutationFacts(params: {
           storeKey: expected.absentTarget.canonicalKey,
         }
       : undefined;
-  const expectedReadSource = original?.readSource;
+  const expectedReadSource = original?.readSource ?? params.source;
   if (
     !expectedRoute ||
     facts.agentId !== expectedRoute.agentId ||
@@ -191,4 +197,53 @@ export function assertSessionMutationProjectionCurrent(
   if (expected?.projection && getSessionRowProjection(context) !== expected.projection) {
     throw changed();
   }
+}
+
+/** Only an acknowledged creation may advance an absent or idless Talk admission. */
+export function createSessionCreationAuthorizationRecorder(params: {
+  targets: AuthorizedSessionMutationTarget[];
+  talkSessionTarget: SessionMutationAuthorization["talkSessionTarget"];
+  permitsGeneratedSession: boolean;
+}): NonNullable<SessionMutationAuthorization["recordCreatedSession"]> {
+  let createdSessionRecorded = false;
+  return (created) => {
+    // Only the creation owner's COMMIT notification may replace an absent snapshot.
+    // Never adopt a response/reload result, or a later incarnation of the same key.
+    if (createdSessionRecorded) {
+      return;
+    }
+    let expected = params.targets.find((target) => {
+      const route = target.absentTarget ?? (params.talkSessionTarget ? target.resolved : null);
+      return (
+        target.sessionId === null &&
+        route?.agentId === created.agentId &&
+        route.canonicalKey === created.sessionKey &&
+        route.storePath === created.storePath
+      );
+    });
+    if (!expected && params.permitsGeneratedSession) {
+      expected = {
+        sessionKey: created.sessionKey,
+        agentId: created.agentId,
+        resolved: null,
+        sessionId: null,
+      };
+      params.targets.push(expected);
+    }
+    if (!expected) {
+      return;
+    }
+    createdSessionRecorded = true;
+    expected.resolved = {
+      ...expected.resolved,
+      agentId: created.agentId,
+      canonicalKey: created.sessionKey,
+      storeKey: created.sessionKey,
+      storePath: created.storePath,
+      ...(created.readSource ? { readSource: created.readSource } : {}),
+    };
+    expected.sessionId = created.sessionId;
+    expected.lifecycleRevision = created.lifecycleRevision;
+    expected.created = true;
+  };
 }

@@ -188,6 +188,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     return true;
   };
 
+  const reportCurrentSessionError = (isCurrent: () => boolean, failure: string, error: unknown) => {
+    if (isCurrent()) {
+      chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(error)}`);
+    }
+  };
+
   const applySessionSetting = async (
     patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
     success: string | ((result: SessionsPatchResult) => string),
@@ -211,9 +217,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       applySessionInfoFromPatch(result);
       await after();
     } catch (err) {
-      if (isCurrent()) {
-        chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
-      }
+      reportCurrentSessionError(isCurrent, failure, err);
     }
   };
 
@@ -235,9 +239,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             await onSelect(item.value);
           }
         } catch (err) {
-          if (isCurrent()) {
-            chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
-          }
+          reportCurrentSessionError(isCurrent, "selection failed", err);
         }
         tui.requestRender();
       })();
@@ -597,9 +599,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             await sendMessage(result.continuationPrompt);
           }
         } catch (err) {
-          if (isCurrent()) {
-            chatLog.addSystem(`goal failed: ${formatTuiErrorMessage(err)}`);
-          }
+          reportCurrentSessionError(isCurrent, "goal failed", err);
         }
       } else {
         await sendMessage(raw);
@@ -717,9 +717,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             chatLog.addSystem(result.text);
           }
         } catch (err) {
-          if (isCurrent()) {
-            chatLog.addSystem(`usage cost failed: ${formatTuiErrorMessage(err)}`);
-          }
+          reportCurrentSessionError(isCurrent, "usage cost failed", err);
         }
         return;
       }

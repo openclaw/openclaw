@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -225,6 +226,9 @@ function renderIdentityMenuHelpSubmenu() {
 }
 
 export function renderSidebarHelpMenu() {
+  if (!currentThemeBranding().communityLinks) {
+    return nothing;
+  }
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-identity-menu__help"

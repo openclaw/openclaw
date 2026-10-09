@@ -67,32 +67,6 @@ function replaceMemoryVectorTable(db: DatabaseSync): void {
   );
 }
 
-function replaceMemoryChunkFtsTable(db: DatabaseSync): void {
-  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_FTS_TABLE);
-  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_FTS_TABLE}`);
-  if (!createSql) {
-    return;
-  }
-  db.exec(createSql);
-  rebuildMemoryChunkFts(db, MEMORY_INDEX_FTS_TABLE);
-  ensureMemoryChunkFtsTriggers(db);
-}
-
-function replaceMemoryPathFtsTable(db: DatabaseSync): void {
-  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_PATHS_FTS_TABLE);
-  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_PATHS_FTS_TABLE}`);
-  if (!createSql) {
-    return;
-  }
-  db.exec(createSql);
-  // Bulk publication already suspends row triggers. Rebuild from the copied
-  // stable source ids so later singleton deletes remain direct rowid lookups.
-  db.exec(
-    `INSERT INTO main.${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source) ` +
-      `SELECT id, path, source FROM main.memory_index_sources`,
-  );
-}
-
 /** The native publication owner receives prepared connection and source facts. */
 type MemoryDatabasePublication = {
   targetDb: DatabaseSync;
@@ -161,8 +135,24 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
             .join("\n"),
         );
 
-        replaceMemoryChunkFtsTable(params.targetDb);
-        replaceMemoryPathFtsTable(params.targetDb);
+        for (const table of [MEMORY_INDEX_FTS_TABLE, MEMORY_INDEX_PATHS_FTS_TABLE]) {
+          const createSql = readTableSql(params.targetDb, MEMORY_REINDEX_SCHEMA, table);
+          params.targetDb.exec(`DROP TABLE IF EXISTS main.${table}`);
+          if (!createSql) {
+            continue;
+          }
+          params.targetDb.exec(createSql);
+          if (table === MEMORY_INDEX_FTS_TABLE) {
+            rebuildMemoryChunkFts(params.targetDb, table);
+            ensureMemoryChunkFtsTriggers(params.targetDb);
+          } else {
+            // Rebuild from the copied stable source ids while row triggers are suspended.
+            params.targetDb.exec(
+              `INSERT INTO main.${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source) ` +
+                `SELECT id, path, source FROM main.memory_index_sources`,
+            );
+          }
+        }
         if (publishesPathFts) {
           ensureMemoryPathFtsTriggers(params.targetDb);
         }

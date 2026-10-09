@@ -87,30 +87,21 @@ async function grantPermissions(params: {
   await withCdpSocket(
     params.wsUrl,
     async (send) => {
-      if (params.assertCurrent) {
-        await assertInteractionCurrent(params);
-        params.signal.throwIfAborted();
-      }
-      try {
-        await send("Browser.grantPermissions", {
-          origin: params.origin,
-          permissions: allPermissions,
-        });
-        return;
-      } catch (error) {
-        if (params.optionalPermissions.length === 0) {
-          throw error;
+      for (const permissions of [allPermissions, params.requiredPermissions]) {
+        if (params.assertCurrent) {
+          await assertInteractionCurrent(params);
+          params.signal.throwIfAborted();
+        }
+        try {
+          await send("Browser.grantPermissions", { origin: params.origin, permissions });
+          unsupportedPermissions = permissions === allPermissions ? [] : params.optionalPermissions;
+          return;
+        } catch (error) {
+          if (permissions !== allPermissions || params.optionalPermissions.length === 0) {
+            throw error;
+          }
         }
       }
-      if (params.assertCurrent) {
-        await assertInteractionCurrent(params);
-        params.signal.throwIfAborted();
-      }
-      await send("Browser.grantPermissions", {
-        origin: params.origin,
-        permissions: params.requiredPermissions,
-      });
-      unsupportedPermissions = params.optionalPermissions;
     },
     { commandTimeoutMs: params.timeoutMs, lookup: params.wsLookup, signal: params.signal },
   );

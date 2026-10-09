@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
 import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
 import { registerAgentIdentityUpdateTests } from "./agents-identity-update.test-support.js";
@@ -30,7 +31,10 @@ const mocks = vi.hoisted(() => ({
   listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
-  pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
+  pruneAgentConfig: vi.fn((_cfg: MockConfig, _agentId: string) => ({
+    config: {},
+    removedBindings: 0,
+  })),
   writeConfigFile: vi.fn(async (_nextConfig?: unknown, _writeOptions?: unknown) => {}),
   omitConfigMutationResult: false,
   ensureAgentWorkspace: vi.fn(
@@ -135,7 +139,7 @@ vi.mock("../../config/config.js", async () => {
       snapshot: { sourceConfig: mocks.loadConfigReturn },
     }),
     mutateConfigFileWithRetry: async (params: {
-      writeOptions?: unknown;
+      writeOptions?: object;
       mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
     }) => {
       const draft = structuredClone(mocks.loadConfigReturn);
@@ -145,6 +149,10 @@ vi.mock("../../config/config.js", async () => {
         attempt: 0,
       });
       await mocks.writeConfigFile(draft, params.writeOptions);
+      mocks.loadConfigReturn = draft;
+      if (params.writeOptions) {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      }
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
@@ -158,6 +166,7 @@ vi.mock("../../config/config.js", async () => {
       };
     },
     transformConfigFileWithRetry: async (params: {
+      writeOptions?: object;
       transform: (
         config: Record<string, unknown>,
         context: unknown,
@@ -170,6 +179,9 @@ vi.mock("../../config/config.js", async () => {
       });
       await mocks.writeConfigFile(transformed.nextConfig);
       mocks.loadConfigReturn = transformed.nextConfig;
+      if (params.writeOptions) {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      }
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
@@ -783,10 +795,10 @@ describe("agents.delete", () => {
         },
       },
     };
-    mocks.findAgentEntryIndex.mockReturnValue(0);
-    mocks.pruneAgentConfig.mockReturnValue({
-      config: { agents: { entries: { main: {} } } },
-      removedBindings: 2,
+    mocks.pruneAgentConfig.mockImplementation((cfg, agentId) => {
+      const config = structuredClone(cfg);
+      delete config.agents?.entries?.[agentId];
+      return { config, removedBindings: 2 };
     });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");
     mocks.purgeAgentSessionStoreEntries.mockReset().mockResolvedValue(false);
@@ -969,11 +981,6 @@ describe("agents.delete", () => {
   });
 
   it("keeps deletion fenced when config persistence succeeds before reporting failure", async () => {
-    let configuredCheck = 0;
-    mocks.findAgentEntryIndex.mockImplementation(() => {
-      configuredCheck += 1;
-      return configuredCheck < 4 ? 0 : -1;
-    });
     mocks.writeConfigFile.mockImplementationOnce(async (nextConfig?: unknown) => {
       if (!nextConfig || typeof nextConfig !== "object") {
         throw new Error("expected config object");
@@ -992,6 +999,10 @@ describe("agents.delete", () => {
 
   it("does not perform destructive cleanup without a config deletion result", async () => {
     mocks.omitConfigMutationResult = true;
+    mocks.pruneAgentConfig.mockReturnValueOnce({
+      config: mocks.loadConfigReturn,
+      removedBindings: 0,
+    });
 
     const { promise } = makeCall("agents.delete", { agentId: "test-agent" });
 
@@ -1004,11 +1015,6 @@ describe("agents.delete", () => {
 
   it("keeps authority removed when the committed config omits its mutation result", async () => {
     mocks.omitConfigMutationResult = true;
-    let configuredCheck = 0;
-    mocks.findAgentEntryIndex.mockImplementation(() => {
-      configuredCheck += 1;
-      return configuredCheck < 4 ? 0 : -1;
-    });
 
     const { promise } = makeCall("agents.delete", { agentId: "test-agent" });
 
@@ -1068,7 +1074,6 @@ describe("agents.delete", () => {
       ([pathname]) => pathname === journal.agentDir,
     ).length;
     trashed.delete(journal.agentDir);
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
     mocks.readAgentDeletionJournal.mockReturnValue(journal);
     const blockedCreate = makeCall("agents.create", { name: "Test Agent" });
     await blockedCreate.promise;
@@ -1119,7 +1124,7 @@ describe("agents.delete", () => {
         }),
       ],
     });
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(journal);
     mocks.fsRealpath.mockImplementation(async (pathname: string) =>
       pathname === workspaceAlias ? workspaceDir : pathname,
@@ -1168,7 +1173,7 @@ describe("agents.delete", () => {
         }),
       ],
     });
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(journal);
     mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
       if (pathname !== completedChild && pathname !== workspaceDir) {
@@ -1222,7 +1227,7 @@ describe("agents.delete", () => {
   it("does not move a symlink ancestor when its canonical descendant fails", async () => {
     const agentLink = "/deep/journal/link";
     const agentTarget = "/target";
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(
       deletionJournal({
         agentDir: agentLink,
@@ -1266,7 +1271,7 @@ describe("agents.delete", () => {
 
   it("does not trash a replacement at a journaled symlink path", async () => {
     const workspaceLink = "/journal/workspace-link";
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     const journal = deletionJournal({
       workspaceDir: workspaceLink,
       cleanupPaths: [
@@ -1307,7 +1312,7 @@ describe("agents.delete", () => {
     const workspaceTarget = "/real-tmp/workspace";
     const agentDir = `${workspaceLink}/agent`;
     const sessionsDir = `${workspaceLink}/transcripts`;
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(
       deletionJournal({
         agentDir,
@@ -1387,7 +1392,7 @@ describe("agents.delete", () => {
     });
     const trashed = new Set<string>();
     let workspaceAttempts = 0;
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(journal);
     mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
       pathname === journal.agentDir ? "test-agent" : undefined,
@@ -1470,7 +1475,7 @@ describe("agents.delete", () => {
         }),
       ],
     });
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(journal);
     mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
       pathname === journal.agentDir ? "test-agent" : undefined,
@@ -1501,7 +1506,7 @@ describe("agents.delete", () => {
 
   it("reclaims durable journal ownership after a process restart", async () => {
     const directoryOwners = new Map<string, string>();
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(deletionJournal());
     mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
       directoryOwners.get(pathname ?? ""),
@@ -1542,7 +1547,7 @@ describe("agents.delete", () => {
       { agentId: "test-agent", path: "/journal/agent/openclaw-agent.sqlite" },
       { agentId: "other-agent", path: "/journal/agent/openclaw-agent.sqlite" },
     ];
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(
       deletionJournal({ workspaceDir: "/journal", sessionsDir: "/deleted/sessions" }),
     );
@@ -1588,7 +1593,7 @@ describe("agents.delete", () => {
 
   it("revalidates database ownership after earlier filesystem cleanup", async () => {
     let claimed = false;
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(deletionJournal());
     mocks.listOpenClawRegisteredAgentDatabases.mockImplementation(() =>
       claimed ? [{ agentId: "other-agent", path: "/journal/agent/survivor.sqlite" }] : [],
@@ -1614,7 +1619,6 @@ describe("agents.delete", () => {
     mocks.loadConfigReturn = {
       agents: { entries: { "other-agent": { workspace: "/journal" } } },
     };
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
     mocks.readAgentDeletionJournal.mockReturnValue(deletionJournal());
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
@@ -1663,7 +1667,7 @@ describe("agents.delete", () => {
   });
 
   it("preserves the original keep-files intent while recovering deletion", async () => {
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
+    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
     mocks.readAgentDeletionJournal.mockReturnValue(
       deletionJournal({
         deleteFiles: false,

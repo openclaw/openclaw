@@ -110,6 +110,11 @@ export function createSessionHistoryWorkerReaders(
     },
     readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
     readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
+    readLatestAssistant: reader(
+      "transcript-latest-assistant",
+      "latest assistant text",
+      (value) => value.result,
+    ),
     readVisibleDelta: reader(
       "transcript-visible-delta",
       "visible transcript delta",
@@ -482,7 +487,7 @@ export function createSessionHistoryWorkerReaders(
       (value) => value.entry,
     ),
     readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
-    readEntries: async (scope, continuation, expectedIdentity) => {
+    readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
       const assertIdentity = () => {
         if (
@@ -496,13 +501,19 @@ export function createSessionHistoryWorkerReaders(
       return runRequest(
         () => {
           assertIdentity();
-          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
+          return {
+            kind: "session-entry-list",
+            scope,
+            continuation,
+            expectedIdentity: captured,
+            ifRevision,
+          };
         },
-        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
+        JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
           assertIdentity();
-          return value.entries;
+          return value;
         },
       );
     },

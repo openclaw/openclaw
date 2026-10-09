@@ -24,6 +24,13 @@ openclaw gateway restart --wait 30s
 Manual restart signals now use `SIGUSR2`. `SIGUSR1` starts Node's inspector and no longer restarts the Gateway. Update scripts that send the old signal; prefer `openclaw gateway restart` for service-aware restarts.
 </Warning>
 
+If restart cannot verify a live serving owner, it leaves the process untouched.
+Run `openclaw gateway status --deep`, fix the reported startup failure (for example,
+a stopped Tailscale backend when Serve is configured), then run
+`openclaw gateway start` to wait for readiness. A loaded service or a running PID
+alone does not prove that the Gateway is serving. Reinstallation is not a remedy
+for an unresolved startup dependency or unknown process ownership.
+
 `--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
 `--skip-deferral` bypasses only the safe-restart active-work deferral gate. It can move the Gateway into shutdown even while active-work blockers are reported, but the close-stage pending-reply drain still applies before the process exits. It requires `--safe` — use it when a deferral is stuck on a runaway task and reply delivery can still be allowed to settle.
