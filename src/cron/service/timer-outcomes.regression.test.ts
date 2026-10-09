@@ -306,45 +306,47 @@ describe("cron timer outcome and failure policy regressions", () => {
     expect(deferredNotifications).toHaveLength(0);
   });
 
-  it("resets the auto-disable streak after a successful recurring run", () => {
+  it("alerts once a one-shot exhausts its transient retries, even above an explicit after", () => {
     const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
+    const deferredNotifications: DeferredCronNotifications = [];
     const state = createCronServiceState({
-      storePath: "/tmp/cron-consecutive-failure-reset.json",
+      storePath: "/tmp/cron-one-shot-exhausted-retries.json",
       nowMs: () => startedAt,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     const job = createIsolatedRegressionJob({
-      id: "recurring-failure-reset",
-      name: "recurring failure reset",
+      id: "one-shot-exhausted-retries",
+      name: "one-shot exhausted retries",
       scheduledAt: startedAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
-      payload: { kind: "agentTurn", message: "recover" },
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "fail" },
       state: {},
     });
-    const apply = (status: "ok" | "error", run: number) =>
+    // after: 5 can never be reached: the retry budget disables the job on its 4th error.
+    job.failureAlert = { after: 5 };
+
+    const failures: boolean[] = [];
+    for (let run = 0; run < 4; run += 1) {
       applyJobResult(
         state,
         job,
         {
-          status,
-          ...(status === "error" ? { error: `failure ${run}` } : {}),
+          status: "error",
+          error: "429 rate limit exceeded",
+          errorClassification: { kind: "reason", reason: "rate_limit" },
           startedAt: startedAt + run * 60_000,
           endedAt: startedAt + run * 60_000 + 10,
         },
-        { deferredNotifications: [] },
+        { deferredNotifications },
       );
-
-    for (let run = 0; run < 9; run += 1) {
-      apply("error", run);
-    }
-    apply("ok", 9);
-    for (let run = 10; run < 19; run += 1) {
-      apply("error", run);
+      failures.push(job.enabled);
     }
 
-    expect(job.enabled).toBe(true);
-    expect(job.state.consecutiveErrors).toBe(9);
-    expect(job.state.autoDisabled).toBeUndefined();
+    expect(failures).toEqual([true, true, true, false]);
+    expect(job.state.consecutiveErrors).toBe(4);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(deferredNotifications).toHaveLength(1);
+    expect(deferredNotifications[0]?.kind).toBe("failure-alert");
   });
 
   it.each([
