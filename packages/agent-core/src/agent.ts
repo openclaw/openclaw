@@ -34,6 +34,7 @@ import type {
   QueueMode,
   StreamFn,
   ToolExecutionMode,
+  ToolLoopRecoveryState,
 } from "./types.js";
 
 export type { QueueMode } from "./types.js";
@@ -307,7 +308,7 @@ export class Agent {
   >();
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
-  private readonly toolLoopRecoveryState = { criticalToolLoopSeen: false };
+  private toolLoopRecoveryState: ToolLoopRecoveryState = { criticalToolLoopSeen: false };
 
   public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
   public transformContext?: NonNullable<AgentOptions["transformContext"]>;
@@ -472,7 +473,7 @@ export class Agent {
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
-    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
+    this.toolLoopRecoveryState = { criticalToolLoopSeen: false };
     this.clearAllQueues();
   }
 
@@ -488,7 +489,7 @@ export class Agent {
         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
       );
     }
-    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
+    this.toolLoopRecoveryState = { criticalToolLoopSeen: false };
     const messages = this.normalizePromptInput(input, images);
     await this.runPromptMessages(messages);
   }
