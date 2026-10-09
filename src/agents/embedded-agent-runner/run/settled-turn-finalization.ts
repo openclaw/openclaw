@@ -150,13 +150,26 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     throw new Error("admitted run authority is no longer active");
   }
   const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
-  const committedSessionTarget =
-    preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
+  // Transcript custody belongs to the host-owned session manager whenever dispatch
+  // handed one over, and that attempt therefore owns no store target of its own.
+  // Carry only its writer fence into the finalizer: minting a store target here
+  // would run the tool-free finalizer as a direct transcript writer under a claim
+  // this run never held, and its first commit refuses as a rebound writer.
+  const transcriptCustodyIsManagerOwned =
+    Boolean(preparedAttempt.sessionManager) && !preparedAttempt.sessionTarget;
+  const committedSessionTarget = transcriptCustodyIsManagerOwned
+    ? sessionWriterFence && { ...sessionWriterFence }
+    : preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
       ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
       : undefined;
+  // A borrowed manager reports the forked parent's transcript id; this run keeps its own.
+  const committedSessionId =
+    committedSessionTarget?.sessionId ??
+    (transcriptCustodyIsManagerOwned ? preparedAttempt.sessionId : undefined) ??
+    initial.sessionIdUsed;
   const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
     attempt: input.finalization.preparedAttempt,
-    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+    sessionId: committedSessionId,
     sessionTarget: committedSessionTarget,
   });
 
@@ -191,7 +204,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
           // The first transcript append may have committed the writer after
           // dispatch preparation. The summary must retain that original fence.
           ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
-          sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+          sessionId: committedSessionId,
           sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
         },
         settledAttempt: initial.attempt,
@@ -275,7 +288,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       attempt: input.finalization.preparedAttempt,
       abortSignal: input.finalization.abortSignal,
       assertActive: assertFinalizationActive,
-      sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+      sessionId: committedSessionId,
       sessionTarget: committedSessionTarget,
     });
     if (input.finalization.abortSignal.aborted) {
