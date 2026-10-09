@@ -205,9 +205,9 @@ function ensureMemoryRuntime(params: {
     return owner;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
-  for (const runtime of [previousSlot?.runtime, previousSlot?.providerRuntime]) {
-    if (runtime) {
-      retiredRuntimes.add(runtime);
+  for (const retiredRuntime of [previousSlot?.runtime, previousSlot?.providerRuntime]) {
+    if (retiredRuntime) {
+      retiredRuntimes.add(retiredRuntime);
     }
   }
   standaloneMemoryRegistrySlot = {
