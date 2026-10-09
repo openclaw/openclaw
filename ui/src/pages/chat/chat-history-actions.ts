@@ -15,7 +15,7 @@ import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   captureChatComposerReplacement,
-  loadChatComposerCommittedDraftRevision,
+  loadChatComposerState,
   persistChatComposerState,
 } from "./composer-persistence.ts";
 import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
@@ -256,11 +256,8 @@ export async function rewindChatHistory(
       mentions: [],
       goalMode: null,
       replyTarget: null,
-      expectedDraftRevision: loadChatComposerCommittedDraftRevision(
-        state,
-        sessionKey,
-        agentParams.agentId,
-      ),
+      expectedDraftRevision: loadChatComposerState(state, sessionKey, agentParams.agentId).revisions
+        .committed,
     });
     if (!viewMatches()) {
       return null;

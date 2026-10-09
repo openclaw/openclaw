@@ -65,6 +65,7 @@ import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import { publishUnchangedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 import {
   projectionLane,
   withSessionHistoryWorkerReadCandidates,
@@ -253,6 +254,7 @@ async function runColdMutation(
             "Cold transcript worker cleanup is incomplete; restart OpenClaw before another maintenance operation",
           );
         }
+        publishUnchangedSessionTranscriptReceipts(completed.result.transcriptPublication);
         if (plan.kind !== "cold-restore") {
           await withSqliteSessionPageReclamation(plan.databaseOptions, (reclaimPages) =>
             reclaimSqliteFreePages(plan.databaseOptions, undefined, {

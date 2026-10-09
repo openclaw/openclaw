@@ -56,6 +56,8 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
+const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
+
 function emitGatewayEvent(
   state: ChatPageHost,
   event: Parameters<typeof handlePageGatewayEvent>[1]["event"],
@@ -1574,8 +1576,7 @@ describe("canonical session message recovery", () => {
           "chat.history",
           {
             sessionKey: state.sessionKey,
-            limit: 80,
-            maxBytes: 256 * 1024,
+            ...historyBudget,
           },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
@@ -2500,7 +2501,7 @@ describe("canonical session message recovery", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "chat.history",
-          { sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024 },
+          { sessionKey: state.sessionKey, ...historyBudget },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
       );

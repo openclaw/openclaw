@@ -16,6 +16,7 @@ import {
   SESSION_ROSTER_MAX_AGE_MS,
   SESSION_ROSTER_MAX_BYTES,
   sessionRosterGeneration,
+  sessionRosterScope,
   type RosterExpectation,
   type SessionRosterCache,
   type SessionRosterRecord,
@@ -230,8 +231,7 @@ export async function hydrateSessionRoster(
   const gatewayScope = gateway.connection
     ? gatewayCredentialScope(gateway.connection.gatewayUrl)
     : undefined;
-  const scope =
-    gatewayScope && account ? `account:${JSON.stringify([gatewayScope, account])}` : initial.scope;
+  const scope = gatewayScope && account ? sessionRosterScope(gatewayScope, account) : initial.scope;
   if (
     !record ||
     signal.aborted ||

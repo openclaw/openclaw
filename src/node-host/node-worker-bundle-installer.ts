@@ -522,21 +522,19 @@ export class NodeWorkerBundleInstaller {
         throw error;
       }
       const protectedHashes = new Set(params.bundleHashes);
-      const generations =
-        this.#bundleGenerationsByNamespace.get(params.gatewayNamespace) ??
-        new Map<string, number>();
+      const generations = this.#bundleGenerationsByNamespace.get(params.gatewayNamespace);
       const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
-      for (const [bundleHash, generation] of generations) {
-        if (generation > acknowledgedGeneration) {
-          protectedHashes.add(bundleHash);
-        } else {
-          generations.delete(bundleHash);
+      if (generations) {
+        for (const [bundleHash, generation] of generations) {
+          if (generation > acknowledgedGeneration) {
+            protectedHashes.add(bundleHash);
+          } else {
+            generations.delete(bundleHash);
+          }
         }
-      }
-      if (generations.size > 0) {
-        this.#bundleGenerationsByNamespace.set(params.gatewayNamespace, generations);
-      } else {
-        this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
+        if (generations.size === 0) {
+          this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
+        }
       }
       const candidates = entries
         .filter(

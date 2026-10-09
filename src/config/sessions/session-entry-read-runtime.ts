@@ -40,8 +40,10 @@ import type {
   SessionEntryReadSourcePreparation,
   SessionEntryCohortReader,
 } from "./session-entry-read-runtime.types.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
   SessionEntryListWorkerInput,
+  SessionEntryListWorkerResult,
   SessionEntryReadWorkerResult,
 } from "./session-entry-read.types.js";
 import {
@@ -245,6 +247,61 @@ export async function withSessionDiagnosticTextInWorker(
 
 export { readSessionEntryInWorker } from "./session-entry-read-writable.js";
 
+/** Retain one metadata inventory; the worker checks its native revision before reusing it. */
+export function createSessionEntryListReader(
+  input: Pick<SessionStoreWorkerReadScope, "agentId" | "storePath" | "env">,
+) {
+  const scope = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
+  let snapshot: SessionEntryListWorkerResult = { kind: "session-entry-list", entries: [] };
+  let pending:
+    | Promise<{
+        entries: SessionEntryListWorkerResult["entries"];
+        assertCurrent: () => void;
+      }>
+    | undefined;
+  return () => {
+    if (pending) {
+      return pending;
+    }
+    pending = withSessionStoreReaderInWorker(
+      scope,
+      async ({ reader, database, continuation, assertCurrent }) => {
+        const result = await reader.readEntries(
+          {
+            agentId: database.agentId,
+            storePath: database.path,
+            env: database.env,
+            projection: "list",
+            includeParticipants: false,
+            hydrateSkillPromptRefs: false,
+          },
+          continuation,
+          undefined,
+          snapshot.revision,
+        );
+        assertCurrent();
+        if (!result.unchanged) {
+          snapshot = result;
+        }
+        const source = result.source;
+        return {
+          entries: snapshot.entries,
+          // The worker lifetime ends on return. Retain only the physical source fence.
+          assertCurrent: () => {
+            if (source) {
+              assertCapturedSessionEntryReadSource(source);
+            }
+          },
+        };
+      },
+      { backing: true, dataOnly: true, capturePhysicalSource: true, lane: projectionLane },
+    ).finally(() => {
+      pending = undefined;
+    });
+    return pending;
+  };
+}
+
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
   input: Omit<SessionStoreWorkerReadScope, "agentId"> &
@@ -276,7 +333,7 @@ export async function readSessionEntrySummariesInWorker(
     { ...input, env: scope.env, storePath: scope.storePath ?? input.storePath },
     async ({ reader, database, continuation, assertCurrent }) => {
       assertCurrent();
-      const entries = await reader.readEntries(
+      const { entries } = await reader.readEntries(
         {
           agentId: database.agentId,
           storePath: database.path,

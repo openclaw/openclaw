@@ -25,6 +25,7 @@ let transcript:
   | {
       initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
       assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
+      readPublication: typeof import("../config/sessions/session-transcript-authority.js").readStagedSessionTranscriptAuthority;
     }
   | undefined;
 
@@ -32,10 +33,12 @@ export function prepareAgentTranscript() {
   return Promise.all([
     import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
     import("../config/sessions/session-accessor.sqlite-scope.js"),
-  ]).then(([header, scope]) => {
+    import("../config/sessions/session-transcript-authority.js"),
+  ]).then(([header, scope, authority]) => {
     transcript = {
       initialize: header.ensureTranscriptHeader,
       assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
+      readPublication: authority.readStagedSessionTranscriptAuthority,
     };
   });
 }
@@ -47,7 +50,7 @@ export async function loadAgentTranscriptOperations() {
       if (!transcript) {
         throw new Error("Session transcript initialization was not prepared");
       }
-      const { initialize } = transcript;
+      const { initialize, readPublication } = transcript;
       const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
       assertIdentity(input);
       return context.writeTransaction(
@@ -68,6 +71,7 @@ export async function loadAgentTranscriptOperations() {
               },
             },
           );
+          publication.transcriptPublication = readPublication(current);
           deferSqliteWorkerCommitReceipt(current.db, publication);
           context.admit("commit", publication);
           return publication;

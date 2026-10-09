@@ -83,9 +83,7 @@ async function throwWebhookResponseError(
       retry_after: readRetryAfter(parsed, response, 1),
       code: readDiscordCode(parsed),
       global:
-        parsed && typeof parsed === "object" && "global" in parsed
-          ? Boolean((parsed as { global?: unknown }).global)
-          : false,
+        parsed && typeof parsed === "object" && "global" in parsed ? Boolean(parsed.global) : false,
     });
   }
   throw new DiscordError(response, parsed);

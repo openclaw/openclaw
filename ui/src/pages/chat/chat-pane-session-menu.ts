@@ -166,7 +166,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
     if (action.kind === "stop-cloud-worker") {
-      return this.reclaimHeaderPlacement(row);
+      return this.changeHeaderPlacement(row, "reclaim");
     }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;

@@ -30,7 +30,10 @@ import type {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
-import type { SessionTranscriptWriterFence } from "./transcript-write-context.js";
+import type {
+  InitialSessionTranscriptWriter,
+  SessionTranscriptWriterFence,
+} from "./transcript-write-context.js";
 import type { InternalSessionEntry } from "./types.js";
 
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
@@ -43,7 +46,10 @@ export type SessionManagerIncognitoDatabase = {
   withMetadata<T>(
     assertCurrent: () => void,
     operation: (scope: Pick<SqliteWorkerStore<SessionMetadataOperations>, "execute">) => Promise<T>,
-    controls?: { beforeFreshMessageCommit?: () => void },
+    controls?: {
+      beforeFreshMessageCommit?: () => void;
+      initialWriter?: InitialSessionTranscriptWriter;
+    },
   ): Promise<T>;
 };
 

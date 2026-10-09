@@ -277,13 +277,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
     const basePath = this.context?.basePath ?? "";
-    const expected = buildControlUiFocusPath(
-      { kind: "dashboard", path: routeLocationHref(source) },
-      basePath,
-    );
-    const replacement = buildControlUiFocusPath(
-      { kind: "dashboard", path: routeLocationHref(location) },
-      basePath,
+    const [expected, replacement] = [source, location].map((target) =>
+      buildControlUiFocusPath({ kind: "dashboard", path: routeLocationHref(target) }, basePath),
     );
     const current = `${globalThis.location.pathname}${globalThis.location.search}${globalThis.location.hash}`;
     if (!expected || !replacement || current !== expected || replacement === current) {

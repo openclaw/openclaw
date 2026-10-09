@@ -1,3 +1,4 @@
+import type { SqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
@@ -145,4 +146,19 @@ export type SessionSharingWorkerOperations = {
     input: { scope: SessionAccessScope; params: SessionParticipantRecordInput };
     output: { value: RecordSessionParticipantResult | null } & ParticipantPublication;
   };
+};
+
+export type SessionCollaborationFact = Extract<
+  SessionRowFacts,
+  { kind: "member" | "owner" | "participants" | "category" | "unchanged" }
+>;
+
+export type SessionSharingCommitReceipt = {
+  kind: "session-collaboration-committed";
+  type: Exclude<keyof SessionSharingWorkerOperations, "category.prepare">;
+  result: SessionSharingWorkerOperations[Exclude<
+    keyof SessionSharingWorkerOperations,
+    "category.prepare"
+  >]["output"];
+  publication: SqliteCommitReceipt<readonly SessionCollaborationFact[]>;
 };

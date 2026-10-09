@@ -315,22 +315,13 @@ export function copyProgressDraftLineMetadata(
   );
 }
 
-function itemKindToToolName(kind: string | undefined): string | undefined {
-  switch (normalizeOptionalLowercaseString(kind)) {
-    case "command":
-      return "exec";
-    case "patch":
-      return "apply_patch";
-    case "search":
-      return "web_search";
-    case "api":
-      return "api";
-    case "tool":
-      return "tool_call";
-    default:
-      return undefined;
-  }
-}
+const PROGRESS_ITEM_TOOL_NAMES = new Map([
+  ["command", "exec"],
+  ["patch", "apply_patch"],
+  ["search", "web_search"],
+  ["api", "api"],
+  ["tool", "tool_call"],
+]);
 
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
@@ -470,7 +461,9 @@ export function buildChannelProgressDraftLine(
       );
     }
     case "item": {
-      const name = input.name ?? itemKindToToolName(input.itemKind);
+      const name =
+        input.name ??
+        PROGRESS_ITEM_TOOL_NAMES.get(normalizeOptionalLowercaseString(input.itemKind) ?? "");
       if (isAgentPlanProgressToolName(name)) {
         const status = normalizeOptionalLowercaseString(input.status);
         return status === "failed" || status === "error" || status === "blocked"
