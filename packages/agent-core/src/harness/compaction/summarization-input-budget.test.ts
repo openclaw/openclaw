@@ -387,4 +387,68 @@ describe("summary request input budget", () => {
     expect(text).toContain("omitted from this summary input");
     expect(text).toMatch(/\[Tool result of write_report\(cmd="r+\.\.\.\)\]: WRITE_FAILED: quota$/u);
   });
+
+  it("sends a short history unchanged when the window is too small to sample", async () => {
+    const { streamFn, prompts } = createCapturingStream();
+    const messages: AgentMessage[] = [{ role: "user", content: "Rename the queue.", timestamp: 1 }];
+
+    const result = await generateSummary(
+      messages,
+      createModel(4_096, 4_096),
+      2_500,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
+  });
+
+  it("reserves the thinking allowance a budget-based transport adds to the output", async () => {
+    const { streamFn, prompts } = createCapturingStream();
+    const model = { ...createModel(32_768, 64_000), reasoning: true };
+    const result = await generateSummary(
+      createLongSession(40),
+      model,
+      8_192,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    // 0.8 × 8,192 visible output plus the 16,384-token high thinking budget.
+    const completionTokens = Math.floor(0.8 * 8_192) + 16_384;
+    const promptTokens = estimateStringChars(prompts[0] ?? "") / CHARS_PER_TOKEN_ESTIMATE;
+    expect(promptTokens + completionTokens).toBeLessThan(32_768);
+  });
+
+  it("names each result by the call occurrence it answers when call IDs repeat", () => {
+    const messages: AgentMessage[] = [
+      toolCallMessage([
+        { id: "exec_0", name: "exec", cmd: "first" },
+        { id: "exec_0", name: "exec", cmd: "second" },
+      ]),
+      toolResultMessage("exec_0", "exec", "OUT-FIRST"),
+      toolResultMessage("exec_0", "exec", "OUT-SECOND"),
+      { role: "user", content: `NEWEST ${"z".repeat(200_000)}`, timestamp: 9 },
+    ];
+
+    const { text } = serializeConversationWithinBudget(
+      convertToLlm(messages),
+      MAX_SUMMARY_INPUT_CHARS,
+    );
+
+    expect(text).toContain('[Tool result of exec(cmd="first")]: OUT-FIRST');
+    expect(text).toContain('[Tool result of exec(cmd="second")]: OUT-SECOND');
+  });
 });

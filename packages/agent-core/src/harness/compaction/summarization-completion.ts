@@ -1,3 +1,4 @@
+import { adjustMaxTokensForThinking } from "@openclaw/ai/providers";
 import {
   resolveClaudeFable5ModelIdentity,
   type Model,
@@ -42,23 +43,29 @@ const OMITTED_ENTRIES_INSTRUCTION =
   "Some conversation entries were left out of this input where marked. Do not guess what they said. Keep facts from the previous summary that the shown entries do not change.";
 
 /**
- * Smallest conversation budget worth a model call. Below it the summarizer
- * window cannot hold the newest messages next to the instructions, previous
- * summary and output reservation, so compaction fails and keeps the history.
+ * Smallest conversation budget worth a model call when the history must be
+ * sampled. Below it the summarizer window cannot hold a useful sample next to
+ * the instructions, previous summary and output, so compaction fails and keeps
+ * the history.
  */
 const MIN_SUMMARY_INPUT_CHARS = 4_000;
 
 /**
  * Conversation budget for one summary request: the fixed cap, lowered when the
- * summarizer's own window cannot hold it next to the prompt and the output.
+ * summarizer's own window cannot hold it next to the prompt and the largest
+ * completion the transport may request.
  */
-function resolveSummaryInputChars(model: Model, maxTokens: number, promptText: string): number {
+function resolveSummaryInputChars(
+  model: Model,
+  completionTokens: number,
+  promptText: string,
+): number {
   const contextWindow = model.contextWindow ?? 0;
   if (contextWindow <= 0) {
     return MAX_SUMMARY_INPUT_CHARS;
   }
   const windowChars =
-    ((contextWindow - maxTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
+    ((contextWindow - completionTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
     SUMMARY_WINDOW_SAFETY_MARGIN;
   const available = Math.floor(
     windowChars -
@@ -97,26 +104,6 @@ export async function runSummarizationCompletion(
   if (params.customInstructions) {
     instructions += `\n\nAdditional focus: ${params.customInstructions}`;
   }
-  const conversationBudget = resolveSummaryInputChars(
-    params.model,
-    params.maxTokens,
-    `${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`,
-  );
-  if (conversationBudget < MIN_SUMMARY_INPUT_CHARS) {
-    return err(
-      new SummaryOutputBudgetError(
-        `${params.errorLabel} needs more room than ${params.model.provider}/${params.model.id} has: its ${params.model.contextWindow}-token window cannot hold the conversation next to the instructions, previous summary and ${params.maxTokens}-token output. Set agents.defaults.compaction.model to a model with a larger context window.`,
-      ),
-    );
-  }
-  const conversation = serializeConversationWithinBudget(
-    convertToLlm(params.messages),
-    conversationBudget,
-  );
-  const omissionNote = conversation.omittedEntries > 0 ? `${OMITTED_ENTRIES_INSTRUCTION}\n\n` : "";
-  const context = createSummarizationContext(
-    `<conversation>\n${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
-  );
   const { model, thinkingLevel, maxTokens, signal, apiKey, headers } = params;
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
   const fableReasoning =
@@ -125,6 +112,37 @@ export async function runSummarizationCompletion(
   if ((model.reasoning || fableReasoning) && thinkingLevel) {
     options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
+  // Budget-based thinking transports add the thinking allowance on top of maxTokens.
+  const completionTokens =
+    options.reasoning && options.reasoning !== "off"
+      ? adjustMaxTokensForThinking(
+          maxTokens,
+          model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+          options.reasoning,
+        ).maxTokens
+      : maxTokens;
+  const conversationBudget = resolveSummaryInputChars(
+    model,
+    completionTokens,
+    `${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`,
+  );
+  const conversation = serializeConversationWithinBudget(
+    convertToLlm(params.messages),
+    Math.max(0, conversationBudget),
+  );
+  const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
+  // A history that fits is sent unchanged; only a sample needs the minimum room.
+  if (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS) {
+    return err(
+      new SummaryOutputBudgetError(
+        `${params.errorLabel} needs more room than ${model.provider}/${model.id} has: its ${model.contextWindow}-token window cannot hold the conversation next to the instructions, previous summary and ${completionTokens}-token output. Set agents.defaults.compaction.model to a model with a larger context window.`,
+      ),
+    );
+  }
+  const omissionNote = conversation.omittedEntries > 0 ? `${OMITTED_ENTRIES_INSTRUCTION}\n\n` : "";
+  const context = createSummarizationContext(
+    `<conversation>\n${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
+  );
   const response = params.streamFn
     ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);

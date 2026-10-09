@@ -3,6 +3,7 @@ import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
+import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
 import type { FileOperations } from "../types.js";
 
 export type { FileOperations } from "../types.js";
@@ -315,7 +316,8 @@ function serializeConversationEntries(messages: Message[]): {
 } {
   const parts: string[] = [];
   const labeledResults = new Map<number, string>();
-  const callLabels = new Map<string, string>();
+  // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
+  const callLabels = createToolCallOccurrenceQueue<string>();
   let omissionMessages = 0;
 
   for (const msg of messages) {
@@ -325,6 +327,8 @@ function serializeConversationEntries(messages: Message[]): {
       continue;
     }
     if (msg.role === "user" || msg.role === "toolResult") {
+      // Claim even for an empty result, so a later result with the same ID gets its own call.
+      const callLabel = msg.role === "toolResult" ? callLabels.claim(msg.toolCallId) : undefined;
       const { text, omissionText } = getCompactionContent(msg.content);
       // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
       // Keep the aggregate outside truncation too; later omissions must never disappear silently.
@@ -341,7 +345,7 @@ function serializeConversationEntries(messages: Message[]): {
         continue;
       }
       if (msg.role === "toolResult") {
-        const label = callLabels.get(msg.toolCallId) ?? `${msg.toolName}(...)`;
+        const label = callLabel ?? `${msg.toolName}(...)`;
         labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
         parts.push(`[Tool result]: ${content}`);
       } else {
@@ -359,7 +363,7 @@ function serializeConversationEntries(messages: Message[]): {
             .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
             .join(", ");
           toolCalls.push(`${block.name}(${argsStr})`);
-          callLabels.set(block.id, formatCallLabel(block.name, block.arguments));
+          callLabels.add(block.id, formatCallLabel(block.name, block.arguments));
         }
       }
 
