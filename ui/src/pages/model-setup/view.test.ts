@@ -495,50 +495,66 @@ describe("renderModelSetup", () => {
     },
   );
 
-  it("filters credential choices while retaining setup-only methods", () => {
-    const onStartAuth = vi.fn();
-    const install = {
-      id: "install-provider",
-      label: "Installable provider",
-      kind: "install" as const,
-      featured: false,
-    };
-    const custom = {
-      id: "custom-endpoint",
-      label: "Compatible endpoint",
-      kind: "custom" as const,
-      featured: false,
-    };
-    const container = mount(
-      props({
-        embedded: true,
-        agentLabel: "Writer",
-        credentialChoices: ["openai-oauth", "other-device", "openai", "gemini-api-key"],
-        onStartAuth,
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            configuredModel: "openai/gpt-5.6-luna",
-            authOptions: [...(detected.authOptions ?? []), install, custom],
+  it.each([false, true])(
+    "filters credential choices while retaining setup-only methods: %s",
+    (setupOnly) => {
+      const onStartAuth = vi.fn();
+      const onManualConnect = vi.fn();
+      const install = {
+        id: "install-provider",
+        label: "Installable provider",
+        kind: "install" as const,
+        featured: false,
+      };
+      const custom = {
+        id: "custom-endpoint",
+        label: "Compatible endpoint",
+        kind: "custom" as const,
+        featured: false,
+      };
+      const container = mount(
+        props({
+          embedded: true,
+          agentLabel: "Writer",
+          credentialChoices: ["openai-oauth", "other-device", "openai", "gemini-api-key"],
+          manualProviderId: "special-token",
+          manualApiKey: "synthetic-token",
+          onStartAuth,
+          onManualConnect,
+          page: {
+            phase: "ready",
+            result: {
+              ...detected,
+              configuredModel: "openai/gpt-5.6-luna",
+              authOptions: [...(detected.authOptions ?? []), install, custom],
+              manualProviders: setupOnly
+                ? [{ id: "special-token", brandId: "openai", label: "Special account token" }]
+                : detected.manualProviders,
+            },
           },
-        },
-      }),
-    );
-    expect(container.querySelector(".content-header")).toBeNull();
-    expect(container.querySelector(".model-setup__current")).toBeNull();
-    expect(text(container)).toContain("for Writer");
-    expect(text(container)).toContain("not the global defaults");
-    expect(container.querySelector('[data-auth-choice="openai-oauth"]')).toBeNull();
-    expect(container.querySelector('[data-prepare-choice="ollama"]')).not.toBeNull();
-    for (const option of [install, custom]) {
-      container
-        .querySelector<HTMLButtonElement>(`[data-auth-choice="${option.id}"] button`)!
-        .click();
-      expect(onStartAuth).toHaveBeenLastCalledWith(option);
-    }
-    expect(container.querySelector(".model-setup__manual")).toBeNull();
-  });
+        }),
+      );
+      expect(container.querySelector(".content-header")).toBeNull();
+      expect(container.querySelector(".model-setup__current")).toBeNull();
+      expect(text(container)).toContain("for Writer");
+      expect(text(container)).toContain("not the global defaults");
+      expect(container.querySelector('[data-auth-choice="openai-oauth"]')).toBeNull();
+      expect(container.querySelector('[data-prepare-choice="ollama"]')).not.toBeNull();
+      for (const option of [install, custom]) {
+        container
+          .querySelector<HTMLButtonElement>(`[data-auth-choice="${option.id}"] button`)!
+          .click();
+        expect(onStartAuth).toHaveBeenLastCalledWith(option);
+      }
+      if (setupOnly) {
+        expect(container.querySelector('[data-manual-provider="special-token"]')).not.toBeNull();
+        container.querySelector<HTMLButtonElement>(".model-setup__manual button.primary")!.click();
+        expect(onManualConnect).toHaveBeenCalledOnce();
+      } else {
+        expect(container.querySelector(".model-setup__manual")).toBeNull();
+      }
+    },
+  );
 
   it.each(["wizard", "primary", "utility"] as const)(
     "leaves the %s dialog in control of its action",
