@@ -186,7 +186,6 @@ export class DiscordRealtimePlayback<TState> {
       this.retainedSpeechClosed = true;
       this.speechSuccessor = undefined;
       this.queuedExactSpeechMessages = [];
-      this.retireExactSpeech();
     }
     this.clearOutputAudio("session-close");
     this.directOutput?.close();
@@ -578,7 +577,7 @@ export class DiscordRealtimePlayback<TState> {
       speech.direct &&
       Atomics.exchange(speech.direct.clock, DISCORD_CONTINUOUS_EXACT_SPEECH, 0n) ===
         -speech.direct.epoch;
-    if (preserveUnplayed && !directStarted && !speech.output?.activity.snapshot().playbackStarted) {
+    if (preserveUnplayed && !directStarted && !speech.output?.hasStarted()) {
       this.queuedExactSpeechMessages.unshift(speech.message);
     }
   }
@@ -609,7 +608,6 @@ export class DiscordRealtimePlayback<TState> {
     this.speechSuccessor = undefined;
     this.params.stopTerminally();
     this.queuedExactSpeechMessages = [];
-    this.retireExactSpeech();
     this.clearOutputAudio(reason);
     this.params.onTerminalError(error);
   }

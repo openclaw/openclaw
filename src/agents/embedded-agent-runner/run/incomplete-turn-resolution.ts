@@ -14,6 +14,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
@@ -90,7 +91,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
+    params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
+    !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
@@ -102,19 +105,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.hasIntentionalTerminalCompletion
-  ) {
-    return null;
-  }
-
-  if (
+    params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
-    resolveSourceReplyDelivery(params.attempt) !== "missing"
+    resolveSourceReplyDelivery(params.attempt) !== "missing" ||
+    // A tool-authored final reply awaits host delivery, so its delivery state is still missing.
+    params.attempt.messagingToolSourceReplyPayloads?.some(
+      (payload) => payload.toolAuthored === true,
+    ) ||
+    hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)
   ) {
-    return null;
-  }
-
-  if (hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 
@@ -149,22 +148,29 @@ export function resolveIncompleteTurnPayloadText(params: {
   ) {
     return formatUserFacingAssistantErrorText(assistant);
   }
-  const failureFacts = promptError
-    ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
-    : undefined;
+  const preflightFailureText = renderAgentHarnessPreflightUserMessage(promptError);
+  const failureFacts =
+    promptError && preflightFailureText === undefined
+      ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+      : undefined;
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
-  const promptFailureText = failureFacts
-    ? (failureFacts.providerRequestError?.userMessage ??
-      failureFacts.formatFailureText ??
-      renderAssistantRequestFailureCopy({
-        reason: failureFacts.reason,
-        status: failureFacts.status,
-        code: failureFacts.code,
-      }))
-    : undefined;
+  const promptFailureText =
+    preflightFailureText ??
+    (failureFacts
+      ? (failureFacts.providerRequestError?.userMessage ??
+        failureFacts.formatFailureText ??
+        renderAssistantRequestFailureCopy({
+          reason: failureFacts.reason,
+          status: failureFacts.status,
+          code: failureFacts.code,
+        }))
+      : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
     return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
+  }
+  if (preflightFailureText !== undefined) {
+    return preflightFailureText;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
     return formatUserFacingAssistantErrorText(assistant);
@@ -226,6 +232,7 @@ interface YieldContinuationAttempt {
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
   runtimeContinuationStarted?: boolean;
+  yieldMessageWaitRegistered?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -242,6 +249,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
     hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
+    attempt.yieldMessageWaitRegistered === true ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0
   );

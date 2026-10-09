@@ -8,6 +8,7 @@ import type {
   BoardWidget,
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
 import {
@@ -34,13 +35,16 @@ import {
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
 export class GatewayBoardProvider implements BoardProvider {
+  readonly canPinWidgets = true;
+  readonly canPinMcpApps = false;
+  readonly canMutate = true;
+  readonly canGrant = true;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly loadErrorSignal = new ValueSignal<string | null>(null);
   private readonly eventStream = new EventStream<BoardCommandEvent>();
-  private client: BoardGatewayClient;
   private readonly retiredClients = new WeakSet<BoardGatewayClient>();
   private clientGeneration = 0;
   private unsubscribe: (() => void) | undefined;
@@ -49,7 +53,6 @@ export class GatewayBoardProvider implements BoardProvider {
   private userRefreshRequested = false;
   private readonly changedWidgets = new Set<string>();
   private stateGeneration = 0;
-  private connected = false;
   private wakeRetryDelay: (() => void) | undefined;
   private readonly appViews = new BoardMcpAppViewCache();
   private disposed = false;
@@ -57,19 +60,13 @@ export class GatewayBoardProvider implements BoardProvider {
 
   constructor(
     private readonly session: BoardGetParams,
-    client: BoardGatewayClient,
-    connected = true,
-    public readonly canPinWidgets = true,
-    public readonly canPinMcpApps = false,
-    public readonly canMutate = true,
-    public readonly canGrant = true,
+    private client: BoardGatewayClient,
+    private connected = true,
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(this.sessionKey));
     this.snapshot$ = this.snapshotSignal;
     this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
-    this.client = client;
-    this.connected = connected;
     this.subscribe(client);
     if (connected) {
       void this.activate();
@@ -431,23 +428,14 @@ export class GatewayBoardProvider implements BoardProvider {
     }
   }
 
-  private waitForRetry(delayMs: number): Promise<void> {
-    return new Promise((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = () => {
-        if (!timer) {
-          return;
-        }
-        clearTimeout(timer);
-        timer = undefined;
-        if (this.wakeRetryDelay === finish) {
-          this.wakeRetryDelay = undefined;
-        }
-        resolve();
-      };
-      timer = setTimeout(finish, delayMs);
-      this.wakeRetryDelay = finish;
-    });
+  private async waitForRetry(delayMs: number): Promise<void> {
+    const controller = new AbortController();
+    const wake = () => controller.abort();
+    this.wakeRetryDelay = wake;
+    await sleepWithAbort(delayMs, controller.signal).catch(() => undefined);
+    if (this.wakeRetryDelay === wake) {
+      this.wakeRetryDelay = undefined;
+    }
   }
 
   private async mutate(

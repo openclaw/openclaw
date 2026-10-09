@@ -6,7 +6,13 @@ import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogResults, type PluginCatalogResultsProps } from "./catalog-results.ts";
 
-function plugin(id: string, overrides: Partial<PluginDiscoveryEntry> = {}): PluginDiscoveryEntry {
+function plugin(
+  id: string,
+  overrides: {
+    catalog?: Partial<PluginDiscoveryEntry["catalog"]>;
+    local?: Partial<PluginDiscoveryEntry["local"]>;
+  } = {},
+): PluginDiscoveryEntry {
   return {
     id,
     catalog: {
@@ -50,9 +56,7 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
       { slug: "tools", label: "Tools", description: "Tools", icon: "wrench", order: 1 },
     ],
     featured: [plugin("featured")],
-    featuredLoading: false,
     trending: [plugin("trending")],
-    trendingLoading: false,
     loadingMore: false,
     loadMoreError: null,
     intent: "all",
@@ -105,112 +109,82 @@ describe("renderPluginCatalogResults", () => {
     expect(chips.querySelectorAll("button")).toHaveLength(3);
   });
 
-  it("focuses unified search and places discovery chips before grouped sections", async () => {
+  it("uses the package fallback for unknown and inherited category icon names", () => {
     const container = mount(
       baseProps({
-        result: {
-          items: [
-            plugin("official-tool"),
-            plugin("community-tool", {
-              catalog: { name: "Community tool", official: false, categories: ["tools"] },
-            }),
-          ],
-        },
+        categories: ["constructor", "unknown-icon", "package", "brain"].map((icon, order) => ({
+          slug: icon,
+          label: icon,
+          description: icon,
+          icon,
+          order,
+        })),
       }),
     );
-    const search = container.querySelector<HTMLInputElement>('input[type="search"]');
-    await vi.waitFor(() => expect(document.activeElement).toBe(search));
-    expect(
-      [...container.querySelectorAll(".plugin-catalog-chip")].map((chip) =>
-        chip.textContent?.trim(),
-      ),
-    ).toEqual(["All", "Featured", "Trending", "Channels", "Tools"]);
-    expect(
-      [...container.querySelectorAll<HTMLElement>("[data-catalog-section]")].map(
-        (section) => section.dataset.catalogSection,
-      ),
-    ).toEqual(["featured", "trending", "tools"]);
+    const categoryIcons = [...container.querySelectorAll(".plugin-catalog-chip")]
+      .slice(3)
+      .map((chip) => chip.querySelector("svg")?.outerHTML);
+    expect(categoryIcons[2]).toBeDefined();
+    expect(categoryIcons[0]).toBe(categoryIcons[2]);
+    expect(categoryIcons[1]).toBe(categoryIcons[2]);
+    expect(categoryIcons[3]).toBeDefined();
+    expect(categoryIcons[3]).not.toBe(categoryIcons[2]);
   });
 
-  it.each([true, false, null])(
-    "keeps search flat for one publisher type or no matches (%s)",
-    (official) => {
+  it.each(["official", "community", "empty", "mixed"] as const)(
+    "preserves search ranking and groups only mixed publishers (%s)",
+    (kind) => {
+      const official = Array.from({ length: kind === "mixed" ? 10 : 1 }, (_, i) =>
+        plugin(`official-${i}`),
+      );
+      const community = ["community-first", "community-second"].map((id) =>
+        plugin(id, { catalog: { name: "OpenClaw integration", official: false, categories: [] } }),
+      );
+      const items =
+        kind === "mixed"
+          ? [community[0]!, ...official, community[1]!]
+          : kind === "official"
+            ? official
+            : kind === "community"
+              ? community.slice(0, 1)
+              : [];
+      const onLoadMore = vi.fn();
       const container = mount(
         baseProps({
-          query: "notion",
-          result: {
-            items:
-              official === null
-                ? []
-                : [plugin("Notion", { catalog: { name: "Notion", official, categories: [] } })],
-          },
+          query: "integration",
+          result: { items, ...(kind === "mixed" ? { nextCursor: "catalog-page-2" } : {}) },
+          onLoadMore,
         }),
       );
-
-      expect(container.querySelectorAll(".plugin-catalog-section")).toHaveLength(0);
-      expect(
-        container.querySelectorAll(".plugin-catalog-grid--results .plugin-catalog-card"),
-      ).toHaveLength(official === null ? 0 : 1);
-      expect(container.querySelector("openclaw-panel-empty-state") !== null).toBe(
-        official === null,
+      const sections = [...container.querySelectorAll(".plugin-catalog-section")];
+      expect(sections.map((section) => section.querySelector("h2")?.textContent?.trim())).toEqual(
+        kind === "mixed" ? ["Official", "Community"] : [],
       );
-      expect(container.querySelector(".plugin-catalog-pagination")).toBeNull();
+      if (kind === "mixed") {
+        for (const [index, entries] of [official, community].entries()) {
+          expect(
+            [...sections[index]!.querySelectorAll<HTMLElement>(".plugin-catalog-card")].map(
+              (card) => card.dataset.pluginId,
+            ),
+          ).toEqual(entries.map((entry) => entry.id));
+        }
+        const loadMore = container.querySelectorAll<HTMLButtonElement>(
+          ".plugin-catalog-load-more button",
+        );
+        expect(loadMore).toHaveLength(1);
+        loadMore[0]!.click();
+        expect(onLoadMore).toHaveBeenCalledOnce();
+      } else {
+        expect(
+          container.querySelectorAll(".plugin-catalog-grid--results .plugin-catalog-card"),
+        ).toHaveLength(kind === "empty" ? 0 : 1);
+        expect(container.querySelector("openclaw-panel-empty-state") !== null).toBe(
+          kind === "empty",
+        );
+        expect(container.querySelector(".plugin-catalog-pagination")).toBeNull();
+      }
     },
   );
-
-  it("groups mixed search results by official status without truncating or changing each group's rank", () => {
-    const official = Array.from({ length: 10 }, (_, index) => plugin(`official-${index}`));
-    const community = ["community-first", "community-second"].map((id) =>
-      plugin(id, { catalog: { name: "OpenClaw integration", official: false, categories: [] } }),
-    );
-    const onLoadMore = vi.fn();
-    const container = mount(
-      baseProps({
-        query: "integration",
-        result: {
-          items: [community[0]!, ...official, community[1]!],
-          nextCursor: "catalog-page-2",
-        },
-        onLoadMore,
-      }),
-    );
-
-    expect(
-      [...container.querySelectorAll(".plugin-catalog-section h2")].map((heading) =>
-        heading.textContent?.trim(),
-      ),
-    ).toEqual(["Official", "Community"]);
-    const sections = container.querySelectorAll(".plugin-catalog-section");
-    for (const [index, entries] of [official, community].entries()) {
-      expect(
-        [...sections[index]!.querySelectorAll<HTMLElement>(".plugin-catalog-card")].map(
-          (card) => card.dataset.pluginId,
-        ),
-      ).toEqual(entries.map((entry) => entry.id));
-    }
-    const loadMore = container.querySelectorAll<HTMLButtonElement>(
-      ".plugin-catalog-load-more button",
-    );
-    expect(loadMore).toHaveLength(1);
-    loadMore[0]!.click();
-    expect(onLoadMore).toHaveBeenCalledOnce();
-  });
-
-  it("offers bounded continuation only when the expanded result has another page", () => {
-    const onLoadMore = vi.fn();
-    const container = mount(
-      baseProps({
-        category: "tools",
-        result: { items: [plugin("tool")], nextCursor: "catalog-page-2" },
-        onLoadMore,
-      }),
-    );
-
-    const loadMore = container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button");
-    expect(loadMore?.textContent?.trim()).toBe("Load more");
-    loadMore?.click();
-    expect(onLoadMore).toHaveBeenCalledOnce();
-  });
 
   it("keeps a partial ClawHub failure retryable", () => {
     const onRetry = vi.fn();
@@ -233,261 +207,148 @@ describe("renderPluginCatalogResults", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it.each<{
-    name: string;
-    packageName: string;
-    pluginId: string | undefined;
-    installed?: boolean;
-    imageUrl?: string;
-    pluginIconUrls: Record<string, string>;
-    iconUrls: Record<string, string>;
-    expected: string | undefined;
-  }>([
-    {
-      name: "uninstalled first-party placeholder",
-      packageName: "@openclaw/whatsapp",
-      pluginId: undefined,
-      pluginIconUrls: {},
-      iconUrls: {},
-      expected: undefined,
-    },
-    {
-      name: "third-party identity without first-party artwork",
-      packageName: "@community/whatsapp",
-      pluginId: "whatsapp",
-      pluginIconUrls: {},
-      iconUrls: {},
-      expected: undefined,
-    },
-    {
-      name: "unscoped third-party identity without first-party artwork",
-      packageName: "whatsapp",
-      pluginId: "whatsapp",
-      pluginIconUrls: {},
-      iconUrls: {},
-      expected: undefined,
-    },
-    {
-      name: "installed package icon before catalog imagery",
-      packageName: "@openclaw/whatsapp",
-      pluginId: "whatsapp",
-      installed: true,
-      imageUrl: "https://example.com/icon.png",
-      pluginIconUrls: { whatsapp: "blob:package-icon" },
-      iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
-      expected: "blob:package-icon",
-    },
-    {
-      name: "published package icon before installation",
-      packageName: "@openclaw/whatsapp",
-      pluginId: undefined,
-      imageUrl: "https://example.com/icon.png",
-      pluginIconUrls: {},
-      iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
-      expected: "blob:catalog-icon",
-    },
-  ])(
-    "renders $name",
-    ({ packageName, pluginId, installed, imageUrl, pluginIconUrls, iconUrls, expected }) => {
-      const entry = plugin("catalog-entry");
-      const container = mount(
-        baseProps({
-          query: "whatsapp",
-          result: {
-            items: [
-              {
-                ...entry,
-                catalog: { ...entry.catalog, packageName, imageUrl },
-                local: {
-                  ...entry.local,
-                  pluginId,
-                  installed: installed ?? false,
-                  enabled: installed ?? false,
-                  state: installed ? "enabled" : "not-installed",
-                },
+  it("uses only resolved artwork, preferring installed icons and whitening only official images", () => {
+    const imageUrl = "https://example.com/icon.png";
+    const cases = [
+      { id: "official-package", packageName: "@openclaw/whatsapp", official: true },
+      {
+        id: "community-package",
+        packageName: "@community/whatsapp",
+        pluginId: "whatsapp",
+        official: true,
+      },
+      {
+        id: "installed",
+        pluginId: "installed",
+        official: true,
+        imageUrl,
+        expected: "blob:package-icon",
+      },
+      { id: "official", official: true, imageUrl, expected: "blob:catalog-icon" },
+      { id: "community", official: false, imageUrl, expected: "blob:catalog-icon" },
+      { id: "missing", official: true },
+    ];
+    const container = mount(
+      baseProps({
+        query: "artwork",
+        result: {
+          items: cases.map(({ id, packageName, pluginId, official, imageUrl: catalogImageUrl }) =>
+            plugin(id, {
+              catalog: {
+                name: id,
+                categories: ["channels"],
+                packageName,
+                official,
+                imageUrl: catalogImageUrl,
               },
-            ],
-          },
-          pluginIconUrls,
-          iconUrls,
-        }),
+              local: {
+                pluginId,
+                ...(id === "installed"
+                  ? {
+                      present: true,
+                      installed: true,
+                      enabled: true,
+                      state: "enabled",
+                      action: "manage",
+                    }
+                  : {}),
+              },
+            }),
+          ),
+        },
+        pluginIconUrls: { installed: "blob:package-icon" },
+        iconUrls: { [imageUrl]: "blob:catalog-icon" },
+      }),
+    );
+    for (const { id, official, expected } of cases) {
+      const art = container.querySelector(`[data-plugin-id="${id}"] .plugin-catalog-card__art`)!;
+      expect(art.querySelector("img")?.getAttribute("src") ?? null).toBe(expected ?? null);
+      expect(art.querySelector(".plugins-tile--white") !== null).toBe(
+        official && Boolean(expected),
       );
+    }
+  });
 
-      expect(container.querySelector(".plugin-catalog-card__art img")?.getAttribute("src")).toBe(
-        expected,
-      );
+  it.each([
+    {
+      name: "hidden catch-all categories",
+      categories: ["tools", "other"],
+      entries: [
+        ["matched", ["tools"]],
+        ["other-plugin", ["other"]],
+        ["uncategorized-plugin", []],
+      ],
+      shelves: { tools: ["matched"], other: [], uncategorized: [] },
+    },
+    {
+      name: "providers with multiple purposes",
+      categories: ["models", "media"],
+      entries: [
+        ["novita", ["models", "media"]],
+        ["zai", ["models", "media"]],
+        ["text-only", ["models"]],
+      ],
+      shelves: { models: ["novita", "text-only", "zai"], media: ["novita", "zai"] },
+    },
+  ] satisfies Array<{
+    name: string;
+    categories: string[];
+    entries: Array<[string, string[]]>;
+    shelves: Record<string, string[]>;
+  }>)(
+    "keeps category membership and search consistent for $name",
+    ({ categories, entries, shelves }) => {
+      const props = baseProps({
+        featured: [],
+        trending: [],
+        categories: categories.map((slug, order) => ({
+          slug,
+          label: slug === "other" ? "Other" : slug,
+          description: slug,
+          icon: "package",
+          order,
+        })),
+        result: {
+          items: entries.map(([id, entryCategories]) =>
+            plugin(id, {
+              catalog: {
+                name: id,
+                official: entryCategories.includes("models") || id === "matched",
+                categories: entryCategories,
+              },
+            }),
+          ),
+        },
+      });
+      const container = mount(props);
+      for (const [shelf, ids] of Object.entries(shelves)) {
+        const section = container.querySelector(`[data-catalog-section="${shelf}"]`);
+        expect(
+          [...(section?.querySelectorAll<HTMLElement>(".plugin-catalog-card") ?? [])].map(
+            (card) => card.dataset.pluginId,
+          ),
+        ).toEqual(ids);
+        if (ids.length === 0) {
+          expect(section).toBeNull();
+        }
+      }
+      if (categories.includes("other")) {
+        expect(
+          [...container.querySelectorAll(".plugin-catalog-chip")].map((chip) =>
+            chip.textContent?.trim(),
+          ),
+        ).not.toContain("Other");
+        expect(container.querySelector('[data-plugin-id="matched"]')).not.toBeNull();
+        expect(container.querySelector('[data-plugin-id="other-plugin"]')).toBeNull();
+        render(renderPluginCatalogResults({ ...props, query: "plugin" }), container);
+        for (const id of ["other-plugin", "uncategorized-plugin"]) {
+          expect(container.querySelector(`[data-plugin-id="${id}"]`)).not.toBeNull();
+        }
+      }
     },
   );
 
-  it("shows initials when a package icon cannot decode, then accepts a new icon", async () => {
-    const entry = plugin("slack", {
-      catalog: {
-        name: "Slack",
-        categories: ["channels"],
-        official: true,
-        imageUrl: "https://example.com/icon.png",
-      },
-    });
-    const props = baseProps({
-      query: "slack",
-      result: { items: [entry] },
-      iconUrls: { "https://example.com/icon.png": "blob:broken" },
-    });
-    const container = mount(props);
-    container.querySelector(".plugin-catalog-card__art img")!.dispatchEvent(new Event("error"));
-    await vi.waitFor(() =>
-      expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull(),
-    );
-    expect(
-      container
-        .querySelector(".plugin-catalog-card__art .plugins-tile--fallback")
-        ?.textContent?.trim(),
-    ).toBe("SL");
-    render(renderPluginCatalogResults(props), container);
-    expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull();
-    render(
-      renderPluginCatalogResults({
-        ...props,
-        iconUrls: { "https://example.com/icon.png": "blob:repaired" },
-      }),
-      container,
-    );
-    expect(container.querySelector(".plugin-catalog-card__art img")?.getAttribute("src")).toBe(
-      "blob:repaired",
-    );
-  });
-
-  it("uses white tiles for official catalog images without styling placeholders or community icons", () => {
-    const imageUrl = "https://example.com/icon.png";
-    const container = mount(
-      baseProps({
-        result: {
-          items: [
-            plugin("official", {
-              catalog: { name: "Official", official: true, categories: ["channels"], imageUrl },
-            }),
-            plugin("community", {
-              catalog: { name: "Community", official: false, categories: ["channels"], imageUrl },
-            }),
-            plugin("missing"),
-          ],
-        },
-        iconUrls: { [imageUrl]: "blob:icon" },
-      }),
-    );
-
-    expect(
-      container.querySelector(
-        '.plugin-catalog-card[data-plugin-id="official"] .plugins-tile--white',
-      ),
-    ).not.toBeNull();
-    expect(
-      container.querySelector(
-        '.plugin-catalog-card[data-plugin-id="community"] .plugins-tile--white',
-      ),
-    ).toBeNull();
-    expect(
-      container.querySelector(
-        '.plugin-catalog-card[data-plugin-id="missing"] .plugins-tile--white',
-      ),
-    ).toBeNull();
-  });
-
-  it("caps grouped sections at two desktop rows and opens the selected category", () => {
-    const onCategoryChange = vi.fn();
-    const container = mount(
-      baseProps({
-        result: { items: Array.from({ length: 10 }, (_, index) => plugin(`tool-${index}`)) },
-        onCategoryChange,
-      }),
-    );
-    const tools = container.querySelector('[data-catalog-section="tools"]');
-
-    expect(tools?.querySelectorAll(".plugin-catalog-card")).toHaveLength(8);
-    expect(tools?.classList.contains("plugin-catalog-section--expandable")).toBe(true);
-    tools?.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")?.click();
-    expect(onCategoryChange).toHaveBeenCalledWith("tools");
-  });
-
-  it("hides Other and Uncategorized from the homepage and category navigation while retaining search", () => {
-    const other = plugin("other-plugin", {
-      catalog: { name: "Other plugin", official: false, categories: ["other"] },
-    });
-    const uncategorized = plugin("uncategorized-plugin", {
-      catalog: { name: "Uncategorized plugin", official: false, categories: [] },
-    });
-    const props = baseProps({
-      categories: [
-        ...baseProps().categories,
-        { slug: "other", label: "Other", description: "Other", icon: "package", order: 99 },
-      ],
-      result: { items: [plugin("matched"), other, uncategorized] },
-    });
-    const container = mount(props);
-    expect(container.querySelector('[data-catalog-section="other"]')).toBeNull();
-    expect(container.querySelector('[data-catalog-section="uncategorized"]')).toBeNull();
-    expect(
-      [...container.querySelectorAll(".plugin-catalog-chip")].map((chip) =>
-        chip.textContent?.trim(),
-      ),
-    ).not.toContain("Other");
-    expect(container.querySelector('[data-plugin-id="matched"]')).not.toBeNull();
-    expect(container.querySelector('[data-plugin-id="other-plugin"]')).toBeNull();
-    render(renderPluginCatalogResults({ ...props, query: "plugin" }), container);
-    expect(container.querySelector('[data-plugin-id="other-plugin"]')).not.toBeNull();
-    expect(container.querySelector('[data-plugin-id="uncategorized-plugin"]')).not.toBeNull();
-  });
-
-  it("shows model providers in both their purpose and derived Media shelves", () => {
-    const providers = ["novita", "zai"].map((id) =>
-      plugin(id, {
-        catalog: {
-          name: id === "zai" ? "Z.AI" : "Novita",
-          official: true,
-          categories: ["models", "media"],
-        },
-      }),
-    );
-    const plain = plugin("text-only", {
-      catalog: { name: "Text only", official: true, categories: ["models"] },
-    });
-    const container = mount(
-      baseProps({
-        featured: [],
-        trending: [],
-        result: { items: [...providers, plain] },
-        categories: [
-          {
-            slug: "models",
-            label: "Models",
-            description: "Model providers",
-            icon: "brain",
-            order: 0,
-          },
-          {
-            slug: "media",
-            label: "Media",
-            description: "Media providers",
-            icon: "palette",
-            order: 1,
-          },
-        ],
-      }),
-    );
-    for (const id of ["novita", "zai"]) {
-      expect(
-        container.querySelectorAll('[data-catalog-section="models"] [data-plugin-id="' + id + '"]'),
-      ).toHaveLength(1);
-      expect(
-        container.querySelectorAll('[data-catalog-section="media"] [data-plugin-id="' + id + '"]'),
-      ).toHaveLength(1);
-    }
-    expect(
-      container.querySelector('[data-catalog-section="media"] [data-plugin-id="text-only"]'),
-    ).toBeNull();
-  });
-
-  it("orders each category by its own pins before downloads and truncation", () => {
+  it("orders and caps each category before opening its full results", () => {
     const items = Array.from({ length: 9 }, (_, index) =>
       plugin(`popular-${index}`, {
         catalog: {
@@ -507,7 +368,13 @@ describe("renderPluginCatalogResults", () => {
         categoryRanks: { tools: 0 },
       },
     });
-    const container = mount(baseProps({ result: { items: [...items, pinned] } }));
+    const onCategoryChange = vi.fn();
+    const container = mount(baseProps({ result: { items: [...items, pinned] }, onCategoryChange }));
+    const tools = container.querySelector('[data-catalog-section="tools"]')!;
+    expect(tools.querySelectorAll(".plugin-catalog-card")).toHaveLength(8);
+    expect(tools.classList.contains("plugin-catalog-section--expandable")).toBe(true);
+    tools.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    expect(onCategoryChange).toHaveBeenCalledWith("tools");
     expect(
       [
         ...container.querySelectorAll<HTMLElement>(
@@ -526,53 +393,38 @@ describe("renderPluginCatalogResults", () => {
     ]);
   });
 
-  it("shows exactly one top-right status or install action and omits download counts", async () => {
-    const onInstall = vi.fn();
+  it("keeps one action per card while an install publishes before its final response", async () => {
     const installed = plugin("installed", {
-      local: {
-        present: true,
-        installed: true,
-        enabled: true,
-        state: "enabled",
-        pluginId: "installed",
-        action: "manage",
-      },
-    });
-    const available = plugin("available");
-    const container = mount(
-      baseProps({ query: "result", result: { items: [installed, available] }, onInstall }),
-    );
-
-    const installedCard = container.querySelector('[data-plugin-id="installed"]');
-    const installedAction = installedCard?.querySelector(".plugin-catalog-card__action");
-    expect(installedAction?.querySelector('[aria-label="Enabled"]')).not.toBeNull();
-    expect(installedCard?.querySelector("button")).toBeNull();
-    const availableCard = container.querySelector('[data-plugin-id="available"]');
-    const availableAction = availableCard?.querySelector(".plugin-catalog-card__action");
-    await availableAction?.querySelector("openclaw-plugin-install-action")?.updateComplete;
-    expect(availableAction?.querySelectorAll("button")).toHaveLength(1);
-    expect(container.querySelector(".plugin-download-count")).toBeNull();
-    availableAction?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onInstall).toHaveBeenCalledWith("available");
-  });
-
-  it("retains install progress when the catalog publishes installed status before the final response", async () => {
-    const entry = plugin("published", {
       local: { present: true, installed: true, enabled: true, state: "enabled", action: "manage" },
     });
-    const props = baseProps({ query: "published", result: { items: [entry] } });
+    const props = baseProps({
+      query: "result",
+      result: { items: [installed, plugin("available")] },
+    });
     const container = mount({
       ...props,
-      installProgress: new Map([["install:published", { startedAt: Date.now(), activities: [] }]]),
+      installProgress: new Map([["install:installed", { startedAt: Date.now(), activities: [] }]]),
     });
-    const action = container.querySelector("openclaw-plugin-install-action");
+    const installedCard = container.querySelector('[data-plugin-id="installed"]')!;
+    const action = installedCard.querySelector("openclaw-plugin-install-action");
     await action?.updateComplete;
     expect(action?.textContent).toContain("Installing");
-    expect(container.querySelector('[aria-label="Enabled"]')).toBeNull();
+    expect(installedCard.querySelector('[aria-label="Enabled"]')).toBeNull();
     action?.querySelector("button")?.click();
     expect(props.onInstall).not.toHaveBeenCalled();
     render(renderPluginCatalogResults(props), container);
-    expect(container.querySelector("openclaw-plugin-install-action")).toBeNull();
-    expect(container.querySelector('[aria-label="Enabled"]')).not.toBeNull();
+    expect(installedCard.querySelector("openclaw-plugin-install-action")).toBeNull();
+    expect(
+      installedCard.querySelector('.plugin-catalog-card__action [aria-label="Enabled"]'),
+    ).not.toBeNull();
+    expect(installedCard.querySelector("button")).toBeNull();
+    const available = container.querySelector(
+      '[data-plugin-id="available"] .plugin-catalog-card__action',
+    )!;
+    await available.querySelector("openclaw-plugin-install-action")?.updateComplete;
+    expect(available.querySelectorAll("button")).toHaveLength(1);
+    expect(container.querySelector(".plugin-download-count")).toBeNull();
+    available.querySelector<HTMLButtonElement>("button")!.click();
+    expect(props.onInstall).toHaveBeenCalledWith("available");
   });
 });

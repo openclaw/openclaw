@@ -1,4 +1,3 @@
-// Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import {
@@ -15,12 +14,6 @@ import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
 
 type PortProcess = { pid: number; command?: string };
-
-type ForceFreePortResult = {
-  killed: PortProcess[];
-  waitedMs: number;
-  escalatedToSigkill: boolean;
-};
 
 type BeforePortSignal = (context: { port: number; pid?: number; signal: NodeJS.Signals }) => void;
 
@@ -245,15 +238,6 @@ function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-export function forceFreePort(
-  port: number,
-  opts: { beforeSignal?: BeforePortSignal } = {},
-): PortProcess[] {
-  const listeners = listPortListeners(port);
-  killPids(port, listeners, "SIGTERM", opts.beforeSignal);
-  return listeners;
-}
-
 function killPids(
   port: number,
   listeners: PortProcess[],
@@ -288,7 +272,7 @@ export async function forceFreePortAndWait(
     /** Last-moment ownership guard invoked before each destructive signal. */
     beforeSignal?: BeforePortSignal;
   } = {},
-): Promise<ForceFreePortResult> {
+) {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
   const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 100);
   const sigtermTimeoutMs = Math.min(
@@ -300,7 +284,7 @@ export async function forceFreePortAndWait(
   let useFuserFallback = false;
 
   try {
-    killed = forceFreePort(port, opts.beforeSignal ? { beforeSignal: opts.beforeSignal } : {});
+    killed = listPortListeners(port);
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
@@ -312,6 +296,10 @@ export async function forceFreePortAndWait(
     }
     useFuserFallback = true;
     killed = killPortWithFuser(port, "SIGTERM", opts.beforeSignal);
+  }
+  // Signal and ownership errors must propagate without switching cleanup tools.
+  if (!useFuserFallback) {
+    killPids(port, killed, "SIGTERM", opts.beforeSignal);
   }
 
   if (killed.length === 0) {

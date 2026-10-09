@@ -482,6 +482,9 @@ describe("findSettingsSearchBlocks", () => {
 
   it.each([
     ["language", "Language", "#settings-language"],
+    ["favicon", "Browser tab icon", "#settings-appearance-tab-icon"],
+    ["browser tab icon", "Browser tab icon", "#settings-appearance-tab-icon"],
+    ["agent avatar", "Browser tab icon", "#settings-appearance-tab-icon"],
     ["typography", "Typography", "#settings-appearance-typography"],
     ["font", "Typography", "#settings-appearance-typography"],
     ["typeface", "Typography", "#settings-appearance-typography"],
@@ -546,7 +549,7 @@ describe("findSettingsSearchBlocks", () => {
         value: null,
         uiHints: {},
         identityAvailable,
-      });
+      }).filter((entry) => entry.hash === "#settings-profile-identity");
 
     expect(search(false)).toEqual([]);
     expect(search(true)).toEqual([

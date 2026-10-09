@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/mxc-sandbox",
-  "version": "2026.9.7",
+  "version": "2026.9.9",
   "description": "OpenClaw MXC sandbox execution plugin for MXC-capable hosts",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "dependencies": {
-    "@microsoft/mxc-sdk": "0.8.0",
+    "@microsoft/mxc-sdk": "0.9.0",
     "zod": "4.6.5"
   },
   "openclaw": {
@@ -25,10 +25,10 @@
       "minHostVersion": ">=2026.6.11"
     },
     "compat": {
-      "pluginApi": ">=2026.9.7"
+      "pluginApi": ">=2026.9.9"
     },
     "build": {
-      "openclawVersion": "2026.9.7",
+      "openclawVersion": "2026.9.9",
       "bundledDist": false,
       "staticAssets": [
         {

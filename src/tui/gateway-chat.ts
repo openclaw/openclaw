@@ -52,11 +52,10 @@ import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
-  type EdgeAuthHeadersConfig,
 } from "../gateway/edge-auth.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -65,6 +64,7 @@ import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import {
+  readTuiGatewayModelCatalog,
   refreshTuiGatewayModelCatalog,
   type GatewayModelCatalogEntry,
 } from "./gateway-chat-models.js";
@@ -74,6 +74,7 @@ import type {
   TuiBackend,
   TuiEvent,
   TuiModelChoice,
+  TuiModelCatalogScope,
   TuiApprovalDecision,
   TuiSessionList,
   TuiSessionDescription,
@@ -137,7 +138,7 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 
 async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boolean> {
   try {
-    const identity = loadDeviceIdentityIfPresent();
+    const identity = await loadDeviceIdentityIfPresentAsync();
     return Boolean(
       identity &&
       (
@@ -171,12 +172,12 @@ export class GatewayChatClient implements TuiBackend {
   private readonly historyLifetime = new AbortController();
   private ready = createDeferredCore();
   private pendingConnectError?: Error;
-  private readonly modelCatalogs = new Map<string | undefined, GatewayModelCatalogEntry>();
+  private readonly modelCatalogs = new Map<string, GatewayModelCatalogEntry>();
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
   onEvent?: (evt: TuiEvent) => void;
-  onModelsChanged?: (agentId?: string) => void;
+  onModelsChanged?: (scope: TuiModelCatalogScope) => void;
   onConnected?: () => void;
   onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
@@ -460,7 +461,7 @@ export class GatewayChatClient implements TuiBackend {
 
   async listAgents() {
     const result = await this.client.request<TuiAgentsList>("agents.list", {});
-    if (!this.modelCatalogs.has(result.defaultId)) {
+    if (!this.getKnownModels({ agentId: result.defaultId })) {
       void this.listModels({ agentId: result.defaultId }).catch(() => {});
     }
     return result;
@@ -519,15 +520,17 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request("status");
   }
 
-  getKnownModels(opts?: { agentId?: string }): TuiModelChoice[] | undefined {
-    return this.modelCatalogs.get(opts?.agentId)?.models;
+  getKnownModels(opts: TuiModelCatalogScope = {}): TuiModelChoice[] | undefined {
+    return readTuiGatewayModelCatalog(this.modelCatalogs, opts, this.hello?.features.capabilities);
   }
 
-  listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
+  listModels(opts: TuiModelCatalogScope = {}): Promise<TuiModelChoice[]> {
     return refreshTuiGatewayModelCatalog({
       catalogs: this.modelCatalogs,
       client: this.client,
-      agentId: opts?.agentId,
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+      capabilities: this.hello?.features.capabilities,
       published:
         this.hello?.features.capabilities?.includes(GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG) ===
         true,
@@ -546,17 +549,22 @@ export class GatewayChatClient implements TuiBackend {
     if (!clear && !refresh && !scope) {
       return;
     }
-    for (const [agentId, entry] of this.modelCatalogs) {
-      if (scope && (scope.agentId !== agentId || scope.sessionKey || scope.authProfileId)) {
+    for (const entry of this.modelCatalogs.values()) {
+      if (
+        scope &&
+        (scope.authProfileId ||
+          scope.agentId !== entry.scope.agentId ||
+          (scope.sessionKey && scope.sessionKey !== entry.scope.sessionKey))
+      ) {
         continue;
       }
       // An invalidation must not wait behind, or be overwritten by, an older held request.
       entry.pending = undefined;
       if (clear) {
         entry.models = undefined;
-        this.onModelsChanged?.(agentId);
+        this.onModelsChanged?.(entry.scope);
       }
-      void this.listModels({ agentId }).catch(() => {});
+      void this.listModels(entry.scope).catch(() => {});
     }
   }
 
@@ -635,6 +643,19 @@ export class GatewayChatClient implements TuiBackend {
   }
 }
 
+function resolveTuiEdgeAuthHeaders(
+  config: OpenClawConfig,
+  targetUrl: string,
+  env: NodeJS.ProcessEnv,
+) {
+  return resolveEdgeAuthHeaders({
+    config,
+    value: normalizeEdgeAuthHeadersConfig(gatewayEdgeAuthValueForTarget({ config, targetUrl })),
+    targetUrl,
+    env,
+  });
+}
+
 /**
  * Preserve a pre-probed Gateway route across an in-process handoff. This path
  * deliberately ignores global config and Gateway env overrides, including
@@ -649,15 +670,7 @@ async function resolveBoundGatewayConnection(
     ignoreEnvUrlOverride: true,
   }).url;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
-    gatewayEdgeAuthValueForTarget({ config: opts.config, targetUrl: url }),
-  );
-  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
-    config: opts.config,
-    value: edgeAuthConfig,
-    targetUrl: url,
-    env: process.env,
-  });
+  const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(opts.config, url, process.env);
   const { deviceAuthScope, sshTunnel } = resolveGatewayDeviceAuthRoute({
     config: opts.config,
     url,
@@ -735,15 +748,7 @@ async function resolveGatewayConnection(
   if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
-  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
-    gatewayEdgeAuthValueForTarget({ config, targetUrl: bootstrap.url }),
-  );
-  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
-    config,
-    value: edgeAuthConfig,
-    targetUrl: bootstrap.url,
-    env,
-  });
+  const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);
   return {
     url: bootstrap.url,
     deviceAuthScope: bootstrap.deviceAuthScope,

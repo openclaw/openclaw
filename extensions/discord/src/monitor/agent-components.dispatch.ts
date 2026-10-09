@@ -12,7 +12,10 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  readSessionUpdatedAtAsync,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -30,10 +33,7 @@ import {
   resolveDiscordGuildEntry,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
-import {
-  buildDiscordGroupSystemPrompt,
-  buildDiscordInboundAccessContext,
-} from "./inbound-context.js";
+import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { buildDiscordConversationRouteContext } from "./route-resolution.js";
@@ -60,16 +60,6 @@ function buildDiscordComponentConversationLabel(params: {
   });
 }
 
-function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionContext) {
-  if (interactionCtx.isDirectMessage) {
-    return "direct";
-  }
-  if (interactionCtx.isGroupDm) {
-    return "group";
-  }
-  return "channel";
-}
-
 export async function dispatchDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -84,12 +74,7 @@ export async function dispatchDiscordComponentEvent(params: {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
   const route = resolveAgentComponentRoute({
     ctx,
-    rawGuildId: interactionCtx.rawGuildId,
-    memberRoleIds: interactionCtx.memberRoleIds,
-    isDirectMessage: interactionCtx.isDirectMessage,
-    isGroupDm: interactionCtx.isGroupDm,
-    userId: interactionCtx.userId,
-    channelId: interactionCtx.channelId,
+    ...interactionCtx,
     parentId: channelCtx.parentId,
   });
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
@@ -100,7 +85,11 @@ export async function dispatchDiscordComponentEvent(params: {
     interaction,
     channelCtx,
   });
-  const chatType = resolveDiscordComponentChatType(interactionCtx);
+  const chatType = interactionCtx.isDirectMessage
+    ? "direct"
+    : interactionCtx.isGroupDm
+      ? "group"
+      : "channel";
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
@@ -108,7 +97,6 @@ export async function dispatchDiscordComponentEvent(params: {
     !interactionCtx.isDirectMessage && channelCtx.displayChannelSlug
       ? `#${channelCtx.displayChannelSlug}`
       : undefined;
-  const groupSubject = interactionCtx.isDirectMessage ? undefined : groupChannel;
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId: interactionCtx.channelId,
@@ -120,14 +108,13 @@ export async function dispatchDiscordComponentEvent(params: {
     scope: channelCtx.isThread ? "thread" : "channel",
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
-  const { ownerAllowFrom } = buildDiscordInboundAccessContext({
+  const { ownerAllowFrom, groupSystemPrompt } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
     allowNameMatching,
     isGuild: !interactionCtx.isDirectMessage,
   });
-  const groupSystemPrompt = buildDiscordGroupSystemPrompt(channelConfig);
   const pinnedMainDmOwner = interactionCtx.isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: ctx.cfg.session?.dmScope,
@@ -148,7 +135,7 @@ export async function dispatchDiscordComponentEvent(params: {
   });
   const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
+  const previousTimestamp = await readSessionUpdatedAtAsync({
     storePath,
     sessionKey,
   });
@@ -203,7 +190,7 @@ export async function dispatchDiscordComponentEvent(params: {
     SenderId: interactionCtx.userId,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
-    GroupSubject: groupSubject,
+    GroupSubject: groupChannel,
     GroupChannel: groupChannel,
     MemberRoleIds: interactionCtx.memberRoleIds,
     GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
@@ -225,7 +212,6 @@ export async function dispatchDiscordComponentEvent(params: {
   });
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
-  const typingChannelId = interactionCtx.channelId;
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "discord",
@@ -334,7 +320,7 @@ export async function dispatchDiscordComponentEvent(params: {
           onReplyStart: async () => {
             try {
               const { sendTyping } = await loadTypingRuntime();
-              await sendTyping({ rest: feedbackRest, channelId: typingChannelId });
+              await sendTyping({ rest: feedbackRest, channelId: interactionCtx.channelId });
             } catch (err) {
               logVerbose(`discord: typing failed for component reply: ${String(err)}`);
             }

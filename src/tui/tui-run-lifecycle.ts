@@ -38,6 +38,7 @@ type TuiRunLifecycleContext = {
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
   clearLocalBtwRunIds?: () => void;
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
   localMode?: boolean;
 };
@@ -92,11 +93,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
-    const pending = pendingTerminalLifecycleErrors.get(runId);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending);
+    clearTimeout(pendingTerminalLifecycleErrors.get(runId));
     pendingTerminalLifecycleErrors.delete(runId);
   };
 
@@ -199,12 +196,6 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     clearPendingSubmitDraft(state, runId);
   };
 
-  const clearActiveRunIfMatch = (runId: string) => {
-    if (state.activeChatRunId === runId) {
-      state.activeChatRunId = null;
-    }
-  };
-
   const promoteMostRecentSessionRun = (): boolean => {
     if (state.activeChatRunId) {
       return false;
@@ -290,7 +281,9 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     params: { runId: string; wasActiveRun: boolean; status: "idle" | "aborted" | "error" },
     reconcileIdle: boolean,
   ) => {
-    clearActiveRunIfMatch(params.runId);
+    if (state.activeChatRunId === params.runId) {
+      state.activeChatRunId = null;
+    }
     const promotedRemainingRun = promoteMostRecentSessionRun();
     flushPendingHistoryRefreshIfIdle();
     if (!promotedRemainingRun) {

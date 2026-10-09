@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -7,24 +8,25 @@ import {
   type SessionFileEntry,
   type SessionsFilesGetParams,
   type SessionsFilesListParams,
+  type SessionsFilesAssetsParams,
+  validateSessionsFilesAssetsParams,
   validateSessionsFilesRevealParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { LruCache } from "../../infra/lru-cache.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
 } from "../session-transcript-read-target.js";
-import {
-  readSessionTranscriptVisibleMessageDeltaCore,
-  type SessionTranscriptReadScope,
-} from "../session-transcript-readers.js";
+import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
@@ -35,9 +37,15 @@ import {
   resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
-import { getRepositoryArtifact, listRepositoryArtifacts } from "./session-repository-artifacts.js";
+import { createSessionFileReadAuthority } from "./session-file-read-authority.js";
+import {
+  getRepositoryArtifact,
+  listRepositoryArtifacts,
+  resolveRepositoryArtifactPath,
+} from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
+import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -66,24 +74,9 @@ const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
 const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
 // Request latency must not scale with transcript size: delta resets rebuild the
 // fold, while this process-local LRU cap bounds retained session state.
-const touchedFilesCache = new Map<string, TouchedFilesCacheEntry>();
+const touchedFilesCache = new LruCache<TouchedFilesCacheEntry>(TOUCHED_FILES_CACHE_LIMIT);
 // Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
 const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
-
-function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined {
-  const cached = touchedFilesCache.get(key);
-  if (cached) {
-    touchedFilesCache.delete(key);
-    touchedFilesCache.set(key, cached);
-  }
-  return cached;
-}
-
-function writeTouchedFilesCache(key: string, entry: TouchedFilesCacheEntry): void {
-  touchedFilesCache.delete(key);
-  touchedFilesCache.set(key, entry);
-  pruneMapToMaxSize(touchedFilesCache, TOUCHED_FILES_CACHE_LIMIT);
-}
 
 function sessionFilesError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
@@ -148,14 +141,6 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
 }
 
-function isToolCallBlockType(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.toLowerCase().replace(/[_-]/g, "");
-  return normalized === "toolcall" || normalized === "tooluse";
-}
-
 function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
   const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
@@ -163,7 +148,11 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
   }
   for (const blockValue of record.content) {
     const block = asOptionalObjectRecord(blockValue);
-    if (!block || !isToolCallBlockType(block.type)) {
+    if (!block || typeof block.type !== "string") {
+      continue;
+    }
+    const type = block.type.toLowerCase().replace(/[_-]/g, "");
+    if (type !== "toolcall" && type !== "tooluse") {
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
@@ -189,47 +178,45 @@ async function foldSqliteTouchedFiles(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<Map<string, TouchedFile>> {
-  let cached = readTouchedFilesCache(cacheKey);
-  let cursor = cached?.cursor;
-  let files = cached?.files ?? new Map<string, TouchedFile>();
-  let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
+  return withSessionTranscriptDeltaReader(scope, async (reader) => {
+    const cached = touchedFilesCache.get(cacheKey);
+    let cursor = cached?.cursor;
+    let files = cached?.files ?? new Map<string, TouchedFile>();
+    let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
-  while (true) {
-    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
-      ...(cursor ? { cursor } : {}),
-      maxBytes,
-      maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
-    });
-    if (delta.kind === "missing") {
-      touchedFilesCache.delete(cacheKey);
-      return new Map();
-    }
-    if (delta.kind === "reset") {
-      cached = { cursor: delta.cursor, files: new Map() };
-      cursor = cached.cursor;
-      files = cached.files;
-      writeTouchedFilesCache(cacheKey, cached);
-      continue;
-    }
-    for (const event of delta.events) {
-      const message = sqliteMessageEventWithSeq(event);
-      if (message !== undefined) {
-        collectTouchedFilesFromMessage(message, files);
+    while (true) {
+      const delta = await reader.visible({
+        ...(cursor ? { cursor } : {}),
+        maxBytes,
+        maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
+      });
+      if (delta.kind === "missing") {
+        touchedFilesCache.delete(cacheKey);
+        return new Map();
       }
+      if (delta.kind === "reset") {
+        cursor = delta.cursor;
+        files = new Map();
+        touchedFilesCache.set(cacheKey, { cursor, files });
+        continue;
+      }
+      for (const event of delta.events) {
+        const message = sqliteMessageEventWithSeq(event);
+        if (message !== undefined) {
+          collectTouchedFilesFromMessage(message, files);
+        }
+      }
+      cursor = delta.cursor;
+      touchedFilesCache.set(cacheKey, { cursor, files });
+      if (!delta.hasMore) {
+        return files;
+      }
+      if (delta.requiredBytes !== undefined) {
+        maxBytes = delta.requiredBytes;
+      }
+      await nextTurn();
     }
-    cached = { cursor: delta.cursor, files };
-    cursor = cached.cursor;
-    writeTouchedFilesCache(cacheKey, cached);
-    if (!delta.hasMore) {
-      return files;
-    }
-    if (delta.requiredBytes !== undefined) {
-      maxBytes = delta.requiredBytes;
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
+  });
 }
 
 async function loadSqliteTouchedFiles(
@@ -271,14 +258,8 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
 }
 
 /**
- * Canonical workspace root of a session that lives on this Gateway's own disk.
- * Workspace identity surfaces must name the same directory the file routes
- * open, so they read it from here instead of re-deriving the precedence.
- *
- * An exec-node session's directory only exists on the remote host, while the
- * precedence below falls back to the local agent workspace — returning that
- * would describe the wrong machine. `sessions.files.reveal` refuses the same
- * case; callers here get "no local root" and their own absent-workspace path.
+ * Reuse file-route workspace precedence, excluding remote-owned roots.
+ * Exec-node sessions can otherwise fall back to a local agent directory.
  */
 export function resolveLocalSessionWorkspaceRoot(params: {
   sessionKey: string;
@@ -290,14 +271,12 @@ export function resolveLocalSessionWorkspaceRoot(params: {
     : loaded.root;
 }
 
-async function loadSessionFiles(params: {
-  sessionKey: string;
-  agentId?: string;
-  context: GatewayRequestContext;
-}): Promise<
+async function loadSessionFiles(
+  loaded: ReturnType<typeof loadSessionFileRoot>,
+  context: GatewayRequestContext,
+): Promise<
   LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
-  const loaded = loadSessionFileRoot(params);
   const { storePath, entry, canonicalKey, agentId } = loaded;
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
@@ -322,7 +301,7 @@ async function loadSessionFiles(params: {
       async () => {},
     );
   }
-  const repository = await resolveRepositoryWorkspaceAccess(loaded, params.context);
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
   const scope = {
     agentId,
     sessionEntry: entry,
@@ -351,11 +330,14 @@ async function loadSessionFiles(params: {
   };
 }
 
-function respondSessionFileNotFound(respond: RespondFn, filePath: string) {
+function respondSessionFileNotFound(respond: RespondFn, filePath: string, reason?: string) {
   respond(
     false,
     undefined,
-    sessionFilesError("session_file_not_found", "session file not found", { path: filePath }),
+    sessionFilesError("session_file_not_found", "session file not found", {
+      path: filePath,
+      ...(reason ? { reason } : {}),
+    }),
   );
 }
 
@@ -393,7 +375,8 @@ async function handleSessionFilesRead(
   options: GatewayRequestHandlerOptions,
   request:
     | { kind: "list"; params: SessionsFilesListParams }
-    | { kind: "get"; params: SessionsFilesGetParams },
+    | { kind: "get"; params: SessionsFilesGetParams }
+    | { kind: "assets"; params: SessionsFilesAssetsParams },
 ): Promise<void> {
   const { respond, context } = options;
   const { params } = request;
@@ -409,12 +392,24 @@ async function handleSessionFilesRead(
   const read = retainSessionScopedRead(options, params.sessionKey, agentId, {
     requireMaterialized: true,
   });
+  const source = loadSessionFileRoot({ ...params, agentId });
+  const hostRead = createSessionFileReadAuthority(options, { ...source, agentId });
   try {
-    const loaded = await loadSessionFiles({ ...params, agentId, context });
+    const loaded = await loadSessionFiles(source, context);
     read?.assertCurrent();
+    if (
+      request.kind !== "list" &&
+      loaded.repository?.kind === "stored" &&
+      resolveRepositoryArtifactPath(request.params.path) === undefined
+    ) {
+      respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
+      return;
+    }
     let result:
       | Awaited<ReturnType<typeof listSessionWorkspaceFiles>>
-      | Awaited<ReturnType<typeof getSessionWorkspaceFile>>;
+      | Awaited<ReturnType<typeof getSessionWorkspaceFile>>
+      | Awaited<ReturnType<typeof getSessionWorkspaceAssets>>;
+    let failure: (() => void) | undefined;
     if (request.kind === "list") {
       const query = {
         files: loaded.files,
@@ -430,7 +425,29 @@ async function handleSessionFilesRead(
                 ...loaded,
                 ...query,
                 assertCurrent: () => read?.assertCurrent(),
+                authorizeHostRead: hostRead.authorizeHostRead,
               });
+      read?.assertCurrent();
+    } else if (request.kind === "assets") {
+      const repository = loaded.repository;
+      result = await getSessionWorkspaceAssets({
+        ...loaded,
+        path: request.params.path,
+        refs: request.params.refs,
+        authorizeHostRead: hostRead.authorizeHostRead,
+        assertCurrent: () => read?.assertCurrent(),
+        ...(repository
+          ? {
+              repositoryFile: async (path: string) => {
+                const repositoryResult =
+                  repository.kind === "stored"
+                    ? await getRepositoryArtifact(repository, path)
+                    : await repository.inspect("get", { path, files: loaded.files });
+                return repositoryResult.file;
+              },
+            }
+          : {}),
+      });
       read?.assertCurrent();
     } else {
       const query = { files: loaded.files, path: request.params.path };
@@ -443,30 +460,63 @@ async function handleSessionFilesRead(
                 ...loaded,
                 ...query,
                 assertCurrent: () => read?.assertCurrent(),
+                authorizeHostRead: hostRead.authorizeHostRead,
               });
       read?.assertCurrent();
       const { file } = fileResult;
       if (!file || file.missing) {
-        respondSessionFileNotFound(respond, request.params.path);
-        return;
-      }
-      if (typeof file.content !== "string" && file.previewKind !== "unsupported") {
-        respondSessionFileTooLarge(respond, file, request.params.path);
-        return;
+        failure = () =>
+          respondSessionFileNotFound(
+            respond,
+            request.params.path,
+            "reason" in fileResult && fileResult.reason === "outside_session_boundary"
+              ? "outside_session_boundary"
+              : undefined,
+          );
+      } else if (typeof file.content !== "string" && file.previewKind !== "unsupported") {
+        failure = () => respondSessionFileTooLarge(respond, file, request.params.path);
       }
       result = fileResult;
     }
-    respond(true, {
-      sessionKey: params.sessionKey,
-      ...result,
-      ...(loaded.repository ? { root: undefined } : {}),
-    });
+    const publish =
+      failure ??
+      (() =>
+        respond(
+          true,
+          request.kind === "assets"
+            ? result
+            : {
+                sessionKey: params.sessionKey,
+                ...result,
+                ...(loaded.repository ? { root: undefined } : {}),
+              },
+        ));
+    if (hostRead.hasHostRead()) {
+      await hostRead.withCurrent(publish);
+    } else {
+      publish();
+    }
+  } catch (error) {
+    if (!hostRead.hasHostRead() || !(error instanceof SessionMutationAuthorizationChangedError)) {
+      throw error;
+    }
+    respondSessionFileNotFound(
+      respond,
+      "path" in params ? (params.path ?? "") : "",
+      "outside_session_boundary",
+    );
   } finally {
+    hostRead.release();
     read?.release();
   }
 }
 
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
+  "sessions.files.assets": defineValidatedGatewayHandler(
+    "sessions.files.assets",
+    validateSessionsFilesAssetsParams,
+    (options) => handleSessionFilesRead(options, { kind: "assets", params: options.params }),
+  ),
   "sessions.files.list": defineValidatedGatewayHandler(
     "sessions.files.list",
     validateSessionsFilesListParams,
@@ -516,35 +566,23 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileNotFound(respond, params.path);
       return;
     }
-    if (update.status === "too-large") {
+    if (update.status !== "updated") {
+      const errors = {
+        "too-large": ["session_file_too_large", "session file content is too large"],
+        conflict: ["session_file_conflict", "session file changed since it was read"],
+        unsafe: ["session_file_unsafe", "session file could not be written safely"],
+      } as const;
+      const [type, message] = errors[update.status];
       respond(
         false,
         undefined,
-        sessionFilesError("session_file_too_large", "session file content is too large", {
-          maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+        sessionFilesError(type, message, {
           path: params.path,
-          size: update.size,
-        }),
-      );
-      return;
-    }
-    if (update.status === "conflict") {
-      respond(
-        false,
-        undefined,
-        sessionFilesError("session_file_conflict", "session file changed since it was read", {
-          path: params.path,
-          currentHash: update.currentHash,
-        }),
-      );
-      return;
-    }
-    if (update.status === "unsafe") {
-      respond(
-        false,
-        undefined,
-        sessionFilesError("session_file_unsafe", "session file could not be written safely", {
-          path: params.path,
+          ...(update.status === "too-large"
+            ? { maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES, size: update.size }
+            : update.status === "conflict"
+              ? { currentHash: update.currentHash }
+              : {}),
         }),
       );
       return;

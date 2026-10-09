@@ -1,6 +1,7 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability } from "./index.ts";
 import { fetchPagedSessionRows } from "./paged-session-rows.ts";
+import type { SessionListSnapshot } from "./session-capability.ts";
 
 // Matches the Gateway default and covers the default 50-child Swarm roster.
 // Custom larger groups keep paging through the bounded retry loop below.
@@ -20,16 +21,16 @@ export async function fetchChildSessionRows(params: {
   sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
   isCurrent: () => boolean;
-  pageSize?: number;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const pageSize = params.pageSize ?? CHILD_SESSION_LIST_PAGE_SIZE;
-  const query = childSessionListQuery(params.parentKey, pageSize);
+  const query = childSessionListQuery(params.parentKey);
+  let pagination: SessionListSnapshot["pagination"];
   const readResult = () => {
     const snapshot = params.sessions.listSnapshot(query);
     if (snapshot.error) {
       throw new Error(snapshot.error);
     }
+    pagination = snapshot.pagination;
     return snapshot.result;
   };
   if (params.initialResult) {
@@ -47,6 +48,7 @@ export async function fetchChildSessionRows(params: {
     },
     initialResult: params.initialResult ? readResult() : undefined,
     resultKind: "window",
+    windowPagination: () => pagination,
     isCurrent: params.isCurrent,
     missingResultError: "child session list returned no result",
     incompletePaginationError: "The child session list kept changing. Try again.",

@@ -87,32 +87,25 @@ describe("meeting transcript migration stage cleanup", () => {
     },
   );
 
-  it("turns a failed stage close into a warning instead of throwing", () => {
+  it.each(["close", "removal"] as const)("turns a failed stage %s into a warning", (failure) => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-cleanup-");
     const databasePath = path.join(stateDir, "stage.sqlite");
-    const database = openLegacyMeetingTranscriptStage(databasePath);
-    database.close();
+    const database =
+      failure === "close" ? openLegacyMeetingTranscriptStage(databasePath) : undefined;
+    if (database) {
+      database.close();
+    } else {
+      fsSync.mkdirSync(databasePath);
+    }
 
     const warnings = disposeLegacyMeetingTranscriptStage({ database, databasePath });
-
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(
-      "Could not close the meeting transcript migration stage database",
-    );
-    expect(fsSync.existsSync(databasePath)).toBe(false);
-  });
-
-  it("turns a failed stage removal into a warning instead of throwing", () => {
-    const stateDir = tempDirs.make("openclaw-meeting-transcripts-cleanup-");
-    const databasePath = path.join(stateDir, "stage.sqlite");
-    fsSync.mkdirSync(databasePath);
-
-    const warnings = disposeLegacyMeetingTranscriptStage({ databasePath });
-
     expect(warnings).toEqual([
       expect.stringContaining(
-        `Could not remove the disposable meeting transcript migration file ${databasePath}`,
+        failure === "close"
+          ? "Could not close the meeting transcript migration stage database"
+          : `Could not remove the disposable meeting transcript migration file ${databasePath}`,
       ),
     ]);
+    expect(fsSync.existsSync(databasePath)).toBe(failure === "removal");
   });
 });

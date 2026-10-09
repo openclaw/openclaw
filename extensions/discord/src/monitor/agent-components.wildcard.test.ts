@@ -1,16 +1,7 @@
 // Discord tests cover agent components.wildcard plugin behavior.
-import { beforeAll, describe, expect, it } from "vitest";
-
-let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
-let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
-let createDiscordComponentControls: typeof import("./agent-components.js").createDiscordComponentControls;
-let createDiscordComponentModal: typeof import("./agent-components.js").createDiscordComponentModal;
-
-beforeAll(async () => {
-  ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } = await import("../components.js"));
-  ({ createDiscordComponentControls, createDiscordComponentModal } =
-    await import("./agent-components.js"));
-});
+import { describe, expect, it } from "vitest";
+import { buildDiscordComponentCustomId, buildDiscordModalCustomId } from "../components.js";
+import { createDiscordComponentControls, createDiscordComponentModal } from "./agent-components.js";
 
 function createWildcardComponents() {
   const context = { cfg: {}, accountId: "default" };

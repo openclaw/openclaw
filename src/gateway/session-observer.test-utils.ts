@@ -41,7 +41,9 @@ export function event(params: {
   };
 }
 
-export function modelMessage(value: Record<string, unknown>) {
+export function modelMessage(
+  value: Record<string, unknown>,
+): Awaited<ReturnType<NonNullable<SessionObserverDeps["completeModel"]>>> {
   return {
     text: JSON.stringify(value),
     provider: "openai",
@@ -50,12 +52,15 @@ export function modelMessage(value: Record<string, unknown>) {
   };
 }
 
-export function preparedModel() {
+export function preparedModel(): Awaited<
+  ReturnType<NonNullable<SessionObserverDeps["prepareModel"]>>
+> {
   return {
     config: cfg,
     provider: "openai",
     model: "gpt-test",
-    outputTextPolicy: "strict-visible" as const,
+    authProfileId: undefined,
+    outputTextPolicy: "strict-visible",
     agentId: "main",
     agentDir: "/tmp/agent",
   };

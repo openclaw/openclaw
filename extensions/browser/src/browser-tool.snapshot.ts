@@ -1,33 +1,33 @@
 /**
- * Browser agent tool snapshot execution and inline page-state feedback.
- *
  * Owns the model-facing snapshot result shape (untrusted-content wrapping,
  * caps, dialog states) and attaches fresh page state to actions that changed
  * the page document so the model does not need a follow-up snapshot call.
  */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { imageResultFromFile } from "openclaw/plugin-sdk/channel-actions";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   formatErrorMessage,
   truncateSanitizedExternalContent,
+  wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
-import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
-import { textResult } from "openclaw/plugin-sdk/tool-results";
-import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
-  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  browserSnapshot,
-  getRuntimeConfig,
-  imageResultFromFile,
   normalizeOptionalString,
   readStringValue,
-  resolveRuntimeImageSanitization,
-  wrapExternalContent,
-} from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
+import { browserSnapshot } from "./browser/client.js";
+import {
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role-snapshot.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 
@@ -183,16 +183,14 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
   return msg.includes("refs=aria") && msg.includes("not support");
 }
 
-/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
+  const { input, target, profile } = params;
   const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
@@ -250,7 +248,7 @@ export async function executeSnapshotAction(params: {
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
-    await browserSnapshot(proxyRequest ?? baseUrl, {
+    await browserSnapshot(target, {
       ...query,
       profile,
       signal: params.signal,
@@ -415,18 +413,16 @@ export async function executeSnapshotAction(params: {
 export async function appendNavigatedPageState(params: {
   result: AgentToolResult<unknown>;
   targetId?: string;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   let snapshot: AgentToolResult<unknown>;
   try {
     snapshot = await executeSnapshotAction({
       input: { targetId: params.targetId, mode: "efficient" },
-      baseUrl: params.baseUrl,
+      target: params.target,
       profile: params.profile,
-      proxyRequest: params.proxyRequest,
       signal: params.signal,
     });
   } catch (err) {

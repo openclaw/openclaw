@@ -226,13 +226,13 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
             : await pollProviderOperationJson<TogetherVideoResponse>({
                 url: `${baseUrl}/videos/${videoId}`,
                 headers,
-                deadline: createProviderOperationDeadline({
-                  timeoutMs: resolveProviderOperationTimeoutMs({
-                    deadline,
-                    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                  }),
-                  label: `Together video generation task ${videoId}`,
-                }),
+                deadline:
+                  deadline.deadlineAtMs === undefined
+                    ? createProviderOperationDeadline({
+                        timeoutMs: DEFAULT_TIMEOUT_MS,
+                        label: `Together video generation task ${videoId}`,
+                      })
+                    : { ...deadline, label: `Together video generation task ${videoId}` },
                 defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
                 fetchFn,
                 maxAttempts: MAX_POLL_ATTEMPTS,

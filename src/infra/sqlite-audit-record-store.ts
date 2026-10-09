@@ -29,22 +29,6 @@ export function createSqliteAuditRecordStore<T>(
       const record = prepare({ key, value, createdAt });
       runOpenClawStateWriteTransaction(({ db }) => kernel(db).upsert(record), options);
     },
-    delete(key: string): void {
-      runOpenClawStateWriteTransaction(({ db }) => kernel(db).delete(key), options);
-    },
-    compareAndSet(
-      key: string,
-      expectedValue: T | null,
-      value: T | null,
-      createdAt = Date.now(),
-    ): boolean {
-      const expectedPayloadJson = expectedValue === null ? null : JSON.stringify(expectedValue);
-      const record = value === null ? null : prepare({ key, value, createdAt });
-      return runOpenClawStateWriteTransaction(
-        ({ db }) => kernel(db).compareAndSet(key, expectedPayloadJson, record),
-        options,
-      );
-    },
     registerLegacyMany(records: readonly SqliteAuditRecordEntry<T>[]): void {
       const prepared = records.map(prepare);
       if (prepared.length === 0) {
@@ -54,9 +38,6 @@ export function createSqliteAuditRecordStore<T>(
         ({ db }) => kernel(db).registerLegacyMany(prepared),
         options,
       );
-    },
-    size(): number {
-      return kernel(openOpenClawStateDatabase(options).db).size();
     },
     entries() {
       return kernel(openOpenClawStateDatabase(options).db).entries();

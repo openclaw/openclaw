@@ -41,11 +41,6 @@ type GatewayReloadLog = {
   error?: (msg: string) => void;
 };
 
-export type GatewayGmailRestartAbortController = {
-  abort: () => void;
-  signal: AbortSignal;
-};
-
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
@@ -114,6 +109,12 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function assertConfigReloadWriteSnapshot(snapshot: ConfigFileSnapshot): void {
+  if (!snapshot.exists || !snapshot.valid) {
+    throw new Error("Config write snapshot is missing or invalid; runtime application refused.");
+  }
+}
+
 export function createReloadCancellationError(superseded: boolean) {
   return superseded
     ? new GatewayConfigReloadSupersededError()
@@ -166,11 +167,11 @@ export type GatewayReloadHandlerParams = {
     changedPaths: readonly string[];
     reloadPluginIds?: ReadonlySet<string>;
     pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
-    /** Fence config consumers before drain; return their publication after successful rollback. */
+    /** Fence execution before drain; retire active facts only when replacement can begin. */
     prepareConfigEffects: (replacement: {
       pluginIds: ReadonlySet<string>;
       channels: ReadonlySet<ChannelKind>;
-    }) => () => Promise<void>;
+    }) => { retire: () => void; rollback: () => Promise<void> };
     commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
@@ -186,8 +187,8 @@ export type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   cronReconciliation: GatewayCronReconciliation;
-  createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
-  clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
+  createGmailRestartAbortController?: () => AbortController;
+  clearGmailRestartAbortController?: (controller: AbortController) => void;
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;

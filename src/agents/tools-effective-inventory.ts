@@ -18,7 +18,8 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
@@ -240,6 +241,9 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
       // The selected provider owner must join the generation before dynamic hooks resolve.
       loadRuntimePlugins: true,
       runtimePluginSelections: [{ provider, modelId, agentId }],
+      // Gateway-hosted reads borrow the admitting Gateway's live plugin instances
+      // instead of synchronously loading another copy on every cold refresh.
+      allowGatewaySubagentBinding: true,
     },
     { catalogMode: "static" },
   );
@@ -300,14 +304,15 @@ export function resolveConfiguredModelCompat(params: {
 }
 
 /** Resolves the grouped effective tool inventory and user-visible filtering notices. */
-export function resolveEffectiveToolInventory(
+export async function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
-): EffectiveToolInventoryResult {
+): Promise<EffectiveToolInventoryResult> {
   const agentId =
     params.agentId?.trim() ||
     resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
+  const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
   const runtimeModelContext =
     Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
       ? {
@@ -337,10 +342,11 @@ export function resolveEffectiveToolInventory(
       agentAccountId: params.accountId,
     });
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
-  const effectiveTools = createOpenClawCodingToolsInternal(
+  const effectiveTools = await createOpenClawCodingToolsInternalAsync(
     {
       ...params,
       conversationCapabilityProfile: capabilityProfile,
+      authProfileStoreSource,
       agentId,
       workspaceDir,
       agentDir,

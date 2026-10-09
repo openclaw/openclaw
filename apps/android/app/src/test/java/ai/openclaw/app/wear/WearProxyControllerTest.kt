@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocolCodec
@@ -215,8 +216,8 @@ class WearProxyControllerTest {
           selectedModelRef = { "openai/gpt-test" },
           agents = {
             listOf(
-              WearProxyAgent(id = "main", name = "Main", emoji = "*"),
-              WearProxyAgent(id = "ops", name = "Ops", emoji = null),
+              GatewayAgentSummary(id = "main", name = "Main", emoji = "*"),
+              GatewayAgentSummary(id = "ops", name = "Ops", emoji = null),
             )
           },
           selectGatewayAgent = { agentId ->
@@ -287,9 +288,9 @@ class WearProxyControllerTest {
           gatewayStatusText = { "Connected" },
           activeAgentId = { activeAgentId },
           agents = {
-            listOf(WearProxyAgent(id = " ", name = "Invalid", emoji = null)) +
+            listOf(GatewayAgentSummary(id = " ", name = "Invalid", emoji = null)) +
               (0..32).map { index ->
-                WearProxyAgent(id = "agent-$index", name = "Agent $index", emoji = null)
+                GatewayAgentSummary(id = "agent-$index", name = "Agent $index", emoji = null)
               }
           },
         )

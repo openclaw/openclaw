@@ -111,7 +111,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
@@ -159,7 +159,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([

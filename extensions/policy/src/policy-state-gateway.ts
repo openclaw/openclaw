@@ -1,4 +1,3 @@
-// Policy plugin gateway exposure evidence.
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyGatewayExposureEvidence } from "./policy-state-types.js";
@@ -54,34 +53,20 @@ export function scanPolicyGatewayExposure(
   });
 
   const controlUi = asNonArrayRecord(gateway.controlUi);
-  pushGatewayBooleanEvidence(
-    entries,
-    "gateway-control-ui-enabled",
-    "controlUi",
-    controlUi.enabled,
-    "oc://openclaw.config/gateway/controlUi/enabled",
-  );
-  pushGatewayBooleanEvidence(
-    entries,
-    "gateway-control-ui-insecure-auth",
-    "controlUi",
-    false,
-    "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
-  );
-  pushGatewayBooleanEvidence(
-    entries,
-    "gateway-control-ui-device-auth-disabled",
-    "controlUi",
-    false,
-    "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
-  );
-  pushGatewayBooleanEvidence(
-    entries,
-    "gateway-control-ui-host-origin-fallback",
-    "controlUi",
-    controlUi.dangerouslyAllowHostHeaderOriginFallback,
-    "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
-  );
+  for (const [suffix, value, source] of [
+    ["enabled", controlUi.enabled, "oc://openclaw.config/gateway/controlUi/enabled"],
+    ["insecure-auth", false, "oc://openclaw.invariant/gateway/controlUi/deviceIdentity"],
+    ["device-auth-disabled", false, "oc://openclaw.invariant/gateway/controlUi/deviceIdentity"],
+    [
+      "host-origin-fallback",
+      controlUi.dangerouslyAllowHostHeaderOriginFallback,
+      "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
+    ],
+  ] as const) {
+    if (typeof value === "boolean") {
+      entries.push({ id: `gateway-control-ui-${suffix}`, kind: "controlUi", source, value });
+    }
+  }
 
   if (typeof tailscale.mode === "string") {
     entries.push({
@@ -127,55 +112,33 @@ export function scanPolicyGatewayExposure(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
-function pushGatewayBooleanEvidence(
-  entries: PolicyGatewayExposureEvidence[],
-  id: string,
-  kind: PolicyGatewayExposureEvidence["kind"],
-  value: unknown,
-  source: string,
-): void {
-  if (typeof value !== "boolean") {
-    return;
-  }
-  entries.push({ id, kind, source, value });
-}
-
 function pushGatewayHttpEndpointEvidence(
   entries: PolicyGatewayExposureEvidence[],
   endpoints: Record<string, unknown>,
   endpoint: "chatCompletions" | "responses",
 ): void {
   const config = endpoints[endpoint];
-  if (!isRecord(config)) {
+  if (!isRecord(config) || config.enabled !== true) {
     return;
   }
   const source = `oc://openclaw.config/gateway/http/endpoints/${endpoint}`;
-  const enabled = config.enabled === true;
-  if (enabled) {
-    entries.push({
-      id: `gateway-http-${endpoint}`,
-      kind: "httpEndpoint",
-      source: `${source}/enabled`,
-      value: true,
-      endpoint,
-    });
+  entries.push({
+    id: `gateway-http-${endpoint}`,
+    kind: "httpEndpoint",
+    source: `${source}/enabled`,
+    value: true,
+    endpoint,
+  });
+  for (const input of endpoint === "chatCompletions" ? ["images"] : ["files", "images"]) {
+    pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, input, config[input]);
   }
-  if (!enabled) {
-    return;
-  }
-  if (endpoint === "chatCompletions") {
-    pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["images"], config.images);
-    return;
-  }
-  pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["files"], config.files);
-  pushGatewayHttpUrlFetchEvidence(entries, source, endpoint, ["images"], config.images);
 }
 
 function pushGatewayHttpUrlFetchEvidence(
   entries: PolicyGatewayExposureEvidence[],
   endpointSource: string,
   endpoint: string,
-  path: readonly string[],
+  input: string,
   value: unknown,
 ): void {
   const allowUrl = isRecord(value) ? value.allowUrl : undefined;
@@ -187,9 +150,9 @@ function pushGatewayHttpUrlFetchEvidence(
     Array.isArray(allowlist) &&
     allowlist.some((entry) => isEffectiveGatewayUrlAllowlistEntry(entry));
   entries.push({
-    id: `gateway-http-${endpoint}-${path.join("-")}-url-fetch`,
+    id: `gateway-http-${endpoint}-${input}-url-fetch`,
     kind: "httpUrlFetch",
-    source: `${endpointSource}/${path.map(ocPathSegment).join("/")}/allowUrl`,
+    source: `${endpointSource}/${ocPathSegment(input)}/allowUrl`,
     value: true,
     endpoint,
     explicit: allowUrl === true,

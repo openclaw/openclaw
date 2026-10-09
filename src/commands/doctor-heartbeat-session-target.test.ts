@@ -1,25 +1,21 @@
 // Doctor heartbeat session-target tests cover heartbeat target checks and repair output.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-doctor-");
 
 describe("describeHeartbeatSessionTargetIssues", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-doctor-")));
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = sessionDirs.make();
   });
 
   function cfgWithSession(session: string, target: string | null = "slack"): OpenClawConfig {
@@ -30,12 +26,11 @@ describe("describeHeartbeatSessionTargetIssues", () => {
         store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             heartbeat,
           },
-        ],
+        },
       },
     } as OpenClawConfig;
   }
@@ -54,11 +49,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
         defaults: {
           heartbeat,
         },
-        list: [
-          {
-            id: "ops",
-          },
-        ],
+        entries: { ops: {} },
       },
     } as OpenClawConfig;
   }
@@ -131,7 +122,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("does not warn when an explicit heartbeat recipient does not need session history", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
-    const agent = cfg.agents?.list?.[0];
+    const agent = cfg.agents?.entries?.ops;
     if (!agent?.heartbeat) {
       throw new Error("expected test config to include heartbeat config");
     }
@@ -144,7 +135,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("does not warn when the heartbeat cadence is disabled", async () => {
     const cfg = cfgWithSession("slack:channel:c123");
-    const agent = cfg.agents?.list?.[0];
+    const agent = cfg.agents?.entries?.ops;
     if (!agent?.heartbeat) {
       throw new Error("expected test config to include heartbeat config");
     }
@@ -180,7 +171,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       if (!cfg.agents?.defaults?.heartbeat) {
         throw new Error("expected test config to include default heartbeat config");
       }
-      cfg.agents.list = configuredAgentIds.map((id) => ({ id }));
+      cfg.agents.entries = Object.fromEntries(configuredAgentIds.map((id) => [id, {}]));
       cfg.agents.defaults.heartbeat.agentId = heartbeatAgentId;
       writeStore(cfg, {});
 
@@ -198,7 +189,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   it("warns when an explicit heartbeat inherits a default session", async () => {
     const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
-    const agent = cfg.agents?.list?.[0];
+    const agent = cfg.agents?.entries?.ops;
     if (!agent) {
       throw new Error("expected test config to include an agent");
     }

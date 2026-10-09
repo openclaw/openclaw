@@ -44,7 +44,7 @@ if (require.main === module) {
   const result = module.exports(route, args);
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
-  process.exit(result.status);
+  process.exitCode = result.status;
 }
 `,
     preload: String.raw`

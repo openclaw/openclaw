@@ -70,7 +70,6 @@ describe("PR failure cancellation", () => {
               configs: ["test/vitest/vitest.unit-fast.config.ts"], requiresDist: false,
               runner: "blacksmith-4vcpu-ubuntu-2404" }];
           }
-          export function createChangedExtensionFallbackShards() { return []; }
         `,
       });
       expect(manifest.status, manifest.output).toBe(0);
@@ -159,7 +158,7 @@ describe("PR failure cancellation", () => {
       ).toBe(admitted);
     }
   });
-  it("does not admit the final gate for cancelled workflows or draft pull requests", () => {
+  it("gates cancelled workflows and drafts while preserving an uncertain failure", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
       for (const cancelled of [true, false]) {
@@ -178,10 +177,19 @@ describe("PR failure cancellation", () => {
         }
       }
     }
+    expect(
+      evaluateWorkflowExpression(gate.if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        cancelled: true,
+        failFastResult: "failure",
+      }),
+    ).toBe(true);
   });
 
   it.each(["pull_request", "push", "workflow_dispatch"] as const)(
-    "keeps first-attempt continuation within the canonical monitor's scope (%s)",
+    "keeps canonical PR matrices complete and continuation within the first-attempt monitor (%s)",
     (eventName) => {
       const workflow = readCiWorkflow();
       const node = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -189,7 +197,9 @@ describe("PR failure cancellation", () => {
       for (const [repository, headRepository, runAttempt, nativeFailFast, continuation] of [
         ["openclaw/openclaw", "openclaw/openclaw", 1, false, "1"],
         ["openclaw/openclaw", "contributor/openclaw", 1, false, "1"],
-        ["openclaw/openclaw", "openclaw/openclaw", 2, true, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "contributor/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 3, false, "0"],
         ["fork/openclaw", "fork/openclaw", 1, true, "0"],
         ["fork/openclaw", "contributor/openclaw", 1, true, "0"],
         ["fork/openclaw", "fork/openclaw", 2, true, "0"],
@@ -355,37 +365,30 @@ describe("PR failure cancellation", () => {
     },
   );
 
-  it("keeps an uncertain cancellation red even if cause outputs are unavailable", () => {
-    expect(
-      evaluateWorkflowExpression(readCiWorkflow().jobs["ci-gate"].if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        cancelled: true,
-        failFastResult: "failure",
-      }),
-    ).toBe(true);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "does not reuse a previous attempt's failure cause or monitor result",
-    () => {
+  it.skipIf(process.platform === "win32").each(["rerun", "disabled"] as const)(
+    "verifies selected lanes without requiring a %s PR monitor",
+    (mode) => {
       const workflow = readCiWorkflow();
       const gate = workflow.jobs["ci-gate"];
-      const context = {
-        eventName: "pull_request" as const,
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: "pull_request",
         repository: "openclaw/openclaw",
-        runAttempt: 2,
-        failFastOutputs: { failure_job_id: "42", failure_run_attempt: "1" },
-        failFastResult: "failure",
-        preflightOutputs: { run_checks_node_core_nondist: "true" },
+        runAttempt: mode === "rerun" ? 2 : 1,
+        failFastOutputs: mode === "rerun" ? { failure_job_id: "42", failure_run_attempt: "1" } : {},
+        failFastResult: mode === "rerun" ? "failure" : "skipped",
+        preflightOutputs: {
+          run_checks_node_core_nondist: "true",
+          ...(mode === "disabled" ? { disable_fail_fast: "true" } : {}),
+        },
       };
       expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
-      expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
-      const report = gate.steps.find(
-        (entry: WorkflowStep) => entry.name === "Report originating PR failure",
-      );
-      expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
+      if (mode === "rerun") {
+        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
+        const report = gate.steps.find(
+          (entry: WorkflowStep) => entry.name === "Report originating PR failure",
+        );
+        expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
+      }
       const verify = gate.steps.find(
         (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
       );

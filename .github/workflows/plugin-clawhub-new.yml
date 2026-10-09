@@ -263,6 +263,10 @@ jobs:
 
           cat .local/plugin-clawhub-release-plan.json
           jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
+          if jq -e '.missingTrustedPublisher[]? | select(.publication.state == "pending" or .publication.state == "failed")' .local/plugin-clawhub-release-plan.json >/dev/null; then
+            echo "::error::Pending or failed ClawHub publications cannot be bootstrapped again. Wait for pending publication or use the release plan's operator recovery instructions."
+            exit 1
+          fi
 
           bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"
@@ -570,12 +574,14 @@ jobs:
             mkdir -p "${output_dir}"
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
               PACKAGE_TAG="${package_tag}" \
+              OPENCLAW_CLAWHUB_PACKAGE_FAMILY="$(jq -r '.family' <<< "${plugin}")" \
               bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"
             tgz="$(find "${output_dir}" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
             artifact_sha256="$(sha256sum "${tgz}" | awk '{print $1}')"
             artifact_size="$(wc -c < "${tgz}" | tr -d '[:space:]')"
             PACKAGE_DIR="${package_dir}" \
               PACKAGE_TAG="${package_tag}" \
+              OPENCLAW_CLAWHUB_PACKAGE_FAMILY="$(jq -r '.family' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_PACKAGE_NAME="${package_name}" \
               EXPECTED_CLAWHUB_PACKAGE_VERSION="${package_version}" \
               EXPECTED_CLAWHUB_ARTIFACT_SHA256="${artifact_sha256}" \
@@ -767,6 +773,7 @@ jobs:
             artifact_path="$(jq -r '.artifactPath' <<< "${plugin}")"
             PACKAGE_DIR="$(jq -r '.packageDir' <<< "${plugin}")" \
               PACKAGE_TAG="$(jq -r '.publishTag' <<< "${plugin}")" \
+              OPENCLAW_CLAWHUB_PACKAGE_FAMILY="$(jq -r '.family' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_PACKAGE_NAME="$(jq -r '.packageName' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_PACKAGE_VERSION="$(jq -r '.version' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_ARTIFACT_SHA256="$(jq -r '.sha256' <<< "${plugin}")" \
@@ -923,6 +930,7 @@ jobs:
             artifact_path="$(jq -r '.artifactPath' <<< "${plugin}")"
             PACKAGE_DIR="$(jq -r '.packageDir' <<< "${plugin}")" \
               PACKAGE_TAG="$(jq -r '.publishTag' <<< "${plugin}")" \
+              OPENCLAW_CLAWHUB_PACKAGE_FAMILY="$(jq -r '.family' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_PACKAGE_NAME="$(jq -r '.packageName' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_PACKAGE_VERSION="$(jq -r '.version' <<< "${plugin}")" \
               EXPECTED_CLAWHUB_ARTIFACT_SHA256="$(jq -r '.sha256' <<< "${plugin}")" \
@@ -1033,6 +1041,7 @@ jobs:
               fi
               PACKAGE_DIR="$(jq -r '.packageDir' <<< "${plugin}")" \
                 PACKAGE_TAG="$(jq -r '.publishTag' <<< "${plugin}")" \
+                OPENCLAW_CLAWHUB_PACKAGE_FAMILY="$(jq -r '.family' <<< "${plugin}")" \
                 EXPECTED_CLAWHUB_PACKAGE_NAME="${package_name}" \
                 EXPECTED_CLAWHUB_PACKAGE_VERSION="$(jq -r '.version' <<< "${plugin}")" \
                 EXPECTED_CLAWHUB_ARTIFACT_SHA256="$(jq -r '.sha256' <<< "${plugin}")" \

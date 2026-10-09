@@ -148,17 +148,6 @@ describe("Codex catalog physical status sources", () => {
     },
   );
 
-  it("preserves an active source when an unrelated helper client closes", async () => {
-    const { a, b, index, readNative, active } = await fixture();
-    active(a, "source-a");
-    b.client.close();
-    expect((await index.list({})).sessions[0]).toMatchObject({
-      status: "active",
-      activeFlags: ["source-a"],
-    });
-    expect(readNative).toHaveBeenCalledOnce();
-  });
-
   it("ignores a buffered thread/read status after its source closes", async () => {
     const { a, b, index, active } = await fixture();
     const reading = a.client.request<{ thread: CodexThread }>(

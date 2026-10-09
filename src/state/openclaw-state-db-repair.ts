@@ -53,19 +53,16 @@ import {
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateSchemaRepairAllowed } from "./openclaw-state-db-schema-policy.js";
 import {
+  assertCanonicalAgentDatabasesPrimaryKey,
   assertCanonicalStateSchemaShape,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
-  repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import {
-  readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
-} from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
@@ -95,6 +92,7 @@ export function repairStateSchema(
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
     try {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
     } finally {
       closeReadAdmission?.();
     }
@@ -191,7 +189,7 @@ export function repairStateSchema(
       pathname,
       () => {
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
-        const previousVersion = readStateSchemaMigrationVersion(db);
+        const previousVersion = readStateSchemaContentVersion(db);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
@@ -227,9 +225,6 @@ export function repairStateSchema(
         applied.push(
           ...describeAgentPathMigration(migrateAgentPaths(db, previousVersion, pathname)),
         );
-        if (repairAgentDatabasesCompositePrimaryKey(db)) {
-          applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
-        }
         if (repairAuditEventsSchema(db)) {
           applied.push(
             `Migrated shared state audit event ledger → versioned message lifecycle schema`,

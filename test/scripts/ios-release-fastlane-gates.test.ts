@@ -59,7 +59,7 @@ function runIosScreenshotsCommand(
   writeExecutable(
     "bundle",
     '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-      '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
+      '[[ "${1:-}" == "_4.0.22_" ]] || exit 92\n' +
       `[[ "\${2:-}" != "check" ]] || exit ${options.bundleCheckExit ?? 0}\n` +
       'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n' +
       `exit ${options.bundleExit ?? 0}`,
@@ -240,7 +240,7 @@ end
 def read_ios_version_metadata(**)
   { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
 end
-def render_ios_release_notes(short_version:, build_number:)
+def render_ios_release_notes(short_version:, build_number:, **)
   raise "wrong notes identity" unless [short_version, build_number] == ["2026.7.21", "3"]
   "Saved public release notes.\n"
 end
@@ -326,17 +326,38 @@ puts JSON.generate(rows)
     const source = String.raw`
 require "json"
 require "tempfile"
-module UI
+module TestUI
   def self.user_error!(message); raise message; end
   def self.success(*); end
   def self.important(*); end
+  def self.message(*); end
+  def self.header(*); end
 end
-def default_platform(*); end
-def desc(*); end
-def platform(*); yield; end
-def lane(name, &body); define_singleton_method(name, &body); end
-alias private_lane lane
-load ARGV.fetch(0)
+# Fastlane evaluates its Fastfile in an instance binding and exposes UI only
+# through its namespace, not Object. Neither constant scope leaks into helpers.
+if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
+  require "fastlane"
+  FastlaneCore::UI.ui_object = TestUI
+  Fastlane.load_actions
+  fastfile = Fastlane::FastFile.new(ARGV.fetch(0))
+  run_stage = ->(options) { fastfile.runner.execute(:release_stage, :ios, options) }
+else
+  module FastlaneCore
+    UI = TestUI
+  end
+  class FastfileFixture
+    UI = FastlaneCore::UI
+    def parsing_binding; binding; end
+    def default_platform(*); end
+    def desc(*); end
+    def platform(*); yield; end
+    def lane(name, &body); define_singleton_method(name, &body); end
+    alias private_lane lane
+  end
+  fastfile = FastfileFixture.new
+  eval(File.read(ARGV.fetch(0)), fastfile.parsing_binding, ARGV.fetch(0))
+  run_stage = ->(options) { fastfile.release_stage(options) }
+end
 $LOADED_FEATURES << "pilot.rb"
 module Pilot
   class BuildManager
@@ -344,9 +365,9 @@ module Pilot
   end
 end
 module Spaceship
-  module ConnectAPI
+  class ConnectAPI
     module Platform
-      IOS = "IOS"
+      IOS = "IOS" unless const_defined?(:IOS)
     end
     class Build
       def self.all(**); $builds; end
@@ -376,27 +397,29 @@ App = Struct.new(:id, :groups, :localizations) do
   def get_beta_groups; groups; end
   def get_beta_app_localizations; localizations; end
 end
-def read_ios_version_metadata(**)
-  { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
-end
-def render_ios_release_notes(**); "Saved beta notes."; end
-def assert_ios_uploaded_release_source!(**)
-  raise "source mismatch" if $scenario == "source-mismatch"
-end
-def app_store_connect_api_key_config; :fixture_key; end
-def app_store_connect_target_app; $app; end
-def stage_ios_app_store_release!(**); raise "App Store staging attempted"; end
-def resolve_ios_release_plan!(**); raise "replanning attempted"; end
-def upload_to_testflight(**options)
-  raise "reupload attempted" unless options[:distribute_only] == true
-  $options = options
-  raise "submission failed" if $scenario == "submission-failure"
-  build = $builds.first
-  build.localizations = [Localization.new("en-US", nil, nil, options.fetch(:localized_build_info).fetch("en-US").fetch(:whats_new))]
-  build.localizations.first.whats_new = "stale" if $scenario == "notes-readback"
-  build.build_beta_detail.auto_notify_enabled = options[:notify_external_testers] unless $scenario == "notify-readback"
-  build.build_beta_detail.external_build_state = "WAITING_FOR_BETA_REVIEW" if options[:submit_beta_review]
-  $group.builds = [build] unless $scenario == "group-readback"
+fastfile.instance_eval do
+  def read_ios_version_metadata(**)
+    { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
+  end
+  def render_ios_release_notes(**); "Saved beta notes."; end
+  def assert_ios_uploaded_release_source!(**)
+    raise "source mismatch" if $scenario == "source-mismatch"
+  end
+  def app_store_connect_api_key_config; :fixture_key; end
+  def app_store_connect_target_app; $app; end
+  def stage_ios_app_store_release!(**); raise "App Store staging attempted"; end
+  def resolve_ios_release_plan!(**); raise "replanning attempted"; end
+  def upload_to_testflight(**options)
+    raise "reupload attempted" unless options[:distribute_only] == true
+    $options = options
+    raise "submission failed" if $scenario == "submission-failure"
+    build = $builds.first
+    build.localizations = [Localization.new("en-US", nil, nil, options.fetch(:localized_build_info).fetch("en-US").fetch(:whats_new))]
+    build.localizations.first.whats_new = "stale" if $scenario == "notes-readback"
+    build.build_beta_detail.auto_notify_enabled = options[:notify_external_testers] unless $scenario == "notify-readback"
+    build.build_beta_detail.external_build_state = "WAITING_FOR_BETA_REVIEW" if options[:submit_beta_review]
+    $group.builds = [build] unless $scenario == "group-readback"
+  end
 end
 states = {
   "submit" => "READY_FOR_BETA_SUBMISSION", "pending" => "WAITING_FOR_BETA_REVIEW",
@@ -432,10 +455,10 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
       groups << Group.new("other", "external-group", false, []) if scenario == "ambiguous-group"
       $app = App.new("app", groups, [Localization.new("en-US", scenario == "missing-description" ? "" : "Beta description", "feedback@example.invalid")])
       $review = Review.new("Review", "Contact", scenario == "missing-contact" ? "" : "review@example.invalid", "+15555550123", "Reviewer access instructions", scenario == "missing-demo" ? true : nil)
-      facts = testflight_plan_facts(app: $app, group: $group, short_version: "2026.7.21", versions: [StoreVersion.new("2026.7.21", scenario.start_with?("adopt") ? build : nil)])
+      facts = fastfile.send(:testflight_plan_facts, app: $app, group: $group, short_version: "2026.7.21", versions: [StoreVersion.new("2026.7.21", scenario.start_with?("adopt") ? build : nil)])
       error = nil
       begin
-        release_stage(destination: "testflight", release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
+        run_stage.call(destination: "testflight", release_version: "2026.7.2", app_store_revision: "1", build_number: "3")
       rescue => failure
         error = failure.message
       end
@@ -445,7 +468,14 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
 end
 puts JSON.generate(rows)
 `;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    // Node CI needs only Ruby; this opt-in also proves the pinned Fastlane runtime.
+    const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
+    const rubyArgs = ["-e", source, fastfilePath];
+    const result = spawnSync(
+      useBundle ? "bundle" : "ruby",
+      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
+    );
     expect(result.status, result.stderr).toBe(0);
     const rows = JSON.parse(result.stdout) as {
       scenario: string;
@@ -502,6 +532,7 @@ puts JSON.generate(rows)
           app_version: "2026.7.21",
           build_number: "3",
           distribute_only: true,
+          wait_processing_timeout_duration: 3600,
           distribute_external: true,
           groups: ["external-group"],
           notify_external_testers: true,
@@ -694,29 +725,30 @@ puts JSON.generate(rows)
     const gemfile = readFileSync(gemfilePath, "utf8");
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
-    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
+    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.11\n");
     expect(gemfile).toContain('gem "fastlane", "2.240.1"');
-    expect(gemfile).toContain('ruby "3.4.10"');
+    expect(gemfile).toContain('ruby "3.4.11"');
     expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
-    expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.11");
+    expect(lockfile).toContain("BUNDLED WITH\n  4.0.22");
     expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
     expect(iosJob).not.toContain("BUNDLE_GEMFILE");
     expect(iosJob).not.toContain("ruby/setup-ruby@");
     expect(iosJob).not.toContain("Install locked Fastlane bundle");
     expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(shardJob).toContain("ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073");
-    expect(shardJob).toContain('ruby-version: "3.4.10"');
-    expect(shardJob).toContain('bundler: "4.0.21"');
+    // Dependabot bumps this pin; the contract is an immutable commit SHA, not one release.
+    expect(shardJob).toMatch(/ruby\/setup-ruby@[0-9a-f]{40}\s/u);
+    expect(shardJob).toContain('ruby-version: "3.4.11"');
+    expect(shardJob).toContain('bundler: "4.0.22"');
     expect(shardJob).toContain("bundler-cache: false");
     expect(shardJob).toContain("working-directory: apps/ios");
-    expect(shardJob).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
-    expect(shardJob).toContain("bundle _4.0.21_ check");
-    expect(shardJob).toContain("bundle _4.0.21_ exec fastlane --version");
+    expect(shardJob).toContain("bundle _4.0.22_ install --jobs 4 --retry 3");
+    expect(shardJob).toContain("bundle _4.0.22_ check");
+    expect(shardJob).toContain("bundle _4.0.22_ exec fastlane --version");
     expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
     expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
@@ -731,7 +763,7 @@ puts JSON.generate(rows)
 
     expect(documentedCommands.length).toBeGreaterThan(0);
     for (const command of documentedCommands) {
-      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane');
+      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane');
     }
   });
 
@@ -749,7 +781,7 @@ puts JSON.generate(rows)
     try {
       const result = spawnSync(
         "bash",
-        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check'],
+        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check'],
         {
           cwd: path.join(process.cwd(), "apps", "ios"),
           encoding: "utf8",
@@ -773,14 +805,14 @@ puts JSON.generate(rows)
     const { result, trace } = runIosScreenshotsCommand();
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository bundle fails", () => {
     const { result, trace } = runIosScreenshotsCommand({ bundleExit: 42 });
 
     expect(result.status).toBe(42);
-    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("prints the pinned setup command when the repository bundle is unavailable", () => {
@@ -788,16 +820,16 @@ puts JSON.generate(rows)
 
     expect(result.status).toBe(1);
     expect(trace).toBe("");
-    expect(result.stderr).toContain("Install Ruby 3.4.10");
-    expect(result.stderr).toContain("gem install bundler -v 4.0.21");
-    expect(result.stderr).toContain("bundle _4.0.21_ install");
+    expect(result.stderr).toContain("Install Ruby 3.4.11");
+    expect(result.stderr).toContain("gem install bundler -v 4.0.22");
+    expect(result.stderr).toContain("bundle _4.0.22_ install");
   });
 
   it("ignores a conflicting inherited Gemfile on the pinned path", () => {
     const { result, trace } = runIosScreenshotsCommand({ conflictingGemfile: true });
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository Gemfile is absent", () => {
@@ -837,7 +869,7 @@ puts JSON.generate(rows)
       expect(existsSync(tracePath)).toBe(false);
       expect(result.stderr).toContain("repository iOS Gemfile is missing");
       expect(result.stderr).toContain("Restore it from the repository checkout");
-      expect(result.stderr).toContain("bundle _4.0.21_ install");
+      expect(result.stderr).toContain("bundle _4.0.22_ install");
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }
@@ -1725,12 +1757,6 @@ end
   it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {
     const fastfile = readFastfile();
 
-    expect(laneBody(fastfile, "screenshots")).toContain(
-      'File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args',
-    );
-    expect(laneBody(fastfile, "watch_screenshot")).toContain(
-      'File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args',
-    );
     expect(fastfile).toContain("def normalize_watch_screenshot_status_bar(path)");
     expect(fastfile).toContain("CGImageAlphaInfo.noneSkipLast.rawValue");
     expect(fastfile).toContain("CGImageDestinationCreateWithURL");

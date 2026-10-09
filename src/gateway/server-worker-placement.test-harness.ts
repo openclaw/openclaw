@@ -4,6 +4,7 @@ import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import { createChatAbortContext } from "./server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
 export function createWorkerStopChatContext() {
   return createChatAbortContext() as unknown as GatewayRequestContext;
@@ -21,6 +22,15 @@ export function admitWorkerStopChat(params: {
   const { context, storePath, sessionKey, sessionId, agentId, entry, runId } = params;
   const respond = vi.fn();
   const now = Date.now();
+  const stored = loadGatewaySessionEntryReadOnly(
+    sessionKey,
+    { agentId },
+    { session: { store: storePath } },
+  );
+  const readSource = stored.capturedReadSource;
+  if (!readSource) {
+    throw new Error("Worker Stop chat fixture requires a captured session source");
+  }
   const promise = admitChatSend({
     request: {
       p: { sessionKey, message: "continue", idempotencyKey: runId },
@@ -44,6 +54,9 @@ export function admitWorkerStopChat(params: {
       sessionLoadMs: 0,
       cfg: {},
       storePath,
+      readSource,
+      capturedReadSource: readSource,
+      capturedReadSources: [readSource],
       entry,
       sessionKey,
       // Storage is mocked here; direct chat tests exercise physical source qualification.
@@ -56,6 +69,7 @@ export function admitWorkerStopChat(params: {
         storeKeys: [sessionKey],
         storePath,
         entry,
+        readSource,
       },
       assertSessionTargetCurrent: () => {},
       releaseSessionTarget: () => {},

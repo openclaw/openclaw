@@ -9,9 +9,11 @@ import {
   kindFromMime,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
-import { findMarkdownImageSpans } from "openclaw/plugin-sdk/text-chunking";
+import { findMarkdownImageSpans, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { escapeTelegramHtmlAttr } from "./format-html.js";
 import { inputRichBlockMediaSources, isVoiceNoteMedia } from "./rich-block-model.js";
+import { parseHtmlAttrs } from "./rich-blocks-html.js";
 import {
   buildTelegramRichMarkdownPlan,
   telegramRichMediaReference,
@@ -22,8 +24,6 @@ const MAX_RICH_PHOTO_BYTES = 10 * 1024 * 1024;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
 const LOCAL_MEDIA_SOURCE_RE = /^(?:(?:[fF][iI][lL][eE]:\/\/)?\/(?!\/)|[A-Za-z]:[\\/])/u;
-const LOCAL_MEDIA_TAG_RE =
-  /<(img|video|audio)\b([^>]*?)\bsrc\s*=\s*(?:(["'])([^"']+)\3|([^\s"'=<>`]+))([^>]*)>/giu;
 
 type RichMediaType = "photo" | "video" | "audio" | "voice_note";
 type RichMediaElementType = Exclude<RichMediaType, "voice_note">;
@@ -31,6 +31,8 @@ type RichMediaElementType = Exclude<RichMediaType, "voice_note">;
 export type TelegramRichLocalMedia = TelegramInputRichMessageMedia & {
   /** Original local source, resent as legacy media when Telegram rejects the rich upload. */
   source: string;
+  /** Position in the original payload; inline media has no payload index. */
+  payloadIndex?: number;
   fileName: string;
 };
 
@@ -160,7 +162,7 @@ export async function resolveTelegramRichLocalMedia(params: {
   const loads = new Map<string, ReturnType<typeof loadRichLocalMediaFile>>();
   // Each file is read once, but every embedded occurrence gets its own entry
   // and upload, so a rejected rich page resends each occurrence it displayed.
-  const resolve = async (source: string) => {
+  const resolve = async (source: string, payloadIndex?: number) => {
     const key = source.trim();
     let pending = loads.get(key);
     if (!pending) {
@@ -174,6 +176,7 @@ export async function resolveTelegramRichLocalMedia(params: {
     const entry: TelegramRichLocalMedia = {
       id: `media${media.length + 1}`,
       source: key,
+      payloadIndex,
       fileName: loaded.fileName,
       media: { type: loaded.type, media: new InputFile(loaded.buffer, loaded.fileName) },
     };
@@ -197,23 +200,31 @@ export async function resolveTelegramRichLocalMedia(params: {
     matchElement?: boolean;
   };
   const candidates: Candidate[] = [];
-  for (const match of params.text.matchAll(LOCAL_MEDIA_TAG_RE)) {
-    const [raw, tag = "", before = "", quote = "", quotedSource, unquotedSource, after = ""] =
-      match;
-    const source = quotedSource ?? unquotedSource ?? "";
+  for (const tag of tokenizeHtmlTags(params.text)) {
+    if (tag.closing || (tag.name !== "img" && tag.name !== "video" && tag.name !== "audio")) {
+      continue;
+    }
+    const attrs = parseHtmlAttrs(tag.raw);
+    const source = attrs.get("src") ?? "";
     if (!isTelegramRichLocalMediaSource(source)) {
       continue;
     }
-    const type = richMediaTypeForTag(tag);
-    const outputQuote = quote || '"';
+    const type = richMediaTypeForTag(tag.name);
     candidates.push({
-      start: match.index,
-      end: match.index + raw.length,
+      start: tag.start,
+      end: tag.end,
       source,
       type,
       reference: `tg://${type}?id=${prefix}${candidates.length}`,
-      render: (reference) =>
-        `<${tag}${before}src=${outputQuote}${reference}${outputQuote}${after}>`,
+      render: (reference) => {
+        const attributes = [...attrs]
+          .map(
+            ([name, value]) =>
+              ` ${name}="${escapeTelegramHtmlAttr(name === "src" ? reference : value)}"`,
+          )
+          .join("");
+        return `<${tag.name}${attributes}${tag.selfClosing ? "/" : ""}>`;
+      },
       matchElement: true,
     });
   }
@@ -279,7 +290,7 @@ export async function resolveTelegramRichLocalMedia(params: {
     if (!isTelegramRichLocalMediaSource(source)) {
       continue;
     }
-    const resolved = await resolve(source);
+    const resolved = await resolve(source, index);
     if (!resolved) {
       continue;
     }

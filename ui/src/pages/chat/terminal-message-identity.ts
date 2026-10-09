@@ -5,7 +5,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 type LiveTerminalIdentity = {
   runId: string;
-  afterBoundaryRunId?: string;
   disposition?: "aborted" | "error" | "timeout";
 };
 
@@ -25,13 +24,11 @@ type AuthoritativeTerminal = {
 export function rememberLiveTerminalRun(
   message: unknown,
   runId: string | null | undefined,
-  afterBoundaryRunId?: string,
   disposition?: LiveTerminalIdentity["disposition"],
 ): unknown {
   if (runId && message && typeof message === "object") {
     liveTerminalIdentities.set(message, {
       runId,
-      ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
       ...(disposition ? { disposition } : {}),
     });
     liveTerminalRevision += 1;
@@ -47,24 +44,18 @@ export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   return readLiveTerminalRunId(message) === runId;
 }
 
-export function readLiveTerminalRunId(message: unknown): string | null {
-  return message && typeof message === "object"
-    ? (liveTerminalIdentities.get(message)?.runId ?? null)
-    : null;
+function readLiveTerminalIdentity(message: unknown): LiveTerminalIdentity | undefined {
+  return message && typeof message === "object" ? liveTerminalIdentities.get(message) : undefined;
 }
 
-export function readLiveTerminalAfterBoundaryRunId(message: unknown): string | null {
-  return message && typeof message === "object"
-    ? (liveTerminalIdentities.get(message)?.afterBoundaryRunId ?? null)
-    : null;
+export function readLiveTerminalRunId(message: unknown): string | null {
+  return readLiveTerminalIdentity(message)?.runId ?? null;
 }
 
 export function readLiveTerminalDisposition(
   message: unknown,
 ): LiveTerminalIdentity["disposition"] | null {
-  return message && typeof message === "object"
-    ? (liveTerminalIdentities.get(message)?.disposition ?? null)
-    : null;
+  return readLiveTerminalIdentity(message)?.disposition ?? null;
 }
 
 export function rememberAuthoritativeTerminal(options: {

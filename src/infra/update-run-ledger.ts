@@ -39,7 +39,7 @@ import {
   type UpdateRunStep,
 } from "./update-run-record.js";
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
-import { readRecoveries } from "./update-run-recovery-store.js";
+import { inspectRecoveryRows } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
   applyUpdateRunPhase,
@@ -76,32 +76,41 @@ export function createUpdateRun(
     supersedeStaleIdentityless?: boolean;
     /** Preview history must not repair canonical task data. */
     preview?: boolean;
+    /** Record an already completed repair without publishing a transient running row. */
+    settlement?: { reason: string; detail: string };
   },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
   const now = Date.now();
-  const row = encodeRun(
-    {
-      runId: input.runId ?? randomUUID(),
-      createdAtMs: now,
-      updatedAtMs: now,
-      trigger: input.trigger,
-      phase: "requested",
-      status: "running",
-      reason: null,
-      origin: input.origin ?? {},
-      target: input.target ?? {},
-      before: input.before ?? {},
-      after: {},
-      steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
-      verification: {},
-      repair: [],
-      confirmedAtMs: null,
-      finishedAtMs: null,
-      downtimeMs: null,
-    },
-    options,
-  );
+  const initial: UpdateRunRecord = {
+    runId: input.runId ?? randomUUID(),
+    createdAtMs: now,
+    updatedAtMs: now,
+    trigger: input.trigger,
+    phase: "requested",
+    status: "running",
+    reason: null,
+    origin: input.origin ?? {},
+    target: input.target ?? {},
+    before: input.before ?? {},
+    after: {},
+    steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: null,
+    downtimeMs: null,
+  };
+  if (input.settlement) {
+    upsertStep(initial, {
+      step: "reconcile:settle",
+      status: "completed",
+      endedAtMs: now,
+      detail: input.settlement.detail,
+    });
+    finishUpdateRunRecord(initial, { status: "succeeded", reason: input.settlement.reason });
+  }
+  const row = encodeRun(initial, options);
   return runUpdateRunAdmission(
     (db, recoveryChanges) => {
       const recordRecovery = (record: UpdateRunRecord) => {
@@ -157,11 +166,7 @@ export function createUpdateRun(
       return decodeRun(admittedRow);
     },
     options,
-    {
-      schemaSql: schema,
-      busyTimeoutMs: options.busyTimeoutMs,
-      recoverTaskDeliveryOrphans: !input.preview,
-    },
+    !input.preview,
   );
 }
 
@@ -296,10 +301,10 @@ export function recordUpdateRunPhase(
 
 export function recordUpdateRunStep(
   runId: string,
-  { reason, ...step }: UpdateRunStep & { reason?: string },
+  step: UpdateRunStep & { reason?: string },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(runId, (record) => applyUpdateRunStep(record, { ...step, reason }), options);
+  return mutateRun(runId, (record) => applyUpdateRunStep(record, step), options);
 }
 
 export function recordUpdateRunRepairContinuation(
@@ -373,8 +378,8 @@ export function reconcilePackageOwnerRefusal(
           db,
           query.select("run_id").where("status", "=", "running").limit(1),
         ) ||
-        readRecoveries(db).some(
-          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        inspectRecoveryRows(db).some(
+          ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
         )
       ) {
         return false;
@@ -416,8 +421,8 @@ export function finishInterruptedUpdatePreview(
   runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
       if (
-        readRecoveries(db).some(
-          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        inspectRecoveryRows(db).some(
+          ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
         )
       ) {
         return;
@@ -473,8 +478,8 @@ export function finishInterruptedUpdateBeforeActivation(
         assertSqliteSchemaContains(db, pathname, recoverySchema);
       }
       if (
-        !readRecoveries(db).some(
-          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        !inspectRecoveryRows(db).some(
+          ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
         )
       ) {
         mutateRunInTransaction(

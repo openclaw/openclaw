@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread } from "node:worker_threads";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
@@ -7,17 +8,26 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import {
   ensureSessionGoalOperationsSchema,
   SESSION_GOAL_OPERATIONS_TABLE,
 } from "../../state/openclaw-agent-goal-operations-schema.js";
+import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
   SessionGoalOperation,
+  SessionGoalOperationLookup,
   SessionGoalOperationResult,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
@@ -30,11 +40,16 @@ import {
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
+  captureLifecycleDatabaseScope,
   getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { mergeSessionEntry, type SessionEntry, type SessionGoal } from "./types.js";
 
 export type { SessionGoalOperation, SessionGoalOperationResult } from "./goals-operations.types.js";
@@ -45,27 +60,17 @@ const OPERATION_VALIDITY_MS = 24 * 60 * 60 * 1000;
 const OPERATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const MAX_SESSION_RECEIPTS = 4096;
 
-type GoalOperationScope = SessionAccessScope & { expectedSessionId: string };
-type OperationErrorCode =
-  | "expired"
-  | "operation-conflict"
-  | "session-rebound"
-  | "goal-rebound"
-  | "capacity"
-  | "receipt-invalid"
-  | "invalid";
+export type SessionGoalManagementInput = {
+  sessionKey: string;
+  expectedSessionId: string;
+  operation: Exclude<SessionGoalOperation, { action: "start" }> & {
+    action: "edit" | "pause" | "block" | "complete" | "clear";
+  };
+};
 
-export class SessionGoalOperationError extends Error {
-  constructor(
-    readonly code: OperationErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "SessionGoalOperationError";
-  }
-}
+export { SessionGoalOperationError } from "./goals-operations.types.js";
 
-function assertOperationTime(operation: SessionGoalOperation, now: number): void {
+export function assertSessionGoalOperationTime(operation: SessionGoalOperation, now: number): void {
   if (
     !Number.isSafeInteger(operation.issuedAtMs) ||
     operation.issuedAtMs > now + OPERATION_FUTURE_SKEW_MS
@@ -99,34 +104,30 @@ function operationFingerprint(operation: SessionGoalOperation): string {
   );
 }
 
-/** Read a durable receipt before transient chat dedupe or busy checks, without creating tables. */
-export function lookupSessionGoalOperation(
-  options: GoalOperationScope & { operation: SessionGoalOperation },
+/** Read the receipt and its session generation from one admitted snapshot. */
+export function readSessionGoalOperationInDatabase(
+  database: OpenClawAgentReadOnlyDatabase,
+  options: SessionGoalOperationLookup,
 ): SessionGoalOperationResult | undefined {
-  assertOperationTime(options.operation, Date.now());
-  const resolved = resolveSqliteScope(options);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const { db } = database;
-    const table = executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionKysely(db)
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "=", SESSION_GOAL_OPERATIONS_TABLE),
-    );
-    if (!table) {
+  assertSessionGoalOperationTime(options.operation, Date.now());
+  const { db } = database;
+  return runSqliteDeferredTransactionSync(db, () => {
+    const schema = getAdmittedSqliteSchemaFacts(db);
+    if (!schema) {
+      throw new Error("Goal receipt reads require admitted schema facts");
+    }
+    if (!schema.tables.has(SESSION_GOAL_OPERATIONS_TABLE)) {
       return undefined;
     }
     const receipt = readSessionGoalOperationReceipt(
       db,
-      resolved.sessionKey,
+      options.sessionKey,
       options.expectedSessionId,
       options.operation,
     );
     if (
       receipt &&
-      readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !==
+      readSessionEntryRow(database, options.sessionKey)?.entry.sessionId !==
         options.expectedSessionId
     ) {
       throw new SessionGoalOperationError(
@@ -135,8 +136,7 @@ export function lookupSessionGoalOperation(
       );
     }
     return receipt;
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : undefined;
+  });
 }
 
 /** The caller has installed the schema before BEGIN; this read participates in its transaction. */
@@ -146,7 +146,7 @@ export function readSessionGoalOperationReceipt(
   sessionId: string,
   operation: SessionGoalOperation,
 ): SessionGoalOperationResult | undefined {
-  assertOperationTime(operation, Date.now());
+  assertSessionGoalOperationTime(operation, Date.now());
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getSessionKysely(db)
@@ -242,7 +242,7 @@ export function writeSessionGoalOperationReceipt(
   runId?: string,
 ): SessionGoalOperationResult {
   const now = Date.now();
-  assertOperationTime(operation, now);
+  assertSessionGoalOperationTime(operation, now);
   const kysely = getSessionKysely(db);
   executeSqliteQuerySync(
     db,
@@ -292,67 +292,101 @@ export function writeSessionGoalOperationReceipt(
 
 /** Management-only Goal actions do not enter chat or fabricate user turns. */
 export async function mutateSessionGoal(
-  options: GoalOperationScope & {
-    /** Revalidate the Gateway-owned authorization after waiting for the writer queue. */
-    assertCurrent?: () => void;
-    operation: Exclude<SessionGoalOperation, { action: "start" }> & {
-      action: "edit" | "pause" | "block" | "complete" | "clear";
-    };
-  },
+  options: SessionAccessScope &
+    SessionGoalManagementInput & {
+      /** Revalidate the Gateway-owned authorization after waiting for the writer queue. */
+      assertCurrent?: SessionSourceAssertion;
+    },
 ): Promise<SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry }> {
-  const resolved = resolveSqliteScope(options);
+  const resolved = captureLifecycleDatabaseScope(resolveSqliteScope(options));
   const databaseOptions = toDatabaseOptions(resolved);
-  return await runExclusiveSqliteSessionWrite(
+  const input = structuredClone({
+    sessionKey: resolved.sessionKey,
+    expectedSessionId: options.expectedSessionId,
+    operation: options.operation,
+  });
+  return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
-      ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
-      const committed = runOpenClawAgentWriteTransaction(
-        (database) => {
-          options.assertCurrent?.();
-          const fresh = readSessionEntryRow(database, resolved.sessionKey);
-          const replay = readSessionGoalOperationReceipt(
-            database.db,
-            resolved.sessionKey,
-            options.expectedSessionId,
-            options.operation,
-          );
-          if (replay && fresh?.entry.sessionId === options.expectedSessionId) {
-            return { result: replay, replayed: true };
-          }
-          if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
-            throw new SessionGoalOperationError(
-              "session-rebound",
-              "Session changed; refresh before changing its Goal.",
-            );
-          }
-          const goal = applySessionGoalOperation(fresh.entry, options.operation, Date.now());
-          const next = mergeSessionEntry(fresh.entry, { goal });
-          // Goal management preserves the session key and generation, so no identity publication is due.
-          writeSessionEntry(database, resolved.sessionKey, next, {
-            canonicalPreviousEntry: fresh.entry,
-          });
-          const result = writeSessionGoalOperationReceipt(
-            database.db,
-            resolved.sessionKey,
-            options.expectedSessionId,
-            options.operation,
-            goal,
-          );
-          return {
-            result,
-            replayed: false,
-            next,
-          };
-        },
-        databaseOptions,
-        { operationLabel: "session.goal.mutate" },
-      );
-      return {
-        result: committed.result,
-        replayed: committed.replayed,
-        sessionEntry: committed.next,
+      const native = async (assertCaptured?: () => void) => {
+        ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
+        const { previous: _previous, ...result } = runOpenClawAgentWriteTransaction(
+          (database) => {
+            assertCaptured?.();
+            options.assertCurrent?.();
+            return mutateSessionGoalInDatabase(database, input);
+          },
+          databaseOptions,
+          { operationLabel: "session.goal.mutate" },
+        );
+        return result;
       };
+      // The outer FIFO captures the physical store before waiting and retains preparation order.
+      // Incognito, maintenance, and opaque Gateway/SDK guards keep their native atomicity.
+      if (
+        !isMainThread ||
+        !supportsOpenClawAgentDatabaseExecution(databaseOptions) ||
+        (options.assertCurrent && !options.assertCurrent.prepareSessionSource)
+      ) {
+        return native();
+      }
+      const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
+      const client = await import("./goals-management.js").catch(async (error: unknown) => {
+        await execution.release();
+        throw error;
+      });
+      return client.mutateSessionGoalInWorker(
+        { ...databaseOptions, path: resolved.path },
+        resolved.agentId,
+        execution,
+        input,
+        composeSessionSourceAssertion([options.assertCurrent], (assertSources) => {
+          assertSources();
+          assertSessionGoalOperationTime(input.operation, Date.now());
+        }),
+        native,
+      );
     },
     "session.goal.mutate",
   );
+}
+
+/** Receipt replay and the reducer share the current row and the caller's synchronous transaction. */
+export function mutateSessionGoalInDatabase(
+  database: OpenClawAgentDatabase,
+  input: SessionGoalManagementInput,
+): SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry; previous?: SessionEntry } {
+  const fresh = readSessionEntryRow(database, input.sessionKey);
+  const replay = readSessionGoalOperationReceipt(
+    database.db,
+    input.sessionKey,
+    input.expectedSessionId,
+    input.operation,
+  );
+  if (replay && fresh?.entry.sessionId === input.expectedSessionId) {
+    return { result: replay, replayed: true };
+  }
+  if (!fresh || fresh.entry.sessionId !== input.expectedSessionId) {
+    throw new SessionGoalOperationError(
+      "session-rebound",
+      "Session changed; refresh before changing its Goal.",
+    );
+  }
+  const goal = applySessionGoalOperation(fresh.entry, input.operation, Date.now());
+  const sessionEntry = writeSessionEntry(
+    database,
+    input.sessionKey,
+    mergeSessionEntry(fresh.entry, { goal }),
+    {
+      canonicalPreviousEntry: fresh.entry,
+    },
+  );
+  const result = writeSessionGoalOperationReceipt(
+    database.db,
+    input.sessionKey,
+    input.expectedSessionId,
+    input.operation,
+    goal,
+  );
+  return { result, replayed: false, sessionEntry, previous: fresh.entry };
 }

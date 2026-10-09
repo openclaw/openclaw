@@ -7,6 +7,12 @@ import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js"
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
+/** Process-private locator; live owner admission remains separate from this identity. */
+export type SqliteWorkerEphemeralTarget = {
+  kind: "ephemeral";
+  handle: string;
+  incarnation: string;
+};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -64,6 +70,7 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
+      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;
@@ -86,6 +93,8 @@ export type SqliteWorkerReply = {
       transfer?: "start" | "frame";
       input?: "next";
       closeReceipt?: SqliteWorkerCloseReceipt;
+      /** Optional wire fact; the native-runtime owner validates it before sibling inheritance. */
+      nativeRuntimeAdmission?: unknown;
     }
   | {
       ok: false;

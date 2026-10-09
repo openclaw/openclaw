@@ -12,19 +12,17 @@ const DASHBOARD_COMMAND = "/dashboard";
 const CONTROL_UI_SKILL = "control-ui";
 const DEFAULT_DASHBOARD_REQUEST = "Create a dashboard for this session.";
 
-function findControlUiSkill(skills: SkillCommandSpec[]): SkillCommandSpec | undefined {
-  return skills.find(
-    (skill) =>
-      skill.skillSource === "bundled" && skill.skillName.trim().toLowerCase() === CONTROL_UI_SKILL,
-  );
-}
-
 async function loadDashboardSkills(
   params: HandleCommandsParams,
 ): Promise<{ controlUi: SkillCommandSpec; available: SkillCommandSpec[] } | null> {
   const loaded = (await params.loadSkillCommands?.()) ?? params.skillCommands ?? [];
   const controlUi =
-    (await params.loadBundledSkillCommand?.(CONTROL_UI_SKILL)) ?? findControlUiSkill(loaded);
+    (await params.loadBundledSkillCommand?.(CONTROL_UI_SKILL)) ??
+    loaded.find(
+      (skill) =>
+        skill.skillSource === "bundled" &&
+        skill.skillName.trim().toLowerCase() === CONTROL_UI_SKILL,
+    );
   if (!controlUi) {
     return null;
   }
@@ -32,13 +30,6 @@ async function loadDashboardSkills(
     controlUi,
     available: [controlUi, ...loaded.filter((skill) => skill.skillFile !== controlUi.skillFile)],
   };
-}
-
-function buildDashboardRequest(requirements: string): string {
-  const trimmed = requirements.trim();
-  return trimmed
-    ? `${DEFAULT_DASHBOARD_REQUEST}\n\nDashboard requirements:\n${trimmed}`
-    : DEFAULT_DASHBOARD_REQUEST;
 }
 
 /** Built-in command handler that guarantees the dashboard operating skill is selected. */
@@ -54,8 +45,12 @@ export const handleDashboardCommand: CommandHandler = defineAuthorizedTextComman
         "Dashboard support is unavailable because the control-ui skill is unavailable for this agent.",
       );
     }
+    const trimmed = requirements.trim();
+    const request = trimmed
+      ? `${DEFAULT_DASHBOARD_REQUEST}\n\nDashboard requirements:\n${trimmed}`
+      : DEFAULT_DASHBOARD_REQUEST;
     const expanded = expandExplicitSkillReferences({
-      text: `$${skills.controlUi.name} ${buildDashboardRequest(requirements)}`,
+      text: `$${skills.controlUi.name} ${request}`,
       skillCommands: skills.available,
     });
     if (expanded.error || expanded.skills.length === 0) {

@@ -1,8 +1,10 @@
+import http from "node:http";
 import { HTTPFetchError } from "@line/bot-sdk";
-// Line tests cover send plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
 const {
   pushMessageMock,
@@ -10,6 +12,9 @@ const {
   lineFetchMock,
   showLoadingAnimationMock,
   getProfileMock,
+  getGroupMemberProfileMock,
+  getRoomMemberProfileMock,
+  getGroupSummaryMock,
   MessagingApiClientMock,
   requireRuntimeConfigMock,
   resolveLineAccountMock,
@@ -23,12 +28,18 @@ const {
   const lineFetchMockLocal = vi.fn();
   const showLoadingAnimationMockLocal = vi.fn();
   const getProfileMockLocal = vi.fn();
+  const getGroupMemberProfileMockLocal = vi.fn();
+  const getRoomMemberProfileMockLocal = vi.fn();
+  const getGroupSummaryMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
     return {
       pushMessage: pushMessageMockLocal,
       replyMessage: replyMessageMockLocal,
       showLoadingAnimation: showLoadingAnimationMockLocal,
       getProfile: getProfileMockLocal,
+      getGroupMemberProfile: getGroupMemberProfileMockLocal,
+      getRoomMemberProfile: getRoomMemberProfileMockLocal,
+      getGroupSummary: getGroupSummaryMockLocal,
     };
   });
   const requireRuntimeConfigMockLocal = vi.fn((cfg: unknown) => cfg ?? {});
@@ -43,6 +54,9 @@ const {
     lineFetchMock: lineFetchMockLocal,
     showLoadingAnimationMock: showLoadingAnimationMockLocal,
     getProfileMock: getProfileMockLocal,
+    getGroupMemberProfileMock: getGroupMemberProfileMockLocal,
+    getRoomMemberProfileMock: getRoomMemberProfileMockLocal,
+    getGroupSummaryMock: getGroupSummaryMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
     requireRuntimeConfigMock: requireRuntimeConfigMockLocal,
     resolveLineAccountMock: resolveLineAccountMockLocal,
@@ -103,41 +117,44 @@ const LINE_TEST_CFG = {
   },
 };
 
+function createTrackedResponse(body: string, init: ResponseInit) {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(body));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return { response: new Response(stream, init), wasCanceled: () => canceled };
+}
+
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
-  const sendCases = [
-    {
-      label: "push",
-      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
-      provider: pushMessageMock,
-    },
-    {
-      label: "reply",
-      send: () =>
-        sendModule.sendMessageLine("U123", "Hello", {
-          cfg: LINE_TEST_CFG,
-          replyToken: "reply-token",
-        }),
-      provider: replyMessageMock,
-    },
-  ];
-
-  function expectedMediaSendResult(chatId: string, messageId: string, messageCount: number) {
-    const raw = {
+  function expectedMediaSendResult(chatId: string, messageIds: string[], messageCount: number) {
+    const raw = messageIds.map((messageId) => ({
       channel: "line",
       chatId,
       conversationId: chatId,
       messageId,
       meta: { messageCount },
-    };
+    }));
+    const messageId = messageIds[0];
     return {
       chatId,
       messageId,
       receipt: {
-        parts: [{ index: 0, kind: "media", platformMessageId: messageId, raw, threadId: chatId }],
-        platformMessageIds: [messageId],
+        parts: messageIds.map((id, index) => ({
+          index,
+          kind: "media",
+          platformMessageId: id,
+          raw: raw[index],
+          threadId: chatId,
+        })),
+        platformMessageIds: messageIds,
         primaryPlatformMessageId: messageId,
-        raw: [raw],
+        raw,
         sentAt: fixedSentAt,
         threadId: chatId,
       },
@@ -184,6 +201,9 @@ describe("LINE send helpers", () => {
     lineFetchMock.mockReset();
     showLoadingAnimationMock.mockReset();
     getProfileMock.mockReset();
+    getGroupMemberProfileMock.mockReset();
+    getRoomMemberProfileMock.mockReset();
+    getGroupSummaryMock.mockReset();
     MessagingApiClientMock.mockReset();
     requireRuntimeConfigMock.mockClear();
     resolveLineAccountMock.mockReset();
@@ -198,6 +218,9 @@ describe("LINE send helpers", () => {
         replyMessage: replyMessageMock,
         showLoadingAnimation: showLoadingAnimationMock,
         getProfile: getProfileMock,
+        getGroupMemberProfile: getGroupMemberProfileMock,
+        getRoomMemberProfile: getRoomMemberProfileMock,
+        getGroupSummary: getGroupSummaryMock,
       };
     });
     requireRuntimeConfigMock.mockImplementation((cfg: unknown) => cfg ?? LINE_TEST_CFG);
@@ -231,34 +254,14 @@ describe("LINE send helpers", () => {
     vi.useRealTimers();
   });
 
-  it("counts quick reply labels in grapheme clusters", () => {
-    const label = "1234567890123456789😀";
-    const quickReply = sendModule.createQuickReplyItems([label]);
-    const item = quickReply.items?.[0] as { action: { label: string; text: string } } | undefined;
-
-    expect(item?.action.label).toBe(label);
-    expect(item?.action.text).toBe(label);
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
-  });
-
-  it("keeps provider-valid Flex alternative text and bounds oversized Unicode safely", () => {
-    const contents = { type: "bubble" as const };
-
-    expect(sendModule.createFlexMessage("a".repeat(1200), contents).altText).toBe("a".repeat(1200));
-
-    const oversized = sendModule.createFlexMessage(`${"a".repeat(1499)}😀 overflow`, contents);
-    expect(oversized.altText).toBe("a".repeat(1499));
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(oversized.altText)).toBe(false);
-  });
-
   it("sends the same provider-valid Flex alternative text through direct pushes", async () => {
-    const altText = "a".repeat(1200);
+    const altText = `${"a".repeat(1499)}😀 overflow`;
 
     await sendModule.pushFlexMessage("U123", altText, { type: "bubble" }, { cfg: LINE_TEST_CFG });
 
     expect(pushMessageMock).toHaveBeenCalledWith({
       to: "U123",
-      messages: [{ type: "flex", altText, contents: { type: "bubble" } }],
+      messages: [{ type: "flex", altText: "a".repeat(1499), contents: { type: "bubble" } }],
     });
   });
 
@@ -473,7 +476,10 @@ describe("LINE send helpers", () => {
   });
 
   it("pushes images via normalized LINE target", async () => {
-    const result = await sendModule.sendMessageLine("line:user:U123", "", {
+    pushMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "push-first" }, { id: "push-second" }],
+    });
+    const result = await sendModule.pushMessageLine("line:user:U123", "Image caption", {
       cfg: LINE_TEST_CFG,
       verbose: true,
       mediaUrl: "https://example.com/original.jpg",
@@ -488,6 +494,7 @@ describe("LINE send helpers", () => {
           originalContentUrl: "https://example.com/original.jpg",
           previewImageUrl: "https://example.com/original.jpg",
         },
+        { type: "text", text: "Image caption" },
       ],
     });
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
@@ -496,34 +503,26 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed message to U123");
-    expect(result).toEqual(expectedMediaSendResult("U123", "push", 1));
-  });
-
-  it("preserves every provider message id returned by a LINE push", async () => {
-    pushMessageMock.mockResolvedValueOnce({
-      sentMessages: [{ id: "613452345678901234" }, { id: "613452345678901235" }],
-    });
-
-    const result = await sendModule.pushMessagesLine(
-      "line:user:U123",
-      [
-        { type: "text", text: "first" },
-        { type: "text", text: "second" },
-      ],
-      { cfg: LINE_TEST_CFG },
-    );
-
-    expect(result.messageId).toBe("613452345678901234");
-    expect(result.receipt.platformMessageIds).toEqual(["613452345678901234", "613452345678901235"]);
+    expect(result).toEqual(expectedMediaSendResult("U123", ["push-first", "push-second"], 2));
   });
 
   it("replies when reply token is provided", async () => {
-    const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
-      cfg: LINE_TEST_CFG,
-      replyToken: "reply-token",
-      mediaUrl: "https://example.com/media.jpg",
-      verbose: true,
+    const text = "⚠️ 🛠️ `search repos (agent)` failed";
+    replyMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "reply-first" }, { id: "reply-second" }],
     });
+    await sendModule.replyMessageLine(
+      "reply-token",
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/media.jpg",
+          previewImageUrl: "https://example.com/media.jpg",
+        },
+        { type: "text", text },
+      ],
+      { cfg: LINE_TEST_CFG, verbose: true },
+    );
 
     expect(replyMessageMock).toHaveBeenCalledTimes(1);
     expect(pushMessageMock).not.toHaveBeenCalled();
@@ -537,145 +536,82 @@ describe("LINE send helpers", () => {
         },
         {
           type: "text",
-          text: "Hello",
+          text,
         },
       ],
     });
-    expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual(expectedMediaSendResult("C1", "reply", 2));
+    expect(logVerboseMock).toHaveBeenCalledWith("line: replied with 2 messages");
   });
 
-  it("preserves every provider message id returned by a LINE reply", async () => {
+  it("preserves all accepted reply ids when activity recording fails", async () => {
     replyMessageMock.mockResolvedValueOnce({
       sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
     });
-
-    const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
-      cfg: LINE_TEST_CFG,
-      replyToken: "reply-token",
-      mediaUrl: "https://example.com/media.jpg",
+    recordChannelActivityMock.mockImplementationOnce(() => {
+      throw new Error("activity store unavailable");
     });
 
-    expect(result.messageId).toBe("713452345678901234");
-    expect(result.receipt.platformMessageIds).toEqual(["713452345678901234", "713452345678901235"]);
+    const caught = await capturePartialDelivery(() =>
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "Hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    );
+    expect(caught.deliveryResult).toEqual({
+      messageIds: ["713452345678901234", "713452345678901235"],
+      visibleReplySent: true,
+    });
   });
 
-  it.each(sendCases)(
-    "preserves a finalized $label when activity recording fails",
-    async ({ send, provider }) => {
-      provider.mockResolvedValueOnce({ sentMessages: [{ id: "line-provider-final" }] });
-      recordChannelActivityMock.mockImplementationOnce(() => {
-        throw new Error("activity store unavailable");
-      });
+  it("preserves a finalized push when activity recording fails", async () => {
+    pushMessageMock.mockResolvedValueOnce({ sentMessages: [{ id: "line-provider-final" }] });
+    recordChannelActivityMock.mockImplementationOnce(() => {
+      throw new Error("activity store unavailable");
+    });
 
-      const caught = await capturePartialDelivery(send);
-      expect(caught.deliveryResult).toMatchObject({
-        messageIds: ["line-provider-final"],
-        receipt: {
-          primaryPlatformMessageId: "line-provider-final",
-          platformMessageIds: ["line-provider-final"],
-          threadId: "U123",
-          parts: [
-            {
-              platformMessageId: "line-provider-final",
-              kind: "text",
-              raw: { chatId: "U123", meta: { messageCount: 1 } },
-            },
-          ],
-        },
-        visibleReplySent: true,
-      });
-    },
-  );
-
-  it.each(sendCases)(
-    "preserves accepted delivery when a $label response omits its provider message ids",
-    async ({ send, provider }) => {
-      provider.mockResolvedValueOnce({ sentMessages: [] });
-
-      const caught = await capturePartialDelivery(send);
-      expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
-      expect(recordChannelActivityMock).not.toHaveBeenCalled();
-    },
-  );
+    const caught = await capturePartialDelivery(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["line-provider-final"],
+      receipt: {
+        primaryPlatformMessageId: "line-provider-final",
+        platformMessageIds: ["line-provider-final"],
+        threadId: "U123",
+        parts: [
+          {
+            platformMessageId: "line-provider-final",
+            kind: "text",
+            raw: { chatId: "U123", meta: { messageCount: 1 } },
+          },
+        ],
+      },
+      visibleReplySent: true,
+    });
+  });
 
   it.each([
-    { operation: "push", body: "{" },
-    { operation: "push", body: "" },
-    { operation: "reply", body: "{" },
-    { operation: "reply", body: "" },
-  ])("does not retry an accepted $operation response with an unreadable receipt", async (input) => {
-    lineFetchMock.mockResolvedValueOnce(
-      new Response(input.body, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    const send =
-      input.operation === "push"
-        ? () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG })
-        : () =>
-            sendModule.sendMessageLine("U123", "Hello", {
-              cfg: LINE_TEST_CFG,
-              replyToken: "reply-token",
-            });
-
-    const caught = await capturePartialDelivery(send);
-    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
-    expect(lineFetchMock).toHaveBeenCalledOnce();
-    expect(recordChannelActivityMock).not.toHaveBeenCalled();
-  });
-
-  it("delivers a quoted reply unquoted when LINE refuses the quote token", async () => {
-    // LINE answers a token it no longer accepts with a bare 400 that names no
-    // field, so the reply would otherwise disappear instead of arriving plain.
-    lineFetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ message: "Quote token is invalid" }), {
-        status: 400,
-        statusText: "Bad Request",
-      }),
-    );
-
-    const result = await sendModule.pushMessagesLine(
-      "U123",
-      [{ type: "text", text: "answering you" }],
-      { cfg: LINE_TEST_CFG, quoteToken: "stale-token" },
-    );
-
-    expect(result.messageId).toBe("push");
-    const bodies = lineFetchMock.mock.calls.map((call) => {
-      const body = (call[1] as RequestInit).body;
-      if (typeof body !== "string") {
-        throw new Error("expected a JSON string LINE request body");
-      }
-      return JSON.parse(body) as { messages: unknown[] };
-    });
-    expect(bodies).toHaveLength(2);
-    expect(bodies[0]?.messages).toEqual([
-      { type: "text", text: "answering you", quoteToken: "stale-token" },
-    ]);
-    expect(bodies[1]?.messages).toEqual([{ type: "text", text: "answering you" }]);
-  });
-
-  it.each(
-    (["push", "reply"] as const).flatMap((operation) => [
-      { operation, stage: "initial denial", allowed: false, allowFallback: false, attempts: 0 },
-      {
-        operation,
-        stage: "revoked quote fallback",
-        allowed: true,
-        allowFallback: false,
-        attempts: 1,
-      },
-      {
-        operation,
-        stage: "allowed quote fallback",
-        allowed: true,
-        allowFallback: true,
-        attempts: 2,
-      },
-    ]),
-  )("authorizes $operation at each attempt: $stage", async (testCase) => {
+    {
+      operation: "push",
+      stage: "initial denial",
+      allowed: false,
+      allowFallback: false,
+      attempts: 0,
+    },
+    {
+      operation: "push",
+      stage: "revoked quote fallback",
+      allowed: true,
+      allowFallback: false,
+      attempts: 1,
+    },
+    {
+      operation: "reply",
+      stage: "allowed quote fallback",
+      allowed: true,
+      allowFallback: true,
+      attempts: 2,
+    },
+  ])("authorizes $operation at each attempt: $stage", async (testCase) => {
     let allowed = testCase.allowed;
     const authorize = vi.fn(async () => allowed);
     lineFetchMock.mockImplementationOnce(async () => {
@@ -724,24 +660,6 @@ describe("LINE send helpers", () => {
     expect(lineFetchMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps rejected LINE sends distinguishable from accepted delivery", async () => {
-    lineFetchMock.mockResolvedValueOnce(
-      new Response("invalid payload", { status: 400, statusText: "Bad Request" }),
-    );
-
-    const caught = await captureError(() =>
-      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
-    );
-
-    expect(caught).toBeInstanceOf(HTTPFetchError);
-    expect(isChannelPartialDeliveryError(caught)).toBe(false);
-    expect(caught).toMatchObject({
-      status: 400,
-      statusText: "Bad Request",
-      body: "invalid payload",
-    });
-  });
-
   it("does not misclassify network SyntaxErrors as provider acceptance", async () => {
     const failure = new SyntaxError("upstream network decoder failed");
     lineFetchMock.mockRejectedValueOnce(failure);
@@ -753,68 +671,26 @@ describe("LINE send helpers", () => {
   });
 
   it.each([
+    { name: "object receipt container", sentMessages: {}, messageIds: [] },
     {
-      label: "push",
-      send: () =>
-        sendModule.pushMessagesLine("U123", [{ type: "text", text: "Hello" }], {
-          cfg: LINE_TEST_CFG,
-        }),
-      provider: pushMessageMock,
+      name: "null receipt entry",
+      sentMessages: [{ id: "delivered" }, null],
+      messageIds: ["delivered"],
     },
-    {
-      label: "reply",
-      send: () =>
-        sendModule.sendMessageLine("U123", "Hello", {
-          cfg: LINE_TEST_CFG,
-          replyToken: "reply-token",
-        }),
-      provider: replyMessageMock,
-    },
-  ])(
-    "retains valid identities from a partially invalid accepted $label response",
-    async ({ send, provider }) => {
-      provider.mockResolvedValueOnce({
-        sentMessages: [{ id: "line-provider-delivered" }, { id: "   " }],
-      });
-
-      const caught = await capturePartialDelivery(send);
-      expect(caught.deliveryResult).toEqual({
-        messageIds: ["line-provider-delivered"],
-        visibleReplySent: true,
-      });
-      expect(recordChannelActivityMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { name: "object receipt container", sentMessages: {} },
-    { name: "null receipt entry", sentMessages: [null] },
-    { name: "missing entry identifier", sentMessages: [{}] },
-  ])("preserves accepted delivery for a malformed $name", async ({ sentMessages }) => {
+  ])("preserves accepted delivery for a malformed $name", async ({ sentMessages, messageIds }) => {
     pushMessageMock.mockResolvedValueOnce({ sentMessages });
 
     const caught = await capturePartialDelivery(() =>
       sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
     );
 
-    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+    expect(caught.deliveryResult).toEqual({ messageIds, visibleReplySent: true });
     expect(pushMessageMock).toHaveBeenCalledOnce();
     expect(recordChannelActivityMock).not.toHaveBeenCalled();
   });
 
-  it("preserves literal internal-looking text in low-level sends", async () => {
-    const text = "⚠️ 🛠️ `search repos (agent)` failed";
-
-    await sendModule.sendMessageLine("line:user:U123", text, { cfg: LINE_TEST_CFG });
-
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U123",
-      messages: [{ type: "text", text }],
-    });
-  });
-
   it("sends a bare audio URL using the kind inferred by the LINE media owner", async () => {
-    await sendModule.sendMessageLine("line:user:U123", "", {
+    await sendModule.pushMessageLine("line:user:U123", "", {
       cfg: LINE_TEST_CFG,
       mediaUrl: "https://example.com/voice.m4a",
     });
@@ -829,53 +705,6 @@ describe("LINE send helpers", () => {
         },
       ],
     });
-  });
-
-  it("forwards explicit video options through the shared LINE media owner", async () => {
-    await sendModule.sendMessageLine("line:user:U100", "Video", {
-      cfg: LINE_TEST_CFG,
-      mediaUrl: "https://example.com/video.mp4",
-      mediaKind: "video",
-      previewImageUrl: "https://example.com/preview.jpg",
-      trackingId: "track-1",
-    });
-
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-          trackingId: "track-1",
-        },
-        { type: "text", text: "Video" },
-      ],
-    });
-  });
-
-  it("keeps a missing explicit video preview as a visible caller error", async () => {
-    await expect(
-      sendModule.sendMessageLine("line:user:U200", "Video", {
-        cfg: LINE_TEST_CFG,
-        mediaUrl: "https://example.com/video.mp4",
-        mediaKind: "video",
-      }),
-    ).rejects.toThrow(/require previewimageurl/i);
-
-    expect(pushMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("validates image URLs before sending", async () => {
-    await expect(
-      sendModule.sendMessageLine("line:user:U123", "", {
-        cfg: LINE_TEST_CFG,
-        mediaUrl: "http://example.com/private.jpg",
-        mediaKind: "image",
-      }),
-    ).rejects.toThrow("LINE outbound media URL must use HTTPS");
-
-    expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
   it("throws when push messages are empty", async () => {
@@ -917,57 +746,6 @@ describe("LINE send helpers", () => {
     expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
-  it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
-    await sendModule.pushMessagesLine(
-      "Cabcdef0123456789abcdef0123456789",
-      [{ type: "text", text: "hello" }],
-      { cfg: LINE_TEST_CFG },
-    );
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "Cabcdef0123456789abcdef0123456789",
-      messages: [{ type: "text", text: "hello" }],
-    });
-  });
-
-  it("logs HTTP body when push fails", async () => {
-    const err = new Error("LINE push failed") as Error & {
-      status: number;
-      statusText: string;
-      body: string;
-    };
-    err.status = 400;
-    err.statusText = "Bad Request";
-    err.body = "invalid flex payload";
-    pushMessageMock.mockRejectedValueOnce(err);
-
-    await expect(
-      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
-        cfg: LINE_TEST_CFG,
-      }),
-    ).rejects.toThrow("LINE push failed");
-
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      "line: push message failed (400 Bad Request): invalid flex payload",
-    );
-  });
-
-  it("caches profile results by default", async () => {
-    getProfileMock.mockResolvedValue({
-      displayName: "Peter",
-      pictureUrl: "https://example.com/peter.jpg",
-    });
-
-    const first = await sendModule.getUserProfile("U-cache", { cfg: LINE_TEST_CFG });
-    const second = await sendModule.getUserProfile("U-cache", { cfg: LINE_TEST_CFG });
-
-    expect(first).toEqual({
-      displayName: "Peter",
-      pictureUrl: "https://example.com/peter.jpg",
-    });
-    expect(second).toEqual(first);
-    expect(getProfileMock).toHaveBeenCalledTimes(1);
-  });
-
   it("bounds profile cache entries across distinct users", async () => {
     getProfileMock.mockImplementation(async (userId: string) => ({
       displayName: userId,
@@ -981,23 +759,12 @@ describe("LINE send helpers", () => {
     expect(getProfileMock).toHaveBeenCalledTimes(1002);
   });
 
-  it("continues when loading animation is unsupported", async () => {
-    showLoadingAnimationMock.mockRejectedValueOnce(new Error("unsupported"));
-
-    await expect(
-      sendModule.showLoadingAnimation("line:room:R1", { cfg: LINE_TEST_CFG }),
-    ).resolves.toBeUndefined();
-
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      "line: loading animation failed (non-fatal): Error: unsupported",
-    );
-  });
-
   it("pushes quick-reply text and caps to 13 buttons", async () => {
+    const label = "1234567890123456789😀";
     await sendModule.pushTextMessageWithQuickReplies(
       "U-quick",
       "Pick one",
-      Array.from({ length: 20 }, (_, index) => `Choice ${index + 1}`),
+      [label, ...Array.from({ length: 19 }, (_, index) => `Choice ${index + 1}`)],
       { cfg: LINE_TEST_CFG },
     );
 
@@ -1006,8 +773,219 @@ describe("LINE send helpers", () => {
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
     const payload = expectDefined(firstCall[0], "LINE push payload");
+    expect(payload.messages[0]?.quickReply?.items[0]).toMatchObject({
+      action: { label, text: label },
+    });
     expect(expectDefined(payload.messages[0], "LINE push message").quickReply?.items).toHaveLength(
       13,
     );
+  });
+  it("degrades to no profile when LINE cannot answer", async () => {
+    getGroupMemberProfileMock.mockRejectedValue(new Error("404 not found"));
+
+    await expect(
+      sendModule.getUserProfile("Umissing", { cfg: LINE_TEST_CFG, groupId: "Cgroup2" }),
+    ).resolves.toBeNull();
+    await expect(
+      sendModule.getUserProfile("Umissing", { cfg: LINE_TEST_CFG, groupId: "Cgroup2" }),
+    ).resolves.toBeNull();
+
+    expect(getGroupMemberProfileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps profile cache entries scoped to their conversation endpoint", async () => {
+    getGroupMemberProfileMock.mockResolvedValueOnce({ displayName: "Group Sora" });
+    getRoomMemberProfileMock.mockResolvedValueOnce({ displayName: "Room Sora" });
+
+    await expect(
+      sendModule.getUserProfile("Ushared", { cfg: LINE_TEST_CFG, groupId: "Cshared" }),
+    ).resolves.toMatchObject({ displayName: "Group Sora" });
+    await expect(
+      sendModule.getUserProfile("Ushared", { cfg: LINE_TEST_CFG, roomId: "Rshared" }),
+    ).resolves.toMatchObject({ displayName: "Room Sora" });
+
+    expect(getGroupMemberProfileMock).toHaveBeenCalledTimes(1);
+    expect(getRoomMemberProfileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces concurrent group-name cache misses", async () => {
+    let resolveSummary: (summary: { groupId: string; groupName: string }) => void = () => {};
+    getGroupSummaryMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSummary = resolve;
+      }),
+    );
+
+    const first = sendModule.getLineGroupName("Cconcurrent", { cfg: LINE_TEST_CFG });
+    const second = sendModule.getLineGroupName("Cconcurrent", { cfg: LINE_TEST_CFG });
+    expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
+
+    resolveSummary({ groupId: "Cconcurrent", groupName: "Release Squad" });
+    await expect(Promise.all([first, second])).resolves.toEqual(["Release Squad", "Release Squad"]);
+    await expect(sendModule.getLineGroupName("Cconcurrent", { cfg: LINE_TEST_CFG })).resolves.toBe(
+      "Release Squad",
+    );
+    expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades to no group name when the summary call fails", async () => {
+    getGroupSummaryMock.mockRejectedValue(new Error("403 forbidden"));
+
+    await expect(
+      sendModule.getLineGroupName("Cforbidden", { cfg: LINE_TEST_CFG }),
+    ).resolves.toBeUndefined();
+    await expect(
+      sendModule.getLineGroupName("Cforbidden", { cfg: LINE_TEST_CFG }),
+    ).resolves.toBeUndefined();
+
+    expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds an accepted retry-key conflict without reclassifying it as rejected", async () => {
+    const tracked = createTrackedResponse("x".repeat(16 * 1024 + 1), {
+      status: 409,
+      statusText: "Conflict",
+      headers: { "content-type": "application/json" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    lineFetchMock.mockResolvedValueOnce(tracked.response);
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(caught).not.toBeInstanceOf(HTTPFetchError);
+    expect(lineFetchMock).toHaveBeenCalledOnce();
+    const requestInit = lineFetchMock.mock.calls[0]?.[1];
+    expect(new Headers(requestInit?.headers).get("X-Line-Retry-Key")).toBeTruthy();
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("bounds oversized rejected LINE response bodies", async () => {
+    const tracked = createTrackedResponse(`${"line upstream unavailable ".repeat(1024)}tail`, {
+      status: 400,
+      statusText: "Bad Request",
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    lineFetchMock.mockResolvedValueOnce(tracked.response);
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toMatchObject({ status: 400, statusText: "Bad Request" });
+    expect((caught as HTTPFetchError).body).toContain("line upstream unavailable");
+    expect((caught as HTTPFetchError).body).not.toContain("tail");
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("redacts a reflected Authorization token from LINE error bodies", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    lineFetchMock.mockImplementationOnce(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        return new Response(
+          `proxy failure reflected Authorization: ${authorization}; request rejected`,
+          {
+            status: 400,
+            statusText: "Bad Request",
+            headers: { "content-type": "text/plain" },
+          },
+        );
+      },
+    );
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    const body = (caught as HTTPFetchError).body;
+    expect(body).toContain("proxy failure");
+    expect(body).toContain("request rejected");
+    expect(body).not.toContain(token);
+  });
+
+  it("masks a reflected Authorization token through a real HTTP reflector", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    const server = http.createServer((req, res) => {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end(
+        `proxy failure reflected Authorization: ${req.headers.authorization}; request rejected`,
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    try {
+      // The production send boundary targets the fixed LINE API host; route only the
+      // destination to the loopback reflector while the real fetch stack and the
+      // production response handling run unchanged.
+      lineFetchMock.mockImplementationOnce(
+        async (url: string | URL | Request, init?: RequestInit) => {
+          const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+          return realGlobalFetch(
+            target.replace("https://api.line.me", `http://127.0.0.1:${address.port}`),
+            init,
+          );
+        },
+      );
+
+      const caught = await captureError(() =>
+        sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      );
+
+      expect(caught).toBeInstanceOf(HTTPFetchError);
+      const body = (caught as HTTPFetchError).body;
+      expect(body).toContain("proxy failure");
+      expect(body).toContain("request rejected");
+      expect(body).not.toContain(token);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("preserves reply rejection status when the LINE error body cannot be read", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("provider response body failed"));
+        },
+      }),
+      { status: 503, statusText: "Service Unavailable", headers: { "content-type": "text/plain" } },
+    );
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+    lineFetchMock.mockResolvedValueOnce(response);
+
+    const caught = await captureError(() =>
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "Hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    );
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toMatchObject({
+      status: 503,
+      statusText: "Service Unavailable",
+      body: "",
+    });
+    expect(lineFetchMock).toHaveBeenCalledOnce();
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

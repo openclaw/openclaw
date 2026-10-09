@@ -536,7 +536,11 @@ describe("Codex paired-device exec-server relay", () => {
     await expect(socketClosed).resolves.toEqual({ code: 1001 });
     expect(onExecutionDisconnect).toHaveBeenCalledOnce();
     expect(onExecutionDisconnect).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("start a fresh attempt") }),
+      expect.objectContaining({
+        name: "CodexNodeExecServerDisconnectedError",
+        code: "codex_node_disconnected",
+        message: expect.stringContaining("start a fresh attempt"),
+      }),
     );
     await expect(transport.channel.send(Buffer.from("{}"))).rejects.toThrow(
       "execution channel closed",

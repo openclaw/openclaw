@@ -188,7 +188,7 @@ type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
 
 // Slack mrkdwn backslashes are literal, including immediately before code delimiters.
-function tokenizeSlackMrkdwn(text: string): string[] {
+function tokenizeSlackMrkdwn(text: string, graphemes?: Intl.Segments): string[] {
   const tokens: string[] = [];
   for (let index = 0; index < text.length;) {
     if (text.startsWith("```", index)) {
@@ -218,7 +218,11 @@ function tokenizeSlackMrkdwn(text: string): string[] {
     if (codePoint === undefined) {
       break;
     }
-    const character = String.fromCodePoint(codePoint);
+    const grapheme = graphemes?.containing(index + (codePoint > 0xffff ? 1 : 0));
+    const character =
+      (grapheme &&
+        text.slice(index, grapheme.index + grapheme.segment.length).match(/^[^`*_~<>&]+/u)?.[0]) ||
+      String.fromCodePoint(codePoint);
     index += character.length;
     tokens.push(character);
   }
@@ -298,14 +302,9 @@ function projectSlackAngleToken(token: string, dateDisplay: SlackDateDisplay): s
   if (labelSeparator >= 0) {
     return decodeSlackMrkdwnEntities(inner.slice(labelSeparator + 1));
   }
-  if (inner.startsWith("@")) {
-    return "@";
-  }
-  if (inner.startsWith("#")) {
-    return "#";
-  }
-  if (inner.startsWith("!")) {
-    return "!";
+  const prefix = inner.charAt(0);
+  if (prefix === "@" || prefix === "#" || prefix === "!") {
+    return prefix;
   }
   return decodeSlackMrkdwnEntities(inner);
 }
@@ -460,7 +459,10 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     content = "";
   };
 
-  for (const token of tokenizeSlackMrkdwn(text)) {
+  for (const token of tokenizeSlackMrkdwn(
+    text,
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text),
+  )) {
     const transition = resolveSlackCodeMarkerTransition(activeMarker, token);
     const nextMarker = transition === null ? activeMarker : transition;
     const sourceMarker = token === "`" || token === "```" ? token : undefined;
@@ -481,20 +483,15 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     if (token.length > contentLimit) {
       flush();
       const marker = wrapper(activeMarker);
-      if (activeMarker && isAllowedSlackAngleToken(token)) {
-        if (marker) {
-          chunks.push(
-            ...chunkTextForOutbound(token, Math.max(1, Math.floor(contentLimit)), {
-              preserveWhitespace: true,
-            }).map((fragment) => `${marker}${fragment}${marker}`),
-          );
-        } else {
-          chunks.push(
-            ...chunkTextForOutbound(escapeSlackMrkdwn(token), Math.max(1, Math.floor(limit)), {
-              preserveWhitespace: true,
-            }),
-          );
-        }
+      if (activeMarker) {
+        const fragments = chunkTextForOutbound(
+          marker ? token : escapeSlackMrkdwn(token),
+          Math.max(1, Math.floor(marker ? contentLimit : limit)),
+          { preserveWhitespace: true },
+        );
+        chunks.push(
+          ...(marker ? fragments.map((fragment) => `${marker}${fragment}${marker}`) : fragments),
+        );
         continue;
       }
       chunks.push(...(token.length <= limit ? [token] : chunkTextForOutbound(token, limit)));

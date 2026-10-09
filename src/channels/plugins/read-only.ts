@@ -41,7 +41,7 @@ import {
   loadSetupChannelPluginFromManifestRecord,
   type ChannelSetupPluginLoadFailure,
 } from "./setup-entry-loader.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;
@@ -66,15 +66,11 @@ function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
   plugins: Iterable<ChannelPlugin | undefined>,
   options?: {
-    onlyIds?: ReadonlySet<string>;
     allowOverwrite?: boolean;
   },
 ): void {
   for (const plugin of plugins) {
     if (!plugin) {
-      continue;
-    }
-    if (options?.onlyIds && !options.onlyIds.has(plugin.id)) {
       continue;
     }
     if (options?.allowOverwrite === false && byId.has(plugin.id)) {
@@ -90,13 +86,9 @@ function rebindChannelScopedString(
   targetChannelId: string,
 ): string {
   const sourcePrefix = `channels.${sourceChannelId}`;
-  if (value === sourcePrefix) {
-    return `channels.${targetChannelId}`;
-  }
-  if (value.startsWith(`${sourcePrefix}.`)) {
-    return `channels.${targetChannelId}${value.slice(sourcePrefix.length)}`;
-  }
-  return value;
+  return value === sourcePrefix || value.startsWith(`${sourcePrefix}.`)
+    ? `channels.${targetChannelId}${value.slice(sourcePrefix.length)}`
+    : value;
 }
 
 function normalizeManifestText(value: string | undefined, fallback: string): string {
@@ -154,10 +146,6 @@ function getChannelConfigRecord(cfg: OpenClawConfig, channelId: string): Record<
   return (channels && asOptionalRecord(readOwnRecordValue(channels, channelId))) ?? {};
 }
 
-function normalizeManifestAccountConfigKey(accountId: string): string {
-  return normalizeOptionalAccountId(accountId) ?? "";
-}
-
 function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const channelConfig = getChannelConfigRecord(cfg, channelId);
   const accounts = channelConfig.accounts;
@@ -198,7 +186,7 @@ function resolveManifestChannelAccount(params: {
         ? resolveNormalizedAccountEntry(
             accounts,
             accountId,
-            normalizeManifestAccountConfigKey,
+            (candidateId) => normalizeOptionalAccountId(candidateId) ?? "",
             params.accountKeyPolicy,
           )
         : undefined,
@@ -497,7 +485,6 @@ function addManifestChannelPlugins(
         continue;
       }
       addChannelPlugins(byId, [buildManifestChannelPlugin({ record, channelId })], {
-        onlyIds: channelIds,
         allowOverwrite: false,
       });
     }
@@ -626,15 +613,8 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const bundledManifestMissingChannelIds = configuredChannelIds.filter(
     (channelId) => !byId.has(channelId),
   );
-  const bundledManifestMissingChannelIdSet = new Set(bundledManifestMissingChannelIds);
   addManifestChannelPlugins(byId, bundledManifestRecords, {
-    pluginIds: new Set(
-      bundledManifestRecords.flatMap((record) =>
-        record.channels.some((channelId) => bundledManifestMissingChannelIdSet.has(channelId))
-          ? [record.id]
-          : [],
-      ),
-    ),
+    pluginIds: new Set(bundledManifestRecords.map((record) => record.id)),
     channelIds: bundledManifestMissingChannelIds,
     includeSetupFallbackPlugins,
   });

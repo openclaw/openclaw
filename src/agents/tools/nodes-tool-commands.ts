@@ -58,7 +58,9 @@ export async function executeNodeCommandAction(params: {
 }): Promise<ReturnType<typeof jsonResult>> {
   const node = readToolStringParam(params.input, "node", { required: true });
   let command: string;
-  let commandParams: Record<string, unknown> = {};
+  let commandParams: unknown = {};
+  let nodeId: string | undefined;
+  const rawInvoke = params.action === "invoke";
   let gatewayOpts = params.gatewayOpts;
   let invokeTimeoutMs: number | undefined;
   let requireObjectPayload = false;
@@ -164,12 +166,12 @@ export async function executeNodeCommandAction(params: {
       break;
     }
     case "invoke": {
-      const nodeId = await resolveAgentNodeId(params.gatewayOpts, node);
+      nodeId = await resolveAgentNodeId(params.gatewayOpts, node);
       const invokeCommand = readToolStringParam(params.input, "invokeCommand", { required: true });
       const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
-          `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+          `invokeCommand "${invokeCommand}" is reserved for shell execution; call the shell exec tool with { command, host: "node", node: "${nodeId}" } instead`,
         );
       }
       const dedicatedAction = MEDIA_INVOKE_ACTIONS[invokeCommandNormalized];
@@ -187,10 +189,9 @@ export async function executeNodeCommandAction(params: {
         typeof params.input.invokeParamsJson === "string"
           ? params.input.invokeParamsJson.trim()
           : "";
-      let invokeParams: unknown = {};
       if (invokeParamsJson) {
         try {
-          invokeParams = JSON.parse(invokeParamsJson);
+          commandParams = JSON.parse(invokeParamsJson);
         } catch (err) {
           const message = formatErrorMessage(err);
           throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
@@ -202,31 +203,30 @@ export async function executeNodeCommandAction(params: {
         input: params.input,
         gatewayOpts: params.gatewayOpts,
       });
-      const raw = await callNodesToolNodeInvoke(
-        timeouts.gatewayOpts,
-        {
-          nodeId,
-          command: invokeCommand,
-          params: invokeParams,
-          timeoutMs: timeouts.invokeTimeoutMs,
-          idempotencyKey: crypto.randomUUID(),
-          ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
-        },
-        { rawInvoke: true },
-      );
-      return jsonResult(raw ?? {});
+      command = invokeCommand;
+      gatewayOpts = timeouts.gatewayOpts;
+      invokeTimeoutMs = timeouts.invokeTimeoutMs;
+      break;
     }
     default:
       throw new Error("Unsupported node command action");
   }
-  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
-  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
-    nodeId,
-    command,
-    params: commandParams,
-    ...(invokeTimeoutMs === undefined ? {} : { timeoutMs: invokeTimeoutMs }),
-    idempotencyKey: crypto.randomUUID(),
-  });
+  nodeId ??= await resolveAgentNodeId(gatewayOpts, node);
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(
+    gatewayOpts,
+    {
+      nodeId,
+      command,
+      params: commandParams,
+      ...(rawInvoke || invokeTimeoutMs !== undefined ? { timeoutMs: invokeTimeoutMs } : {}),
+      idempotencyKey: crypto.randomUUID(),
+      ...(rawInvoke && params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
+    },
+    rawInvoke ? { rawInvoke: true } : undefined,
+  );
+  if (rawInvoke) {
+    return jsonResult(raw ?? {});
+  }
   const payload =
     raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
   return jsonResult(

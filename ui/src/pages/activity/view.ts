@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -110,12 +110,6 @@ function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   `;
 }
 
-function setLiveFilterExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
-}
-
 function renderToolFilter(props: ActivityProps, toolNames: string[]) {
   const active = Boolean(props.toolFilter);
   return html`
@@ -137,8 +131,8 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
       aria-label=${t("activity.filters")}
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => setLiveFilterExpanded(event, true)}
-      @wa-hide=${(event: Event) => setLiveFilterExpanded(event, false)}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="activity-live-filter-popover__panel">
         <label class="field">
@@ -153,8 +147,11 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
               }
             }}
           >
-            <option value="">${t("activity.allTools")}</option>
-            ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+            <option value="" .selected=${props.toolFilter === ""}>${t("activity.allTools")}</option>
+            ${toolNames.map(
+              (name) =>
+                html`<option value=${name} .selected=${name === props.toolFilter}>${name}</option>`,
+            )}
           </select>
         </label>
       </div>
@@ -295,30 +292,24 @@ export function renderActivity(props: ActivityProps) {
               total: String(props.entries.length),
             })}
           </span>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${filtered.length === 0}
-            @click=${props.onExpandAll}
-          >
-            ${t("activity.expandAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${props.expandedIds.size === 0}
-            @click=${props.onCollapseAll}
-          >
-            ${t("activity.collapseAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            ?disabled=${props.entries.length === 0}
-            @click=${props.onClear}
-          >
-            ${t("activity.clear")}
-          </button>
+          ${[
+            { action: "expandAll", disabled: filtered.length === 0, onClick: props.onExpandAll },
+            {
+              action: "collapseAll",
+              disabled: props.expandedIds.size === 0,
+              onClick: props.onCollapseAll,
+            },
+            { action: "clear", disabled: props.entries.length === 0, onClick: props.onClear },
+          ].map(
+            ({ action, disabled, onClick }) => html`<button
+              type="button"
+              class=${action === "clear" ? "btn btn--sm danger" : "btn btn--sm"}
+              ?disabled=${disabled}
+              @click=${onClick}
+            >
+              ${t(`activity.${action}`)}
+            </button>`,
+          )}
         </div>
       </div>
       <div class="settings-group activity-group">

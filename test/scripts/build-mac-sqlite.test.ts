@@ -91,7 +91,7 @@ exit 2
         expect(result.status, result.stderr).toBe(0);
         const slices = await mac.run("/usr/bin/lipo", ["-archs", library], { encoding: "utf8" });
         expect(slices.status).toBe(0);
-        expect(slices.stdout.trim().split(/\s+/).sort()).toEqual(
+        expect(slices.stdout.trim().split(/\s+/).toSorted()).toEqual(
           arch === "universal" ? ["arm64", "x86_64"] : [arch],
         );
         const installName = await mac.run("/usr/bin/otool", ["-D", library], { encoding: "utf8" });

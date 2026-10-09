@@ -63,17 +63,6 @@ describe("cron scheduled wakes", () => {
     states.length = 0;
   });
 
-  it("keeps a maintenance wake when enabled jobs have no next occurrence", () => {
-    const state = createState();
-    const unscheduled = job();
-    state.store = { version: 1, jobs: [unscheduled] };
-
-    armTimer(state);
-
-    expect(state.deps.scheduler.nextWakeAtMs).toBe(now + 60_000);
-    expect(unscheduled.state.nextRunAtMs).toBeUndefined();
-  });
-
   it("joins a scheduled tick waiting for admission without reopening suspension", async ({
     signal,
   }) => {

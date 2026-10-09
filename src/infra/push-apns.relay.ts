@@ -1,5 +1,3 @@
-// Sends APNs notifications through the configured relay endpoint.
-import { URL } from "node:url";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
@@ -9,20 +7,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayConfig } from "../config/types.gateway.js";
-import {
-  loadOrCreateProcessDeviceIdentity,
-  signDevicePayload,
-  type DeviceIdentity,
-} from "./device-identity.js";
-import { formatErrorMessage } from "./errors.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "./device-identity-async.js";
+import { signDevicePayload, type DeviceIdentity } from "./device-identity.js";
 import { readResponseWithLimit } from "./http-body.js";
-import { normalizeHostname } from "./net/hostname.js";
+import { normalizeApnsRelayBaseUrl } from "./push-apns-relay-url.js";
 import { requireCurrentApnsSend } from "./push-apns-send-current.js";
 
 type ApnsRelayPushType = "alert" | "background";
 type ApnsRelayEnvironment = "production" | "sandbox";
 
-/** Resolved APNs relay endpoint and client timeout for gateway-originated sends. */
 export type ApnsRelayConfig = {
   baseUrl: string;
   timeoutMs: number;
@@ -36,7 +29,6 @@ type ApnsRelayConfigResolutionOptions = {
   registrationRelayOrigin?: string;
 };
 
-/** Normalized relay response after the hosted relay has attempted an APNs send. */
 export type ApnsRelayPushResponse = {
   ok: boolean;
   status: number;
@@ -46,7 +38,6 @@ export type ApnsRelayPushResponse = {
   tokenSuffix?: string;
 };
 
-/** Test/integration seam for sending a signed APNs relay request. */
 export type ApnsRelayRequestSender = (params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
@@ -79,96 +70,9 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
   return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
 }
 
-function readAllowHttp(value: string | undefined): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function isLoopbackRelayHostname(hostname: string): boolean {
-  const normalized = normalizeHostname(hostname);
-  return (
-    normalized === "localhost" ||
-    normalized === "::1" ||
-    normalized === "[::1]" ||
-    /^127(?:\.\d{1,3}){3}$/.test(normalized)
-  );
-}
-
 function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
-  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeApnsRelayBaseUrlWithPolicy(
-  baseUrl: string,
-  allowLoopbackHttpWithoutEnvOptIn: boolean,
-): { ok: true; value: string } | { ok: false; error: string } {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      throw new Error("unsupported protocol");
-    }
-    if (!parsed.hostname) {
-      throw new Error("host required");
-    }
-    // Plain HTTP is only for local relay development; production relay URLs must use TLS.
-    if (parsed.protocol === "http:" && !allowLoopbackHttpWithoutEnvOptIn) {
-      throw new Error(
-        "http relay URLs require OPENCLAW_APNS_RELAY_ALLOW_HTTP=true (development only)",
-      );
-    }
-    // Persisted development URLs may bypass only the current env opt-in;
-    // the loopback boundary remains mandatory during every decode.
-    if (parsed.protocol === "http:" && !isLoopbackRelayHostname(parsed.hostname)) {
-      throw new Error("http relay URLs are limited to loopback hosts");
-    }
-    if (parsed.username || parsed.password) {
-      throw new Error("userinfo is not allowed");
-    }
-    if (parsed.search || parsed.hash) {
-      throw new Error("query and fragment are not allowed");
-    }
-    return { ok: true, value: parsed.toString().replace(/\/+$/, "") };
-  } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
-  }
-}
-
-/** Validate and canonicalize an APNs relay base URL for config and registration origins. */
-export function normalizeApnsRelayBaseUrl(
-  baseUrl: string,
-  env: NodeJS.ProcessEnv = process.env,
-): { ok: true; value: string } | { ok: false; error: string } {
-  return normalizeApnsRelayBaseUrlWithPolicy(
-    baseUrl,
-    readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP),
-  );
-}
-
-/** Revalidate a canonical persisted relay URL without reapplying current input policy. */
-export function normalizePersistedApnsRelayBaseUrl(
-  baseUrl: string,
-): { ok: true; value: string } | { ok: false; error: string } {
-  // Stored loopback HTTP URLs already passed the explicit development-only
-  // policy before commit; decoding must survive later environment changes.
-  return normalizeApnsRelayBaseUrlWithPolicy(baseUrl, true);
-}
-
-function buildRelayGatewaySignaturePayload(params: {
-  gatewayDeviceId: string;
-  signedAtMs: number;
-  bodyJson: string;
-}): string {
-  // Domain-separate relay send signatures from other gateway/device signatures.
-  return [
-    "openclaw-relay-send-v1",
-    params.gatewayDeviceId.trim(),
-    String(Math.trunc(params.signedAtMs)),
-    params.bodyJson,
-  ].join("\n");
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized === "sandbox" || normalized === "production" ? normalized : undefined;
 }
 
 /** Resolve the relay endpoint from env/config and require it to match relay-minted registrations. */
@@ -320,22 +224,19 @@ async function sendApnsRelayRequest(
   };
 }
 
-/** Sign and send an APNs relay push using the gateway device identity. */
-export async function sendApnsRelayPush(params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-  requestSender?: ApnsRelayRequestSender;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRelayPushResponse> {
-  await requireCurrentApnsSend(params);
+export async function sendApnsRelayPush(
+  params: Omit<
+    Parameters<ApnsRelayRequestSender>[0],
+    "gatewayDeviceId" | "signature" | "signedAtMs" | "bodyJson"
+  > & {
+    gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
+    requestSender?: ApnsRelayRequestSender;
+  },
+): Promise<ApnsRelayPushResponse> {
   const sender = params.requestSender ?? sendApnsRelayRequest;
-  const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();
+  const gatewayIdentity =
+    params.gatewayIdentity ?? (await loadOrCreateProcessDeviceIdentityAsync());
+  await requireCurrentApnsSend(params);
   const signedAtMs = Date.now();
   const bodyJson = JSON.stringify({
     relayHandle: params.relayHandle,
@@ -345,11 +246,13 @@ export async function sendApnsRelayPush(params: {
   });
   const signature = signDevicePayload(
     gatewayIdentity.privateKeyPem,
-    buildRelayGatewaySignaturePayload({
-      gatewayDeviceId: gatewayIdentity.deviceId,
-      signedAtMs,
+    // Domain-separate relay send signatures from other gateway/device signatures.
+    [
+      "openclaw-relay-send-v1",
+      gatewayIdentity.deviceId.trim(),
+      String(Math.trunc(signedAtMs)),
       bodyJson,
-    }),
+    ].join("\n"),
   );
   return await sender({
     relayConfig: params.relayConfig,

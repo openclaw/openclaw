@@ -16,7 +16,6 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   listWebPushSubscriptions,
   readPersistedVapidKeyPair,
@@ -67,11 +66,9 @@ describe("legacy Web Push Doctor migration", () => {
 
   function vapidKeys(overrides: Partial<VapidKeyPair> = {}): VapidKeyPair {
     return {
-      ...createWebPushVapidKeyPair(
-        "legacy-public-key",
-        "legacy-private-key",
-        "https://openclaw.ai",
-      ),
+      publicKey: "legacy-public-key",
+      privateKey: "legacy-private-key",
+      subject: "https://openclaw.ai",
       ...overrides,
     };
   }
@@ -192,7 +189,7 @@ describe("legacy Web Push Doctor migration", () => {
   it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
     const stateDir = useStateDir();
     const cfg: OpenClawConfig = {
-      agents: { entries: { "worker-1": { default: true } } },
+      agents: { entries: { "worker-1": {} } },
       session: { mainKey: "desk" },
     };
     const env = {
@@ -465,9 +462,11 @@ describe("legacy Web Push Doctor migration", () => {
     const stateDir = useStateDir();
     const canonical = subscription({ keys: { p256dh: "canonical", auth: "canonical" } });
     seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
-    seedVapid(
-      createWebPushVapidKeyPair("canonical-public", "canonical-private", "https://openclaw.ai"),
-    );
+    seedVapid({
+      publicKey: "canonical-public",
+      privateKey: "canonical-private",
+      subject: "https://openclaw.ai",
+    });
     const paths = await writeLegacyState({
       stateDir,
       subscriptions: [subscription()],
@@ -487,9 +486,11 @@ describe("legacy Web Push Doctor migration", () => {
 
   it("rolls back subscription changes when only VAPID conflicts", async () => {
     const stateDir = useStateDir();
-    seedVapid(
-      createWebPushVapidKeyPair("canonical-public", "canonical-private", "https://openclaw.ai"),
-    );
+    seedVapid({
+      publicKey: "canonical-public",
+      privateKey: "canonical-private",
+      subject: "https://openclaw.ai",
+    });
     await writeLegacyState({
       stateDir,
       subscriptions: [subscription()],

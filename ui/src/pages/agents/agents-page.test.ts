@@ -15,6 +15,7 @@ import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/
 import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   agentsCapability,
   agentsList,
@@ -849,7 +850,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await page.loadAgentFiles("main");
 
     expect(page.agentFileActive).toBe("AGENTS.md");
-    expect(page.agentFileContents["AGENTS.md"]).toBe("# Instructions");
+    expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions");
     expect(request).toHaveBeenCalledWith("agents.files.get", {
       agentId: "main",
       name: "AGENTS.md",
@@ -874,7 +875,7 @@ describe("AgentsPage gateway lifecycle", () => {
     };
     page.agentsSelectedId = "main";
     page.routeData = { panel: "files" } as AgentsRouteData;
-    page.agentFileContents = { "cached.md": "keep" };
+    setAgentFileValues(page, "content", { "cached.md": "keep" });
     page.routeDataInitialized = true;
     page.context = {
       agents: {
@@ -891,7 +892,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     setPageGateway(page, client, false);
     expect(page.agentFilesLoading).toBe(false);
-    expect(page.agentFileContents).toEqual({ "cached.md": "keep" });
+    expect(agentFileValues(page, "content")).toEqual({ "cached.md": "keep" });
 
     setPageGateway(page, client);
     expect(ensureFiles).toHaveBeenCalledTimes(2);

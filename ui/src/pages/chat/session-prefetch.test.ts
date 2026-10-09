@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -28,8 +27,10 @@ import {
   type SessionPrefetchUpdate,
 } from "./session-prefetch.test-support.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
+const cacheKey = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {
   return {
     messages: [{ role: "assistant", content: message }],
@@ -108,7 +109,7 @@ describe("recent session prefetch", () => {
     await settlePromises();
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
     await store.flush();
-    expect(await store.read(key)).toBeNull();
+    expect(await store.read(cacheKey(key))).toBeNull();
   });
 
   it("keeps unchanged history warm while a queued session becomes active", async () => {
@@ -139,7 +140,7 @@ describe("recent session prefetch", () => {
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: queuedKey })).toBeNull();
     await store.flush();
-    expect((await store.read(key))?.messages).toEqual(historyResult(key).messages);
+    expect((await store.read(cacheKey(key)))?.messages).toEqual(historyResult(key).messages);
     await advancePrefetch(31_000);
     expect(request).toHaveBeenCalledOnce();
   });
@@ -175,7 +176,7 @@ describe("recent session prefetch", () => {
     await settlePromises();
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
     await store.flush();
-    expect(await store.read(key)).toBeNull();
+    expect(await store.read(cacheKey(key))).toBeNull();
   });
 
   it.each([
@@ -206,7 +207,7 @@ describe("recent session prefetch", () => {
         readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages ?? null,
       ).toEqual(keepOriginal ? historyResult(key).messages : null);
       await store.flush();
-      expect((await store.read(key))?.messages ?? null).toEqual(
+      expect((await store.read(cacheKey(key)))?.messages ?? null).toEqual(
         keepOriginal ? historyResult(key).messages : null,
       );
     },
@@ -245,7 +246,7 @@ describe("recent session prefetch", () => {
     await settlePromises();
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toEqual(expected);
     await store.flush();
-    expect(await store.read(key)).toEqual(expected);
+    expect(await store.read(cacheKey(key))).toEqual(expected);
   });
 
   it.each([false, true])(
@@ -284,12 +285,12 @@ describe("recent session prefetch", () => {
         clearDuringReread ? null : historyResult(key).messages,
       );
       await store.flush();
-      expect(await store.read(key)).toEqual(snapshot);
+      expect(await store.read(cacheKey(key))).toEqual(snapshot);
     },
   );
 
   it("bounds idle warming to two small tails without reopening fresh or active history", async () => {
-    store.write("agent:main:fresh", historySnapshot("fresh"));
+    store.write(cacheKey("agent:main:fresh"), historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
     const pending: Array<{
@@ -408,7 +409,7 @@ describe("recent session prefetch", () => {
   it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
     const sessionKey = "agent:main:stored";
     const stored = historySnapshot("stored", "session-stored");
-    store.write(sessionKey, stored);
+    store.write(cacheKey(sessionKey), stored);
     await store.flush();
     cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();
@@ -421,7 +422,7 @@ describe("recent session prefetch", () => {
     );
     updatePrefetch(state);
     await advancePrefetch(300);
-    expect(readSpy).toHaveBeenCalledWith(sessionKey);
+    expect(readSpy).toHaveBeenCalledWith(cacheKey(sessionKey));
     expect(request).not.toHaveBeenCalled();
 
     // The presented pane starts loading while IndexedDB is still answering.
@@ -479,13 +480,13 @@ describe("recent session prefetch", () => {
     expect(
       readChatSessionSnapshot(cache, snapshotHost, { sessionKey: presentedSessionKey }),
     ).toEqual(historySnapshot("presented"));
-    expect(store.readSavedAt(presentedSessionKey)).not.toBeNull();
+    expect(store.readSavedAt(cacheKey(presentedSessionKey))).not.toBeNull();
 
     updatePrefetch({ client, listRevision: 11, openSessionKeys: [presentedSessionKey], rows });
     await advancePrefetch(31_000);
     await store.flush();
     expect(request).toHaveBeenCalledTimes(MAX_CACHED_CHAT_SESSIONS - 1);
-    expect(store.readSavedAt("agent:main:background-0")).not.toBeNull();
+    expect(store.readSavedAt(cacheKey("agent:main:background-0"))).not.toBeNull();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {
@@ -650,7 +651,7 @@ describe("recent session prefetch", () => {
       },
     );
     await store.flush();
-    const previousSavedAt = store.readSavedAt(sessionKey);
+    const previousSavedAt = store.readSavedAt(cacheKey(sessionKey));
     cache.clear();
     const liveMessage = {
       role: "user",
@@ -692,7 +693,7 @@ describe("recent session prefetch", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ cursor: "cursor-1", sessionKey }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
       deltaCursor: "cursor-2",
@@ -700,9 +701,9 @@ describe("recent session prefetch", () => {
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });
-    expect(store.readSavedAt(sessionKey)).toBeGreaterThan(previousSavedAt ?? 0);
+    expect(store.readSavedAt(cacheKey(sessionKey))).toBeGreaterThan(previousSavedAt ?? 0);
     await store.flush();
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual({
+    expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual({
       deltaCursor: "cursor-2",
       messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },

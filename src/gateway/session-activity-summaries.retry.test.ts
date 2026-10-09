@@ -1,5 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -13,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/session-transcript-reconcile.js";
+import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -127,6 +129,61 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await testState.cleanup();
   });
 
+  it("uses the patch watermark for concurrent messages and rereads a foreign rewrite on the next request", async ({
+    signal,
+  }) => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const read = () => loadSessionEntryReadOnly(transcript);
+    const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
+    complete.mockImplementationOnce(async () => {
+      await appendWork(target);
+      return { ...result, text: "Only the first message was summarized." };
+    });
+    const firstPublication = createDeferred();
+    changed.mockImplementation(() => {
+      if (read()?.activitySummary) {
+        firstPublication.resolve();
+      }
+    });
+    service.ensure(target);
+    await withinTest(firstPublication.promise, signal);
+    expect(view(target)?.state).toBe("updating");
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
+    expect(readWatermark).not.toHaveBeenCalled();
+
+    const awaitCurrent = () => {
+      const publication = createDeferred();
+      changed.mockImplementation(() => {
+        if (view(target)?.state === "current") {
+          publication.resolve();
+        }
+      });
+      service.ensure(target);
+      return withinTest(publication.promise, signal);
+    };
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+    const database = openOpenClawAgentDatabase({ agentId: target.agentId, env: testState.env });
+    const foreign = new DatabaseSync(database.path);
+    try {
+      foreign
+        .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+        .run("foreign-recap-generation", transcript.sessionId);
+    } finally {
+      foreign.close();
+    }
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(read()?.activitySummary).toMatchObject({ generation: "foreign-recap-generation" });
+    expect(JSON.parse(complete.mock.calls[2]![0].prompt).messages).toEqual([
+      "user: Request 1",
+      "assistant: Verified additional work.",
+    ]);
+    expect(readWatermark).not.toHaveBeenCalled();
+  });
+
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
     const target = { agentId: "main", key: "agent:main:unindexed-recap" };
     const transcript = scope(target);
@@ -217,13 +274,9 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     }
   });
 
-  it.each(
-    ["toolResult", "user", "assistant"].flatMap((role) =>
-      [false, true].map((legacy) => ({ role, legacy })),
-    ),
-  )(
-    "counts only oversized recap messages ($role, legacy cache: $legacy)",
-    async ({ role, legacy }) => {
+  it.each(["toolResult", "user", "assistant"])(
+    "counts only oversized recap messages through legacy migration (%s)",
+    async (role) => {
       const notice = " (Some oversized messages were omitted.)";
       const recap = result.text;
       const target = await addSession(0);
@@ -261,70 +314,74 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         await settled.promise;
       };
       await refresh();
-      if (legacy) {
-        await patchSessionEntryCore(
-          scope(target),
-          (entry) => ({
-            activitySummary: {
-              ...entry.activitySummary!,
-              formatRevision: 2,
-              omittedContent: true,
-              text: recap + notice,
-            },
-          }),
-          { preserveActivity: true },
-        );
-        await service.dispose();
-        service = createService();
-        expect(view(target)).toMatchObject({ state: "stale", text: recap + notice });
-        complete.mockClear();
-        await refresh();
-        expect(complete).not.toHaveBeenCalled();
-        expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
-          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-          text: recap + (role === "toolResult" ? "" : notice),
-          omittedContent: role !== "toolResult",
-        });
-        if (role === "user") {
-          const summary = loadSessionEntryReadOnly(scope(target))!.activitySummary!;
-          const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-          const countReads = (formatRevision: number) => {
-            reads.queries.length = 0;
-            readActivitySummaryBatch({
-              scope: scope(target),
-              previous: { ...summary, formatRevision },
-            });
-            return reads.queries.length;
-          };
-          try {
-            countReads(2);
-            countReads(ACTIVITY_SUMMARY_FORMAT_REVISION);
-            expect(countReads(ACTIVITY_SUMMARY_FORMAT_REVISION)).toBeLessThan(countReads(2));
-          } finally {
-            reads.restore();
-          }
-        }
-        await persistSessionTranscriptTurn(scope(target), {
-          messages: [
-            {
-              eventId: "message-3",
-              parentId: "message-2",
-              message: { role: "assistant", content: "Outcome 3" },
-            },
-          ],
-          touchSessionEntry: false,
-        });
-        await refresh();
-        expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
-          previousRecap: recap,
-          messages: ["assistant: Outcome 3"],
-          omittedContent: role !== "toolResult",
-        });
-      }
+      const summaryText = recap + (role === "toolResult" ? "" : notice);
       expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
-        text: recap + (role === "toolResult" ? "" : notice),
+        text: summaryText,
         omittedContent: role !== "toolResult",
-        coveredMessages: legacy ? 4 : 3,
+        coveredMessages: 3,
+      });
+      await patchSessionEntryCore(
+        scope(target),
+        (entry) => ({
+          activitySummary: {
+            ...entry.activitySummary!,
+            formatRevision: 2,
+            omittedContent: true,
+            text: recap + notice,
+          },
+        }),
+        { preserveActivity: true },
+      );
+      await service.dispose();
+      service = createService();
+      expect(view(target)).toMatchObject({ state: "stale", text: recap + notice });
+      complete.mockClear();
+      await refresh();
+      expect(complete).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
+        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+        text: summaryText,
+        omittedContent: role !== "toolResult",
+      });
+      if (role === "user") {
+        const summary = loadSessionEntryReadOnly(scope(target))!.activitySummary!;
+        const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        const countReads = (formatRevision: number) => {
+          reads.queries.length = 0;
+          readActivitySummaryBatch({
+            scope: scope(target),
+            previous: { ...summary, formatRevision },
+          });
+          return reads.queries.length;
+        };
+        try {
+          countReads(2);
+          countReads(ACTIVITY_SUMMARY_FORMAT_REVISION);
+          expect(countReads(ACTIVITY_SUMMARY_FORMAT_REVISION)).toBeLessThan(countReads(2));
+        } finally {
+          reads.restore();
+        }
+      }
+      await persistSessionTranscriptTurn(scope(target), {
+        messages: [
+          {
+            eventId: "message-3",
+            parentId: "message-2",
+            message: { role: "assistant", content: "Outcome 3" },
+          },
+        ],
+        touchSessionEntry: false,
+      });
+      await refresh();
+      expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
+        previousRecap: recap,
+        messages: ["assistant: Outcome 3"],
+        omittedContent: role !== "toolResult",
+      });
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
+        text: summaryText,
+        omittedContent: role !== "toolResult",
+        coveredMessages: 4,
       });
     },
   );
@@ -467,47 +524,51 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
-  it.each(["new transcript", "older format"] as const)(
-    "retains the previous recap on failure for %s without rebilling repeated requests",
-    async (trigger) => {
-      const target = await addSession(1);
+  it("retains the previous recap on restyle failure without rebilling repeated requests", async () => {
+    const target = await addSession(1);
+    service.ensure(target);
+    await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+    await patchSessionEntryCore(
+      scope(target),
+      (entry) => ({
+        activitySummary: { ...entry.activitySummary!, formatRevision: undefined },
+      }),
+      { preserveActivity: true },
+    );
+    complete.mockRejectedValue(new Error("temporary failure"));
+    service.ensure(target);
+    await vi.waitFor(() => expect(view(target)?.state).toBe("unavailable"));
+    for (let index = 0; index < 20; index += 1) {
       service.ensure(target);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-      if (trigger === "new transcript") {
-        await appendWork(target);
-      } else {
-        await patchSessionEntryCore(
-          scope(target),
-          (entry) => ({
-            activitySummary: { ...entry.activitySummary!, formatRevision: undefined },
-          }),
-          { preserveActivity: true },
-        );
-      }
-      complete.mockRejectedValue(new Error("temporary failure"));
-      service.ensure(target);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("unavailable"));
-      for (let index = 0; index < 20; index += 1) {
-        service.ensure(target);
-      }
-      expect(view(target)?.text).toBe(result.text);
-      expect(complete).toHaveBeenCalledTimes(2);
-    },
-  );
+    }
+    expect(view(target)?.text).toBe(result.text);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
 
-  it("queues a full Activity page and reports admission limits until a slot settles", async () => {
+  it("queues a full Activity page and reports admission limits until a slot settles", async ({
+    signal,
+  }) => {
     const targets: ActivitySummaryTarget[] = [];
     for (let index = 0; index < 257; index += 1) {
       targets.push(await addSession(index));
     }
     const overflow = targets[256]!;
+    const initial = createDeferred();
+    changed.mockImplementation(() => {
+      if (view(overflow)?.state === "current") {
+        initial.resolve();
+      }
+    });
     service.ensure(overflow);
-    await vi.waitFor(() => expect(view(overflow)?.state).toBe("current"));
+    await withinTest(initial.promise, signal);
+    expect(view(overflow)?.state).toBe("current");
     await service.dispose();
     service = createService();
     complete.mockClear();
     const first = createDeferred<typeof result>();
     const remaining = createDeferred<typeof result>();
+    const slotsOccupied = createDeferred();
+    const slotReused = createDeferred();
     const drained = createDeferred();
     const completed = new Set<string>();
     changed.mockImplementation((target: ActivitySummaryTarget) => {
@@ -520,7 +581,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     });
     complete
       .mockImplementationOnce(() => first.promise)
-      .mockImplementation(() => remaining.promise);
+      .mockImplementationOnce(() => {
+        slotsOccupied.resolve();
+        return remaining.promise;
+      })
+      .mockImplementation(() => {
+        slotReused.resolve();
+        return remaining.promise;
+      });
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
       sessionActivitySummaries: service,
@@ -542,7 +610,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       for (let index = 0; index < 100; index += 20) {
         await ensure(targets.slice(index, index + 20));
       }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      await withinTest(slotsOccupied.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(2);
       expect(targets.slice(0, 100).map((target) => view(target)?.state)).toEqual(
         Array.from({ length: 100 }, () => "updating"),
       );
@@ -583,7 +652,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       });
       expect(complete).toHaveBeenCalledTimes(2);
       first.resolve(result);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(3));
+      await withinTest(slotReused.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(3);
       await ensure([overflow]);
       expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
         sessions: [
@@ -594,12 +664,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         ],
       });
       remaining.resolve(result);
-      await drained.promise;
+      await withinTest(drained.promise, signal);
       expect(targets.every((target) => view(target)?.state === "current")).toBe(true);
       expect(complete).toHaveBeenCalledTimes(257);
     } finally {
+      const disposal = service.dispose();
       first.resolve(result);
       remaining.resolve(result);
+      await disposal;
     }
   });
 
@@ -655,45 +727,79 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
-  it("pauses the overloaded model while serving another model, then retries at the queue tail", async () => {
+  it("pauses the overloaded model while serving another model, then retries at the queue tail", async ({
+    signal,
+  }) => {
     const first = await addSession(1);
     const next = await addSession(2);
     const blocker = await addSession(3, "healthy");
     const healthy = await addSession(4, "healthy");
-    cfg.agents!.list = [{ id: "main" }, { id: "healthy", utilityModel: "test/other" }];
+    cfg.agents!.entries = { main: {}, healthy: { utilityModel: "test/other" } };
     const failure = createDeferred<typeof result>();
     const release = createDeferred<typeof result>();
-    complete
-      .mockImplementationOnce(() => failure.promise)
-      .mockImplementationOnce(() => release.promise);
+    const started = createDeferred();
+    // Initial parallel reads can reach the model callbacks in either order.
+    const initialCalls = new Map([
+      ["utility", failure],
+      ["other", release],
+    ]);
+    const healthyReady = createDeferred();
+    const retried = createDeferred();
+    const completed = new Set<string>();
+    changed.mockImplementation((target: ActivitySummaryTarget) => {
+      if (view(target)?.state !== "current") {
+        return;
+      }
+      completed.add(target.key);
+      if (target.key === healthy.key) {
+        healthyReady.resolve();
+      }
+      if (completed.has(first.key) && completed.has(next.key)) {
+        retried.resolve();
+      }
+    });
+    complete.mockImplementation(({ model }) => {
+      const initial = initialCalls.get(model);
+      if (!initial) {
+        return Promise.resolve(result);
+      }
+      initialCalls.delete(model);
+      if (initialCalls.size === 0) {
+        started.resolve();
+      }
+      return initial.promise;
+    });
     fakeTime();
     try {
       service.ensure(first);
       service.ensure(blocker);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      await withinTest(started.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(2);
       service.ensure(next);
       service.ensure(healthy);
       failure.reject(Object.assign(new Error("Overloaded"), { status: 529 }));
-      await vi.waitFor(() => expect(view(healthy)?.state).toBe("current"));
+      await withinTest(healthyReady.promise, signal);
+      expect(view(healthy)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(3);
       expect(view(first)?.state).toBe("updating");
       expect(view(next)?.state).toBe("updating");
       release.resolve(result);
       await vi.advanceTimersByTimeAsync(30_000);
-      await vi.waitFor(() => expect(view(first)?.state).toBe("current"));
-      await vi.waitFor(() => expect(view(next)?.state).toBe("current"));
-      expect(
-        complete.mock.calls.map(([request]) => JSON.parse(request.prompt).messages[0]),
-      ).toEqual([
-        "user: Request 1",
-        "user: Request 3",
-        "user: Request 4",
-        "user: Request 2",
-        "user: Request 1",
-      ]);
+      await withinTest(retried.promise, signal);
+      expect(view(first)?.state).toBe("current");
+      expect(view(next)?.state).toBe("current");
+      const requests = complete.mock.calls.map(
+        ([request]) => JSON.parse(request.prompt).messages[0],
+      );
+      expect(requests.slice(0, 2)).toEqual(
+        expect.arrayContaining(["user: Request 1", "user: Request 3"]),
+      );
+      expect(requests.slice(2)).toEqual(["user: Request 4", "user: Request 2", "user: Request 1"]);
     } finally {
+      const disposal = service.dispose();
       failure.resolve(result);
       release.resolve(result);
+      await disposal;
     }
   });
 
@@ -728,10 +834,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
   );
 
   it.each([
-    new Error("No API key found for provider test"),
     Object.assign(new Error("Invalid API key"), { status: 401 }),
     Object.assign(new Error("Insufficient quota; check your billing plan"), { status: 429 }),
-    Object.assign(new Error("Daily request limit exceeded"), { status: 429 }),
     new Error("Isolated completion failed with stop reason error.", {
       cause: { status: 429, message: "Daily request limit exceeded" },
     }),

@@ -5,11 +5,48 @@ import { cronStoreKey } from "../store/key.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 
 type MaintenanceOutcome = CronRuntimeMutationContracts["cron.scheduleUnowned"]["outcome"];
+
+/** Keep host activity and exact local reservations current while a worker owns its rows. */
+export function prepareCronScheduleOwnership(state: CronServiceState, jobIds: readonly string[]) {
+  const owners = jobIds.map((jobId) => ({
+    jobId,
+    active: isCronJobActive(jobId),
+    reservation: state.queuedRunReservationsByJobId.get(jobId),
+  }));
+  const ownership = owners.map(({ jobId, active, reservation }) => ({
+    jobId,
+    active,
+    reservation: reservation
+      ? {
+          markerAtMs: reservation.markerAtMs,
+          preserveWhenDisabled: reservation.preserveWhenDisabled,
+        }
+      : undefined,
+  }));
+  return {
+    ownership,
+    assertCurrent() {
+      for (let index = 0; index < owners.length; index += 1) {
+        const owner = owners[index]!;
+        const prepared = ownership[index]!;
+        const current = state.queuedRunReservationsByJobId.get(owner.jobId);
+        if (
+          owner.active !== isCronJobActive(owner.jobId) ||
+          current !== owner.reservation ||
+          current?.markerAtMs !== prepared.reservation?.markerAtMs ||
+          current?.preserveWhenDisabled !== prepared.reservation?.preserveWhenDisabled
+        ) {
+          throw new Error("Cron schedule ownership changed before commit");
+        }
+      }
+    },
+  };
+}
 
 /** Schedules authoritative rows in the worker without clearing live process ownership. */
 export async function recomputeUnownedCronSchedules(
@@ -30,38 +67,10 @@ export async function recomputeUnownedCronSchedules(
       }
     },
     prepare({ jobIds }) {
-      const owners = jobIds.map((jobId) => ({
-        jobId,
-        active: isCronJobActive(jobId),
-        reservation: state.queuedRunReservationsByJobId.get(jobId),
-      }));
-      const ownership = owners.map(({ jobId, active, reservation }) => ({
-        jobId,
-        active,
-        reservation: reservation
-          ? {
-              markerAtMs: reservation.markerAtMs,
-              preserveWhenDisabled: reservation.preserveWhenDisabled,
-            }
-          : undefined,
-      }));
+      const prepared = prepareCronScheduleOwnership(state, jobIds);
       return {
-        value: { nowMs: opts?.nowMs ?? state.deps.nowMs(), ownership },
-        assertCurrent() {
-          for (let index = 0; index < owners.length; index += 1) {
-            const owner = owners[index]!;
-            const prepared = ownership[index]!;
-            const current = state.queuedRunReservationsByJobId.get(owner.jobId);
-            if (
-              owner.active !== isCronJobActive(owner.jobId) ||
-              current !== owner.reservation ||
-              current?.markerAtMs !== prepared.reservation?.markerAtMs ||
-              current?.preserveWhenDisabled !== prepared.reservation?.preserveWhenDisabled
-            ) {
-              throw new Error("Cron schedule ownership changed before commit");
-            }
-          }
-        },
+        value: { nowMs: opts?.nowMs ?? state.deps.nowMs(), ownership: prepared.ownership },
+        assertCurrent: () => prepared.assertCurrent(),
       };
     },
     publish(committed) {

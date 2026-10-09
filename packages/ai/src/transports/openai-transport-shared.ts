@@ -7,6 +7,7 @@ import type {
   ToolCall,
   Usage,
 } from "@openclaw/llm-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
@@ -43,8 +44,6 @@ export const log = {
 };
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
-
-const OPENAI_RESPONSE_MODEL_CONFLICT = "Conflicting OpenAI response model attestations";
 
 function splitOpenAIResponseModelHeader(value: string | null | undefined): string[] {
   return value
@@ -117,7 +116,7 @@ export function createResponseModelTracker(enabled = true) {
     for (const model of models) {
       const reconciled = reconcileOpenAIResponseModels(responseModel, model);
       if (!reconciled) {
-        throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
+        throw new Error("Conflicting OpenAI response model attestations");
       }
       responseModel = reconciled;
     }
@@ -195,12 +194,8 @@ type MutableOpenAICompletionsReasoningBatch = {
   hasVisibleText: boolean;
 };
 
-const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
-  deltas: [],
-  mirroredThinking: [],
-  hasThinking: false,
-  hasVisibleText: false,
-};
+const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch =
+  createOpenAICompletionsReasoningBatch();
 
 const OPENAI_COMPLETIONS_REASONING_FIELDS = [
   "reasoning_content",
@@ -252,18 +247,15 @@ export function readOpenAICompletionsReasoningBatch(
 ): OpenAICompletionsReasoningBatch {
   let batch: MutableOpenAICompletionsReasoningBatch | undefined;
   const reasoningDetails = delta.reasoning_details;
-  let usedReasoningThinkingDetails = false;
   if (Array.isArray(reasoningDetails)) {
-    for (const item of reasoningDetails) {
-      if (!isRecord(item)) {
+    for (const detail of reasoningDetails) {
+      if (!isRecord(detail)) {
         continue;
       }
-      const detail = item;
       if (typeof detail.text !== "string" || !detail.text) {
         continue;
       }
       if (detail.type === "reasoning.text") {
-        usedReasoningThinkingDetails = true;
         batch ??= createOpenAICompletionsReasoningBatch();
         appendOpenAICompletionsReasoningDelta(batch, {
           kind: "thinking",
@@ -284,7 +276,7 @@ export function readOpenAICompletionsReasoningBatch(
       }
     }
   }
-  if (!usedReasoningThinkingDetails) {
+  if (!batch?.hasThinking) {
     for (const field of OPENAI_COMPLETIONS_REASONING_FIELDS) {
       const value = delta[field];
       if (typeof value === "string" && value.length > 0) {
@@ -342,18 +334,33 @@ export function parseOpenAICompletionsUsage(
     0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  const reasoningTokens = asFiniteNumber(rawUsage.completion_tokens_details?.reasoning_tokens);
+  const hasCoherentContext =
+    [
+      rawUsage.prompt_tokens,
+      rawUsage.completion_tokens,
+      rawUsage.total_tokens,
+      cacheRead,
+      cacheWrite,
+    ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) &&
+    rawUsage.prompt_tokens >= cacheRead + cacheWrite &&
+    rawUsage.total_tokens >= rawUsage.prompt_tokens + rawUsage.completion_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output,
     cacheRead,
     cacheWrite,
     // Managed transport exposes reasoning telemetry; the shipped package Usage shape does not.
-    ...(options?.includeReasoningTokens !== false &&
-    typeof reasoningTokens === "number" &&
-    Number.isFinite(reasoningTokens)
+    ...(options?.includeReasoningTokens !== false && reasoningTokens !== undefined
       ? { reasoningTokens }
       : {}),
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: rawUsage.prompt_tokens,
+          totalTokens: Math.max(input + output + cacheRead + cacheWrite, rawUsage.total_tokens),
+        }
+      : { state: "unavailable" },
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

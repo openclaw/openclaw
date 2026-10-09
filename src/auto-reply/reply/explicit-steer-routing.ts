@@ -15,23 +15,19 @@ import { replyRunRegistry } from "./reply-run-registry.js";
 
 export function parseSteerMessage(raw: string): string | null {
   const match = raw.trim().match(/^\/(?:steer|tell)(?:\s+([\s\S]*))?$/i);
-  if (!match) {
-    return null;
-  }
-  return (match[1] ?? "").trim();
+  return match ? (match[1] ?? "").trim() : null;
 }
 
 function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
-  const candidates = [targetSessionKey];
   // Authorized text slash turns can still arrive on a source-only :slash:
   // lane while the direct conversation owns the active reply operation.
-  if (targetSessionKey.includes(":slash:")) {
-    candidates.push(
-      targetSessionKey.replace(":slash:", ":direct:"),
-      targetSessionKey.replace(":slash:", ":dm:"),
-    );
-  }
-  return candidates;
+  return targetSessionKey.includes(":slash:")
+    ? [
+        targetSessionKey,
+        targetSessionKey.replace(":slash:", ":direct:"),
+        targetSessionKey.replace(":slash:", ":dm:"),
+      ]
+    : [targetSessionKey];
 }
 
 function resolveSteerSourceSessionKey(params: {
@@ -48,8 +44,8 @@ function resolveSteerSourceSessionKey(params: {
     return undefined;
   }
 
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  return resolveInternalSessionKey({ key: raw, alias });
 }
 
 /**

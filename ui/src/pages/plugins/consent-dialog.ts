@@ -39,8 +39,8 @@ type PluginConsentFallback = {
 
 export type PluginConsentState = {
   intent: PluginConsentIntent;
-  pluginId: string | null;
-  fallback: PluginConsentFallback | null;
+  pluginId: string;
+  fallback: PluginConsentFallback;
   details?: CapabilityConsentErrorDetails;
 };
 
@@ -268,19 +268,19 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): Temp
           }
         `,
       )}
-      ${
-        grants.llm
-          ? renderPluginMetaRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
-          : nothing
-      }
-      ${
-        grants.subagent
+      ${(["llm", "subagent"] as const).map((key) => {
+        const overrides = grants[key];
+        return overrides
           ? renderPluginMetaRow(
-              t("pluginConsent.subagentModelOverrides"),
-              modelOverrideSummary(grants.subagent),
+              t(
+                key === "llm"
+                  ? "pluginConsent.modelOverrides"
+                  : "pluginConsent.subagentModelOverrides",
+              ),
+              modelOverrideSummary(overrides),
             )
-          : nothing
-      }
+          : nothing;
+      })}
     `,
   );
 }
@@ -304,8 +304,6 @@ const PLUGIN_ORIGIN_LABELS: Readonly<Record<string, string>> = {
   official: "pluginsPage.official",
 };
 
-function pluginOriginLabel(origin: string, official?: boolean): string;
-function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
 function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
   if (official) {
     return t("pluginsPage.official");
@@ -392,10 +390,10 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
   const plugin = inspection?.plugin;
   const fallback = consent.fallback;
   const packageName = inspection?.source?.packageName;
-  const slug = consent.pluginId ?? packageName ?? fallback?.name ?? "plugin";
-  const name = plugin?.name ?? fallback?.name ?? slug;
-  const version = plugin?.version ?? fallback?.version;
-  const origin = pluginOriginLabel(plugin?.origin, fallback?.official);
+  const slug = consent.pluginId;
+  const name = plugin?.name ?? fallback.name;
+  const version = plugin?.version ?? fallback.version;
+  const origin = pluginOriginLabel(plugin?.origin, fallback.official);
   const meta = [origin, packageName].filter(Boolean).join(" · ");
   const action = props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name });
   const confirmUnavailable =

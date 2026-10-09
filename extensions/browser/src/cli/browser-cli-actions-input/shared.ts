@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -86,13 +87,20 @@ async function readActionsFile(filePath: string): Promise<string> {
       filePath: await fs.realpath(filePath),
       maxBytes: ACTIONS_INPUT_MAX_BYTES,
     });
-    return buffer.toString("utf8");
+    return decodeJsonInput(buffer, "--actions-file");
   } catch (cause) {
     if (cause instanceof FsSafeError && cause.code === "too-large") {
       throw createActionsInputTooLargeError("--actions-file", cause);
     }
     throw cause;
   }
+}
+
+function decodeJsonInput(buffer: Buffer, source: string): string {
+  if (!isUtf8(buffer)) {
+    throw new Error(`${source} must be valid UTF-8.`);
+  }
+  return buffer.toString("utf8");
 }
 
 export async function readFields(opts: {
@@ -103,7 +111,7 @@ export async function readFields(opts: {
     throw new Error("Specify only one of --fields or --fields-file");
   }
   const payload = opts.fieldsFile
-    ? await fs.readFile(opts.fieldsFile, "utf8")
+    ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
     : (opts.fields ?? "");
   if (!payload.trim()) {
     throw new Error("fields are required");
@@ -141,7 +149,7 @@ async function readStdinText(): Promise<string> {
     }
     chunks.push(buf);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeJsonInput(Buffer.concat(chunks), "--actions-file - stdin");
 }
 
 export async function readActionsPayload(opts: {

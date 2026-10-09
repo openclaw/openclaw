@@ -56,9 +56,6 @@ export function createTuiAuthChildOwner() {
   };
 
   return {
-    get running(): boolean {
-      return active !== null && isChildRunning(active.child);
-    },
     spawnAndWait: async (spawnChild: () => ChildProcess): Promise<TuiAuthChildResult> => {
       if (closed) {
         throw new Error("TUI auth child owner is closed");
@@ -69,12 +66,7 @@ export function createTuiAuthChildOwner() {
       const owned: ActiveAuthChild = { child: spawnChild() };
       active = owned;
       return await new Promise<TuiAuthChildResult>((resolve, reject) => {
-        let settled = false;
         const settle = (complete: () => void): void => {
-          if (settled) {
-            return;
-          }
-          settled = true;
           clearActive(owned);
           complete();
         };

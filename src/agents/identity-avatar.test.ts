@@ -52,13 +52,12 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace,
             identity: { avatar: "avatars/main.png" },
           },
-        ],
+        },
       },
     };
 
@@ -74,13 +73,12 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace,
             identity: { avatar: outsidePath },
           },
-        ],
+        },
       },
     };
 
@@ -105,7 +103,7 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", workspace }],
+        entries: { main: { workspace } },
       },
     };
 
@@ -119,7 +117,7 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", workspace, identity: { avatar: "avatars/missing.png" } }],
+        entries: { main: { workspace, identity: { avatar: "avatars/missing.png" } } },
       },
     };
 
@@ -142,7 +140,7 @@ describe("resolveAgentAvatar", () => {
     const absolute = resolveAgentAvatar(
       {
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: outsidePath } }],
+          entries: { main: { workspace, identity: { avatar: outsidePath } } },
         },
       },
       "main",
@@ -187,7 +185,7 @@ describe("resolveAgentAvatar", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", workspace, identity: { avatar: "avatars/too-big.png" } }],
+        entries: { main: { workspace, identity: { avatar: "avatars/too-big.png" } } },
       },
     };
 
@@ -201,10 +199,10 @@ describe("resolveAgentAvatar", () => {
   it("accepts remote and data avatars", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", identity: { avatar: "https://example.com/avatar.png" } },
-          { id: "data", identity: { avatar: "data:image/png;base64,aaaa" } },
-        ],
+        entries: {
+          main: { identity: { avatar: "https://example.com/avatar.png" } },
+          data: { identity: { avatar: "data:image/png;base64,aaaa" } },
+        },
       },
     };
 
@@ -225,10 +223,10 @@ describe("resolveAgentAvatar", () => {
     const oversized = `data:image/png;base64,${"A".repeat(AVATAR_MAX_DATA_URL_CHARS)}`;
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "generic", identity: { avatar: "data:text/plain,avatar" } },
-          { id: "oversized", identity: { avatar: oversized } },
-        ],
+        entries: {
+          generic: { identity: { avatar: "data:text/plain,avatar" } },
+          oversized: { identity: { avatar: oversized } },
+        },
       },
     };
 

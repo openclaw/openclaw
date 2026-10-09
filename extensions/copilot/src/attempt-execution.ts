@@ -13,6 +13,7 @@ import {
   clearActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAcceptedSessionSpawnResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
 import { deferBackgroundCompactionCleanup } from "./attempt-cleanup.js";
 import {
@@ -43,7 +44,7 @@ import type {
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createPromptError } from "./prompt-error.js";
-import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
+import { isMissingCopilotSessionError } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
@@ -138,7 +139,6 @@ export async function runCopilotExecution(context: {
     }
     void session.abort().catch(() => undefined);
   };
-  params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
   let sandbox: SandboxContext | null = null;
   let effectiveWorkspaceDir = resolvedWorkspaceForSandbox;
   if (resolvedWorkspaceForSandbox) {
@@ -150,9 +150,7 @@ export async function runCopilotExecution(context: {
         sandboxSessionKey,
       }));
     } catch (error: unknown) {
-      settled = true;
-      params.abortSignal?.removeEventListener("abort", abortActiveSession);
-      if (abortRequested || params.abortSignal?.aborted) {
+      if (params.abortSignal?.aborted) {
         return finishAttempt(
           createResult(input, {
             aborted: true,
@@ -179,8 +177,6 @@ export async function runCopilotExecution(context: {
   hookContext.workspaceDir = effectiveWorkspaceDir;
   const requestedCwd = readResolvedAttemptPath(input.cwd);
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspaceForSandbox) {
-    settled = true;
-    params.abortSignal?.removeEventListener("abort", abortActiveSession);
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
@@ -240,6 +236,10 @@ export async function runCopilotExecution(context: {
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
+    params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
+    if (params.abortSignal?.aborted) {
+      abortActiveSession();
+    }
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>
@@ -338,16 +338,15 @@ export async function runCopilotExecution(context: {
       userInputBridge,
     } = sessionSetup;
     userInputBridgeRef = userInputBridge;
-    const replayDecision = decideReplayAction({
-      sdkSessionId: input.initialReplayState?.sdkSessionId,
-      replayInvalid: input.initialReplayState?.replayInvalid,
-    });
-    downgradedFromResume = replayDecision.downgradedFromResume;
+    const previousSessionId = normalizeOptionalString(input.initialReplayState?.sdkSessionId);
+    downgradedFromResume = Boolean(
+      previousSessionId && input.initialReplayState?.replayInvalid === true,
+    );
     const resumeSessionId = settledToolFinalization
       ? settledFinalizationSessionId
-      : replayDecision.action === "resume"
-        ? replayDecision.sdkSessionId
-        : undefined;
+      : downgradedFromResume
+        ? undefined
+        : previousSessionId;
     if (resumeSessionId) {
       try {
         session = (await client.resumeSession(resumeSessionId, {
@@ -365,16 +364,13 @@ export async function runCopilotExecution(context: {
             error,
           );
         }
-        const classification = classifyResumeFailure(error);
-        if (!classification.recoverable) {
+        if (!isMissingCopilotSessionError(error)) {
           throw error;
         }
         resumeFailureRecovered = true;
-        session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
-        nativeSessionCreatedFresh = true;
-        nativeSessionHistoryValidated = true;
       }
-    } else {
+    }
+    if (!session) {
       session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
       nativeSessionCreatedFresh = true;
       nativeSessionHistoryValidated = true;

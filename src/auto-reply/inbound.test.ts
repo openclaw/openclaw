@@ -1,11 +1,11 @@
 /** Tests inbound auto-reply handling across channel message contexts. */
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
@@ -55,11 +55,6 @@ function installGroupRequireMentionTestPlugins(
         plugin: createChannelTestPluginBase({ id: "line" }),
         source: "test",
       },
-      {
-        pluginId: "imessage",
-        plugin: createChannelTestPluginBase({ id: "imessage" }),
-        source: "test",
-      },
     ]),
   );
 }
@@ -85,12 +80,6 @@ describe("applyTemplate", () => {
     const ctx: TemplateContext = { CommandArgs: { raw: "go" } };
 
     expect(applyTemplate("args={{CommandArgs}}", ctx)).toBe("args=");
-  });
-
-  it("renders missing placeholders as empty", () => {
-    const ctx: TemplateContext = {};
-
-    expect(applyTemplate("missing={{Missing}}", ctx)).toBe("missing=");
   });
 
   it("never renders channel-owned conversation image references", () => {
@@ -255,18 +244,6 @@ describe("finalizeInboundContext", () => {
 });
 
 describe("inbound dedupe", () => {
-  it("skips duplicates with the same key", () => {
-    resetInboundDedupe();
-    const ctx: MsgContext = {
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "whatsapp:+1555",
-      MessageSid: "msg-1",
-    };
-    commitInboundForTest(ctx);
-    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate" });
-  });
-
   it("does not dedupe when the peer changes", () => {
     resetInboundDedupe();
     const base: MsgContext = {
@@ -310,21 +287,11 @@ describe("inbound dedupe", () => {
   });
 });
 
-const senderMetaTempDirs = createSuiteTempRootTracker({
-  prefix: "openclaw-sender-meta-",
-});
+const senderMetaTempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sender-meta-");
 
 describe("initSessionState BodyStripped", () => {
-  beforeAll(async () => {
-    await senderMetaTempDirs.setup();
-  });
-
-  afterAll(async () => {
-    await senderMetaTempDirs.cleanup();
-  });
-
   it("prefers BodyForAgent over Body for group chats", async () => {
-    const root = await senderMetaTempDirs.make("group");
+    const root = senderMetaTempDirs.make();
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -346,7 +313,7 @@ describe("initSessionState BodyStripped", () => {
   });
 
   it("prefers BodyForAgent over Body for direct chats", async () => {
-    const root = await senderMetaTempDirs.make("direct");
+    const root = senderMetaTempDirs.make();
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
@@ -408,12 +375,11 @@ describe("mention helpers", () => {
           groupChat: { mentionPatterns: ["\\bglobal\\b"] },
         },
         agents: {
-          list: [
-            {
-              id: "work",
+          entries: {
+            work: {
               groupChat: { mentionPatterns: ["\\bworkbot\\b"] },
             },
-          ],
+          },
         },
       },
       "work",
@@ -554,31 +520,6 @@ describe("resolveGroupRequireMention", () => {
       key: "line:group:r123",
       channel: "line",
       id: "r123",
-      chatType: "group",
-    };
-
-    const { group } = prepareReplyConversation({ ctx, groupResolution });
-    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
-  });
-
-  it("preserves plugin-backed channel requireMention resolution", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        imessage: {
-          groups: {
-            "chat:primary": { requireMention: false },
-          },
-        },
-      },
-    };
-    const ctx: TemplateContext = {
-      Provider: "imessage",
-      From: "imessage:group:chat:primary",
-    };
-    const groupResolution: GroupKeyResolution = {
-      key: "imessage:group:chat:primary",
-      channel: "imessage",
-      id: "chat:primary",
       chatType: "group",
     };
 

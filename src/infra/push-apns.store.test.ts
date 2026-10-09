@@ -58,44 +58,6 @@ afterEach(async () => {
 });
 
 describe("push APNs registration store", () => {
-  it("round-trips direct registrations without creating the retired JSON store", async () => {
-    const baseDir = await makeTempDir();
-    const saved = await registerDirectApnsRegistration({
-      nodeId: "ios-node-1",
-      environment: "sandbox",
-      baseDir,
-    });
-
-    await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(saved);
-    await expect(
-      fs.access(path.join(baseDir, "push", "apns-registrations.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("ignores a present valid legacy JSON registration during runtime reads", async () => {
-    const baseDir = await makeTempDir();
-    const legacyPath = path.join(baseDir, "push", "apns-registrations.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        registrationsByNodeId: {
-          "legacy-node": {
-            nodeId: "legacy-node",
-            [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
-            topic: "ai.openclaw.ios",
-            environment: "sandbox",
-            updatedAtMs: 1,
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    await expect(loadApnsRegistration("legacy-node", baseDir)).resolves.toBeNull();
-    await fs.access(legacyPath);
-  });
-
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
     const baseDir = await makeTempDir();
     const relay = await registerApnsRegistration({
@@ -206,6 +168,9 @@ describe("push APNs registration store", () => {
     const baseDir = await makeTempDir();
     const stale = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
     const fresh = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
+    await expect(
+      fs.access(path.join(baseDir, "push", "apns-registrations.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(fresh.updatedAtMs).toBe(stale.updatedAtMs + 1);
     await expect(

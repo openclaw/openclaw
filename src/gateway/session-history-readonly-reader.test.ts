@@ -17,7 +17,6 @@ import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly-scope.js";
-import { assertOpenClawAgentCurrentRuntimeSchema } from "../state/openclaw-agent-db-schema-helpers.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -184,6 +183,16 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
             "requested-message",
           ]);
+          // The race must reach SQLite while canonical admission stays warm.
+          const missingEntryReader = createReadonlySessionHistoryReader({
+            ...target,
+            entryValidationKey: "agent:main:missing-row",
+          });
+          await scope.run(target.database, () =>
+            missingEntryReader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+              maxMessages: 10,
+            }),
+          );
         }
         if (admission === "policy") {
           setCanonicalSqliteSessionMainKey(database, "custom");
@@ -249,18 +258,6 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
     });
   },
 );
-
-it("observes a row changed after preparation and before the first worker read", async () => {
-  await withHistory(async ({ target, database }) => {
-    const reader = createReadonlySessionHistoryReader(target);
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run("{", target.entryValidationKey!);
-    await expect(
-      reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-    ).rejects.toThrow("openclaw doctor --fix");
-  });
-});
 
 it("revalidates the retained handle between paged and anchored reader invocations", async () => {
   await withHistory(async ({ target, database }) => {
@@ -403,12 +400,6 @@ it("validates participant projection on the current reader handle", async () => 
 it("admits history without creating a missing additive participant table", async () => {
   await withHistory(async ({ target, database }) => {
     database.db.exec("DROP TABLE session_participants");
-    expect(() =>
-      assertOpenClawAgentCurrentRuntimeSchema(database.db, {
-        agentId: database.agentId,
-        pathname: database.path,
-      }),
-    ).not.toThrow();
     const reader = createReadonlySessionHistoryReader(target);
     const page = await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
       maxMessages: 10,

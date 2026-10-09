@@ -45,10 +45,8 @@ vi.mock("./chrome.js", () => ({
   stopOpenClawChrome: lifecycleMocks.stopOpenClawChrome,
 }));
 
-vi.mock("./chrome-mcp.runtime.js", () => ({
-  getChromeMcpModule: async () => ({
-    closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
-  }),
+vi.mock("./chrome-mcp.js", () => ({
+  closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
 }));
 
 vi.mock("./pw-ai-module.js", () => ({

@@ -7,7 +7,6 @@ import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import { RECEIPT, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
-import { requireWorkerProfile } from "./service-validation.js";
 
 describe("local project prepared worker reserves", () => {
   const fixture = usePreparedPoolFixture();
@@ -58,14 +57,12 @@ describe("local project prepared worker reserves", () => {
         arch: "x64",
       }),
     };
-    const serviceError = (_code: string, message: string) => new Error(message);
     const createIntentOwner = () =>
       createWorkerProviderIntent({
         store: fixture.store,
         getConfig: () => fixture.config,
         projectNamespace: "prepared-pool-test",
         providerFor: () => fixture.provider,
-        requireWorkerProfile: (value) => requireWorkerProfile(value, serviceError),
         prepareNodeArtifacts: async () => ({
           artifacts: {
             nodeBootstrapSha256: "e".repeat(64),
@@ -79,9 +76,7 @@ describe("local project prepared worker reserves", () => {
         }),
         resumeProvision: async (record) => await fixture.ready(record),
         isStopping: () => false,
-        inState: (record, ...states) => states.includes(record.state),
         withLock: async (_environmentId, task) => task(),
-        serviceError,
       });
     const createPool = (intentOwner: ReturnType<typeof createIntentOwner>) =>
       fixture.pool({

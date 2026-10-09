@@ -5,9 +5,39 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  captureOpenClawStateReadSource,
+  retireIdleOpenClawStateReadWorkers,
+} from "./openclaw-state-read-worker.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+
+it("retires cached readers after independent custody joins and permits reuse", async () => {
+  const { options } = source();
+  const nativeSource = captureRetainedNativeWorkerSource();
+  const task = queueTask();
+  const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+  try {
+    await task.captured;
+    expect(await retireIdleOpenClawStateReadWorkers(nativeSource)).toBe(false);
+    expect(mock.closePool).not.toHaveBeenCalled();
+  } finally {
+    task.result.resolve(emptyReply);
+    await reading;
+  }
+  expect(mock.closePool).not.toHaveBeenCalled();
+  expect(await retireIdleOpenClawStateReadWorkers(nativeSource)).toBe(true);
+  expect(mock.closePool).toHaveBeenCalledOnce();
+
+  const next = queueTask();
+  next.result.resolve(emptyReply);
+  await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).resolves.toEqual(
+    emptyReply,
+  );
+  expect(mock.create).toHaveBeenCalledTimes(2);
+});
 
 it("keeps lazy reads with their captured generation when another generation dispatches them", async () => {
   const { options } = source();
@@ -31,8 +61,8 @@ it("keeps lazy reads with their captured generation when another generation disp
           const secondTask = queueTask();
           firstTask.result.resolve(emptyReply);
           secondTask.result.resolve(emptyReply);
-          const firstTransport = first.createTransport({ type: "fleet.list" });
-          const secondTransport = second.createTransport({ type: "fleet.list" });
+          const firstTransport = first.createTransport({ type: "backup.runs" });
+          const secondTransport = second.createTransport({ type: "backup.runs" });
           try {
             await expect(firstTransport.startRead(location, authority).result).resolves.toEqual({
               value: emptyReply,
@@ -43,12 +73,12 @@ it("keeps lazy reads with their captured generation when another generation disp
             expect(mock.create).toHaveBeenCalledTimes(2);
             expect(mock.create).toHaveBeenNthCalledWith(
               1,
-              expect.objectContaining({ workerUrl: firstUrl, maxWorkers: 2 }),
+              expect.objectContaining({ workerUrl: firstUrl }),
               expect.objectContaining({ retainedTransport: true }),
             );
             expect(mock.create).toHaveBeenNthCalledWith(
               2,
-              expect.objectContaining({ workerUrl: secondUrl, maxWorkers: 2 }),
+              expect.objectContaining({ workerUrl: secondUrl }),
               expect.objectContaining({ retainedTransport: true }),
             );
           } finally {
@@ -86,7 +116,7 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     bind((url) => new URL(`${url.href}?synthetic-generation=owned`));
     captured = captureOpenClawStateReadSource();
     const retainedSource = captured;
-    const transport = retainedSource.createTransport({ type: "fleet.list" });
+    const transport = retainedSource.createTransport({ type: "backup.runs" });
     const task = queueTask();
     task.result.resolve(emptyReply);
     scope.run("accepted reader", () => {

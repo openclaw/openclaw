@@ -216,6 +216,7 @@ async function runGenerateVoiceResponse(
     coreConfig,
     agentRuntime: runtime,
     callId: "call-123",
+    agentId: "main",
     from: "+15550001111",
     senderIsOwner: overrides?.senderIsOwner,
     transcript: overrides?.transcript ?? [{ speaker: "user", text: userMessage }],
@@ -640,6 +641,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       from: "+15550001111",
       senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
@@ -690,6 +692,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       from: "+15550001111",
       senderIsOwner: undefined,
       transcript: [{ speaker: "user", text: "hello there" }],
@@ -738,6 +741,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       sessionKey,
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -811,6 +815,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "main",
       sessionKey: "voice:call:call-123",
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -842,6 +847,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       sessionKey: "meet-room-1",
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -869,6 +875,7 @@ describe("generateVoiceResponse", () => {
         coreConfig: {} as OpenClawConfig,
         agentRuntime: runtime,
         callId: "call-123",
+        agentId: "voice",
         sessionKey,
         from: "+15550001111",
         senderIsOwner: undefined,
@@ -907,6 +914,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: { session: { mainKey: "work" } },
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       sessionKey: "agent:voice:main",
       from: "+15550001111",
       senderIsOwner: undefined,
@@ -919,10 +927,10 @@ describe("generateVoiceResponse", () => {
   });
 
   it.each([
-    { configuredAgentId: undefined, agentId: "main" },
-    { configuredAgentId: "voice", agentId: "voice" },
+    { configuredAgentId: "voice", agentId: "main" },
+    { configuredAgentId: undefined, agentId: "voice" },
   ])(
-    "uses the $agentId agent workspace with config agentId=$configuredAgentId",
+    "uses recorded owner $agentId with config agentId=$configuredAgentId",
     async ({ configuredAgentId, agentId }) => {
       const {
         runtime,
@@ -943,6 +951,7 @@ describe("generateVoiceResponse", () => {
         coreConfig,
         agentRuntime: runtime,
         callId: "call-123",
+        agentId,
         from: "+15550001111",
         senderIsOwner: undefined,
         transcript: [],
@@ -971,6 +980,31 @@ describe("generateVoiceResponse", () => {
       expect(args.sessionFile).toBeUndefined();
     },
   );
+
+  it("rejects an empty recorded owner before session work", async () => {
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission, sessionStore } = createAgentRuntime(
+      [],
+    );
+
+    await expect(
+      generateVoiceResponse({
+        voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice" }),
+        coreConfig: {},
+        agentRuntime: runtime,
+        callId: "call-unowned",
+        agentId: " ",
+        sessionKey: "agent:support:voice:15550001111",
+        from: "+15550001111",
+        senderIsOwner: undefined,
+        transcript: [],
+        userMessage: "hello there",
+      }),
+    ).rejects.toThrow("Voice Call has no recorded agent owner");
+
+    expect(runWithWorkAdmission).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(sessionStore).toEqual({});
+  });
 
   it("prefers the agent frozen on the call", async () => {
     const { runtime, runEmbeddedAgent, resolveStorePath } = createAgentRuntime([
@@ -1020,6 +1054,7 @@ describe("generateVoiceResponse", () => {
       coreConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      agentId: "voice",
       from: "+15550001111",
       senderIsOwner: undefined,
       transcript: [],

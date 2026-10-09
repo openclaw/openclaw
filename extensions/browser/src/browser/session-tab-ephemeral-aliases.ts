@@ -2,6 +2,7 @@
  * Process-local aliases for durable storage keys and non-durable tab rows.
  */
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
 
 type AliasIdentity = {
@@ -34,13 +35,7 @@ function normalizedAliases<T extends string | undefined>(
   primary: T,
   aliases: Array<string | undefined>,
 ): Set<T | string> {
-  return new Set([
-    primary,
-    ...aliases.flatMap((alias) => {
-      const value = alias?.trim();
-      return value ? [value] : [];
-    }),
-  ]);
+  return new Set([primary, ...normalizeTrimmedStringList(aliases)]);
 }
 
 function durableKeysByInteraction(): Map<string, Set<string>> {
@@ -96,22 +91,18 @@ export function rememberDurableTabAliases(
   }
 }
 
-export function resolveDurableTabAlias(identity: AliasIdentity): string | undefined {
-  const storageKeys = durableKeysByInteraction().get(interactionKey(identity));
-  return storageKeys?.size === 1 ? storageKeys.values().next().value : undefined;
+function readAliasCandidates<T>(
+  targets: { size: number; values: () => Iterator<T, undefined> } | undefined,
+) {
+  return {
+    target: targets?.size === 1 ? targets.values().next().value : undefined,
+    hasCandidates: (targets?.size ?? 0) > 0,
+  };
 }
 
-export function hasDurableTabAlias(identity: AliasIdentity): boolean {
-  return (durableKeysByInteraction().get(interactionKey(identity))?.size ?? 0) > 0;
-}
-
-export function resolveDurableTabExact(identity: AliasIdentity): string | undefined {
-  const storageKeys = durableExactKeysByInteraction().get(interactionKey(identity));
-  return storageKeys?.size === 1 ? storageKeys.values().next().value : undefined;
-}
-
-export function hasDurableTabExact(identity: AliasIdentity): boolean {
-  return (durableExactKeysByInteraction().get(interactionKey(identity))?.size ?? 0) > 0;
+export function readDurableTabAlias(identity: AliasIdentity, kind: "alias" | "exact" = "alias") {
+  const mappings = kind === "exact" ? durableExactKeysByInteraction() : durableKeysByInteraction();
+  return readAliasCandidates(mappings.get(interactionKey(identity)));
 }
 
 function volatileAliasTargetKey(target: VolatileAliasTarget): string {
@@ -156,22 +147,10 @@ export function rememberVolatileTabAliases(
   }
 }
 
-export function resolveVolatileTabAlias(identity: AliasIdentity): VolatileAliasTarget | undefined {
-  const targets = volatileAliasesByInteraction().get(interactionKey(identity));
-  return targets?.size === 1 ? targets.values().next().value : undefined;
-}
-
-export function hasVolatileTabAlias(identity: AliasIdentity): boolean {
-  return (volatileAliasesByInteraction().get(interactionKey(identity))?.size ?? 0) > 0;
-}
-
-export function resolveVolatileTabExact(identity: AliasIdentity): VolatileAliasTarget | undefined {
-  const targets = volatileExactTargetsByInteraction().get(interactionKey(identity));
-  return targets?.size === 1 ? targets.values().next().value : undefined;
-}
-
-export function hasVolatileTabExact(identity: AliasIdentity): boolean {
-  return (volatileExactTargetsByInteraction().get(interactionKey(identity))?.size ?? 0) > 0;
+export function readVolatileTabAlias(identity: AliasIdentity, kind: "alias" | "exact" = "alias") {
+  const mappings =
+    kind === "exact" ? volatileExactTargetsByInteraction() : volatileAliasesByInteraction();
+  return readAliasCandidates(mappings.get(interactionKey(identity)));
 }
 
 export function forgetVolatileTabAlias(identity: AliasIdentity): void {

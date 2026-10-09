@@ -148,7 +148,7 @@ disable durable notes globally; explicit `transcribe` mode still exposes only
 its bounded live tail. Twilio joins do not have the browser caption stream and
 are not captured by this path.
 
-For a yes/no listen probe:
+For a yes/no listen check:
 
 ```bash
 openclaw googlemeet test-listen <meet-url> --transport chrome-node

@@ -1,4 +1,4 @@
-// Text formatting helpers shared by command output.
+import { containingSegment } from "@openclaw/normalization-core/grapheme";
 import * as terminalAnsi from "../../packages/terminal-core/src/ansi.js";
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -20,7 +20,7 @@ export const shortenText = (value: string, maxLen: number) => {
 export function formatTextCell(text: string, width: number): string {
   // Eight UTF-16 units per column allow ordinary accents/emoji; reserve width for padding.
   // Whole-cluster raw bounds also catch invisible runs and oversized single graphemes.
-  const overflow = graphemeSegmenter.segment(text).containing(width * 7);
+  const overflow = containingSegment(graphemeSegmenter.segment(text), text, width * 7);
   const bounded = overflow ? `${text.slice(0, overflow.index)}…` : text;
   const boundedWidth = terminalAnsi.visibleWidth(bounded);
   const fitted =

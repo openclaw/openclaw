@@ -22,8 +22,8 @@ import {
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
 import {
-  authorizeControlUiPluginCookieRequest,
   bindControlUiPluginCookieRequestAuthority,
+  prepareControlUiPluginCookieRequest,
   resolveControlUiPluginAuthCookieGeneration,
 } from "./http-auth-plugin-cookie.js";
 import {
@@ -333,7 +333,6 @@ export async function authorizeControlUiReadRequestOrReply(
     return null;
   }
   const authMethod = authResult.method ?? "none";
-  const trustDeclaredOperatorScopes = authMethod === "trusted-proxy" || authMethod === "tailscale";
   const operatorScopes = resolveControlUiReadOperatorScopes(
     params.req,
     authMethod,
@@ -344,8 +343,6 @@ export async function authorizeControlUiReadRequestOrReply(
     setControlUiPluginAuthCookieForRequest(
       params.req,
       params.res,
-      authMethod,
-      trustDeclaredOperatorScopes,
       authGeneration,
       cfg,
       operatorScopes,
@@ -410,23 +407,12 @@ export async function authorizeGatewayHttpRequestOrReply(
 export function setControlUiPluginAuthCookieForRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  authMethod: GatewayAuthResult["method"],
-  trustDeclaredOperatorScopes: boolean,
   authGeneration: string | undefined,
   cfg: OpenClawConfig,
-  authenticatedScopes?: readonly string[],
+  authenticatedScopes: readonly string[],
   authenticatedProfileId?: string,
 ): ControlUiPluginTabAuthGrant[] {
-  const scopes =
-    authenticatedScopes ??
-    (usesSharedSecretGatewayMethod(authMethod)
-      ? [...CLI_DEFAULT_OPERATOR_SCOPES]
-      : authMethod === "trusted-proxy" || authMethod === "tailscale"
-        ? resolveTrustedHttpOperatorScopes(req, {
-            trustDeclaredOperatorScopes,
-          })
-        : []);
-  const grants = listControlUiPluginTabAuthGrants(scopes);
+  const grants = listControlUiPluginTabAuthGrants(authenticatedScopes);
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {
       generation: resolveControlUiPluginAuthCookieGeneration(authGeneration, cfg),
@@ -452,12 +438,16 @@ export async function authorizePluginGatewayHttpRequestOrReply(
 } | null> {
   const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
   const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
-  const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
+  const cookieAuth = await prepareControlUiPluginCookieRequest(params.req, {
     requestPath: params.requestPath,
     authGeneration,
     res: params.res,
   });
   if (cookieAuth) {
+    if (!hasCurrentClientAuthority()) {
+      sendUnauthorized(params.res);
+      return null;
+    }
     return bindControlUiPluginCookieRequestAuthority(cookieAuth, {
       ...params,
       hasCurrentClientAuthority,
@@ -570,10 +560,6 @@ export async function checkGatewayHttpRequestAuth(
 export async function authorizeScopedGatewayHttpRequestOrReply(
   params: GatewayHttpRequestAuthParams & {
     operatorMethod: string;
-    resolveOperatorScopes: (
-      req: IncomingMessage,
-      requestAuth: AuthorizedGatewayHttpRequest,
-    ) => string[];
   },
 ): Promise<{
   cfg: OpenClawConfig;
@@ -591,7 +577,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(
     return null;
   }
 
-  const operatorScopes = params.resolveOperatorScopes(params.req, requestAuth);
+  const operatorScopes = resolveSharedSecretHttpOperatorScopes(params.req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, operatorScopes);
   if (!scopeAuth.allowed) {
     sendMissingScopeForbidden(params.res, scopeAuth.missingScope);

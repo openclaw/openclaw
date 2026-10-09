@@ -58,7 +58,7 @@ repairing state. If ownership remains held, Doctor warns, restores the service,
 and refuses the unsafe repair. On macOS, failed activation attempts restore the
 LaunchAgent registration so its KeepAlive policy can recover; the error reports
 whether the job is loaded and gives a recovery command if bootstrap also fails.
-An ambiguous `kickstart` error followed by a probe that confirms the job is absent
+An ambiguous `kickstart` error followed by a check that confirms the job is absent
 uses bootstrap recovery; successful activation then completes normally. A failure
 for a job that remains loaded stays visible.
 
@@ -66,6 +66,32 @@ Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
+
+After restoration, Doctor verifies the Gateway with the shared health probe used
+by `openclaw gateway start`. A running process or owned listener alone does not
+mean it is ready. If the readiness budget expires while the service is running,
+Doctor leaves it running and warns that readiness was not verified, including
+the observed startup phase when available. Run `openclaw gateway status --deep`
+or `openclaw gateway diagnostics export` to investigate; repair still completes.
+
+When an exited container leaves a Gateway lock in a bind-mounted state directory,
+Doctor uses Gateway startup's namespace and heartbeat policy. It waits up to
+95 seconds for an unverifiable container owner, bounded by any active service
+stop deadline, and reclaims the lock once its last renewal is more than 90 seconds
+old. An already stale lock needs no wait. The waiting message names the holder's
+host, PID namespace, and renewal age. If the holder keeps renewing, Doctor leaves
+state unchanged and reports how long to wait before retrying. A verified live
+holder on the same host must stop before ordinary repair can proceed; Doctor
+names its PID. Update-driven foreground shutdown retains its existing drain budget.
+Do not delete a lock that an active Gateway might still own.
+
+Once Doctor owns maintenance, it checks the update requester's current authority
+within that same ownership scope. Its own maintenance window does not trigger a
+lock wait or an offline-maintenance refusal; requester revocation still stops repair.
+
+When maintenance cannot acquire state ownership, Doctor includes the underlying
+schema or filesystem error. A shared-state database from a newer OpenClaw build
+stays unchanged; rerun Doctor with a build that supports that database version.
 
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
@@ -81,7 +107,7 @@ reports what it removed or skipped; it does not guarantee a replacement service
 will be installed. Explicit repair maintenance skips this separate cleanup flow.
 
 If Doctor stopped a managed Gateway for repair, a failed or timed-out restoration
-probe produces a warning and Doctor still attempts to start that service and
+check produces a warning and Doctor still attempts to start that service and
 verify readiness. Live maintenance custody and update admission still apply;
 observed changes to the service command, account, or manager require operator review.
 An explicit ownership refusal is reported as a refusal, without attempting to
@@ -91,9 +117,9 @@ that identity cannot be captured, Doctor leaves the service running and reports
 the inspection warning; live state writers still prevent unsafe offline repair.
 
 When service inspection blocks repair, Doctor and `gateway status --deep` name
-the failed native probe:
+the failed native check:
 
-- **Linux inspection deadline expired:** the manager probe or its custody/admission
+- **Linux inspection deadline expired:** the manager check or its custody/admission
   guards exhausted the inspection budget. This does not mean the user session bus
   is missing. Check the reported restoration result and run
   `openclaw gateway status --deep` after recovery.
@@ -102,8 +128,8 @@ the failed native probe:
   command alone is insufficient: effective service inspection also uses
   `busctl --user`. On Debian/Ubuntu, install `dbus-user-session`, then run
   `systemctl --user start dbus.socket` from that account's user session.
-- **Probe cannot start (`EACCES`/`EPERM`):** check executable permissions and
-  directory access as the service account. Native probes run from the filesystem
+- **Check cannot start (`EACCES`/`EPERM`):** check executable permissions and
+  directory access as the service account. Native checks run from the filesystem
   root so an inaccessible operator directory inherited through `sudo -u` does
   not prevent inspection.
 - **macOS GUI domain unavailable:** sign in to the desktop as the target user
@@ -125,7 +151,7 @@ owner stop it and run Doctor as the state-owning account with
 `OPENCLAW_SERVICE_REPAIR_POLICY=external`. This existing policy skips native
 maintenance inspection and service mutations; it retains Gateway/state
 coordinators and agent-database lease checks. Shutdown and restart remain with
-the deployment owner. A failed native probe is never treated as proof that the
+the deployment owner. A failed native check is never treated as proof that the
 Gateway is stopped.
 
 Health diagnostics also leave native service inspection to that external owner.

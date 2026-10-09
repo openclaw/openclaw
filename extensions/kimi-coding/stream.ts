@@ -191,12 +191,10 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   const nextContent: unknown[] = [];
   for (const block of record.content) {
     const typedBlock = asOptionalObjectRecord(block);
-    if (typedBlock?.type !== "text" || typeof typedBlock.text !== "string") {
-      nextContent.push(block);
-      continue;
-    }
-
-    const parsed = parseKimiTaggedToolCalls(typedBlock.text);
+    const parsed =
+      typedBlock?.type === "text" && typeof typedBlock.text === "string"
+        ? parseKimiTaggedToolCalls(typedBlock.text)
+        : null;
     if (!parsed) {
       nextContent.push(block);
       continue;

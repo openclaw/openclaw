@@ -32,6 +32,8 @@ export type ChannelProgressDraftCompositorParams = {
   entry: StreamingCompatEntry | null | undefined;
   /** Prepared items own display; raw callbacks retain diagnostic bookkeeping only. */
   preparedItems?: boolean;
+  /** Keep one public operation/task status when the rolling tool log is hidden. */
+  showWorkStatus?: boolean;
   mode: StreamingMode;
   active: boolean;
   seed: string;

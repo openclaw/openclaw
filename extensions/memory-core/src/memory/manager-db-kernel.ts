@@ -142,34 +142,24 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
           )
           .run(params.metaKey);
 
-        params.targetDb.exec(`
-        DELETE FROM main.memory_index_sources;
-        INSERT INTO main.memory_index_sources (id, path, source, hash, mtime, size)
-        SELECT id, path, source, hash, mtime, size
-        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
-
-        DELETE FROM main.memory_index_chunks;
-        INSERT INTO main.memory_index_chunks (
-          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        )
-        SELECT
-          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
-
-        DELETE FROM main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
-        INSERT INTO main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
-          chunk_id, importance, triggers, project_key
-        )
-        SELECT chunk_id, importance, triggers, project_key
-        FROM ${MEMORY_REINDEX_SCHEMA}.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
-
-        DELETE FROM main.memory_index_chunk_provenance;
-        INSERT INTO main.memory_index_chunk_provenance (
-          chunk_id, origin_class, session_kind, observed_at, supersedes_key
-        )
-        SELECT chunk_id, origin_class, session_kind, observed_at, supersedes_key
-        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunk_provenance;
-      `);
+        params.targetDb.exec(
+          Object.entries({
+            memory_index_sources: "id, path, source, hash, mtime, size",
+            memory_index_chunks:
+              "chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at",
+            [MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE]:
+              "chunk_id, importance, triggers, project_key",
+            memory_index_chunk_provenance:
+              "chunk_id, origin_class, session_kind, observed_at, supersedes_key",
+          })
+            .map(
+              ([table, columns]) =>
+                `DELETE FROM main.${table};\n` +
+                `INSERT INTO main.${table} (${columns})\n` +
+                `SELECT ${columns} FROM ${MEMORY_REINDEX_SCHEMA}.${table};`,
+            )
+            .join("\n"),
+        );
 
         replaceMemoryChunkFtsTable(params.targetDb);
         replaceMemoryPathFtsTable(params.targetDb);

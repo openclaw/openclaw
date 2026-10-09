@@ -10,6 +10,7 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -44,11 +45,13 @@ export type PreparedModelRuntimeCatalogSource = Readonly<{
 }>;
 
 export type PreparedModelRuntimeCatalogAccessParams = {
+  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
   agentFacts: PreparedModelRuntimeAgentFacts;
   nativeConfigFingerprint: string;
   catalogFacts: PreparedModelRuntimeCatalogFacts;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   isCurrent: () => boolean;
+  isPublished?: () => boolean;
   retirementSignal: AbortSignal;
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
     Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;

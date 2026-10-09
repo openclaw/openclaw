@@ -27,10 +27,6 @@ type MentionTarget = {
   replacementText?: string;
 };
 
-function isWhatsAppGroupJid(jid: string): boolean {
-  return jid.endsWith("@g.us");
-}
-
 export function mayContainWhatsAppOutboundMention(text: string): boolean {
   return /@\+?\d/.test(text);
 }
@@ -102,17 +98,9 @@ function extractLidDigits(value: string | null | undefined): string | null {
   return parts && LID_JID_DOMAIN_RE.test(parts.domain) ? parts.user : null;
 }
 
-function participantValues(participant: WhatsAppOutboundMentionParticipant): {
-  id?: string | null;
-  lid?: string | null;
-  phoneNumber?: string | null;
-  e164?: string | null;
-} {
-  return typeof participant === "string" ? { id: participant } : participant;
-}
-
-function chooseMentionJid(participant: WhatsAppOutboundMentionParticipant): string | null {
-  const values = participantValues(participant);
+function chooseMentionJid(
+  values: Exclude<WhatsAppOutboundMentionParticipant, string>,
+): string | null {
   const idJid = normalizeKnownUserJid(values.id ?? "");
   const lidJid = normalizeKnownUserJid(values.lid ?? "");
   return (
@@ -132,7 +120,8 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
   const byPhone = new Map<string, MentionTarget>();
   const byLid = new Map<string, MentionTarget>();
   for (const participant of participants) {
-    const mentionJid = chooseMentionJid(participant);
+    const values = typeof participant === "string" ? { id: participant } : participant;
+    const mentionJid = chooseMentionJid(values);
     if (!mentionJid) {
       continue;
     }
@@ -141,7 +130,6 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
       mentionJid,
       ...(lidDigits ? { replacementText: `@${lidDigits}` } : {}),
     };
-    const values = participantValues(participant);
     for (const value of [values.id, values.phoneNumber, values.e164]) {
       const digits = extractPhoneDigits(value);
       if (digits && !byPhone.has(digits)) {
@@ -178,7 +166,7 @@ export function resolveWhatsAppOutboundMentions(params: {
   participants?: readonly WhatsAppOutboundMentionParticipant[];
 }): WhatsAppOutboundMentionResolution {
   if (
-    !isWhatsAppGroupJid(params.chatJid) ||
+    !params.chatJid.endsWith("@g.us") ||
     !mayContainWhatsAppOutboundMention(params.text) ||
     !params.participants?.length
   ) {
@@ -191,48 +179,24 @@ export function resolveWhatsAppOutboundMentions(params: {
   }
 
   const codeRanges = collectCodeRanges(params.text);
-  const replacements: Array<{ start: number; end: number; text: string }> = [];
   const mentionedJids = new Set<string>();
-
-  for (const match of params.text.matchAll(OUTBOUND_MENTION_RE)) {
-    const start = match.index;
-    const token = match[0];
-    if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
-      continue;
-    }
-    const rawDigits = match[1];
-    if (!rawDigits) {
-      continue;
-    }
-    const digits = rawDigits.replace(/\D/g, "");
-    const target = token.startsWith("@+")
-      ? (byPhone.get(digits) ?? byLid.get(digits))
-      : (byLid.get(digits) ?? byPhone.get(digits));
-    if (!target) {
-      continue;
-    }
-    mentionedJids.add(target.mentionJid);
-    if (target.replacementText && target.replacementText !== token) {
-      replacements.push({
-        start,
-        end: start + token.length,
-        text: target.replacementText,
-      });
-    }
-  }
-
-  if (replacements.length === 0) {
-    return { text: params.text, mentionedJids: [...mentionedJids] };
-  }
-
-  let text = "";
-  let cursor = 0;
-  for (const replacement of replacements) {
-    text += params.text.slice(cursor, replacement.start);
-    text += replacement.text;
-    cursor = replacement.end;
-  }
-  text += params.text.slice(cursor);
+  const text = params.text.replace(
+    OUTBOUND_MENTION_RE,
+    (token, rawDigits: string, start: number) => {
+      if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
+        return token;
+      }
+      const digits = rawDigits.replace(/\D/g, "");
+      const target = token.startsWith("@+")
+        ? (byPhone.get(digits) ?? byLid.get(digits))
+        : (byLid.get(digits) ?? byPhone.get(digits));
+      if (!target) {
+        return token;
+      }
+      mentionedJids.add(target.mentionJid);
+      return target.replacementText ?? token;
+    },
+  );
   return { text, mentionedJids: [...mentionedJids] };
 }
 

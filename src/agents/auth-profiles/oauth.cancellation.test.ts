@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import "./oauth-common-mocks.test-support.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const authMocks = vi.hoisted(() => ({
@@ -22,7 +23,6 @@ vi.mock("./store-runtime.js", () => ({
 it.each(["primary", "legacy fallback"])(
   "%s resolution does not return credentials when cancellation wins the race",
   async (route) => {
-    const { resolveApiKeyForProfile } = await import("./oauth.js");
     const credential: OAuthCredential = {
       type: "oauth",
       provider: "openai",

@@ -130,10 +130,8 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: {
               search: {
                 remote: {
@@ -142,7 +140,7 @@ describe("memory search config", () => {
               },
             },
           },
-        ],
+        },
       },
     });
   }
@@ -171,13 +169,11 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: { search: { enabled: false } },
           },
-        ],
+        },
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -187,7 +183,7 @@ describe("memory search config", () => {
   it("throws the typed unavailable error only for the degraded agent owner", () => {
     const cfg = asConfig({
       agents: {
-        list: [{ id: "cold" }, { id: "healthy" }],
+        entries: { cold: {}, healthy: {} },
       },
     });
     setActiveDegradedSecretOwners([
@@ -211,13 +207,11 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: { search: { enabled: false } },
           },
-        ],
+        },
       },
     });
     const resolved = resolveMemorySearchSyncConfig(cfg, "main");
@@ -278,9 +272,8 @@ describe("memory search config", () => {
   it("preserves explicitly configured transcript search for an opted-in agent", () => {
     const cfg = asConfig({
       agents: {
-        list: [
-          {
-            id: "personal",
+        entries: {
+          personal: {
             memory: {
               search: {
                 rememberAcrossConversations: true,
@@ -288,7 +281,7 @@ describe("memory search config", () => {
               },
             },
           },
-        ],
+        },
       },
     });
 
@@ -304,12 +297,11 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "shared",
+        entries: {
+          shared: {
             memory: { search: { rememberAcrossConversations: false } },
           },
-        ],
+        },
       },
     });
 
@@ -483,17 +475,15 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: {
               search: {
                 query: { maxResults: 8 },
               },
             },
           },
-        ],
+        },
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -520,10 +510,8 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: {
               search: {
                 extraPaths: [
@@ -534,7 +522,7 @@ describe("memory search config", () => {
               },
             },
           },
-        ],
+        },
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -695,17 +683,15 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: {
               search: {
                 documentInputType: "document",
               },
             },
           },
-        ],
+        },
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -762,17 +748,15 @@ describe("memory search config", () => {
 
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             memory: {
               search: {
                 rememberAcrossConversations: false,
               },
             },
           },
-        ],
+        },
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");

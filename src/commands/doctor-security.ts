@@ -89,12 +89,7 @@ function collectExecPolicyConflictWarnings(
     const scopeExecConfig = params.scopeExecConfig;
     const globalExecConfig = params.globalExecConfig;
     if (
-      !scopeExecConfig?.mode &&
-      !scopeExecConfig?.security &&
-      !scopeExecConfig?.ask &&
-      !globalExecConfig?.mode &&
-      !globalExecConfig?.security &&
-      !globalExecConfig?.ask
+      ![scopeExecConfig, globalExecConfig].some((exec) => exec?.mode || exec?.security || exec?.ask)
     ) {
       return;
     }
@@ -128,17 +123,16 @@ function collectExecPolicyConflictWarnings(
     if (canonicalModeSource) {
       configParts.push(`${canonicalModeSource}="${snapshot.mode.requested}"`);
     }
-    if (securityConflict) {
-      if (!canonicalModeSource) {
-        configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+    for (const [field, conflict] of [
+      [snapshot.security, securityConflict],
+      [snapshot.ask, askConflict],
+    ] as const) {
+      if (conflict) {
+        if (!canonicalModeSource) {
+          configParts.push(`${field.requestedSource}="${field.requested}"`);
+        }
+        hostParts.push(`${field.hostSource}="${field.host}"`);
       }
-      hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
-    }
-    if (askConflict) {
-      if (!canonicalModeSource) {
-        configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
-      }
-      hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
     }
 
     findings.push({
@@ -281,7 +275,7 @@ export async function collectSecurityWarnings(
     defaults: cfg.secrets?.defaults,
   }).ref;
   findings.push(
-    ...findSecretStoreRedactedValueFindings({ database: { env } }).map(
+    ...(await findSecretStoreRedactedValueFindings({ database: { env } })).map(
       (finding): SecurityAuditFinding => ({
         checkId: "doctor.secret_store_redacted_value",
         severity: "warn",

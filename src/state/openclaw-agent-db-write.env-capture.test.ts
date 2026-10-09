@@ -27,6 +27,7 @@ const boundary = vi.hoisted(() => {
       signal?.throwIfAborted();
     }),
     cache: {
+      terminal: { peek: () => undefined },
       pending: new Map<string, PendingAgentDatabaseOpen>(),
       activePending: new Set<PendingAgentDatabaseOpen>(),
       databases: new Map<string, OpenClawAgentDatabase>(),
@@ -105,6 +106,7 @@ vi.mock("./openclaw-agent-db.js", async () => {
       path: boundary.route(options),
       db: new DatabaseSync(":memory:"),
       walMaintenance: {
+        stop: async () => {},
         checkpoint: () => false,
         close: () => true,
         reclaimFreePages: createSqliteWalReclamationResult,

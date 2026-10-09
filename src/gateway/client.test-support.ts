@@ -1,4 +1,15 @@
+import { generateKeyPairSync } from "node:crypto";
 import { vi } from "vitest";
+import type { DeviceIdentity } from "../infra/device-identity.js";
+
+export function createClientTestIdentity(deviceId: string): DeviceIdentity {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  return {
+    deviceId,
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+  };
+}
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,

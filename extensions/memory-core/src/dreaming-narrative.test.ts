@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readRecentDreamDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import { runDreamNarrative, type DreamingCompletion } from "./dreaming-narrative.js";
@@ -167,13 +168,17 @@ describe("runDreamNarrative", () => {
     );
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "detaches publication without an unhandled failure (reject=%s)",
-    async (reject) => {
+    async (reject, { signal }) => {
       const workspaceDir = await createTempWorkspace("dreaming-detached-");
       const completion = createDeferred<{ text: string }>();
       const subagent = createCompletion();
       subagent.complete.mockReturnValue(completion.promise);
+      const published = createDeferred<void>();
+      const logger = createLogger();
+      // Both success and fallback log completion only after the diary write settles.
+      logger.info.mockImplementation(() => published.resolve());
       const unhandled = vi.fn();
       process.on("unhandledRejection", unhandled);
       try {
@@ -183,8 +188,8 @@ describe("runDreamNarrative", () => {
             subagent,
             workspaceDir,
             data: { phase: "rem", snippets: ["A detached fragment."] },
-            logger: createLogger(),
-            detached: true,
+            logger,
+            runInBackground: (run) => run(),
           }),
         ).resolves.toEqual({ status: "pending" });
         expect(subagent.complete).toHaveBeenCalledOnce();
@@ -193,12 +198,11 @@ describe("runDreamNarrative", () => {
         } else {
           completion.resolve({ text: "A detached memory found its page." });
         }
-        await vi.waitFor(async () => {
-          const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
-          expect(diary).toContain(
-            reject ? "A memory trace surfaced" : "A detached memory found its page.",
-          );
-        });
+        await withinTest(published.promise, signal);
+        const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+        expect(diary).toContain(
+          reject ? "A memory trace surfaced" : "A detached memory found its page.",
+        );
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
         completion.resolve({ text: "settled" });

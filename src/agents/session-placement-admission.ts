@@ -1,5 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { registerReplyOperationSuccessorBarrier } from "../auto-reply/reply/reply-run-registry.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { assertRequiredWorkerLocalExecution } from "../config/required-worker-profile.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -12,6 +16,7 @@ import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
+import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
@@ -19,6 +24,10 @@ import { settleRequesterRun } from "./requester-run-settlement.js";
 import { createSessionPlacementSettlementClosedAbortError } from "./run-termination.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
+import type {
+  LocalTurnPlacementClaim,
+  RequiredSessionPlacementAdmission,
+} from "./session-placement-admission.types.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
@@ -29,16 +38,9 @@ import {
   withoutGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
-export type LocalTurnPlacementClaim = {
-  sessionId: string;
-  agentId?: string;
-  sessionKey?: string;
-  runId: string;
-};
+export type SessionPlacementTurnParams = RunEmbeddedAgentInternalParams & { sessionFile: string };
 
-export type SessionPlacementTurnParams = RunEmbeddedAgentParams & { sessionFile: string };
-
-type SessionPlacementSandboxParams = {
+export type SessionPlacementSandboxParams = {
   agentId: string;
   config?: OpenClawConfig;
   sessionId: string;
@@ -46,13 +48,25 @@ type SessionPlacementSandboxParams = {
   workspaceDir: string;
 };
 
+export type PreparedSessionPlacementSandbox = Disposable & {
+  sandbox: SandboxContext | null;
+  assertCurrent: () => void;
+};
+
 export type SessionPlacementAdmissionProvider = {
-  resolveRuntimeOverride?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => string | undefined;
+  withRequiredSession?: RequiredSessionPlacementAdmission;
+  usesWorkerInference?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => boolean;
+  resolveRuntimeOverride?: (
+    identity: Omit<LocalTurnPlacementClaim, "runId">,
+  ) => Promise<string | undefined>;
   assertCompactionSuccessorAllowed: (params: {
     currentTarget: SessionTranscriptRuntimeTarget;
     successorSessionId: string;
   }) => void;
-  recoverTerminalTurn?: (session: { sessionId: string; sessionKey?: string }) => string | undefined;
+  recoverTerminalTurn?: (
+    session: { sessionId: string; sessionKey?: string },
+    assertCurrent?: () => void,
+  ) => Promise<string | undefined>;
   executeLocalTurn: <T>(
     claim: LocalTurnPlacementClaim,
     runLocal: () => Promise<T>,
@@ -68,7 +82,9 @@ export type SessionPlacementAdmissionProvider = {
 };
 
 type PlacementSandboxAdmissionProvider = SessionPlacementAdmissionProvider & {
-  resolveSandbox?: (params: SessionPlacementSandboxParams) => Promise<SandboxContext | null>;
+  prepareSandbox?: (
+    params: SessionPlacementSandboxParams,
+  ) => Promise<PreparedSessionPlacementSandbox>;
 };
 
 type SessionPlacementAdmissionState = {
@@ -93,10 +109,87 @@ export function installSessionPlacementAdmissionProvider(
 }
 
 /** Carries placement-owned runtime selection into candidate preparation and execution. */
-export function resolveSessionPlacementRuntimeOverride(
+export async function resolveSessionPlacementRuntimeOverride(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
-): string | undefined {
-  return state.provider?.resolveRuntimeOverride?.(identity);
+): Promise<string | undefined> {
+  const provider = state.provider;
+  const runtime = await provider?.resolveRuntimeOverride?.(identity);
+  if (state.provider !== provider) {
+    throw createAbortError("session placement owner changed during runtime selection");
+  }
+  return runtime;
+}
+
+const requiredPlacementScope = resolveGlobalSingleton(
+  Symbol.for("openclaw.requiredSessionPlacementScope"),
+  () =>
+    new AsyncLocalStorage<{
+      identity: Omit<LocalTurnPlacementClaim, "runId">;
+      provider: SessionPlacementAdmissionProvider;
+      assertPlacementCurrent: () => void;
+    }>(),
+);
+
+/** Nested entry points consume this run's owner-held admission, never a cached permission. */
+export async function withRequiredSessionPlacement<T>(
+  identity: Omit<LocalTurnPlacementClaim, "runId">,
+  options: { config?: OpenClawConfig; assertCurrent?: () => void; signal?: AbortSignal },
+  task: () => Promise<T>,
+): Promise<T> {
+  const inherited = requiredPlacementScope.getStore();
+  if (
+    inherited &&
+    inherited.identity.sessionId === identity.sessionId &&
+    inherited.identity.agentId === identity.agentId &&
+    inherited.identity.sessionKey === identity.sessionKey
+  ) {
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
+    if (state.provider !== inherited.provider) {
+      throw createAbortError("session placement owner changed during required worker preparation");
+    }
+    inherited.assertPlacementCurrent();
+    return await task();
+  }
+  const required =
+    getRuntimeConfig().cloudWorkers?.requiredProfile ??
+    options.config?.cloudWorkers?.requiredProfile;
+  if (!required) {
+    return await task();
+  }
+  const provider = state.provider;
+  if (!identity.sessionKey?.trim() || !provider?.withRequiredSession) {
+    throw new Error(
+      "Required worker execution needs a real session and an available Gateway placement owner; sessionless model helpers are unsupported.",
+    );
+  }
+  const assertCurrent = () => {
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
+    if (state.provider !== provider) {
+      throw createAbortError("session placement owner changed during required worker preparation");
+    }
+  };
+  assertCurrent();
+  return await provider.withRequiredSession(
+    identity,
+    async (assertPlacementCurrent) => {
+      assertCurrent();
+      assertPlacementCurrent();
+      return await requiredPlacementScope.run(
+        { identity: { ...identity }, provider, assertPlacementCurrent },
+        task,
+      );
+    },
+    assertCurrent,
+    options.signal,
+  );
+}
+
+export function sessionPlacementUsesWorkerInference(
+  identity: Omit<LocalTurnPlacementClaim, "runId">,
+): boolean {
+  return state.provider?.usesWorkerInference?.(identity) === true;
 }
 
 /** Captures the exact placement owner, including standalone absence, before awaited work. */
@@ -142,6 +235,8 @@ export async function withSessionPlacementTurnAdmission(
   // Providers may execute locally or remotely; both must release queue ownership
   // only when their actual execution path has acquired its placement claim.
   const runAdmittedLocalTurn = async () => {
+    assertRequiredWorkerLocalExecution(getRuntimeConfig(), "Gateway");
+    assertRequiredWorkerLocalExecution(params.config ?? {}, "Gateway");
     const settle = resolveSessionPlacementForcedTerminalSettlement();
     const assertCurrent = resolveSessionPlacementTurnSettlementAssertion();
     if (params.replyOperation && settle) {
@@ -167,20 +262,21 @@ export async function withSessionPlacementTurnAdmission(
   const assertAdmittedRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
-  const assertCurrent = () => {
-    params.abortSignal?.throwIfAborted();
-    // Setup waits must not carry revoked ingress or an already-closed execution
-    // into workspace preparation. Runtime admission still owns allocation.
-    params.preparedRunAdmission?.assertSourceCurrent();
-    if (params.admittedRunContext && !assertAdmittedRunCurrent) {
-      throw createAbortError("admitted run authority is no longer active");
-    }
-    assertAdmittedRunCurrent?.();
-    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    if (state.provider !== provider) {
-      throw createAbortError("session placement owner changed during turn admission");
-    }
-  };
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.preparedRunAdmission?.assertSourceCurrent, assertAdmittedRunCurrent],
+    (assertSources) => {
+      params.abortSignal?.throwIfAborted();
+      // Setup waits retain the ingress and execution owners through worker preparation.
+      assertSources();
+      if (params.admittedRunContext && !assertAdmittedRunCurrent) {
+        throw createAbortError("admitted run authority is no longer active");
+      }
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      if (state.provider !== provider) {
+        throw createAbortError("session placement owner changed during turn admission");
+      }
+    },
+  );
   const result = await withPlacementTurnCallerScope(params, () =>
     withoutSessionPlacementForcedTerminalSettlement(() =>
       provider
@@ -211,6 +307,10 @@ export async function withLocalSessionPlacementTurnSettlement(
     | "isFinalFallbackAttempt"
   > = {},
 ): Promise<EmbeddedAgentRunResult> {
+  const assertLocalAllowed = () => {
+    assertRequiredWorkerLocalExecution(getRuntimeConfig(), "Local CLI");
+  };
+  assertLocalAllowed();
   const provider = state.provider;
   const lifecycleGeneration =
     options.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(claim.runId);
@@ -245,6 +345,7 @@ export async function withLocalSessionPlacementTurnSettlement(
       async (taskMarker) => {
         assertCurrent();
         const runLocal = async () => {
+          assertLocalAllowed();
           // Placement admission can itself await work. A cancelled or replaced
           // queue owner must never execute through the captured provider.
           assertCurrent();
@@ -289,6 +390,7 @@ export async function withLocalSessionPlacementTurnSettlement(
         return result;
       },
       {
+        sessionTarget: claim,
         priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
           .priority,
         onQueued: () => {
@@ -303,17 +405,45 @@ export async function withLocalSessionPlacementTurnSettlement(
   }
 }
 
-/** Resolves an authoritative sandbox only when the live placement owns remote execution. */
-export async function resolveSessionPlacementSandbox(
+/** Retains the selected placement owner, including absence, until its consumer settles. */
+export async function prepareSessionPlacementSandbox(
   params: SessionPlacementSandboxParams,
-): Promise<SandboxContext | null> {
-  return (await state.provider?.resolveSandbox?.(params)) ?? null;
+): Promise<PreparedSessionPlacementSandbox> {
+  const provider = state.provider;
+  const prepared = await provider?.prepareSandbox?.(params);
+  let released = false;
+  const assertCurrent = () => {
+    if (released || state.provider !== provider) {
+      throw createAbortError("session placement owner changed during sandbox use");
+    }
+    prepared?.assertCurrent();
+  };
+  try {
+    assertCurrent();
+    return {
+      sandbox: prepared?.sandbox ?? null,
+      assertCurrent,
+      [Symbol.dispose]() {
+        released = true;
+        prepared?.[Symbol.dispose]();
+      },
+    };
+  } catch (error) {
+    prepared?.[Symbol.dispose]();
+    throw error;
+  }
 }
 
 /** The current placement owner alone can settle a proven terminal worker turn. */
-export function recoverTerminalSessionPlacementTurn(session: {
-  sessionId: string;
-  sessionKey?: string;
-}): string | undefined {
-  return state.provider?.recoverTerminalTurn?.(session);
+export async function recoverTerminalSessionPlacementTurn(
+  session: { sessionId: string; sessionKey?: string },
+  assertCurrent?: () => void,
+): Promise<string | undefined> {
+  const provider = state.provider;
+  return await provider?.recoverTerminalTurn?.(session, () => {
+    assertCurrent?.();
+    if (state.provider !== provider) {
+      throw new Error("session placement owner changed during terminal recovery");
+    }
+  });
 }

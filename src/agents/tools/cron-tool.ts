@@ -107,6 +107,11 @@ function requireCronJobIdParam(params: Record<string, unknown>): string {
 
 const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
 
+// A run waits for its outcome up to the call's timeoutMs, capped so one tool call cannot
+// hold the turn indefinitely; enqueue keeps its own budget on top of the wait.
+const CRON_RUN_MAX_WAIT_MS = 10 * 60_000;
+const CRON_RUN_ENQUEUE_TIMEOUT_MS = 60_000;
+
 function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
 }
@@ -169,12 +174,12 @@ function formatCronTerminalPresentation(
   }
 }
 
-function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
+function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
   return (
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("invalid cron.list params") &&
-    error.message.includes("unexpected property 'compact'")
+    error.message.includes(`invalid ${method} params`) &&
+    error.message.includes(`unexpected property '${param}'`)
   );
 }
 
@@ -190,11 +195,11 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   const scriptCue = params.triggersEnabled
-    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); failure alerts already wait for consecutive failures, so a one-off failure stays quiet."
+    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); only the failure alert waits for consecutive failures, run output still follows the job's delivery."
     : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
-ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true) | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
+ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true) | run jobId (runMode "force"=now; waits up to timeoutMs, default 60s, and returns the finished run: status, error, deliveryStatus, summary; a longer run, or a main-session job that starts after this turn, returns runId — check it later with runs jobId runId, never with a scheduled verify job) | runs jobId runId? = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
 SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page. Genuinely new, requested automations can still be created.
 
@@ -219,7 +224,7 @@ AUTHORING (recurring): every fire re-runs the same instructions; keep the model 
 
 ${triggerSection}
 
-DELIVERY: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
+DELIVERY: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route or creating-conversation commit when no external route exists; set channel/to for a specific chat — no messaging tool inside the run). Conversation delivery succeeds after the history commit; WebChat sees it live and after reconnect.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
 FAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.
 
@@ -242,7 +247,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
         ? "Inspect or remove only the current automation. Actions: list [includeDisabled], get jobId, remove jobId. Use the current job ID; other jobs and management actions are unavailable."
         : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
       : managementAuthority?.managementOnly
-        ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
+        ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s, and returns the finished run, or its runId if still running); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
         : buildCronToolDescription({ triggersEnabled }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
@@ -386,7 +391,10 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                     ...pageParams,
                   });
                 } catch (error) {
-                  if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {
+                  if (
+                    !useCompactList ||
+                    !isOlderGatewayRejectingParam(error, "cron.list", "compact")
+                  ) {
                     throw error;
                   }
                   // Protocol v4 gateways predating compact reject the additive field.
@@ -424,9 +432,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           case "remove":
           case "runs": {
             const id = requireCronJobIdParam(params);
+            const runId = action === "runs" ? readToolStringParam(params, "runId") : undefined;
             return jsonResult(
               await callGateway(`cron.${action}`, gatewayOpts, {
                 id,
+                ...(runId ? { runId } : {}),
               }),
             );
           }
@@ -435,17 +445,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
-            if (
-              typeof canonicalJob.declarationKey === "string" &&
-              canonicalJob.declarationKey.trim().length === 0
-            ) {
-              throw new Error("declarationKey must be a non-empty string");
-            }
-            if (
-              typeof canonicalJob.displayName === "string" &&
-              canonicalJob.displayName.trim().length === 0
-            ) {
-              throw new Error("displayName must be a non-empty string");
+            for (const key of ["declarationKey", "displayName"]) {
+              const value = canonicalJob[key];
+              if (typeof value === "string" && value.trim().length === 0) {
+                throw new Error(`${key} must be a non-empty string`);
+              }
             }
             const enabledExplicit = typeof canonicalJob.enabled === "boolean";
             const job =
@@ -478,11 +482,15 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const creatorToolAllowlistCaptureRef = resolvedAuthority
               ? { value: resolvedAuthority.provenance }
               : opts?.creatorToolAllowlistCaptureRef;
-            capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
+            capCronJobToolsAllowOnCreate(
+              job,
+              creatorToolAllowlist,
+              resolvedAuthority?.holdsRuntimeAuthority,
+            );
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
-            const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
+            const { alias } = resolveMainSessionAlias(runtimeConfig);
             const resolvedSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
               : undefined;
             const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
             if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
@@ -608,12 +616,38 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const id = requireCronJobIdParam(params);
             const runMode =
               params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
-            return jsonResult(
-              await callGateway("cron.run", gatewayOpts, {
-                id,
-                mode: runMode,
-              }),
+            // The Gateway holds the request until the run records its outcome, so the model
+            // learns the result in this call instead of scheduling a follow-up check.
+            const waitTimeoutMs = Math.min(
+              parsedGatewayOpts.timeoutMs ?? 60_000,
+              CRON_RUN_MAX_WAIT_MS,
             );
+            let result: Record<string, unknown>;
+            try {
+              result = await callGateway(
+                "cron.run",
+                { ...gatewayOpts, timeoutMs: waitTimeoutMs + CRON_RUN_ENQUEUE_TIMEOUT_MS },
+                { id, mode: runMode, waitTimeoutMs },
+              );
+            } catch (error) {
+              // Shipped Gateways reject the param before enqueueing, so retrying cannot double-run.
+              if (!isOlderGatewayRejectingParam(error, "cron.run", "waitTimeoutMs")) {
+                throw error;
+              }
+              result = await callGateway("cron.run", gatewayOpts, { id, mode: runMode });
+            }
+            if (result.enqueued !== true || result.run) {
+              return jsonResult(result);
+            }
+            const followUp = managementAuthority?.managementOnly
+              ? "check it later on the Automations page"
+              : "check it later with runs jobId runId";
+            return jsonResult({
+              ...result,
+              note: result.finished
+                ? `Finished, but its run history is not visible to this turn (a one-shot may have deleted itself after succeeding); ${followUp} if needed.`
+                : `Not finished yet: it is still running, or it runs in this session and starts after this turn. Its delivery follows the job settings; ${followUp}. Do not schedule a verification job.`,
+            });
           }
           case "next_check": {
             const jobId = readCronSelfRemoveOnlyJobId(opts);
@@ -642,11 +676,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 : "next-heartbeat";
             // An omitted target wakes the originating conversation, not the
             // heartbeat lane. Gateway owns target validation and authorization.
-            const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
+            const { alias } = resolveMainSessionAlias(runtimeConfig);
             const explicitSessionKey = readToolStringParam(params, "sessionKey");
             const explicitAgentId = readToolStringParam(params, "agentId");
             const inferredSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
               : undefined;
             const sessionKey = explicitSessionKey ?? inferredSessionKey;
             // Pair an explicit session with its own agent; caller defaults must

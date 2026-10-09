@@ -1,9 +1,14 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -15,18 +20,19 @@ import {
 } from "./dispatch-from-config.pending-final.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
 
+// Fixture writes must not schedule retention work into the cleanup request census.
+// mock-isolation: Fixture seed writes must not schedule retention requests into this census.
+vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
+  kickSessionEntryMaintenanceAfterWrite() {},
+}));
+
 describe("pending final delivery restart proof", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-final-");
   let storePath: string;
   const sessionKey = "agent:main:discord:direct:123";
 
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pending-final-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   async function writePendingFinal(
@@ -36,7 +42,6 @@ describe("pending final delivery restart proof", () => {
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
-      status: "running",
       startedAt: 10,
       lifecycleRunId: "active-run",
       updatedAt,
@@ -72,7 +77,17 @@ describe("pending final delivery restart proof", () => {
     await writePendingFinal("handled-reply", "delivered", 1);
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
 
-    await clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true });
+    const sql = observeHostDataSql();
+    try {
+      await clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true });
+      expect(
+        sql.queries.filter((query) =>
+          /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
     expect(entry?.pendingFinalDelivery).toBeUndefined();
@@ -125,9 +140,83 @@ describe("pending final delivery restart proof", () => {
     const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry;
     expect(entry.pendingFinalDelivery).toBeUndefined();
     expect(entry.restartRecoverySourceIngress).toBeUndefined();
-    expect(entry.status).toBe("running");
+    expect(entry.status).toBeUndefined();
     expect(entry.lifecycleRunId).toBe("active-run");
     expect(entry.updatedAt).toBe(1);
+  });
+
+  it("cleans only the current completed intent in one worker request after a foreign commit", async () => {
+    await writePendingFinal("handled-reply", "delivered", 1);
+    const scope = { sessionKey, storePath };
+    const original = loadSessionEntry(scope) as SessionEntry;
+    const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    const commands: string[] = [];
+    let beforeCommit: (() => void) | undefined;
+    const observer = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+      .mockImplementation((...args) => {
+        const owner = capture(...args);
+        return {
+          ...owner,
+          get fileIdentity() {
+            return owner.fileIdentity;
+          },
+          runExisting: (source, run, options) =>
+            owner.runExisting(
+              source,
+              (worker) =>
+                run({
+                  execute: (command, commandOptions) => {
+                    commands.push(command.type);
+                    if (command.type === "session.entry.patch.commit") {
+                      const change = beforeCommit;
+                      beforeCommit = undefined;
+                      change?.();
+                    }
+                    return worker.execute(command, commandOptions);
+                  },
+                }),
+              options,
+            ),
+        };
+      });
+    try {
+      for (const change of [
+        { label: "foreign metadata" },
+        { sessionId: "replacement" },
+        { pendingFinalDelivery: { ...original.pendingFinalDelivery!, intentId: "new-intent" } },
+        { restartRecoveryDeliveryRunId: "new-recovery" },
+        {
+          pendingFinalDelivery: {
+            ...original.pendingFinalDelivery!,
+            deliveries: [{ id: "delivery-1", state: "unknown" as const }],
+          },
+        },
+      ]) {
+        replaceSessionEntrySync(scope, original);
+        const foreign = { ...original, ...change };
+        beforeCommit = () => replaceSessionEntrySync(scope, foreign);
+        commands.length = 0;
+        await expect(
+          clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true }),
+        ).resolves.toBeUndefined();
+        expect(commands).toEqual(["session.entry.patch.commit"]);
+        const persisted = loadSessionEntry(scope) as SessionEntry;
+        if ("label" in change) {
+          expect(persisted.label).toBe("foreign metadata");
+          expect(persisted.pendingFinalDelivery).toBeUndefined();
+          expect(persisted.status).toBe("done");
+        } else {
+          expect(persisted).toMatchObject(foreign);
+          expect(persisted.pendingFinalDelivery).toEqual(foreign.pendingFinalDelivery);
+          expect(persisted.status).toBeUndefined();
+        }
+        expect(persisted.updatedAt).toBe(1);
+      }
+    } finally {
+      observer.mockRestore();
+    }
   });
 
   it("does not retire a source while its terminal provider outcome is unknown", async () => {
@@ -144,13 +233,22 @@ describe("pending final delivery restart proof", () => {
       },
     );
 
+    let target: SessionEntryTargetPatchScope | undefined;
+    await readSessionEntryInWorker(
+      { agentId: "main", storePath, sessionKey },
+      () => {},
+      undefined,
+      (prepared) => {
+        target = prepared;
+      },
+    );
+    assert(target);
     await expect(
       retireTerminalRestartRecoverySourceClaim({
-        agentId: "main",
+        target,
+        assertCurrent: () => {},
         sessionId: "session",
-        sessionKey,
         sourceTurnId: "source-1",
-        storePath,
       }),
     ).resolves.toBeUndefined();
 

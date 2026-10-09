@@ -594,13 +594,9 @@ describe("stuck session recovery", () => {
   });
 
   it("coalesces duplicate recovery attempts for the same session", async () => {
-    let resolveWait: ((value: boolean) => void) | undefined;
-    const waitPromise = new Promise<boolean>((resolve) => {
-      resolveWait = resolve;
-    });
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
-    mocks.waitForEmbeddedAgentRunEnd.mockReturnValue(waitPromise);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
     const first = recoverStuckDiagnosticSession({
       sessionId: "session-1",
@@ -608,18 +604,19 @@ describe("stuck session recovery", () => {
       ageMs: 180_000,
       allowActiveAbort: true,
     });
-    await recoverStuckDiagnosticSession({
+    const second = recoverStuckDiagnosticSession({
       sessionId: "session-1",
       sessionKey: "agent:main:main",
       ageMs: 210_000,
       allowActiveAbort: true,
     });
 
+    const [, duplicate] = await Promise.all([first, second]);
+    expect(duplicate).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "already_in_flight",
+    });
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(1);
-    if (!resolveWait) {
-      throw new Error("Expected diagnostic recovery wait resolver to be initialized");
-    }
-    resolveWait(true);
-    await first;
   });
 });

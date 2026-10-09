@@ -152,6 +152,39 @@ describe("Telegram rich local media through the outbound adapter", () => {
     expect(Buffer.from(await upload.arrayBuffer())).toEqual(photoBytes);
   });
 
+  it.each([
+    { name: "apostrophe in source", filename: "Bob's-chart.png", before: "" },
+    { name: "angle bracket in alt", filename: "chart.png", before: 'alt="Revenue > costs"' },
+    {
+      name: "source-like title",
+      filename: "chart.png",
+      before: `title='src="/not-the-source.png"'`,
+    },
+    { name: "encoded ampersand", filename: "salt&pepper.png", before: "" },
+  ])("uploads quoted HTML attributes: $name", async ({ filename, before }) => {
+    const imagePath = path.join(allowedDir, filename);
+    await fs.writeFile(imagePath, photoBytes);
+    const readFile = vi.fn(async (filePath: string) => fs.readFile(filePath));
+    await telegramOutbound.sendText!({
+      cfg: richConfig(),
+      to: "123",
+      text: `<img ${before} src="${imagePath.replaceAll("&", "&amp;")}"/>`,
+      mediaAccess: { localRoots: [allowedDir], readFile },
+    });
+
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(imagePath);
+    expect(requests.map(({ method }) => method)).toEqual(["sendRichMessage"]);
+    const fields = requests[0]!.fields;
+    const photo = richMessage(fields).blocks[0];
+    expect(photo?.type).toBe("photo");
+    if (photo?.type !== "photo") {
+      throw new Error("Expected an uploaded rich photo block");
+    }
+    const upload = resolveTelegramTestUpload({ ...fields, photo: photo.photo.media }, "photo");
+    expect(upload.name).toBe(filename);
+    expect(Buffer.from(await upload.arrayBuffer())).toEqual(photoBytes);
+  });
+
   it("keeps balanced parentheses and captions in local Markdown image destinations", async () => {
     const imageDir = path.join(allowedDir, "chart(1)");
     await fs.mkdir(imageDir);
@@ -441,6 +474,75 @@ describe("Telegram rich local media through the outbound adapter", () => {
       expect(result.receipt?.platformMessageIds).toEqual(["2", "3"]);
     },
   );
+
+  it.each([
+    { name: "document before photo", sequence: ["document", "photo"], inline: false },
+    {
+      name: "repeated photo around document",
+      sequence: ["photo", "document", "photo"],
+      inline: false,
+    },
+    { name: "same inline and payload photo", sequence: ["document", "photo"], inline: true },
+  ])("preserves attachment order after rich rejection: $name", async ({ sequence, inline }) => {
+    rejections.push("Bad Request: RICH_MESSAGE_MEDIA_INVALID");
+    const source = (kind: string) => (kind === "photo" ? fixture.photoPath : documentPath);
+    const result = await telegramOutbound.sendPayload!({
+      cfg: richConfig(),
+      to: "123",
+      text: "",
+      payload: {
+        text: inline ? `Report\n\n![Inline](${fixture.photoPath})` : "Report",
+        mediaUrls: sequence.map(source),
+      },
+      mediaLocalRoots: [fixture.mediaDir],
+    });
+    const expected = inline ? ["photo", ...sequence] : sequence;
+    expect(requests.map(({ method }) => method)).toEqual([
+      "sendRichMessage",
+      "sendMessage",
+      ...expected.map((kind) => (kind === "photo" ? "sendPhoto" : "sendDocument")),
+    ]);
+    for (const [index, kind] of expected.entries()) {
+      const upload = resolveTelegramTestUpload(requests[index + 2]!.fields, kind);
+      expect(upload.name).toBe(path.basename(source(kind)));
+      expect(Buffer.from(await upload.arrayBuffer())).toEqual(await fs.readFile(source(kind)));
+    }
+    expect(result.receipt?.platformMessageIds).toEqual([
+      "2",
+      ...expected.map((_, index) => String(index + 3)),
+    ]);
+  });
+
+  it("keeps remaining attachment order without resending accepted rich pages", async () => {
+    rejections.push("", "Bad Request: RICH_MESSAGE_MEDIA_INVALID");
+    const result = await telegramOutbound.sendPayload!({
+      cfg: richConfig(),
+      to: "123",
+      text: "",
+      payload: {
+        text: "Report",
+        // Fifty photos fill the first rich page; the final photo is rejected.
+        mediaUrls: [documentPath, ...Array.from({ length: 51 }, () => fixture.photoPath)],
+      },
+      mediaLocalRoots: [fixture.mediaDir],
+    });
+
+    expect(requests.map(({ method }) => method)).toEqual([
+      "sendRichMessage",
+      "sendRichMessage",
+      "sendMessage",
+      "sendDocument",
+      "sendPhoto",
+    ]);
+    expect(
+      richMessage(requests[0]!.fields).blocks.filter((block) => block.type === "photo"),
+    ).toHaveLength(50);
+    const document = resolveTelegramTestUpload(requests[3]!.fields, "document");
+    expect(Buffer.from(await document.arrayBuffer())).toEqual(await fs.readFile(documentPath));
+    const photo = resolveTelegramTestUpload(requests[4]!.fields, "photo");
+    expect(Buffer.from(await photo.arrayBuffer())).toEqual(photoBytes);
+    expect(result.receipt?.platformMessageIds).toEqual(["1", "3", "4", "5"]);
+  });
 
   it("resends every repeated local attachment after rich rejection", async () => {
     rejections.push("Bad Request: RICH_MESSAGE_MEDIA_INVALID");

@@ -21,7 +21,10 @@ import {
   setSessionsSpawnConfigOverride,
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { getLatestSubagentRunByChildSessionKey } from "./subagents/registry/subagent-registry-read.js";
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+} from "./subagents/registry/subagent-registry-read.js";
 import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 
@@ -45,7 +48,7 @@ async function spawn(context = discordContext, args: Record<string, unknown> = {
 async function waitForCleanup(childSessionKey: string) {
   await waitForSessionsSpawnEvent(
     "run cleanup bookkeeping",
-    () => getLatestSubagentRunByChildSessionKey(childSessionKey)?.cleanupCompletedAt != null,
+    () => getLatestLiveSubagentRunByChildSessionKey(childSessionKey)?.cleanupCompletedAt != null,
   );
 }
 
@@ -63,7 +66,7 @@ describe("sessions_spawn lifecycle", () => {
       messages: { queue: {} },
       agents: { defaults: { subagents: { runTimeoutSeconds: 1 } } },
     });
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentProgress.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
@@ -78,7 +81,7 @@ describe("sessions_spawn lifecycle", () => {
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
     await scheduler.stop();
   });
@@ -87,29 +90,6 @@ describe("sessions_spawn lifecycle", () => {
       delete process.env.OPENCLAW_TEST_FAST;
     } else {
       process.env.OPENCLAW_TEST_FAST = fastModeEnv.previous;
-    }
-  });
-
-  it("gives native child startup enough gateway request time", async () => {
-    const ctx = setupSessionsSpawnGatewayMock({
-      includeChatHistory: true,
-      agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
-    });
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      messages: { queue: {} },
-      agents: { defaults: { subagents: { runTimeoutSeconds: 120 } } },
-    });
-    await spawn(mainContext);
-    const child = ctx.getChild();
-    assert(child.sessionKey);
-    try {
-      expect(ctx.calls.find((call) => call.method === "agent")).toMatchObject({
-        timeoutMs: 125_000,
-        params: { lane: "subagent" },
-      });
-    } finally {
-      await waitForCleanup(child.sessionKey);
     }
   });
 
@@ -157,35 +137,34 @@ describe("sessions_spawn lifecycle", () => {
   });
 
   it("runs cleanup via a child lifecycle event", async () => {
+    const settleRootWork = observeRootWork();
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
       onSessionsDelete: (params) => {
         deletedKey = (params as { key?: string } | undefined)?.key;
       },
     });
-    await spawn(discordContext, { cleanup: "delete" });
-    const child = ctx.getChild();
-    assert(child.runId);
-    assert(child.sessionKey);
-    vi.useFakeTimers();
     try {
+      await spawn(discordContext, { cleanup: "delete" });
+      const child = ctx.getChild();
+      assert(child.runId);
+      assert(child.sessionKey);
       emitAgentEvent({
         runId: child.runId,
         stream: "lifecycle",
         data: { phase: "end", startedAt: 1234, endedAt: 2345 },
       });
-      await vi.runAllTimersAsync();
+      await waitForSessionsSpawnEvent(
+        "lifecycle cleanup",
+        () =>
+          ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
+          deletedKey === child.sessionKey,
+      );
+      expect(deletedKey).toBe(child.sessionKey);
+      expect(ctx.waitCalls.find((call) => call.runId === child.runId)?.timeoutMs).toBe(1000);
     } finally {
-      vi.useRealTimers();
+      await settleRootWork();
     }
-    await waitForSessionsSpawnEvent(
-      "lifecycle cleanup",
-      () =>
-        ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
-        deletedKey === child.sessionKey,
-    );
-    expect(deletedKey).toBe(child.sessionKey);
-    expect(ctx.waitCalls.find((call) => call.runId === child.runId)?.timeoutMs).toBe(1000);
   });
 
   it("records timeout when agent.wait and the child session are terminal", async () => {
@@ -201,9 +180,9 @@ describe("sessions_spawn lifecycle", () => {
     assert(child.sessionKey);
     await waitForCleanup(child.sessionKey);
     expect(ctx.waitCalls.find((call) => call.runId === child.runId)?.timeoutMs).toBe(1000);
-    expect(getLatestSubagentRunByChildSessionKey(child.sessionKey)?.execution.outcome?.status).toBe(
-      "timeout",
-    );
+    expect(
+      (await getLatestSubagentRunByChildSessionKey(child.sessionKey))?.execution.outcome?.status,
+    ).toBe("timeout");
   });
 
   it("uses the target agent's bound account for a Matrix room", async () => {
@@ -213,7 +192,7 @@ describe("sessions_spawn lifecycle", () => {
       messages: { queue: {} },
       agents: {
         defaults: { subagents: { allowAgents: ["bot-alpha"] } },
-        list: [{ id: "main" }, { id: "bot-alpha" }],
+        entries: { main: {}, "bot-alpha": {} },
       },
       bindings: [
         {

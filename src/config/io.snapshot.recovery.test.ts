@@ -142,23 +142,29 @@ describe("prepared config recovery", () => {
     },
   );
 
-  it.each(["absent", "unparseable"] as const)(
-    "does not prepare recovery from an unusable %s backup",
+  it.each(["absent", "unparseable", "externally-owned"] as const)(
+    "does not prepare recovery for %s config or backup",
     async (kind) => {
       const { root, configPath, original, io } = fixture();
       const backupPath = `${configPath}.bak`;
       const bytes = "{ not JSON5";
       if (kind === "absent") {
         fs.unlinkSync(backupPath);
-      } else {
+      } else if (kind === "unparseable") {
         fs.writeFileSync(backupPath, bytes);
+      } else {
+        io.env.OPENCLAW_CONFIG_READONLY = "1";
       }
+      const before = kind === "externally-owned" ? manifest(root) : undefined;
       await expect(prepare(io)).resolves.toBeNull();
       expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-      if (kind !== "absent") {
+      if (kind === "unparseable") {
         expect(fs.readFileSync(backupPath, "utf8")).toBe(bytes);
       }
       expect(clobberFiles(root)).toEqual([]);
+      if (kind === "externally-owned") {
+        expect(manifest(root)).toEqual(before);
+      }
     },
   );
 
@@ -224,51 +230,56 @@ describe("prepared config recovery", () => {
     expect(clobberFiles(root)).toEqual([]);
   });
 
-  it("leaves a newer live observation current when an older prepared recovery is applied", async () => {
-    const { root, configPath, original, env, io } = fixture();
-    const plan = await recovery(io);
-    const deps = normalizeConfigIoDeps({
-      env,
-      homedir: () => root,
-      logger: { warn: vi.fn(), error: vi.fn() },
-    });
-    using newer = captureConfigHealthStateStore(deps, configPath);
-    const snapshot = await newer.read();
-    if (!snapshot) {
-      throw new Error("Expected the newer observation to be current");
-    }
-
-    await expect(plan.apply()).rejects.toMatchObject({
-      name: "ConfigMutationConflictError",
-      retryable: false,
-    });
-    expectUnchanged(root, configPath, original);
-    expect(newer.isCurrent()).toBe(true);
-    await newer.update({ lastObservedSuspiciousSignature: "newer-observation" }, snapshot);
-    expect(
-      readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
-    ).toBe("newer-observation");
-  });
-
-  it("refuses recovery declined after a completed observation between prepare and apply", async () => {
-    const { root, configPath, original, env, io } = fixture();
-    const plan = await recovery(io);
-    const logger = { warn: vi.fn(), error: vi.fn() };
-    const deps = normalizeConfigIoDeps({ env, homedir: () => root, logger });
-    const current = await io.readConfigFileSnapshot();
-    observeConfigSnapshotSync(deps, current);
-    const health = readConfigHealthStateFromStore(deps);
-    expect(health.entries?.[configPath]?.lastObservedSuspiciousSignature).toBeTruthy();
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-
-    await expect(plan.apply()).rejects.toMatchObject({
-      name: "ConfigMutationConflictError",
-      retryable: false,
-    });
-    expectUnchanged(root, configPath, original);
-    expect(readConfigHealthStateFromStore(deps)).toEqual(health);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-  });
+  it.each(["live", "completed", "during-apply"] as const)(
+    "preserves a newer %s observation when prepared recovery is applied",
+    async (phase) => {
+      const { root, configPath, original, env, io } = fixture();
+      const plan = await recovery(io);
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const deps = normalizeConfigIoDeps({ env, homedir: () => root, logger });
+      using newer = phase === "live" ? captureConfigHealthStateStore(deps, configPath) : undefined;
+      const snapshot = await newer?.read();
+      if (newer && !snapshot) {
+        throw new Error("Expected the newer observation to be current");
+      }
+      if (phase === "completed") {
+        observeConfigSnapshotSync(deps, await io.readConfigFileSnapshot());
+      }
+      const health = phase === "completed" ? readConfigHealthStateFromStore(deps) : undefined;
+      if (phase === "completed") {
+        expect(health?.entries?.[configPath]?.lastObservedSuspiciousSignature).toBeTruthy();
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+      }
+      await expect(
+        plan.apply(
+          phase === "during-apply"
+            ? () => {
+                patchConfigHealthEntryToStore(deps, configPath, {
+                  lastObservedSuspiciousSignature: "newer-observation",
+                });
+              }
+            : undefined,
+        ),
+      ).rejects.toMatchObject({
+        name: "ConfigMutationConflictError",
+        retryable: false,
+      });
+      expectUnchanged(root, configPath, original);
+      if (newer && snapshot) {
+        expect(newer.isCurrent()).toBe(true);
+        await newer.update({ lastObservedSuspiciousSignature: "newer-observation" }, snapshot);
+      }
+      if (phase === "completed") {
+        expect(readConfigHealthStateFromStore(deps)).toEqual(health);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+      } else {
+        expect(
+          readConfigHealthStateFromStore(deps).entries?.[configPath]
+            ?.lastObservedSuspiciousSignature,
+        ).toBe("newer-observation");
+      }
+    },
+  );
 
   it.each(["async", "sync"] as const)(
     "%s recovery tolerates an unreadable backup stat",
@@ -336,31 +347,6 @@ describe("prepared config recovery", () => {
     } finally {
       spy.mockRestore();
     }
-  });
-
-  it("rejects a superseded explicit apply without claiming a file commit", async () => {
-    const { root, configPath, original, env, io } = fixture();
-    const plan = await recovery(io);
-    const deps = { env, homedir: () => root, logger: { warn: vi.fn() } };
-    await expect(
-      plan.apply(() => {
-        patchConfigHealthEntryToStore(deps, configPath, {
-          lastObservedSuspiciousSignature: "newer-observation",
-        });
-      }),
-    ).rejects.toMatchObject({ name: "ConfigMutationConflictError", retryable: false });
-    expectUnchanged(root, configPath, original);
-    expect(
-      readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
-    ).toBe("newer-observation");
-  });
-
-  it("does not prepare recovery of externally owned config", async () => {
-    const { root, io } = fixture();
-    io.env.OPENCLAW_CONFIG_READONLY = "1";
-    const before = manifest(root);
-    await expect(prepare(io)).resolves.toBeNull();
-    expect(manifest(root)).toEqual(before);
   });
 
   it("keeps an unobserved best-effort config read free of source sidecars", async () => {

@@ -79,8 +79,8 @@ type LmstudioSetupDiscovery = {
   defaultModelId: string | undefined;
 };
 
-function resolveLmstudioSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
+function resolveLmstudioSetupDefaultBaseUrl(): string {
+  return isTruthyEnvValue(process.env.OPENCLAW_DOCKER_SETUP)
     ? LMSTUDIO_DOCKER_HOST_BASE_URL
     : LMSTUDIO_DEFAULT_BASE_URL;
 }
@@ -116,15 +116,8 @@ function stripLmstudioStoredAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function resolvePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const normalized = Math.floor(value);
-    return normalized > 0 ? normalized : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+function resolvePositiveInteger(value: string | undefined): number | undefined {
+  const trimmed = value?.trim();
   if (!trimmed || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
@@ -139,16 +132,17 @@ function buildLmstudioSetupProviderConfig(params: {
   headers: ModelProviderConfig["headers"] | undefined;
   models: ModelDefinitionConfig[];
 }): ModelProviderConfig {
-  const existingWithoutAuth = params.existingProvider
-    ? (({ auth: _auth, apiKey: _apiKey, ...rest }) => rest)(params.existingProvider)
-    : undefined;
-  const sharedWithoutAuth = params.sharedProvider
-    ? (({ auth: _auth, apiKey: _apiKey, ...rest }) => rest)(params.sharedProvider)
-    : undefined;
+  const {
+    auth: _auth,
+    apiKey: _apiKey,
+    ...provider
+  } = {
+    ...params.existingProvider,
+    ...params.sharedProvider,
+  };
   const resolvedAuth = resolveLmstudioProviderAuthMode(params.apiKey);
   return {
-    ...existingWithoutAuth,
-    ...sharedWithoutAuth,
+    ...provider,
     baseUrl: params.baseUrl,
     api: params.sharedProvider?.api ?? params.existingProvider?.api ?? "openai-completions",
     ...(resolvedAuth ? { auth: resolvedAuth } : {}),
@@ -304,7 +298,6 @@ async function discoverLmstudioSetupModels(params: {
   headers?: Record<string, string>;
   requestedModelId?: string;
   resetPreflight?: boolean;
-  timeoutMs?: number;
 }): Promise<
   | { value: LmstudioSetupDiscovery }
   | { failure: NonNullable<ReturnType<typeof resolveLmstudioDiscoveryFailure>> }
@@ -313,7 +306,7 @@ async function discoverLmstudioSetupModels(params: {
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
     ...(params.headers ? { headers: params.headers } : {}),
-    timeoutMs: params.timeoutMs ?? 5000,
+    timeoutMs: 5000,
   });
   const failure = resolveLmstudioDiscoveryFailure({
     baseUrl: params.baseUrl,
@@ -560,7 +553,6 @@ export async function promptAndConfigureLmstudioInteractive(params: {
       baseUrl,
       apiKey: setupDiscoveryApiKey,
       ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-      timeoutMs: 5000,
     });
     params.signal?.throwIfAborted();
     return result;
@@ -725,7 +717,6 @@ async function validateNonInteractiveLmstudioDiscovery(
     ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
     requestedModelId,
     resetPreflight,
-    timeoutMs: 5000,
   });
   if ("failure" in setupDiscovery) {
     throw new Error(setupDiscovery.failure.noteLines.join("\n"));

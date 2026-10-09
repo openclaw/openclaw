@@ -326,7 +326,7 @@ describe("Codex supervision catalog", () => {
     },
   );
 
-  it("preserves the retained owner directory across normal cloned requests", async () => {
+  it("preserves the selected owner directory across normal cloned requests", async () => {
     const runtimeConfig = compatibilityOwnerConfig();
     const expectedAgentDir = resolveDefaultAgentDir(runtimeConfig);
     commandRpcMocks.codexControlRequest.mockImplementation(
@@ -346,10 +346,10 @@ describe("Codex supervision catalog", () => {
         return { data: [] };
       },
     );
-    const control = createCodexSessionCatalogControl({
+    const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => runtimeConfig,
-    });
+    }).forRequest("alpha");
     await control.initialize();
 
     await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
@@ -414,11 +414,11 @@ describe("Codex supervision catalog", () => {
     const runtimeConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "alpha", agentDir: alphaAgentDir },
-          { id: "beta", agentDir: betaAgentDir },
-          { id: "file", agentDir: fileAgentDir },
-        ],
+        entries: {
+          alpha: { agentDir: alphaAgentDir },
+          beta: { agentDir: betaAgentDir },
+          file: { agentDir: fileAgentDir },
+        },
       },
     } as OpenClawConfig;
     const env = { ...process.env, CODEX_HOME: processCodexHome };
@@ -520,15 +520,12 @@ describe("Codex supervision catalog", () => {
       ),
     );
     const configA = {
-      agents: { ownership: "explicit", list: [{ id: "alpha", agentDir: alphaAgentDir }] },
+      agents: { ownership: "explicit", entries: { alpha: { agentDir: alphaAgentDir } } },
     } as OpenClawConfig;
     const configB = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "alpha", agentDir: alphaAgentDir },
-          { id: "beta", agentDir: betaAgentDir },
-        ],
+        entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
       },
     } as OpenClawConfig;
     let runtimeConfig = configA;
@@ -632,10 +629,7 @@ describe("Codex supervision catalog", () => {
     const runtimeConfig = {
       agents: {
         ownership: "explicit",
-        list: [
-          { id: "alpha", agentDir: alphaAgentDir },
-          { id: "beta", agentDir: betaAgentDir },
-        ],
+        entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
       },
     } as OpenClawConfig;
     const { runtime } = createRuntime();

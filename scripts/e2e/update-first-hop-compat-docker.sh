@@ -8,7 +8,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
   echo "blocked destructive package self-update; set OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 to run" >&2
@@ -26,6 +25,7 @@ SKIP_BUILD="${OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-3200s}"
 # Space- or comma-separated recorded release versions; empty runs every recorded source.
 SOURCE_VERSION_FILTER="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS:-}"
+SCENARIO="${OPENCLAW_UPDATE_FIRST_HOP_SCENARIO:-all}"
 ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-first-hop-compat${SOURCE_VERSION_FILTER:+-${SOURCE_VERSION_FILTER//[ ,]/-}}}"
 SOURCE_PACKAGE="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ:-}"
 FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-first-hop.XXXXXX")"
@@ -52,6 +52,17 @@ if [ -n "$SOURCE_PACKAGE" ] && [ -n "$SOURCE_VERSION_FILTER" ]; then
   echo "an explicit source tarball cannot be combined with OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS" >&2
   exit 2
 fi
+case "$SCENARIO" in
+  all | source | missing-load-path) ;;
+  *)
+    echo "invalid first-hop scenario: $SCENARIO" >&2
+    exit 2
+    ;;
+esac
+if [ "$SCENARIO" = "missing-load-path" ] && { [ -n "$SOURCE_PACKAGE" ] || [ -n "$SOURCE_VERSION_FILTER" ]; }; then
+  echo "the missing-load-path scenario does not accept a historical source" >&2
+  exit 2
+fi
 
 PACKAGE_TGZ="$(
   docker_e2e_prepare_package_tgz \
@@ -66,12 +77,12 @@ node "$FIXTURE_HELPER" first-hop-tarball "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" 0 \
 node "$FIXTURE_HELPER" future-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/future.tgz" 1 \
   >"$ARTIFACT_DIR/second-hop-fixture.json"
 ADMISSION_PROTOCOL="$(tar -xOf "$PACKAGE_TGZ" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).openclaw?.updateAdmissionProtocol ?? ""')"
-if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+if [ "$ADMISSION_PROTOCOL" = "1" ] && [ "$SCENARIO" != "missing-load-path" ]; then
   node "$FIXTURE_HELPER" unsupported-admission-tarball "$FIXTURE_ROOT/future.tgz" \
     "$FIXTURE_ROOT/unsupported-admission.tgz" 2 >"$ARTIFACT_DIR/unsupported-admission-fixture.json"
 fi
 docker_e2e_package_mount_args "$FIRST_HOP_TGZ" /tmp/openclaw-update-first-hop-candidate.tgz
-if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+if [ "$ADMISSION_PROTOCOL" = "1" ] && [ "$SCENARIO" != "missing-load-path" ]; then
   DOCKER_E2E_PACKAGE_ARGS+=(-v "$FIXTURE_ROOT/unsupported-admission.tgz:/tmp/openclaw-update-first-hop-unsupported-admission.tgz:ro")
 fi
 
@@ -87,7 +98,7 @@ docker_e2e_build_or_reuse \
   "$SKIP_BUILD"
 
 SOURCE_VERSIONS=("")
-if [ -z "$SOURCE_PACKAGE" ]; then
+if [ "$SCENARIO" != "missing-load-path" ] && [ -z "$SOURCE_PACKAGE" ]; then
   SOURCE_VERSIONS=()
   node "$FIXTURE_HELPER" sources "$FIXTURE_ROOT/packages/original/package" \
     "$SOURCE_VERSION_FILTER" >"$FIXTURE_ROOT/source-versions.txt"
@@ -98,43 +109,45 @@ fi
 
 for version in "${SOURCE_VERSIONS[@]}"; do
   lane_artifact_dir="$ARTIFACT_DIR"
-  source_package="$SOURCE_PACKAGE"
-  if [ -n "$version" ]; then
-    lane_artifact_dir="$ARTIFACT_DIR/$version"
-    mkdir -p "$lane_artifact_dir"
-    cp "$ARTIFACT_DIR/second-hop-fixture.json" "$lane_artifact_dir/second-hop-fixture.json"
-    npm pack "openclaw@$version" --ignore-scripts --json --min-release-age=0 \
-      --pack-destination "$FIXTURE_ROOT/source" >"$lane_artifact_dir/source-pack.json"
-    source_package="$FIXTURE_ROOT/source/$(node -e '
-      const result = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-      if (!Array.isArray(result) || result.length !== 1 || !result[0]?.filename) process.exit(1);
-      process.stdout.write(result[0].filename);
-    ' "$lane_artifact_dir/source-pack.json")"
+  source_package="${SOURCE_PACKAGE:-$FIRST_HOP_TGZ}"
+  expected_missing_chunk=""
+  negative_tgz="$FIRST_HOP_TGZ"
+  if [ "$SCENARIO" != "missing-load-path" ]; then
+    if [ -n "$version" ]; then
+      lane_artifact_dir="$ARTIFACT_DIR/$version"
+      mkdir -p "$lane_artifact_dir"
+      cp "$ARTIFACT_DIR/second-hop-fixture.json" "$lane_artifact_dir/second-hop-fixture.json"
+      npm pack "openclaw@$version" --ignore-scripts --json --min-release-age=0 \
+        --pack-destination "$FIXTURE_ROOT/source" >"$lane_artifact_dir/source-pack.json"
+      source_package="$FIXTURE_ROOT/source/$(
+        node "$FIXTURE_HELPER" pack-filename "$lane_artifact_dir/source-pack.json"
+      )"
+    fi
+    node "$FIXTURE_HELPER" source "$FIXTURE_ROOT/packages/original/package" \
+      "$source_package" "$version" >"$lane_artifact_dir/source.json"
+    expected_missing_chunk="$(node -e '
+      const source = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(source.expectedMissingChunk ?? "");
+    ' "$lane_artifact_dir/source.json")"
+    negative_tgz="$FIXTURE_ROOT/negative-${version:-explicit}.tgz"
+    node "$FIXTURE_HELPER" negative-tarball "$FIRST_HOP_TGZ" "$negative_tgz" \
+      "$expected_missing_chunk" >"$lane_artifact_dir/negative-fixture.json"
+    {
+      printf 'source=%s\n' "$source_package"
+      printf 'original_candidate=%s\n' "$PACKAGE_TGZ"
+      printf 'candidate=%s\n' "$FIRST_HOP_TGZ"
+      printf 'expected_missing_chunk=%s\n' "$expected_missing_chunk"
+      shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" "$negative_tgz" "$FIXTURE_ROOT/future.tgz"
+      if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+        shasum -a 256 "$FIXTURE_ROOT/unsupported-admission.tgz"
+      fi
+      printf '\nsource_build_info=' && tar -xOf "$source_package" package/dist/build-info.json
+      printf '\noriginal_candidate_build_info=' && tar -xOf "$PACKAGE_TGZ" package/dist/build-info.json
+      printf '\ncandidate_build_info=' && tar -xOf "$FIRST_HOP_TGZ" package/dist/build-info.json
+      printf '\nfuture_build_info=' && tar -xOf "$FIXTURE_ROOT/future.tgz" package/dist/build-info.json
+    } >"$lane_artifact_dir/inputs.txt"
   fi
   chmod a+rwx "$lane_artifact_dir"
-  node "$FIXTURE_HELPER" source "$FIXTURE_ROOT/packages/original/package" \
-    "$source_package" "$version" >"$lane_artifact_dir/source.json"
-  expected_missing_chunk="$(node -e '
-    const source = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-    process.stdout.write(source.expectedMissingChunk ?? "");
-  ' "$lane_artifact_dir/source.json")"
-  negative_tgz="$FIXTURE_ROOT/negative-${version:-explicit}.tgz"
-  node "$FIXTURE_HELPER" negative-tarball "$FIRST_HOP_TGZ" "$negative_tgz" \
-    "$expected_missing_chunk" >"$lane_artifact_dir/negative-fixture.json"
-  {
-    printf 'source=%s\n' "$source_package"
-    printf 'original_candidate=%s\n' "$PACKAGE_TGZ"
-    printf 'candidate=%s\n' "$FIRST_HOP_TGZ"
-    printf 'expected_missing_chunk=%s\n' "$expected_missing_chunk"
-    shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" "$negative_tgz" "$FIXTURE_ROOT/future.tgz"
-    if [ "$ADMISSION_PROTOCOL" = "1" ]; then
-      shasum -a 256 "$FIXTURE_ROOT/unsupported-admission.tgz"
-    fi
-    printf '\nsource_build_info=' && tar -xOf "$source_package" package/dist/build-info.json
-    printf '\noriginal_candidate_build_info=' && tar -xOf "$PACKAGE_TGZ" package/dist/build-info.json
-    printf '\ncandidate_build_info=' && tar -xOf "$FIRST_HOP_TGZ" package/dist/build-info.json
-    printf '\nfuture_build_info=' && tar -xOf "$FIXTURE_ROOT/future.tgz" package/dist/build-info.json
-  } >"$lane_artifact_dir/inputs.txt"
 
   echo "Running packaged updater first-hop compatibility Docker E2E (${version:-explicit source})..."
   docker_e2e_run_with_harness \
@@ -142,6 +155,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     -e OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR=/tmp/openclaw-update-first-hop-artifacts \
     -e OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="$expected_missing_chunk" \
     -e OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL="$ADMISSION_PROTOCOL" \
+    -e OPENCLAW_UPDATE_FIRST_HOP_SCENARIO="$SCENARIO" \
     -v "$lane_artifact_dir:/tmp/openclaw-update-first-hop-artifacts" \
     -v "$(docker_e2e_abs_path "$source_package"):/tmp/openclaw-update-first-hop-source.tgz:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
@@ -153,7 +167,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     bash scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh
 done
 
-if [ -z "$SOURCE_PACKAGE" ]; then
+if [ "$SCENARIO" != "missing-load-path" ] && [ -z "$SOURCE_PACKAGE" ]; then
   node -e '
     const fs = require("node:fs"), path = require("node:path");
     const [root, ...versions] = process.argv.slice(1);

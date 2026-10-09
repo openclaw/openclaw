@@ -1,4 +1,3 @@
-/** Builds final reply payloads after sanitization, media normalization, and dedupe. */
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -22,7 +21,6 @@ import {
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
-import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
@@ -31,20 +29,9 @@ import { applyReplyThreading, resolveReplyThreadingPayloads } from "./reply-payl
 import { createReplyDeliveryContext } from "./reply-threading.js";
 
 const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
-  () => import("./reply-payloads-dedupe.runtime.js"),
+  () => import("./reply-payloads-dedupe.js"),
 );
-
-async function normalizeReplyPayloadMedia(params: {
-  payload: ReplyPayload;
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<ReplyPayload> {
-  if (!params.normalizeMediaPaths || !resolveSendableOutboundReplyParts(params.payload).hasMedia) {
-    return params.payload;
-  }
-
-  const normalized = await params.normalizeMediaPaths(params.payload);
-  return copyReplyPayloadMetadata(params.payload, normalized);
-}
+const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
 async function normalizeSentMediaUrlsForDedupe(params: {
   sentMediaUrls: readonly string[];
@@ -54,17 +41,13 @@ async function normalizeSentMediaUrlsForDedupe(params: {
     return [...params.sentMediaUrls];
   }
 
-  const normalizedUrls: string[] = [];
-  const seen = new Set<string>();
+  const normalizedUrls = new Set<string>();
   for (const raw of params.sentMediaUrls) {
     const trimmed = raw.trim();
     if (!trimmed) {
       continue;
     }
-    if (!seen.has(trimmed)) {
-      seen.add(trimmed);
-      normalizedUrls.push(trimmed);
-    }
+    normalizedUrls.add(trimmed);
     try {
       const normalized = await params.normalizeMediaPaths({
         mediaUrl: trimmed,
@@ -72,19 +55,14 @@ async function normalizeSentMediaUrlsForDedupe(params: {
       });
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalized).mediaUrls;
       for (const mediaUrl of normalizedMediaUrls) {
-        const candidate = mediaUrl.trim();
-        if (!candidate || seen.has(candidate)) {
-          continue;
-        }
-        seen.add(candidate);
-        normalizedUrls.push(candidate);
+        normalizedUrls.add(mediaUrl);
       }
     } catch (err) {
       logVerbose(`messaging tool sent-media normalization failed: ${String(err)}`);
     }
   }
 
-  return normalizedUrls;
+  return [...normalizedUrls];
 }
 
 function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
@@ -149,7 +127,6 @@ function copyPayloadWithSanitizedText(
   return next;
 }
 
-/** Builds final outbound payloads from agent output and message-tool delivery evidence. */
 export async function buildReplyPayloads(params: {
   config?: OpenClawConfig;
   payloads: ReplyPayload[];
@@ -190,8 +167,9 @@ export async function buildReplyPayloads(params: {
     for (const payload of params.payloads) {
       let text = payload.text;
 
-      if (payload.isError && text && isBunFetchSocketError(text)) {
-        text = formatBunFetchSocketError(text);
+      if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
+        text =
+          "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
       }
 
       if (text?.includes("HEARTBEAT_OK")) {
@@ -241,10 +219,13 @@ export async function buildReplyPayloads(params: {
         parseMode: "always",
         extractMarkdownImages: params.extractMarkdownImages,
       });
-      const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
-        payload: parsed.payload,
-        normalizeMediaPaths: params.normalizeMediaPaths,
-      });
+      const mediaNormalizedPayload =
+        params.normalizeMediaPaths && resolveSendableOutboundReplyParts(parsed.payload).hasMedia
+          ? copyReplyPayloadMetadata(
+              parsed.payload,
+              await params.normalizeMediaPaths(parsed.payload),
+            )
+          : parsed.payload;
       if (parsed.isSilent) {
         mediaNormalizedPayload.text = undefined;
       }
@@ -340,12 +321,9 @@ export async function buildReplyPayloads(params: {
       continue;
     }
     const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
-    const fragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
-    if (fragments) {
-      fragments.push(sentText);
-    } else {
-      directTextFragmentsByAssistantMessage.set(assistantMessageIndex, [sentText]);
-    }
+    const fragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex) ?? [];
+    fragments.push(sentText);
+    directTextFragmentsByAssistantMessage.set(assistantMessageIndex, fragments);
   }
   const isDirectBlockRetryBlocked = (payload: ReplyPayload) => {
     if (getReplyPayloadMetadata(payload)?.blockReplySources) {
@@ -369,10 +347,9 @@ export async function buildReplyPayloads(params: {
     if (!text || !retryBlockedDirectPayloads.length) {
       return false;
     }
-    const normalizedText = text.trim();
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     const applicableFragments = directTextFragmentsByAssistantMessage.get(assistantMessageIndex);
-    return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
+    return applicableFragments ? applicableFragments.join("").trim() === text : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
     if (
@@ -397,10 +374,7 @@ export async function buildReplyPayloads(params: {
       const wasSent = hasRichContent
         ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
         : params.blockReplyPipeline?.hasSentPayload(payload) || isDirectTextRetryBlocked(payload);
-      if (wasSent) {
-        return null;
-      }
-      return payload;
+      return wasSent ? null : payload;
     }
     if (!reply.trimmedText) {
       return payload;

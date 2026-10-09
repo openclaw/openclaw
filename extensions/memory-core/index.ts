@@ -1,4 +1,4 @@
-import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
@@ -7,6 +7,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type AnyAgentTool,
@@ -16,7 +17,6 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
-import "./src/memory/background-context.js";
 import {
   buildMemoryPromptSection,
   MEMORY_GET_TOOL_CONTRACT,
@@ -164,6 +164,7 @@ function resolveMemoryToolOptions(
     conversationRecall: ctx.conversationRecall,
     activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+    runInBackgroundContext: host.runInBackgroundContext,
   };
 }
 
@@ -180,23 +181,17 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       return await createMemoryRuntime(host).authorizeSearchHits(params);
     },
     async classifyWorkspaceMemoryPaths(params) {
-      const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
-        import("./src/workspace-path-classifier.js"),
-        import("./src/dreaming-state.js"),
-      ]);
-      if (host.openKeyedStore) {
-        dreamingState.configureMemoryCoreDreamingState(host.openKeyedStore);
-      }
+      const { classifyWorkspaceMemoryPaths } = await import("./src/workspace-path-classifier.js");
       return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig,
     async closeAllMemorySearchManagers() {
-      const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeAllMemorySearchManagers();
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      await createMemoryRuntime(host).closeAllMemorySearchManagers();
     },
     async closeMemorySearchManager(params) {
-      const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeMemorySearchManager(params);
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      await createMemoryRuntime(host).closeMemorySearchManager(params);
     },
   };
 }
@@ -211,12 +206,41 @@ export default definePluginEntry({
       api.runtime.llm.acquireLocalService(...args);
     const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options);
-    const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
+    const host = {
+      acquireLocalService,
+      openKeyedStore,
+      runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+    } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
+    api.lifecycle.onDispose?.(async () => {
+      const result = await prepareMemoryManagerReload({
+        retireRuntime: true,
+        retiringEmbeddingProviders: [],
+      }).drain();
+      if (result?.errors.length) {
+        throw new AggregateError(result.errors, "Memory manager disposal failed");
+      }
+    });
+    if (normalizePluginsConfig(api.config.plugins).slots.memory === api.id) {
+      api.registerService({
+        id: "memory-core-index",
+        reload: { configPrefixes: ["memory.search", "agents"] },
+        async start({ config, logger }) {
+          for (const agentId of listAgentIds(config)) {
+            const { error } = await memoryRuntime.getMemorySearchManager({ cfg: config, agentId });
+            if (error) {
+              logger.warn(`memory-core: index startup failed for ${agentId}: ${error}`);
+            }
+          }
+        },
+        stop: () => memoryRuntime.closeAllMemorySearchManagers?.(),
+      });
+    }
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
+      recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
       promptBuilder: (params) => {

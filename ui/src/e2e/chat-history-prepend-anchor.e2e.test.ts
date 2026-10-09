@@ -53,7 +53,9 @@ suite.define(() => {
             }
           : {}),
         viewport: { height: 900, width: 1280 },
-        recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+        ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+          : {}),
       });
       const page = await context.newPage();
       const message = (seq: number) => ({

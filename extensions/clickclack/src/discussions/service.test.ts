@@ -1,7 +1,12 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
+import { getClickClackDiscussionBindingStore } from "./binding-store.js";
 import { fallbackDiscussionLabel } from "./naming.js";
+import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import {
   discussionChannel,
   MANAGED_CONTRACT_FIELDS,
@@ -21,6 +26,135 @@ function legacyCreateResponse(
 }
 
 describe("ClickClack discussion service", () => {
+  it("keeps accepted same-session operations in order while initial hydration settles", async () => {
+    const harness = createHarness({ label: "Hydration ordering" });
+    const entered = createDeferred<void>();
+    const snapshot = createDeferred<PluginStateEntry<never>[]>();
+    const openStore = harness.runtime.state.openKeyedStore;
+    harness.runtime.state.openKeyedStore = <T>(
+      options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+    ) => {
+      const store = openStore<T>(options);
+      if (options.namespace !== "discussion-bindings") {
+        return store;
+      }
+      return {
+        ...store,
+        entries: vi
+          .fn<() => Promise<PluginStateEntry<T>[]>>()
+          .mockImplementationOnce(() => {
+            entered.resolve();
+            return snapshot.promise;
+          })
+          .mockImplementation(() => store.entries()),
+      };
+    };
+    const sessionKey = "agent:main:hydration-ordering";
+    const opening = harness.service.open(sessionKey);
+    await entered.promise;
+    // Another callback submits work as the worker reply passes through promise continuations.
+    const info = snapshot.promise.then(() =>
+      Promise.resolve().then(() => harness.service.info(sessionKey)),
+    );
+    try {
+      snapshot.resolve([]);
+      await expect(opening).resolves.toMatchObject({ state: "open" });
+      await expect(info).resolves.toMatchObject({ state: "open" });
+      expect(harness.createChannel).toHaveBeenCalledOnce();
+    } finally {
+      snapshot.resolve([]);
+      await Promise.allSettled([opening, info]);
+      await harness.service.cleanup();
+    }
+  });
+
+  it.each(["disabled", "retargeted", "revoked", "replaced"] as const)(
+    "does not update or resurrect a discussion after %s during binding preparation",
+    async (change) => {
+      const harness = createHarness({ label: "Prepared metadata", category: "Projects" });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const openStore = harness.runtime.state.openKeyedStore;
+      let holdEntries = false;
+      harness.runtime.state.openKeyedStore = <T>(
+        options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+      ) => {
+        const store = openStore<T>(options);
+        if (options.namespace !== "discussion-bindings") {
+          return store;
+        }
+        return {
+          ...store,
+          entries: async () => {
+            const entries = await store.entries();
+            if (holdEntries) {
+              entered.resolve();
+              await release.promise;
+            }
+            return entries;
+          },
+        };
+      };
+      const sessionKey = "agent:main:prepared-metadata-authority";
+      await harness.service.open(sessionKey);
+      const originalBinding = getClickClackDiscussionBindingStore(harness.runtime).get(sessionKey);
+      if (!originalBinding) {
+        throw new Error("Expected the opened discussion binding fixture");
+      }
+      const { displayTitle: _displayTitle, ...legacyBinding } = originalBinding;
+      harness.store.register(sessionKey, legacyBinding);
+      // This unchanged legacy title needs the sibling-support scan even if ordinary scans are removed.
+      harness.store.register("agent:main:prepared-metadata-sibling", {
+        ...originalBinding,
+        channelId: "chn_supporting_sibling",
+        externalRef: "supporting-sibling-room",
+        displayTitle: "Confirmed title support",
+      });
+      const replacement = {
+        ...originalBinding,
+        sessionId: "replacement-session",
+        channelId: "chn_replacement",
+        channelRouteId: "replacement-route",
+        externalRef: "replacement-room",
+        section: "Replacement section",
+      };
+      harness.updateChannel.mockClear();
+      harness.setSessionEntry({ label: "Prepared metadata", category: "Changed section" });
+      holdEntries = true;
+      // info passes resolved.account: there is no older network await between these guards and the scan.
+      const operation = harness.service.info(sessionKey);
+      try {
+        await entered.promise;
+        if (change === "disabled") {
+          harness.config.channels!.clickclack!.enabled = false;
+        } else if (change === "retargeted") {
+          harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
+        } else if (change === "revoked") {
+          markClickClackDiscussionChannelRevoked(harness.runtime, legacyBinding);
+        } else {
+          // Bypass local routing indexes, as another native writer can, then reset the session.
+          harness.store.register(sessionKey, replacement);
+          harness.setSessionEntry({
+            sessionId: replacement.sessionId,
+            label: "Prepared metadata",
+            category: "Changed section",
+          });
+        }
+        release.resolve();
+        await operation;
+
+        if (change === "replaced") {
+          expect(harness.store.lookup(sessionKey)).toEqual(replacement);
+        }
+        expect(harness.updateChannel).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await operation.catch(() => undefined);
+        await harness.service.cleanup();
+      }
+    },
+  );
+
   it("opens a managed channel once and returns stable info URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
     harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
@@ -130,13 +264,13 @@ describe("ClickClack discussion service", () => {
 
   it("pins the configured default for global keys and preserves qualified owners", async () => {
     const globalHarness = createHarness({ label: "Global session" });
-    globalHarness.config.agents = { list: [{ id: "ops", default: true }] };
+    globalHarness.config.agents = { entries: { ops: {} } };
 
     expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
     expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
 
     const qualifiedHarness = createHarness({ label: "Qualified session" });
-    qualifiedHarness.config.agents = { list: [{ id: "ops" }, { id: "worker" }] };
+    qualifiedHarness.config.agents = { entries: { ops: {}, worker: {} } };
     const qualifiedKey = "agent:worker:qualified";
 
     expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
@@ -149,7 +283,7 @@ describe("ClickClack discussion service", () => {
 
   it("uses the account agent for unscoped links without changing the configured owner", async () => {
     const harness = createHarness({ label: "Telegram peer" });
-    harness.config.agents = { list: [{ id: "ops", default: true }] };
+    harness.config.agents = { entries: { ops: {} } };
     harness.config.channels!.clickclack!.agentId = "research";
 
     await harness.service.open("telegram:12345");
@@ -314,6 +448,23 @@ describe("ClickClack discussion service", () => {
       label: "Current reset race",
       section: "Current sessions",
     });
+  });
+
+  it("rechecks the attachment incarnation after a prepared session read returns", async () => {
+    const harness = createHarness({ sessionId: "session-old", label: "Prepared attachment" });
+    const sessionKey = "agent:main:prepared-attachment";
+    let reads = 0;
+    harness.runtime.agent.session.getSessionEntryAsync = async (params) => {
+      const prepared = harness.runtime.agent.session.getSessionEntry(params);
+      if (++reads === 2) {
+        harness.setSessionEntry({ sessionId: "session-new", label: "Prepared attachment" });
+      }
+      return prepared;
+    };
+
+    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-new" });
+    expect(harness.createChannel).toHaveBeenCalledOnce();
   });
 
   it("falls back after exhausting desired-name suffixes through 20", async () => {
