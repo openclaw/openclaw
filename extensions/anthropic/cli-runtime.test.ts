@@ -236,6 +236,10 @@ describe("Claude native stdio boundary", () => {
     const liveSession = createLiveSession(cleanup);
     const context = await createContext("normal", { liveSession });
     const first = resultDetail(await collect(context));
+    expect(first.initialize).toMatchObject({
+      appendSystemPrompt: "synthetic operator instructions",
+      systemPromptSnapshot: false,
+    });
     liveSession.fingerprint = "changed-authoritative-prompt";
     const pending = collect({
       ...context,
@@ -252,6 +256,7 @@ describe("Claude native stdio boundary", () => {
       expect(second.turn).toBe(1);
       expect(second.initialize).toMatchObject({
         appendSystemPrompt: "changed authoritative instructions",
+        systemPromptSnapshot: false,
       });
       expect(() => process.kill(Number(first.pid), 0)).toThrow();
     } finally {
