@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
+import { readBoundedRequestBody } from "../request-body.mjs";
 
 const port = readTcpPortEnv("CLICKCLACK_FIXTURE_PORT", 44181);
 const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
@@ -82,49 +83,17 @@ function checkAuth(req, res) {
   return true;
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    let bytes = 0;
-    let settled = false;
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      if (settled) {
-        return;
-      }
-      bytes += Buffer.byteLength(chunk, "utf8");
-      if (bytes > requestMaxBytes) {
-        settled = true;
-        body = "";
-        req.resume();
-        reject(
-          Object.assign(
-            new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`),
-            { code: "ETOOBIG" },
-          ),
-        );
-        return;
-      }
-      body += chunk;
-    });
-    req.on("end", () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
+async function readBody(req) {
+  const body = await readBoundedRequestBody(req, requestMaxBytes, (limit) =>
+    Object.assign(new Error(`ClickClack fixture request body exceeded ${limit} bytes`), {
+      code: "ETOOBIG",
+    }),
+  );
+  try {
+    return body ? JSON.parse(body) : {};
+  } catch {
+    return {};
+  }
 }
 
 function handleRequestError(res, error) {

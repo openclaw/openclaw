@@ -2577,7 +2577,7 @@ docker_e2e_docker_run_cmd run demo
       expect(script, path).toContain("openclaw_e2e_enable_openclaw_cli_timeout");
     }
     expect(readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8")).toContain(
-      'openclaw_e2e_run_command node "$baseline_entry" onboard',
+      'openclaw_release_onboard "$PORT" openclaw_e2e_run_command node "$baseline_entry"',
     );
   });
 
