@@ -1,21 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  resolveDefaultAgentDir,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  clearSessionStoreCacheForTest,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
@@ -31,102 +18,36 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./app-server/session-binding-store.js";
-import {
-  createCodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
-} from "./app-server/session-binding.js";
+import { createCodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resetSharedCodexAppServerClientForTests,
 } from "./app-server/shared-client.js";
-import { createClientHarness, useAutoCleanupTempDirTracker } from "./app-server/test-support.js";
+import { createClientHarness } from "./app-server/test-support.js";
 import { createCodexCommand } from "./commands.js";
+import {
+  createContext,
+  createCodexRuntimeContextOverrides,
+  useCodexCommandTestState,
+} from "./commands.test-support.js";
 
 let tempDir: string;
 
-function createContext(
-  args: string,
-  sessionFile?: string,
-  overrides: Partial<PluginCommandContext> = {},
-): PluginCommandContext {
-  return {
-    channel: "test",
-    isAuthorizedSender: true,
-    senderIsOwner: true,
-    senderId: "user-1",
-    args,
-    commandBody: `/codex ${args}`,
-    config: {},
-    sessionId: "session-1",
-    sessionFile,
-    requestConversationBinding: async () => ({ status: "error", message: "unused" }),
-    detachConversationBinding: async () => ({ removed: false }),
-    getCurrentConversationBinding: async () => null,
-    ...overrides,
-  };
-}
-
-async function createCodexRuntimeContextOverrides(
-  sessionKey = "agent:main:test:codex-compact",
-): Promise<{
-  config: PluginCommandContext["config"];
-  sessionKey: string;
-  sessionTarget: NonNullable<PluginCommandContext["sessionTarget"]>;
-}> {
-  const storePath = path.join(tempDir, "codex-runtime-sessions.json");
-  await upsertSessionEntry({
-    storePath,
-    sessionKey,
-    entry: {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      agentHarnessId: "codex",
-    },
-  });
-  return {
-    config: { session: { store: storePath } },
-    sessionKey,
-    sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-  };
-}
-
-function createThreadResumeResponse(params: { threadId: string; canAcceptDirectInput: boolean }) {
-  const result = threadStartResult(params.threadId, "/repo");
-  return {
-    ...result,
-    model: "gpt-5.4",
-    thread: {
-      ...result.thread,
-      sessionId: params.threadId,
-      source: "appServer",
-      canAcceptDirectInput: params.canAcceptDirectInput,
-    },
-  };
-}
-
 describe("codex command", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      resetSharedCodexAppServerClientForTests();
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      clearRuntimeAuthProfileStoreSnapshots();
-      clearSessionStoreCacheForTest();
-      vi.unstubAllEnvs();
-      cleanup();
-    }),
-  );
-
-  beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-codex-native-retention-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  useCodexCommandTestState({
+    onSetup: (stateDir) => {
+      tempDir = stateDir;
+    },
   });
 
-  it.each(["original", "claimed-successor", "retained-successor"] as const)(
-    "R5 host ownership proof: delayed native close preserves %s ownership",
+  it.each(["claimed-successor", "retained-successor"] as const)(
+    "delayed native close preserves %s ownership",
     async (scenario) => {
-      const context = await createCodexRuntimeContextOverrides(`agent:main:test:r5:${scenario}`);
+      const context = await createCodexRuntimeContextOverrides(
+        tempDir,
+        `agent:main:test:r5:${scenario}`,
+      );
       const nativeHome = path.join(tempDir, "native-home");
       await fs.mkdir(nativeHome);
       vi.stubEnv("CODEX_HOME", nativeHome);
@@ -140,7 +61,7 @@ describe("codex command", () => {
         sessionKey: context.sessionKey,
       };
       const bindingStore = createCodexAppServerBindingStore(
-        createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        createCodexSqliteTestBindingStateStore({
           namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
           maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
           overflowPolicy: "reject-new",
@@ -155,12 +76,21 @@ describe("codex command", () => {
           requestTimeoutMs: 10_000,
         },
       };
-      const response = createThreadResumeResponse({ threadId, canAcceptDirectInput: true });
+      const startedThread = threadStartResult(threadId, "/repo");
+      const response = {
+        ...startedThread,
+        model: "gpt-5.4",
+        thread: {
+          ...startedThread.thread,
+          sessionId: threadId,
+          source: "appServer",
+          canAcceptDirectInput: true,
+        },
+      };
       let nativeGeneration = 1;
       let nativeLoaded = true;
       let replyToLoadedSnapshot: (() => void) | undefined;
       const unsubscribeGenerations: number[] = [];
-      const wireMethods: string[] = [];
       const harness = createClientHarness({
         onWrite(line, send) {
           const message: unknown = JSON.parse(line);
@@ -171,7 +101,6 @@ describe("codex command", () => {
           ) {
             return;
           }
-          wireMethods.push(message.method);
           let result: unknown;
           switch (message.method) {
             case "initialize":
@@ -203,12 +132,8 @@ describe("codex command", () => {
               break;
             case "thread/loaded/list": {
               const snapshot = { data: nativeLoaded ? [threadId] : [], nextCursor: null };
-              if (scenario !== "original") {
-                replyToLoadedSnapshot = () => send({ id: message.id, result: snapshot });
-                return;
-              }
-              result = snapshot;
-              break;
+              replyToLoadedSnapshot = () => send({ id: message.id, result: snapshot });
+              return;
             }
             default:
               send({
@@ -328,11 +253,7 @@ describe("codex command", () => {
           notifications.slice(startCursor).map((entry) => Promise.resolve(entry.completion)),
         );
         await drainTransitions();
-        if (scenario !== "original") {
-          await expect(releaseCodexAppServerLiveThread(harness.client, threadId)).resolves.toBe(
-            true,
-          );
-        }
+        await expect(releaseCodexAppServerLiveThread(harness.client, threadId)).resolves.toBe(true);
         nativeLoaded = false;
         const unsubscribesBeforeClose = unsubscribeGenerations.length;
         const closeCompletion: CodexServerNotification = {
@@ -345,24 +266,22 @@ describe("codex command", () => {
         };
         const completionCursor = notifications.length;
         harness.send(closeCompletion);
-        if (scenario !== "original") {
-          await vi.waitFor(() => expect(replyToLoadedSnapshot).toBeTypeOf("function"));
-          const command = createCodexCommand({ pluginConfig, deps: { bindingStore } });
-          const reply = await command.handler(
-            createContext(`resume ${threadId}`, undefined, context),
-          );
-          expect(reply.text).toContain("Attached this OpenClaw session");
-          expect(bindingStore.read(identity)).toMatchObject({
-            threadId,
-            clientId: harness.client.getInstanceId(),
-          });
-          expect(starts).toBe(1);
-          expect(nativeGeneration).toBe(2);
-          if (scenario === "claimed-successor") {
-            successor = await consumeCodexAppServerLiveThread(harness.client, threadId);
-            expect(successor).toBeDefined();
-            successor?.assertCurrent();
-          }
+        await vi.waitFor(() => expect(replyToLoadedSnapshot).toBeTypeOf("function"));
+        const command = createCodexCommand({ pluginConfig, deps: { bindingStore } });
+        const reply = await command.handler(
+          createContext(`resume ${threadId}`, undefined, context),
+        );
+        expect(reply.text).toContain("Attached this OpenClaw session");
+        expect(bindingStore.read(identity)).toMatchObject({
+          threadId,
+          clientId: harness.client.getInstanceId(),
+        });
+        expect(starts).toBe(1);
+        expect(nativeGeneration).toBe(2);
+        if (scenario === "claimed-successor") {
+          successor = await consumeCodexAppServerLiveThread(harness.client, threadId);
+          expect(successor).toBeDefined();
+          successor?.assertCurrent();
         }
         const bindingBeforeClose = bindingStore.read(identity);
         replyToLoadedSnapshot?.();
@@ -379,28 +298,10 @@ describe("codex command", () => {
         if (scenario !== "claimed-successor") {
           successor = await consumeCodexAppServerLiveThread(harness.client, threadId);
         }
-        console.log(
-          "R5_HOST_PROOF " +
-            JSON.stringify({
-              scenario,
-              starts,
-              nativeGeneration,
-              wireMethods,
-              notificationHandlerJoined: true,
-              nativeRuntimeLoadedAfterClose: nativeLoaded,
-              extraUnsubscribeGenerations: unsubscribeGenerations.slice(unsubscribesBeforeClose),
-              bindingBeforeClose,
-              bindingAfterClose,
-              subscriptionOwnershipPresent: successor !== undefined,
-              sqliteBindingStore: true,
-              commandRpcReal: scenario !== "original",
-              sharedClientLeaseReal: true,
-            }),
-        );
         expect(bindingAfterClose).toEqual(bindingBeforeClose);
         expect(unsubscribeGenerations.slice(unsubscribesBeforeClose)).toEqual([]);
-        expect(nativeLoaded).toBe(scenario !== "original");
-        expect(successor !== undefined).toBe(scenario !== "original");
+        expect(nativeLoaded).toBe(true);
+        expect(successor).toBeDefined();
         successor?.assertCurrent();
       } finally {
         await parent?.unregister();

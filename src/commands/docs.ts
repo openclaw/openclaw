@@ -1,7 +1,6 @@
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
-// Implements docs link/search output for `openclaw docs`.
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -38,10 +37,6 @@ function buildMarkdown(query: string, results: DocResult[]): string {
   return lines.join("\n");
 }
 
-function formatLinkLabel(link: string): string {
-  return link.replace(/^https?:\/\//i, "");
-}
-
 function renderRichResults(query: string, results: DocResult[], runtime: RuntimeEnv) {
   runtime.log(`${theme.heading("Docs search:")} ${theme.info(query)}`);
   if (results.length === 0) {
@@ -49,8 +44,7 @@ function renderRichResults(query: string, results: DocResult[], runtime: Runtime
     return;
   }
   for (const item of results) {
-    const linkLabel = formatLinkLabel(item.link);
-    const link = formatDocsLink(item.link, linkLabel);
+    const link = formatDocsLink(item.link, item.link.replace(/^https?:\/\//i, ""));
     runtime.log(
       `${theme.muted("-")} ${theme.command(item.title)} ${theme.muted("(")}${link}${theme.muted(")")}`,
     );
@@ -58,10 +52,6 @@ function renderRichResults(query: string, results: DocResult[], runtime: Runtime
       runtime.log(`  ${theme.muted(item.snippet)}`);
     }
   }
-}
-
-async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
-  runtime.log(markdown.trimEnd());
 }
 
 async function fetchDocsSearch(query: string): Promise<DocResult[]> {
@@ -121,7 +111,6 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
   return results;
 }
 
-/** Search hosted docs, or print the docs homepage when no query is provided. */
 export async function docsSearchCommand(
   queryParts: string[],
   runtime: RuntimeEnv,
@@ -168,6 +157,5 @@ export async function docsSearchCommand(
     renderRichResults(query, results, runtime);
     return;
   }
-  const markdown = buildMarkdown(query, results);
-  await renderMarkdown(markdown, runtime);
+  runtime.log(buildMarkdown(query, results).trimEnd());
 }

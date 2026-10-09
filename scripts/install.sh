@@ -32,6 +32,23 @@ if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPE
 fi
 unset OPENCLAW_INSTALLER_REEXEC_FILE
 
+# Shared policy is inlined when building standalone distribution scripts.
+# shellcheck source=scripts/install-policy.sh
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"
+
+installer_node() { node "$@"; }
+installer_npm() { npm "$@"; }
+installer_step() { run_quiet_step "$@"; }
+installer_error() { ui_error "$@"; }
+installer_npm_version_error() {
+    echo "Unable to determine npm version from ${1}; no package changes were made." >&2
+}
+installer_clone_error() {
+    ui_error "Could not publish the cloned checkout: ${1}"
+    ui_info "Inspect the destination for partial files, move it or choose another --git-dir, then retry."
+    return 1
+}
+
 # OpenClaw Installer for macOS and Linux
 # Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
 
@@ -135,50 +152,6 @@ resolve_openclaw_user_path() {
 }
 
 DOWNLOADER=""
-detect_downloader() {
-    if command -v curl &> /dev/null; then
-        DOWNLOADER="curl"
-        return 0
-    fi
-    if command -v wget &> /dev/null; then
-        DOWNLOADER="wget"
-        return 0
-    fi
-    ui_error "Missing downloader (curl or wget required)"
-    exit 1
-}
-
-download_file() {
-    local url="$1"
-    local output="$2"
-    local redirect_mode="${3:-follow}"
-    if [[ -z "$DOWNLOADER" ]]; then
-        detect_downloader
-    fi
-    if [[ "$DOWNLOADER" == "curl" ]]; then
-        if [[ "$redirect_mode" == "deny" ]]; then
-            curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
-                --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-                --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-                --retry 3 --retry-delay 1 --retry-connrefused \
-                -o "$output" "$url"
-            return
-        fi
-        # Bound connection and transfer stalls without a total download duration.
-        curl -fsSL --proto '=https' --tlsv1.2 \
-            --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-            --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
-            --retry 3 --retry-delay 1 --retry-connrefused \
-            -o "$output" "$url"
-        return
-    fi
-    if [[ "$redirect_mode" == "deny" ]]; then
-        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
-        return
-    fi
-    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
-}
-
 # Managed setup endpoints must return a non-empty script with a raw shebang.
 # This is a response-shape check, not an authenticity or completeness check.
 validate_downloaded_script() {
@@ -620,24 +593,6 @@ run_with_spinner() {
         else
             "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
         fi
-        if [[ "$gum_status" -eq 0 ]]; then
-            if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
-                GUM=""
-                GUM_STATUS="skipped"
-                GUM_REASON="gum raw mode unavailable"
-                ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                if needs_stdin_isolation; then
-                    "$@" < /dev/null
-                else
-                    "$@"
-                fi
-                return $?
-            fi
-            if [[ -s "$gum_out" ]]; then
-                cat "$gum_out"
-            fi
-            return 0
-        fi
         if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
             GUM=""
             GUM_STATUS="skipped"
@@ -649,6 +604,12 @@ run_with_spinner() {
                 "$@"
             fi
             return $?
+        fi
+        if [[ "$gum_status" -eq 0 ]]; then
+            if [[ -s "$gum_out" ]]; then
+                cat "$gum_out"
+            fi
+            return 0
         fi
         if [[ -s "$gum_err" ]]; then
             cat "$gum_err" >&2
@@ -674,8 +635,6 @@ run_quiet_step() {
 
     local log
     mktempfile log
-    local showed_progress=false
-
     local cmd_exit=0
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
@@ -687,11 +646,9 @@ run_quiet_step() {
         if (( cmd_exit == 0 )); then
             return 0
         fi
-        showed_progress=true
     else
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
-        showed_progress=true
         if needs_stdin_isolation; then
             "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
         else
@@ -700,10 +657,6 @@ run_quiet_step() {
         if (( cmd_exit == 0 )); then
             return 0
         fi
-    fi
-
-    if [[ "$showed_progress" == "false" ]]; then
-        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -726,15 +679,6 @@ run_required_step() {
         return 0
     fi
     exit 1
-}
-
-cleanup_legacy_submodules() {
-    local repo_dir="$1"
-    local legacy_dir="$repo_dir/Peekaboo"
-    if [[ -d "$legacy_dir" ]]; then
-        ui_info "Removing legacy submodule checkout: ${legacy_dir}"
-        rm -rf "$legacy_dir"
-    fi
 }
 
 begin_openclaw_bin_backup() {
@@ -991,141 +935,6 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
-resolve_npm_config_path() {
-    local raw="$1"
-    if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
-        return 1
-    fi
-    if [[ "$raw" == \~/* && -n "${HOME:-}" ]]; then
-        printf '%s\n' "${HOME}/${raw#"~/"}"
-        return 0
-    fi
-    if [[ "$raw" == "\${HOME}/"* && -n "${HOME:-}" ]]; then
-        printf '%s\n' "${HOME}/${raw#"\${HOME}/"}"
-        return 0
-    fi
-    printf '%s\n' "$raw"
-}
-
-npm_config_file_has_key() {
-    local file="$1"
-    local key="$2"
-    [[ -f "$file" ]] || return 1
-    grep -Eiq "^[[:space:]]*${key}[[:space:]]*=" "$file"
-}
-
-npm_command_path() {
-    local npm_cmd="$1"
-    local npm_path="$npm_cmd"
-    if [[ "$npm_path" != */* ]]; then
-        npm_path="$(command -v "$npm_cmd" 2>/dev/null)" || return 1
-    fi
-    if command -v node >/dev/null 2>&1; then
-        node -e 'const fs = require("node:fs"); console.log(fs.realpathSync(process.argv[1]));' "$npm_path" 2>/dev/null && return 0
-    fi
-    printf '%s\n' "$npm_path"
-}
-
-npm_builtin_config_path() {
-    local npm_cmd="$1"
-    local npm_path
-    npm_path="$(npm_command_path "$npm_cmd")" || return 1
-    local npm_root
-    npm_root="$(cd "$(dirname "$npm_path")/.." >/dev/null 2>&1 && pwd -P)" || return 1
-    printf '%s\n' "${npm_root}/npmrc"
-}
-
-npm_config_has_raw_key() {
-    local npm_cmd="$1"
-    local key="$2"
-    local project_dir="${3:-}"
-    local raw=""
-    local file=""
-    local -a files=()
-
-    if [[ -n "$project_dir" ]]; then
-        files+=("${project_dir}/.npmrc")
-    fi
-
-    raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
-    if [[ -n "$raw" ]]; then
-        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
-        [[ -n "$file" ]] && files+=("$file")
-    elif [[ -n "${HOME:-}" ]]; then
-        files+=("${HOME}/.npmrc")
-    fi
-
-    raw="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
-    if [[ -n "$raw" ]]; then
-        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
-        [[ -n "$file" ]] && files+=("$file")
-    fi
-
-    raw="$(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get globalconfig --global 2>/dev/null || true)"
-    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
-    [[ -n "$file" ]] && files+=("$file")
-
-    file="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
-    [[ -n "$file" ]] && files+=("$file")
-
-    for file in "${files[@]}"; do
-        if npm_config_file_has_key "$file" "$key"; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-npm_lifecycle_allow_arg() {
-    local npm_cmd="$1" spec="$2" npm_cwd="${3:-$PWD}" exact_identity="${4:-}" version="" output=""
-    if ! version="$("$npm_cmd" --version 2>/dev/null)"; then
-        echo "Unable to determine npm version from ${npm_cmd}; no package changes were made." >&2
-        return 1
-    fi
-    output="$(node - "$version" "$spec" "$npm_cwd" "$exact_identity" <<'NODE'
-const path = require("node:path");
-const [versionOutput, spec, cwd, exactIdentity] = process.argv.slice(2);
-const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
-const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
-const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
-if (!parsed) fail("Unable to determine npm version; no package changes were made.");
-if (+parsed[1] < 12 && (+parsed[1] !== 11 || +parsed[2] < 16)) process.exit(0);
-const normalized = spec.trim();
-const unaliased = normalized.toLowerCase().startsWith("openclaw@") ? normalized.slice(9).trim() : normalized;
-const explicit = (value) => /\.(?:tgz|tar\.gz)$/i.test(value) || value.includes("://") || value.includes("#") || /^(?:file|github|git\+(?:ssh|https|http|file)|npm):/i.test(value);
-let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\.{1,2}(?:[\\/]|$)/.test(unaliased) || path.isAbsolute(normalized) || path.isAbsolute(unaliased) ? unaliased : "openclaw";
-const alias = /^npm:/i.test(identity);
-if (alias) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
-const filePrefix = /^file:/i.test(identity) ? "file:" : "";
-const archivePath = identity.slice(filePrefix.length);
-const gitShorthand = !/^~[\\/]/.test(identity) && /^[^./@\s:#][^/\s:@#]*\/[^/\s:@#]+(?:#[\s\S]*)?$/.test(identity);
-const localArchive = !alias && !gitShorthand && /\.(?:tgz|tar\.gz|tar)$/i.test(archivePath) && (filePrefix || path.isAbsolute(archivePath) || !/^[a-z][a-z0-9+.-]*:/i.test(archivePath));
-let absoluteArchive = "";
-if (localArchive) {
-  const npmPath = process.platform === "win32" ? archivePath.replaceAll("\\", "/") : archivePath;
-  // Escape raw paths before URL normalization so literal %, #, and ? retain their identity.
-  let fileUrl = `file:${encodeURI(npmPath).replace(/[?#]/g, encodeURIComponent)}`;
-  fileUrl = fileUrl.replace(/^file:\/\/(?=[^/])/, "file:/").replace(/^file:\/{1,3}(?=\.\.?(?:\/|$))/, "file:");
-  const specPath = decodeURIComponent(new URL(fileUrl).pathname);
-  let resolvedPath = decodeURIComponent(new URL(fileUrl, `${require("node:url").pathToFileURL(path.resolve(cwd || process.cwd())).href}/`).pathname);
-  if (process.platform === "win32") resolvedPath = resolvedPath.replace(/^\/+([a-z]:\/)/i, "$1");
-  absoluteArchive = /^\/~(?:\/|$)/.test(specPath) ? path.resolve(require("node:os").homedir(), specPath.slice(3)) : path.resolve(cwd || process.cwd(), resolvedPath);
-}
-// Tarballs match the absolute npm resolved identity; directory links accept relative paths.
-// Keep the npm 11 comma-path identity: its advisory/strict decision stays npm-owned.
-if (absoluteArchive && (+parsed[1] >= 12 || !absoluteArchive.includes(","))) identity = `${filePrefix}${absoluteArchive}`;
-else {
-  const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
-  if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
-}
-if (exactIdentity) identity = exactIdentity;
-if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'; use a package URL or local path without commas.`);
-process.stdout.write(`--allow-scripts=${identity}\n`);
-NODE
-)" || return 1
-    printf '%s' "$output"
-}
-
 verify_npm_lifecycle_completed() {
     local npm_cmd="$1" npm_root=""
     npm_root="$("$npm_cmd" root -g 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
@@ -1144,18 +953,8 @@ run_npm_global_install() {
     local npm_cwd="$PWD"
     lifecycle_arg="$(npm_lifecycle_allow_arg "$npm_cmd" "$spec" "$npm_cwd")" || return 1
 
-    local freshness_flag="--min-release-age=0"
-    local min_release_age=""
-    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get min-release-age --global 2>/dev/null || true)"
-    if npm_config_has_raw_key "$npm_cmd" "min-release-age"; then
-        freshness_flag="--min-release-age=0"
-    elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
-        local before_value=""
-        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get before --global 2>/dev/null || true)"
-        if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
-            freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
-        fi
-    fi
+    local freshness_flag
+    freshness_flag="$(npm_freshness_flag "$npm_cmd")"
 
     local -a cmd
     cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" --loglevel "$NPM_LOGLEVEL")
@@ -1527,20 +1326,19 @@ parse_args() {
                 HELP=1
                 shift
                 ;;
-            --install-method|--method)
+            --install-method|--method|--version|--git-dir|--dir)
                 if [[ $# -lt 2 || "${2:-}" == --* ]]; then
                     ui_error "Missing value for $1"
                     return 2
                 fi
-                INSTALL_METHOD="$2"
-                shift 2
-                ;;
-            --version)
-                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-                    ui_error "Missing value for $1"
-                    return 2
-                fi
-                OPENCLAW_VERSION="$2"
+                case "$1" in
+                    --install-method|--method) INSTALL_METHOD="$2" ;;
+                    --version) OPENCLAW_VERSION="$2" ;;
+                    --git-dir|--dir)
+                        GIT_DIR="$2"
+                        GIT_DIR_EXPLICIT=${2:+1}
+                        ;;
+                esac
                 shift 2
                 ;;
             --beta)
@@ -1554,15 +1352,6 @@ parse_args() {
             --git|--github)
                 INSTALL_METHOD="git"
                 shift
-                ;;
-            --git-dir|--dir)
-                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
-                    ui_error "Missing value for $1"
-                    return 2
-                fi
-                GIT_DIR="$2"
-                GIT_DIR_EXPLICIT=${2:+1}
-                shift 2
                 ;;
             --no-git-update)
                 GIT_UPDATE=0
@@ -1754,16 +1543,9 @@ parse_node_version_components_for_binary() {
     return 0
 }
 
-parse_node_version_components() {
-    if ! command -v node &> /dev/null; then
-        return 1
-    fi
-    parse_node_version_components_for_binary node
-}
-
 node_major_version() {
     local version_components major minor patch
-    version_components="$(parse_node_version_components || true)"
+    version_components="$(parse_node_version_components_for_binary node || true)"
     read -r major minor patch <<< "$version_components"
     if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
         echo "$major"
@@ -1792,74 +1574,14 @@ node_version_components_are_supported() {
     esac
 }
 
-node_binary_has_safe_sqlite() {
-    local node_bin="$1"
-    "$node_bin" -e '
-        const { DatabaseSync } = require("node:sqlite");
-        const db = new DatabaseSync(":memory:");
-        try {
-            const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
-            const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
-            const major = Number(match?.[1]);
-            const minor = Number(match?.[2]);
-            const patch = Number(match?.[3]);
-            const safe =
-                major > 3 ||
-                (major === 3 &&
-                    (minor > 51 ||
-                        (minor === 51 && patch >= 3) ||
-                        (minor === 50 && patch >= 7) ||
-                        (minor === 44 && patch >= 6)));
-            const text = "a\u0000b\u0000";
-            const bytes = Buffer.from(text, "utf8");
-            const json = JSON.stringify({ value: text });
-            db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
-            db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-            const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
-            const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
-            const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
-            const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
-            if (!textSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
-            } else if (!blobSafe || !jsonSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
-            } else if (!safe) {
-                console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
-            }
-            if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
-        } finally {
-            db.close();
-        }
-    ' --no-warnings >/dev/null
-}
-
-node_binary_sqlite_version() {
-    local node_bin="$1"
-    local version
-    version="$("$node_bin" -e '
-        const { DatabaseSync } = require("node:sqlite");
-        const db = new DatabaseSync(":memory:");
-        try {
-            process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
-        } finally {
-            db.close();
-        }
-    ' 2>/dev/null || true)"
-    printf '%s\n' "${version:-unavailable}"
-}
-
 node_version_is_supported() {
     local version_components major minor patch
-    version_components="$(parse_node_version_components || true)"
+    version_components="$(parse_node_version_components_for_binary node || true)"
     read -r major minor patch <<< "$version_components"
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
         return 1
     fi
     node_version_components_are_supported "$major" "$minor" "$patch"
-}
-
-node_is_supported() {
-    node_binary_is_supported node
 }
 
 node_binary_is_supported() {
@@ -2116,10 +1838,6 @@ promote_supported_node_binary() {
     return 1
 }
 
-activate_supported_node_on_path() {
-    promote_supported_node_binary
-}
-
 print_active_node_paths() {
     if ! command -v node &> /dev/null; then
         return 1
@@ -2151,7 +1869,7 @@ ensure_macos_default_node_active() {
         fi
     fi
 
-    if node_is_supported; then
+    if node_binary_is_supported node; then
         return 0
     fi
 
@@ -2173,7 +1891,7 @@ ensure_macos_default_node_active() {
 }
 
 ensure_default_node_active_shell() {
-    if node_is_supported; then
+    if node_binary_is_supported node; then
         return 0
     fi
 
@@ -2227,7 +1945,7 @@ use_supported_nvm_node() {
         version="${version##*/}"
         nvm use --silent "$version" || return 1
         refresh_shell_command_cache
-        node_is_supported || return 1
+        node_binary_is_supported node || return 1
         ui_info "Using existing nvm Node.js ${version} for this installation (${NVM_DIR})"
         echo "  Shell profiles and the nvm default are unchanged. For later commands, run: nvm use ${version}"
         return 0
@@ -2294,7 +2012,7 @@ install_node_with_existing_nvm() {
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if node_is_supported; then
+        if node_binary_is_supported node; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
@@ -2313,10 +2031,10 @@ check_node() {
 }
 
 finish_linux_node_install() {
-    if ! node_is_supported; then
-        activate_supported_node_on_path || true
+    if ! node_binary_is_supported node; then
+        promote_supported_node_binary || true
     fi
-    if ! node_is_supported; then
+    if ! node_binary_is_supported node; then
         local active_path active_version
         active_path="$(command -v node 2>/dev/null || echo "not found")"
         active_version="$(node -v 2>/dev/null || echo "missing")"
@@ -2337,8 +2055,8 @@ install_node_with_apk() {
         run_required_step "Installing Node.js" sudo apk add --no-cache nodejs npm
     fi
 
-    activate_supported_node_on_path || true
-    if node_is_supported; then
+    promote_supported_node_binary || true
+    if node_binary_is_supported node; then
         finish_linux_node_install
         return 0
     fi
@@ -2353,8 +2071,8 @@ install_node_with_apk() {
         run_required_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
     fi
 
-    activate_supported_node_on_path || true
-    if node_is_supported; then
+    promote_supported_node_binary || true
+    if node_binary_is_supported node; then
         finish_linux_node_install
         return 0
     fi
@@ -2498,10 +2216,6 @@ check_git() {
     return 1
 }
 
-is_root() {
-    [[ "$(id -u)" -eq 0 ]]
-}
-
 require_sudo() {
     if [[ "$OS" != "linux" ]]; then
         return 0
@@ -2527,37 +2241,26 @@ install_git() {
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
+        local -a git_cmd=()
         if command -v apk &> /dev/null && is_alpine_linux; then
-            if is_root; then
-                run_quiet_step "Installing Git" apk add --no-cache git
-            else
-                run_quiet_step "Installing Git" sudo apk add --no-cache git
-            fi
+            git_cmd=(apk add --no-cache git)
         elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
-            run_quiet_step "Installing Git" apt_get_install git
+            git_cmd=(apt_get_install git)
         elif command -v pacman &> /dev/null && is_arch_linux; then
-            if is_root; then
-                run_quiet_step "Installing Git" pacman -Sy --noconfirm git
-            else
-                run_quiet_step "Installing Git" sudo pacman -Sy --noconfirm git
-            fi
+            git_cmd=(pacman -Sy --noconfirm git)
         elif command -v dnf &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Installing Git" dnf install -y -q git
-            else
-                run_quiet_step "Installing Git" sudo dnf install -y -q git
-            fi
+            git_cmd=(dnf install -y -q git)
         elif command -v yum &> /dev/null; then
-            if is_root; then
-                run_quiet_step "Installing Git" yum install -y -q git
-            else
-                run_quiet_step "Installing Git" sudo yum install -y -q git
-            fi
+            git_cmd=(yum install -y -q git)
         else
             ui_error "Could not detect package manager for Git"
             exit 1
         fi
+        if [[ "${git_cmd[0]}" != "apt_get_install" ]] && ! is_root; then
+            git_cmd=(sudo "${git_cmd[@]}")
+        fi
+        run_quiet_step "Installing Git" "${git_cmd[@]}"
     fi
     ui_success "Git installed"
 }
@@ -2638,10 +2341,6 @@ check_existing_openclaw() {
     return 1
 }
 
-set_pnpm_cmd() {
-    PNPM_CMD=("$@")
-}
-
 pnpm_cmd_pretty() {
     if [[ ${#PNPM_CMD[@]} -eq 0 ]]; then
         echo ""
@@ -2655,7 +2354,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.2"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -2686,188 +2385,6 @@ ensure_pnpm() {
     ui_success "pnpm ready ($(pnpm_cmd_pretty))"
 }
 
-run_pnpm() (
-    local repo_dir="$PWD"
-    if [[ "${1:-}" == "-C" ]]; then
-        repo_dir="$2"
-        shift 2
-    fi
-    cd "$repo_dir" || return 1
-    # Pin nested commands and inherited roots only for this child. Corepack's
-    # cold-cache prompt would otherwise wait invisibly in the version probe.
-    env COREPACK_ENABLE_DOWNLOAD_PROMPT=0 PATH="${PNPM_CMD[0]%/*}:$PATH" \
-      NPM_CONFIG_WORKSPACE_DIR="$PWD" npm_config_workspace_dir="$PWD" \
-      PNPM_CONFIG_LOCKFILE_DIR="$PWD" pnpm_config_lockfile_dir="$PWD" \
-      "${PNPM_CMD[@]}" "$@"
-)
-
-should_prefer_offline_pnpm_install() {
-    local project_dir="${1:-$PWD}"
-    [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]] || return 1
-    local configured=""
-    configured="$(run_pnpm -C "$project_dir" config get prefer-offline 2>/dev/null)" || return 1
-    [[ -z "$configured" || "$configured" == "undefined" || "$configured" == "null" ]]
-}
-
-resolve_git_openclaw_ref() {
-    local requested="${OPENCLAW_VERSION:-latest}"
-    local resolved_version=""
-
-    case "$requested" in
-        ""|latest)
-            resolved_version="$(npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
-            if [[ -n "$resolved_version" ]]; then
-                echo "v${resolved_version}"
-                return 0
-            fi
-            echo "main"
-            return 0
-            ;;
-        next|beta)
-            resolved_version="$(npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
-            if [[ -n "$resolved_version" ]]; then
-                echo "v${resolved_version}"
-                return 0
-            fi
-            echo "$requested"
-            return 0
-            ;;
-        main)
-            echo "main"
-            return 0
-            ;;
-        v[0-9]*)
-            echo "$requested"
-            return 0
-            ;;
-        [0-9]*.[0-9]*.[0-9]*)
-            echo "v${requested}"
-            return 0
-            ;;
-        *)
-            echo "$requested"
-            return 0
-            ;;
-    esac
-}
-
-verify_git_rebase_recovery() {
-    local repo_dir="$1"
-    local expected_head="$2"
-    local expected_status="$3"
-    local git_dir
-
-    git_dir="$(git -C "$repo_dir" rev-parse --absolute-git-dir)" || return 1
-    if [[ -d "$git_dir/rebase-merge" || -d "$git_dir/rebase-apply" ]]; then
-        git -C "$repo_dir" rebase --abort >/dev/null 2>&1 || return 1
-    fi
-
-    [[ "$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" == "$expected_head" ]] &&
-        [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" == "$expected_status" ]] &&
-        [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
-}
-
-checkout_git_openclaw_ref() {
-    local repo_dir="$1"
-    local ref="$2"
-    local original_head=""
-    local original_status=""
-    local namespaces=(heads tags)
-
-    GIT_REF_KIND=""
-
-    if [[ -z "$ref" ]]; then
-        return 0
-    fi
-
-    # Full commit IDs pin source bytes, even when a remote ref has the same name.
-    # Bundled/existing checkouts already have the object and need no remote lookup.
-    if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-        if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
-            if ! run_quiet_step "Fetching requested commit" git -C "$repo_dir" fetch --no-tags origin "$ref"; then
-                ui_error "Could not fetch requested git commit: ${ref}"
-                return 1
-            fi
-        fi
-        if ! git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-            ui_error "Requested git version is not a commit: ${ref}"
-            return 1
-        fi
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-        GIT_REF_KIND="immutable"
-        return 0
-    fi
-
-    if [[ "$ref" == "main" ]]; then
-        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
-        run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
-        if [[ "$GIT_UPDATE" == "1" ]]; then
-            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-                ui_error "Could not record repository state before updating from origin/main"
-                return 1
-            fi
-            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
-                ui_error "Could not record repository state before updating from origin/main"
-                return 1
-            fi
-            if ! run_quiet_step "Updating repository" git -C "$repo_dir" rebase origin/main; then
-                if verify_git_rebase_recovery "$repo_dir" "$original_head" "$original_status"; then
-                    ui_error "Could not update repository from origin/main; the checkout was restored to its pre-update state"
-                else
-                    ui_error "Could not update repository from origin/main; checkout recovery was not verified. Run git -C \"$repo_dir\" rebase --abort and inspect the checkout before retrying"
-                fi
-                return 1
-            fi
-        fi
-        GIT_REF_KIND="moving"
-        return 0
-    fi
-
-    # Normalized release selectors prefer immutable tags. A same-name branch
-    # remains a fallback for operator-supplied v-prefixed branch names.
-    if [[ "$ref" == v[0-9]* ]]; then
-        namespaces=(tags heads)
-    fi
-
-    local namespace=""
-    local probe_status=0
-    for namespace in "${namespaces[@]}"; do
-        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
-            if [[ "$namespace" == "heads" ]]; then
-                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-                GIT_REF_KIND="moving"
-            else
-                run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
-                if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-                    ui_error "Requested git version is not a commit: ${ref}"
-                    return 1
-                fi
-                run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
-                GIT_REF_KIND="immutable"
-            fi
-            return 0
-        else
-            probe_status=$?
-        fi
-        if (( probe_status != 2 )); then
-            ui_error "Could not resolve requested git ref: ${ref}"
-            return 1
-        fi
-    done
-
-    ui_error "Requested git version not found: ${ref}"
-    return 1
-}
-
-git_install_lockfile_flag() {
-    if [[ "$1" == "moving" ]]; then
-        echo "--no-frozen-lockfile"
-    else
-        echo "--frozen-lockfile"
-    fi
-}
-
 validate_git_checkout_head() {
     local repo_dir="$1"
 
@@ -2881,99 +2398,6 @@ validate_git_checkout_head() {
     ui_error "Git checkout has no commit: ${repo_dir}"
     ui_info "Move or remove this incomplete checkout, then retry the installer."
     return 1
-}
-
-clone_git_checkout_transactionally() {
-    local repo_url="$1"
-    local repo_dir="$2"
-    shift 2
-
-    local parent_dir staging_dir clone_status=0 preserve_repo_dir=0
-    parent_dir="$(dirname "$repo_dir")"
-    mkdir -p "$parent_dir"
-    parent_dir="$(cd "$parent_dir" && pwd -P)"
-    if [[ -d "$repo_dir" && -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-        preserve_repo_dir=1
-        repo_dir="$(cd "$repo_dir" && pwd -P)"
-        staging_dir="$(mktemp -d "${repo_dir}/.openclaw-clone.XXXXXX")"
-    else
-        repo_dir="${parent_dir}/$(basename "$repo_dir")"
-        staging_dir="$(mktemp -d "${parent_dir}/.openclaw-clone.XXXXXX")"
-    fi
-    TMPFILES+=("$staging_dir")
-
-    run_quiet_step "Cloning OpenClaw" git clone "$@" "$repo_url" "$staging_dir" || clone_status=$?
-    if (( clone_status != 0 )); then
-        return "$clone_status"
-    fi
-
-    if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
-const fs = require("node:fs");
-const [source, target, preserveTarget] = process.argv.slice(2);
-if (preserveTarget === "0") {
-  try {
-    fs.lstatSync(target);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-    fs.renameSync(source, target);
-    process.exit(0);
-  }
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
-if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
-const moved = [];
-try {
-  for (const entry of entries) {
-    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
-    moved.push(entry);
-  }
-  fs.rmdirSync(source);
-} catch (error) {
-  const rollbackErrors = [];
-  for (const entry of moved.reverse()) {
-    try {
-      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
-    } catch (rollbackError) {
-      rollbackErrors.push(rollbackError);
-    }
-  }
-  if (rollbackErrors.length > 0) {
-    let recovery = source;
-    try {
-      recovery = `${source}.recovery`;
-      fs.renameSync(source, recovery);
-    } catch (recoveryError) {
-      rollbackErrors.push(recoveryError);
-      recovery = source;
-    }
-    throw new AggregateError(
-      [error, ...rollbackErrors],
-      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
-    );
-  }
-  throw error;
-}
-NODE
-    then
-        ui_error "Could not publish the cloned checkout: ${repo_dir}"
-        ui_info "Inspect the destination for partial files, move it or choose another --git-dir, then retry."
-        return 1
-    fi
-}
-
-repo_pnpm_spec() {
-    local repo_dir="$1"
-    local package_json="${repo_dir}/package.json"
-
-    if [[ ! -f "$package_json" ]]; then
-        return 1
-    fi
-
-    node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (typeof pkg.packageManager === "string") process.stdout.write(pkg.packageManager);' "$package_json"
 }
 
 
@@ -3303,7 +2727,7 @@ bounded_probe_output() {
 
     status="$(cat "$status_file" 2>/dev/null || true)"
     if [[ -s "$timeout_file" || "$status" == "timeout" ]]; then
-        echo "Warning: timed out during installer finalization probe: ${label}" >&2
+        echo "Warning: timed out during installer finalization check: ${label}" >&2
         return 124
     fi
 
@@ -3454,7 +2878,6 @@ install_openclaw_from_git() {
         fi
     fi
 
-    cleanup_legacy_submodules "$repo_dir"
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
@@ -3511,31 +2934,9 @@ resolve_beta_version() {
     echo "$beta"
 }
 
-to_lowercase_ascii() {
-    # macOS still ships Bash 3.2, so avoid `${value,,}` here.
-    printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
-}
-
 is_explicit_package_install_spec() {
     local value="${1:-}"
     [[ "$value" == *"://"* || "$value" == *"#"* || "$value" == /* || "$value" == ./* || "$value" == ../* || "$value" =~ \.(tgz|tar\.gz)$ || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
-}
-
-is_openclaw_source_package_install_spec() {
-    local value="${1:-}"
-    local normalized_value=""
-    normalized_value="$(to_lowercase_ascii "$value")"
-    normalized_value="${normalized_value#openclaw@}"
-
-    [[ "$normalized_value" == "main" ]] && return 0
-    [[ "$normalized_value" =~ ^github:openclaw/openclaw($|[#/]) ]] && return 0
-
-    normalized_value="${normalized_value#git+}"
-    [[ "$normalized_value" =~ ^https?://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
-    [[ "$normalized_value" =~ ^ssh://git@github\.com[:/]openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
-    [[ "$normalized_value" =~ ^git://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
-    [[ "$normalized_value" =~ ^git@github\.com:openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
-    return 1
 }
 
 can_resolve_registry_package_version() {
@@ -3567,10 +2968,6 @@ resolve_package_install_spec() {
         echo "$value"
         return 0
     fi
-    if [[ "$value" == "latest" ]]; then
-        echo "${package_name}@latest"
-        return 0
-    fi
     echo "${package_name}@${value}"
 }
 
@@ -3582,7 +2979,6 @@ install_openclaw() {
         if [[ -n "$beta_version" ]]; then
             OPENCLAW_VERSION="$beta_version"
             ui_info "Beta tag detected (${beta_version})"
-            package_name="openclaw"
         else
             OPENCLAW_VERSION="latest"
             ui_info "No beta tag found; using latest"
@@ -3984,8 +3380,8 @@ main() {
     # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
     # only when they are about to call brew.
     load_nvm_for_node_detection || exit 1
-    if ! node_is_supported; then
-        use_supported_nvm_node || activate_supported_node_on_path || true
+    if ! node_binary_is_supported node; then
+        use_supported_nvm_node || promote_supported_node_binary || true
     fi
     if ! check_node; then
         if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
@@ -4124,15 +3520,11 @@ main() {
         if [[ -n "$claw" ]] && is_gateway_daemon_loaded "$claw"; then
             local user_claw
             user_claw="$(openclaw_command_for_user "$claw")"
-            if [[ "$DRY_RUN" == "1" ]]; then
-                ui_info "Gateway daemon detected; would restart (${user_claw} daemon restart)"
+            ui_info "Gateway daemon detected; restarting"
+            if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
+                ui_success "Gateway restarted"
             else
-                ui_info "Gateway daemon detected; restarting"
-                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
-                    ui_success "Gateway restarted"
-                else
-                    ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
-                fi
+                ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
             fi
         fi
     fi

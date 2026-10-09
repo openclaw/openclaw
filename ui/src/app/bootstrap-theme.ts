@@ -2,6 +2,7 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -19,7 +20,6 @@ import {
 } from "./settings.ts";
 import { setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
-import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
 import {
   applyChatFontSmoothing,
@@ -86,6 +86,18 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   syncControlUiSystemChrome();
 }
 
+function livePreferencesKey(settings: UiPreferences): string {
+  // Persisted navigation bindings are boot/resume state. Live selection is
+  // published by the Gateway and agent-selection owners, not theme subscribers.
+  const {
+    sessionKey: _sessionKey,
+    lastActiveSessionKey: _lastActiveSessionKey,
+    selectedAgentId: _selectedAgentId,
+    ...preferences
+  } = settings;
+  return JSON.stringify(preferences);
+}
+
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
@@ -104,6 +116,7 @@ export function createApplicationTheme(
   let disposed = false;
   const publish = () => {
     const generation = ++presentationGeneration;
+    let preferencesPublished = false;
     setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
     syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
@@ -112,16 +125,10 @@ export function createApplicationTheme(
       }
       const previousMascot =
         typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
-      const previousHat =
-        typeof document === "undefined"
-          ? undefined
-          : document.documentElement.dataset.themeAvatarHat;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
-      if (
-        typeof document !== "undefined" &&
-        (previousMascot !== document.documentElement.dataset.themeMascot ||
-          previousHat !== document.documentElement.dataset.themeAvatarHat)
-      ) {
+      // Computed-style consumers need the applied palette, not just the new
+      // preference. Synchronous application shares the publication below.
+      if (preferencesPublished) {
         for (const listener of listeners) {
           listener();
         }
@@ -144,6 +151,7 @@ export function createApplicationTheme(
     });
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
+    preferencesPublished = true;
     for (const listener of listeners) {
       listener();
     }
@@ -203,10 +211,11 @@ export function createApplicationTheme(
 
   const refresh = () => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
-    if (JSON.stringify(next) === JSON.stringify(settings)) {
+    const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    settings = next;
+    if (!changed) {
       return;
     }
-    settings = next;
     void loadCatalog();
     publish();
     syncSystemThemeListener();
@@ -259,26 +268,14 @@ export function createApplicationTheme(
       serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
       publish();
     },
-    setMode(mode: ThemeMode, element) {
-      const currentTheme = resolveTheme(settings.theme, settings.themeMode);
-      const nextTheme = resolveTheme(settings.theme, mode);
-      startThemeTransition({
-        nextTheme,
-        currentTheme,
-        context: { element },
-        applyTheme: () => {
-          patchSettings({ themeMode: mode });
-        },
-      });
+    setMode(mode: ThemeMode) {
+      patchSettings({ themeMode: mode });
     },
     refresh,
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       catalog?.dispose();

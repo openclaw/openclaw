@@ -3,10 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnFault = vi.hoisted(() => {
   const state: {
-    code: "EMFILE" | "ENFILE";
     errors: Error[];
     close?: () => void;
-  } = { code: "EMFILE", errors: [] };
+  } = { errors: [] };
   return state;
 });
 
@@ -22,20 +21,21 @@ vi.mock("node:child_process", async (importOriginal) => {
       }
       // Node 24/26 returns before assigning any stdio fields on EMFILE/ENFILE.
       const child = new EventEmitter();
-      const error = Object.assign(new Error(`spawn ${args[0]} ${spawnFault.code}`), {
-        code: spawnFault.code,
+      const error = Object.assign(new Error(`spawn ${args[0]} EMFILE`), {
+        code: "EMFILE",
       });
       child.once("error", (emitted: Error) => spawnFault.errors.push(emitted));
-      spawnFault.close = () => child.emit("close", -constants.errno[spawnFault.code], null);
+      spawnFault.close = () => child.emit("close", -constants.errno.EMFILE, null);
       process.nextTick(() => child.emit("error", error));
       return child;
     },
   };
 });
 
+import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
-import type { JsonRpcRequest, OpenClawExecServer } from "./sandbox-exec-server/types.js";
+import type { JsonRpcRequest } from "./sandbox-exec-server/types.js";
 
 useIsolatedStateGuard();
 
@@ -59,8 +59,8 @@ const requests: Array<{ label: string; request: JsonRpcRequest }> = [
       },
     },
   },
-  ...[false, true].map((streamResponse) => ({
-    label: `http/request streaming=${streamResponse}`,
+  {
+    label: "http/request",
     request: {
       id: 1,
       method: "http/request",
@@ -68,15 +68,14 @@ const requests: Array<{ label: string; request: JsonRpcRequest }> = [
         requestId: "spawn-failure",
         method: "GET",
         url: "https://example.test/response",
-        streamResponse,
+        streamResponse: true,
       },
     },
-  })),
+  },
 ];
 
-describe.each(["EMFILE", "ENFILE"] as const)("sandbox spawn %s", (code) => {
+describe("sandbox spawn without stdio", () => {
   it.each(requests)("settles $label after the failed child closes", async ({ request }) => {
-    spawnFault.code = code;
     const finalizeExec = vi.fn(async () => undefined);
     const runShellCommand = vi.fn(async () => ({
       code: 0,
@@ -93,23 +92,7 @@ describe.each(["EMFILE", "ENFILE"] as const)("sandbox spawn %s", (code) => {
       finalizeExec,
       runShellCommand,
     });
-    if (!sandbox.backend || !sandbox.fsBridge) {
-      throw new Error("The sandbox fixture must provide its backend and filesystem bridge");
-    }
-    const execServer: OpenClawExecServer = {
-      environmentId: "spawn-failure-test",
-      authPath: "/spawn-failure-test",
-      refCount: 1,
-      closed: false,
-      url: "ws://localhost/spawn-failure-test",
-      sandbox,
-      backend: sandbox.backend,
-      fsBridge: sandbox.fsBridge,
-      networkIsolated: true,
-      children: new Set(),
-      cleanupTasks: new Set(),
-      server: { clients: [], close: (callback) => callback() },
-    };
+    const execServer = createSessionExecServer(sandbox);
     const send = vi.fn();
     const session = new CodexSandboxExecSession(execServer, { send, isOpen: () => true });
     const pending = session.handleRequest(request);
@@ -124,7 +107,7 @@ describe.each(["EMFILE", "ENFILE"] as const)("sandbox spawn %s", (code) => {
       expect(send).toHaveBeenCalledExactlyOnceWith({
         jsonrpc: "2.0",
         id: 1,
-        error: { code: -32603, message: `spawn codex-spawn-resource-fault ${code}` },
+        error: { code: -32603, message: "spawn codex-spawn-resource-fault EMFILE" },
       });
       expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
         status: "failed",

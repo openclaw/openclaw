@@ -263,11 +263,6 @@ export class MemoryDB {
     return result.numDeletedRows > 0;
   }
 
-  async count(agentId: string): Promise<number> {
-    await this.ensureInitialized();
-    return await this.table!.countRows(memoryAgentPredicate(agentId));
-  }
-
   close(): void {
     this.table?.close();
     this.db?.close();

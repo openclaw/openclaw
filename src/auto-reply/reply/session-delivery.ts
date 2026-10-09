@@ -1,4 +1,3 @@
-// Resolves persisted delivery route fields for session-bound replies.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -38,10 +37,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
-  }
-  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
+  return normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
@@ -65,27 +61,21 @@ function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boole
 
 function isDirectSessionKey(sessionKey?: string): boolean {
   const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
+  const parts = (parseAgentSessionKey(raw)?.rest ?? raw).split(":").filter(Boolean);
+  const markerIndex = parts.slice(0, 3).findIndex((part) => DIRECT_SESSION_MARKERS.has(part));
+  if (markerIndex < 0) {
     return false;
   }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const parts = scoped.split(":").filter(Boolean);
-  if (parts.length < 2) {
-    return false;
+  if (markerIndex > 0) {
+    const channel = normalizeMessageChannel(parts[0]);
+    if (!channel || !isDeliverableMessageChannel(channel)) {
+      return false;
+    }
   }
-  if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 0);
-  }
-  const channel = normalizeMessageChannel(parts[0]);
-  if (!channel || !isDeliverableMessageChannel(channel)) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 1);
-  }
-  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
-    ? hasStrictDirectSessionTail(parts, 2)
-    : false;
+  return (
+    (markerIndex !== 2 || Boolean(normalizeOptionalString(parts[1]))) &&
+    hasStrictDirectSessionTail(parts, markerIndex)
+  );
 }
 
 function isExternalRoutingChannel(channel?: string): channel is string {

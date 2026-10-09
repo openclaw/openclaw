@@ -12,7 +12,6 @@ const userPreferences = {
     agentQuestion: false,
     humanMentioned: false,
     scheduledTaskFailed: false,
-    backgroundTaskFailed: false,
   },
   detailLevel: "private" as const,
   quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
@@ -165,17 +164,29 @@ type DevicePreferencesListener = NonNullable<
 >;
 
 describe("Web Push preference controls", () => {
-  function renderPreferences(options: { onDevice?: DevicePreferencesListener } = {}) {
-    const container = document.createElement("div");
+  function renderPreferences(
+    options: {
+      onDevice?: DevicePreferencesListener;
+      onUser?: Parameters<typeof renderNotificationsSection>[0]["onWebPushSetUserPreferences"];
+      timeZone?: string;
+      container?: HTMLElement;
+    } = {},
+  ) {
+    const container = options.container ?? document.createElement("div");
     const user = {
       ...userPreferences,
-      quietHours: { ...userPreferences.quietHours, enabled: true },
+      quietHours: {
+        ...userPreferences.quietHours,
+        enabled: true,
+        timeZone: options.timeZone ?? "UTC",
+      },
     };
     const device = { enabled: true, label: "phone", agentIds: ["main"] };
     render(
       renderNotificationsSection({
         connected: true,
         onWebPushSetDevicePreferences: options.onDevice,
+        onWebPushSetUserPreferences: options.onUser,
         webPush: {
           supported: true,
           permission: "granted",
@@ -199,7 +210,8 @@ describe("Web Push preference controls", () => {
 
     // Native checkboxes bypass the settings toggle; booleans are wa-switch rows.
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
-    expect(container.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(8);
+    expect(container.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(7);
+    expect(container.textContent).not.toContain("Background task failed");
 
     const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
       .filter((control) => {
@@ -210,6 +222,45 @@ describe("Web Push preference controls", () => {
     expect(container.querySelectorAll("select")).toHaveLength(10);
     expect(container.querySelectorAll('input[type="time"]')).toHaveLength(2);
     expect(unstyled).toEqual([]);
+  });
+
+  it("preserves a saved timezone alias and saves a native selection", () => {
+    const onUser = vi.fn();
+    const container = renderPreferences({ onUser, timeZone: "US/Pacific" });
+    const select = expectDefined(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+      "timezone select",
+    );
+    expect(select.value).toBe("US/Pacific");
+    select.value = "Europe/London";
+    select.dispatchEvent(new Event("change"));
+    renderPreferences({ container, onUser, timeZone: "Europe/London" });
+    expect(select.value).toBe("Europe/London");
+    expect(container.querySelector('select[aria-label="Time zone"]')).toBe(select);
+    expect(onUser).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        quietHours: expect.objectContaining({ timeZone: "Europe/London" }),
+      }),
+    );
+  });
+
+  it("retains UTC and the saved timezone when the browser catalog is unavailable", () => {
+    const catalog = vi.spyOn(Intl, "supportedValuesOf").mockImplementation(() => {
+      throw new RangeError("unavailable");
+    });
+    try {
+      const container = renderPreferences({ timeZone: "US/Pacific" });
+      const select = expectDefined(
+        container.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+        "timezone select",
+      );
+      expect(select.value).toBe("US/Pacific");
+      expect([...select.options].map((option) => option.value)).toEqual(
+        expect.arrayContaining(["UTC", "US/Pacific"]),
+      );
+    } finally {
+      catalog.mockRestore();
+    }
   });
 
   it("patches device preferences from the toggle row and select row", () => {

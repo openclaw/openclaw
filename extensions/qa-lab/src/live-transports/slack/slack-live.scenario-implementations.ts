@@ -1,4 +1,3 @@
-// QA Lab Slack live scenario implementations.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
@@ -9,6 +8,7 @@ import {
   type SlackQaApprovalScenarioRun,
   type SlackQaCodexApprovalScenarioRun,
   type SlackQaScenarioImplementation,
+  type SlackQaConfigOverrides,
   type SlackQaScenarioContext,
 } from "./slack-live.contracts.js";
 import { waitForSlackScenarioReply } from "./slack-live.message-observations.js";
@@ -219,7 +219,6 @@ export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementatio
       input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
       matchText: marker,
       noReplyObservationMs: 8_000,
-      preserveGatewayDebug: true,
       beforeRun: async ({ gateway }) => {
         const gatewayLogTail = (await gateway.call(
           "logs.tail",
@@ -272,62 +271,42 @@ export const slackQaTopLevelReplyShapeScenario: SlackQaScenarioImplementation = 
   },
 };
 
-export const slackQaProgressCommentaryTrueScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    progress: { commentary: true, toolProgress: false },
-  },
-  buildRun: (sutUserId) =>
-    buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "lane",
-      toolProgress: "absent",
-    }),
-};
+function createSlackProgressScenario(
+  progress: NonNullable<SlackQaConfigOverrides["progress"]>,
+  expectation: Parameters<typeof buildSlackProgressCommentaryRun>[1],
+): SlackQaScenarioImplementation {
+  return {
+    configOverrides: { progress },
+    buildRun: (sutUserId) => buildSlackProgressCommentaryRun(sutUserId, expectation),
+  };
+}
 
-export const slackQaProgressCommentaryFalseScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    progress: { commentary: false, toolProgress: false },
-  },
-  buildRun: (sutUserId) =>
-    buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "headline",
-      toolProgress: "absent",
-    }),
-};
+export const slackQaProgressCommentaryTrueScenario = createSlackProgressScenario(
+  { commentary: true, toolProgress: false },
+  { commentary: "lane", toolProgress: "absent" },
+);
 
-export const slackQaProgressCommentaryOmittedScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    // This proof inspects chat.update history for one editable text draft.
-    // Native and Block Kit cards have separate transport proofs.
-    progress: { style: "compact", toolProgress: true },
-  },
-  buildRun: (sutUserId) =>
-    buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "headline",
-      toolProgress: "draft",
-    }),
-};
+export const slackQaProgressCommentaryFalseScenario = createSlackProgressScenario(
+  { commentary: false, toolProgress: false },
+  { commentary: "headline", toolProgress: "absent" },
+);
 
-export const slackQaProgressCommentaryVerboseDedupeScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    progress: { commentary: true, toolProgress: false, verboseDefault: "on" },
-  },
-  buildRun: (sutUserId) =>
-    buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "standalone",
-      toolProgress: "standalone-redacted",
-    }),
-};
+// This proof inspects chat.update history for one editable text draft.
+// Native and Block Kit cards have separate transport proofs.
+export const slackQaProgressCommentaryOmittedScenario = createSlackProgressScenario(
+  { style: "compact", toolProgress: true },
+  { commentary: "headline", toolProgress: "draft" },
+);
 
-export const slackQaProgressCommentaryVerboseFullScenario: SlackQaScenarioImplementation = {
-  configOverrides: {
-    progress: { commentary: true, toolProgress: false, verboseDefault: "full" },
-  },
-  buildRun: (sutUserId) =>
-    buildSlackProgressCommentaryRun(sutUserId, {
-      commentary: "standalone",
-      toolProgress: "standalone",
-    }),
-};
+export const slackQaProgressCommentaryVerboseDedupeScenario = createSlackProgressScenario(
+  { commentary: true, toolProgress: false, verboseDefault: "on" },
+  { commentary: "standalone", toolProgress: "standalone-redacted" },
+);
+
+export const slackQaProgressCommentaryVerboseFullScenario = createSlackProgressScenario(
+  { commentary: true, toolProgress: false, verboseDefault: "full" },
+  { commentary: "standalone", toolProgress: "standalone" },
+);
 
 function createSlackNativeDataScenario(kind: "chart" | "table"): SlackQaScenarioImplementation {
   return {

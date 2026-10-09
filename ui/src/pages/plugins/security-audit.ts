@@ -5,16 +5,6 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 
 registerPluginManagementEnglish();
 
-function securityLabel(status: string): string {
-  if (/^(?:clean|pass|safe|benign|cleared)$/iu.test(status)) {
-    return "Clean";
-  }
-  if (/^(?:suspicious|warning|review)$/iu.test(status)) {
-    return "Review";
-  }
-  return status;
-}
-
 function securityTone(status: string): "pass" | "warning" | "danger" | "unknown" {
   if (/^(?:clean|pass|safe|benign|cleared)$/iu.test(status)) {
     return "pass";
@@ -45,7 +35,7 @@ export function renderPluginSecurityAudit(
       <span title=${t("pluginsPage.detailSecurityAudit")}>${icons.info}</span>
     </h2>
     <div class="plugin-catalog-detail__security-score">
-      <strong>${securityLabel(status)}</strong>
+      <strong>${tone === "pass" ? "Clean" : tone === "warning" ? "Review" : status}</strong>
       ${[0, 1, 2].map((index) => html`<span class=${index < bars ? "is-filled" : ""} aria-hidden="true"></span>`)}
     </div>
   </a>`;

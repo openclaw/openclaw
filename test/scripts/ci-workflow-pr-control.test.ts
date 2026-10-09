@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -70,7 +70,6 @@ describe("PR failure cancellation", () => {
               configs: ["test/vitest/vitest.unit-fast.config.ts"], requiresDist: false,
               runner: "blacksmith-4vcpu-ubuntu-2404" }];
           }
-          export function createChangedExtensionFallbackShards() { return []; }
         `,
       });
       expect(manifest.status, manifest.output).toBe(0);
@@ -132,7 +131,7 @@ describe("PR failure cancellation", () => {
     },
   );
 
-  it("limits cancellation authority to the same-repository PR monitor", () => {
+  it("uses the existing monitor grants for canonical PR observation including forks", () => {
     const workflow = readCiWorkflow();
     expect(
       Object.entries(workflow.jobs)
@@ -144,7 +143,7 @@ describe("PR failure cancellation", () => {
     ).toEqual(["pr-fail-fast"]);
     for (const [eventName, headRepository, admitted] of [
       ["pull_request", "openclaw/openclaw", true],
-      ["pull_request", "contributor/openclaw", false],
+      ["pull_request", "contributor/openclaw", true],
       ["push", "openclaw/openclaw", false],
       ["workflow_dispatch", "openclaw/openclaw", false],
     ] as const) {
@@ -159,7 +158,7 @@ describe("PR failure cancellation", () => {
       ).toBe(admitted);
     }
   });
-  it("does not admit the final gate for cancelled workflows or draft pull requests", () => {
+  it("gates cancelled workflows and drafts while preserving an uncertain failure", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
       for (const cancelled of [true, false]) {
@@ -178,28 +177,8 @@ describe("PR failure cancellation", () => {
         }
       }
     }
-  });
-
-  it.each(["pull_request", "push", "workflow_dispatch"] as const)(
-    "uses native matrix fail-fast only for PRs (%s)",
-    (eventName) => {
-      const workflow = readCiWorkflow();
-      const failFast = workflow.jobs["checks-node-core-test-nondist-shard"].strategy["fail-fast"];
-      expect(
-        typeof failFast === "string"
-          ? evaluateWorkflowExpression(failFast, {
-              eventName,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-            })
-          : failFast,
-      ).toBe(eventName === "pull_request");
-    },
-  );
-
-  it("keeps an uncertain cancellation red even if cause outputs are unavailable", () => {
     expect(
-      evaluateWorkflowExpression(readCiWorkflow().jobs["ci-gate"].if, {
+      evaluateWorkflowExpression(gate.if, {
         eventName: "pull_request",
         repository: "openclaw/openclaw",
         runAttempt: 1,
@@ -209,25 +188,207 @@ describe("PR failure cancellation", () => {
     ).toBe(true);
   });
 
+  it.each(["pull_request", "push", "workflow_dispatch"] as const)(
+    "keeps canonical PR matrices complete and continuation within the first-attempt monitor (%s)",
+    (eventName) => {
+      const workflow = readCiWorkflow();
+      const node = workflow.jobs["checks-node-core-test-nondist-shard"];
+      const run = node.steps.find((step: WorkflowStep) => step.name === "Run Node test shard");
+      for (const [repository, headRepository, runAttempt, nativeFailFast, continuation] of [
+        ["openclaw/openclaw", "openclaw/openclaw", 1, false, "1"],
+        ["openclaw/openclaw", "contributor/openclaw", 1, false, "1"],
+        ["openclaw/openclaw", "openclaw/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "contributor/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 3, false, "0"],
+        ["fork/openclaw", "fork/openclaw", 1, true, "0"],
+        ["fork/openclaw", "contributor/openclaw", 1, true, "0"],
+        ["fork/openclaw", "fork/openclaw", 2, true, "0"],
+      ] as const) {
+        const context = { eventName, repository, headRepository, runAttempt };
+        expect(evaluateWorkflowExpression(node.strategy["fail-fast"], context)).toBe(
+          eventName === "pull_request" && nativeFailFast,
+        );
+        expect(
+          evaluateWorkflowExpression(run.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE, context),
+        ).toBe(eventName === "pull_request" ? continuation : "0");
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
-    "does not reuse a previous attempt's failure cause or monitor result",
+    "finishes selected compiler and lint groups only for ordinary diagnostic failures",
     () => {
       const workflow = readCiWorkflow();
+      const central = workflow.jobs["check-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run check shard",
+      );
+      const hosted = workflow.jobs["check-test-types-hosted-core-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run hosted core test-types stripe",
+      );
+      const root = tempDirs.make("ci-type-groups-");
+      const calls = path.join(root, "calls");
+      mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+      copyFileSync(
+        new URL("../../scripts/ci-static-step.sh", import.meta.url),
+        path.join(root, ".ci-harness/scripts/ci-static-step.sh"),
+      );
+      mkdirSync(path.join(root, "scripts"));
+      writeFileSync(path.join(root, "scripts/run-oxlint-shards.mts"), "// --extension-stripe\n");
+      writeFileSync(
+        path.join(root, "node"),
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS_FILE"\nif [[ "$*" == *"${FAIL_MARKER:-first}"* ]]; then exit "$COMPILER_EXIT"; fi\n',
+        { mode: 0o755 },
+      );
+      for (const [evidence, compilerExit, expectedCalls, groups] of [
+        ["1", "2", 2, 2],
+        ["0", "2", 1, 0],
+        ["1", "1", 1, 0],
+      ] as const) {
+        writeFileSync(calls, "");
+        const run = spawnSync("/bin/bash", ["-c", central.run], {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${root}:${process.env.PATH}`,
+            CALLS_FILE: calls,
+            COMPILER_EXIT: compilerExit,
+            OPENCLAW_CI_STATIC_EVIDENCE: evidence,
+            NARROW_CHECK_PATHS_JSON: '["src/example.ts"]',
+            TASK: "test-types",
+            CI_CORE_TYPE_GRAPHS_JSON: '["first"]',
+            CI_CORE_TYPE_CONCURRENCY: "1",
+            CI_TYPE_GRAPHS_JSON: '["second"]',
+          },
+        });
+        expect(run.status, run.stderr).toBe(Number(compilerExit));
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(expectedCalls);
+        expect(run.stdout.includes('[ci-static:tsgo:step] {"version":1,"groups":2}')).toBe(
+          groups === 2,
+        );
+      }
+      const run = spawnSync("/bin/bash", ["-c", hosted.run], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${root}:${process.env.PATH}`,
+          CALLS_FILE: calls,
+          COMPILER_EXIT: "2",
+          OPENCLAW_CI_STATIC_EVIDENCE: "1",
+          CI_TYPE_GRAPHS_JSON: '["first"]',
+        },
+      });
+      expect(run.status, run.stderr).toBe(2);
+      expect(run.stdout).toContain('[ci-static:tsgo:step] {"version":1,"groups":1}');
+
+      const lint = workflow.jobs["check-lint-hosted-core-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
+      );
+      const lintScript = lint.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+        String(
+          evaluateWorkflowExpression(expression, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerProfile: "github",
+          }),
+        ),
+      );
+      for (const [evidence, compilerExit, expectedCalls, groups] of [
+        ["1", "1", 2, 2],
+        ["0", "1", 1, 0],
+        ["1", "2", 1, 0],
+      ] as const) {
+        writeFileSync(calls, "");
+        const lintRun = spawnSync("/bin/bash", ["-c", lintScript], {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${root}:${process.env.PATH}`,
+            CALLS_FILE: calls,
+            FAIL_MARKER: "--only=core",
+            COMPILER_EXIT: compilerExit,
+            OPENCLAW_CI_STATIC_EVIDENCE: evidence,
+            CORE_STRIPE: "1",
+            FROZEN_TARGET: "false",
+            RUNNER_PROFILE: "github",
+            RELEASE_GATE: "false",
+          },
+        });
+        expect(lintRun.status, lintRun.stderr).toBe(Number(compilerExit));
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(expectedCalls);
+        expect(lintRun.stdout.includes('[ci-static:oxlint:step] {"version":1,"groups":2}')).toBe(
+          groups === 2,
+        );
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "accepts only the completed monitor's supported test and static exceptions",
+    () => {
+      const verify = readCiWorkflow().jobs["ci-gate"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
+      );
+      for (const [name, result, receipt, attempt, exit] of [
+        ["checks-node-core-test-nondist-shard", "failure", "1", 1, 0],
+        ["checks-node-core-test-nondist-shard", "failure", "", 1, 1],
+        ["checks-node-core-test-nondist-shard", "failure", "1", 2, 1],
+        ["checks-node-core-test-nondist-shard", "cancelled", "1", 1, 1],
+        ["check-shard", "failure", "1", 1, 0],
+        ["check-test-types-hosted-core-shard", "failure", "1", 1, 0],
+        ["check-test-types-hosted-core-shard", "failure", "", 1, 1],
+        ["check-lint-hosted-core-shard", "failure", "1", 1, 0],
+        ["check-lint-hosted-extension-shard", "failure", "1", 1, 0],
+        ["check-lint-hosted-core-shard", "failure", "", 1, 1],
+        ["check-additional-shard", "failure", "1", 1, 1],
+      ] as const) {
+        const allowed = evaluateWorkflowExpression(verify.env.ALLOW_KNOWN_MAIN_RED, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: attempt,
+          failFastResult: "success",
+          failFastOutputs: { known_main_red_attempt: receipt },
+        });
+        const run = spawnSync("/bin/bash", ["-c", verify.run], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ALLOW_KNOWN_MAIN_RED: String(allowed),
+            JOB_RESULTS: `${name}=${result}|true`,
+          },
+        });
+        expect(run.status, run.stdout).toBe(exit);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["rerun", "disabled"] as const)(
+    "verifies selected lanes without requiring a %s PR monitor",
+    (mode) => {
+      const workflow = readCiWorkflow();
       const gate = workflow.jobs["ci-gate"];
-      const context = {
-        eventName: "pull_request" as const,
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: "pull_request",
         repository: "openclaw/openclaw",
-        runAttempt: 2,
-        failFastOutputs: { failure_job_id: "42", failure_run_attempt: "1" },
-        failFastResult: "failure",
-        preflightOutputs: { run_checks_node_core_nondist: "true" },
+        runAttempt: mode === "rerun" ? 2 : 1,
+        failFastOutputs: mode === "rerun" ? { failure_job_id: "42", failure_run_attempt: "1" } : {},
+        failFastResult: mode === "rerun" ? "failure" : "skipped",
+        preflightOutputs: {
+          run_checks_node_core_nondist: "true",
+          ...(mode === "disabled" ? { disable_fail_fast: "true" } : {}),
+        },
       };
       expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
-      expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
-      const report = gate.steps.find(
-        (entry: WorkflowStep) => entry.name === "Report originating PR failure",
-      );
-      expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
+      if (mode === "rerun") {
+        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
+        const report = gate.steps.find(
+          (entry: WorkflowStep) => entry.name === "Report originating PR failure",
+        );
+        expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
+      }
       const verify = gate.steps.find(
         (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
       );

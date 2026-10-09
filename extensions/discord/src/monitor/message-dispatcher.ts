@@ -1,4 +1,3 @@
-// Discord plugin module dispatches inbound messages into the processing queue.
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
@@ -22,7 +21,6 @@ import {
   hasDiscordMessageStickers,
   resolveDiscordReferencedReplyMessageId,
 } from "./message-forwarded.js";
-import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   createDiscordMessageRunQueue,
@@ -62,10 +60,6 @@ type DiscordMessageDispatcher = (
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
 };
-
-function isNonEmptyString(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 export function createDiscordMessageDispatcher(
   params: DiscordMessageHandlerParams,
@@ -193,18 +187,6 @@ export function createDiscordMessageDispatcher(
               await ingress.settle();
               return;
             }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, entries.length > 1);
-            const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-            if (entries.length > 1 && ids.length > 0) {
-              const ctxBatch = ctx as typeof ctx & {
-                MessageSids?: string[];
-                MessageSidFirst?: string;
-                MessageSidLast?: string;
-              };
-              ctxBatch.MessageSids = ids;
-              ctxBatch.MessageSidFirst = ids[0];
-              ctxBatch.MessageSidLast = ids[ids.length - 1];
-            }
             messageRunQueue.enqueue({ context: ctx, ingressSettlement: ingress });
           } catch (error) {
             if (abortSignal?.aborted) {
@@ -280,10 +262,7 @@ export function createDiscordMessageDispatcher(
         pendingDebounceEntries.add(entry);
       }
       await debouncer.enqueue(entry);
-      if (options?.turnAdoptionLifecycle) {
-        return { kind: "deferred" };
-      }
-      return { kind: "completed" };
+      return { kind: options?.turnAdoptionLifecycle ? "deferred" : "completed" };
     } catch (err) {
       params.runtime.error(danger(`handler failed: ${String(err)}`));
       if (options?.turnAdoptionLifecycle) {

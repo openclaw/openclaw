@@ -8,6 +8,7 @@ import type { ChannelThreadingToolContext } from "../../channels/plugins/types.p
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel, listConfiguredMessageChannels } from "./channel-selection.js";
 
@@ -19,23 +20,11 @@ type InternalSourceReplySinkInput = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
-function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolean {
-  const route = parseSessionDeliveryRoute(sessionKey);
-  if (!route) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(route.channel);
-  return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL);
-}
-
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
-  for (const key of ["channel", "target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
   return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+    readTrimmedStringAlias(params, ["channel", "target", "to", "channelId"]) !== undefined ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => normalizeOptionalString(value)))
   );
 }
 
@@ -47,7 +36,9 @@ function hasCurrentSourceReplyContext(input: InternalSourceReplySinkInput): bool
   if (provider === INTERNAL_MESSAGE_CHANNEL) {
     // The message tool replaces ambient webchat context with an external route
     // encoded in the session key. Do not classify that route as a private sink.
-    return !hasExternalSessionDeliveryRoute(input.sessionKey);
+    const route = parseSessionDeliveryRoute(input.sessionKey);
+    const channel = route ? normalizeMessageChannel(route.channel) : undefined;
+    return !channel || channel === INTERNAL_MESSAGE_CHANNEL;
   }
   const currentMessageId = input.toolContext?.currentMessageId;
   return Boolean(
@@ -57,25 +48,6 @@ function hasCurrentSourceReplyContext(input: InternalSourceReplySinkInput): bool
     (typeof currentMessageId === "number" && Number.isFinite(currentMessageId)) ||
     normalizeOptionalString(currentMessageId),
   );
-}
-
-async function hasConfiguredCurrentSourceChannel(
-  input: InternalSourceReplySinkInput,
-): Promise<boolean> {
-  const provider =
-    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  if (!isConfiguredChannel(input.cfg, provider)) {
-    return false;
-  }
-  if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {
-    return false;
-  }
-  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
-  return configuredChannels.some((channel) => channel === provider);
 }
 
 /** Return whether this send resolves to the private current-run source-reply sink. */
@@ -100,5 +72,17 @@ export async function shouldUseInternalSourceReplySink(
   }
   // Configured current-source channels can infer the target and deliver through
   // the normal plugin path; the sink is only the private fallback.
-  return !(await hasConfiguredCurrentSourceChannel(input));
+  const provider =
+    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
+    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
+  if (
+    !provider ||
+    provider === INTERNAL_MESSAGE_CHANNEL ||
+    !isConfiguredChannel(input.cfg, provider) ||
+    !resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })
+  ) {
+    return true;
+  }
+  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
+  return !configuredChannels.some((channel) => channel === provider);
 }

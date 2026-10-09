@@ -27,14 +27,11 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
   @property() label = "";
   @property() mimeType = "";
   @property({ type: Number }) sizeBytes: number | undefined;
-  @property() downloadHref = "";
 
   @state() private status: "loading" | "ready" | "error" = "loading";
   @state() private previewUrl: string | null = null;
 
-  private loadVersion = 0;
   private abortController: AbortController | undefined;
-  private previewObjectUrl: string | undefined;
   private previewBytes: Uint8Array | undefined;
 
   override connectedCallback(): void {
@@ -69,15 +66,13 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
   }
 
   private cancelLoad(): void {
-    this.loadVersion += 1;
     this.abortController?.abort();
     this.abortController = undefined;
   }
 
   private revokePreviewUrl(): void {
-    if (this.previewObjectUrl) {
-      URL.revokeObjectURL(this.previewObjectUrl);
-      this.previewObjectUrl = undefined;
+    if (this.previewUrl) {
+      URL.revokeObjectURL(this.previewUrl);
     }
     this.previewUrl = null;
     this.previewBytes = undefined;
@@ -89,7 +84,6 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
       return;
     }
 
-    const version = this.loadVersion;
     const controller = new AbortController();
     this.abortController = controller;
     const timeout = setTimeout(() => controller.abort(), PDF_PREVIEW_TIMEOUT_MS);
@@ -107,7 +101,7 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
       if (!bytes) {
         throw new Error("PDF attachment exceeds preview limit");
       }
-      if (version !== this.loadVersion || !this.isConnected) {
+      if (this.abortController !== controller || !this.isConnected) {
         return;
       }
       const nextBytes = new Uint8Array(bytes);
@@ -118,13 +112,11 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
         return;
       }
       this.revokePreviewUrl();
-      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
       this.previewBytes = nextBytes;
-      this.previewObjectUrl = objectUrl;
-      this.previewUrl = objectUrl;
+      this.previewUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
       this.status = "ready";
     } catch {
-      if (version === this.loadVersion && this.isConnected) {
+      if (this.abortController === controller && this.isConnected) {
         this.revokePreviewUrl();
         this.status = "error";
       }
@@ -137,7 +129,7 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    const downloadHref = safeAttachmentHref(this.downloadHref || this.src);
+    const downloadHref = safeAttachmentHref(this.src);
     return html`
       <div class="sidebar-pdf-preview" aria-label=${this.label}>
         <div class="sidebar-pdf-preview__surface">

@@ -38,6 +38,17 @@ export function createCodexUserInputBridge(params: {
   turnId: string;
   signal?: AbortSignal;
   gatewayCall?: Parameters<typeof structuredInput.run>[0]["gatewayCall"];
+  /** Native MCP owner binds this exact elicitation to its originating runtime/view. */
+  prepareResourceContext?: (request: {
+    requestId: string | number;
+    snapshot: Record<string, unknown>;
+    signal: AbortSignal;
+  }) => Promise<{
+    context: NonNullable<
+      Parameters<typeof structuredInput.compileForm>[0]["options"]["resourceContext"]
+    >;
+    dispose: () => void | Promise<void>;
+  }>;
   onOrdinaryResponse?: (result: {
     itemId: string;
     questions: readonly AgentHarnessUserInputQuestion[];
@@ -111,7 +122,7 @@ export function createCodexUserInputBridge(params: {
         return undefined;
       }
       if (requestParams.questions.length === 0) {
-        return emptyUserInputResponse();
+        return emptyAgentHarnessUserInputAnswers();
       }
       const timeoutMs = requestParams.isBlocking
         ? (params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS)
@@ -120,7 +131,7 @@ export function createCodexUserInputBridge(params: {
         questions: requestParams.questions,
         intro: "Codex needs input:",
       });
-      const cancelValue = emptyUserInputResponse();
+      const cancelValue = emptyAgentHarnessUserInputAnswers();
       return await enqueue(
         {
           cancelValue,
@@ -148,7 +159,10 @@ export function createCodexUserInputBridge(params: {
       if (readOwnDataString(request.params, "threadId") !== params.threadId) {
         return undefined;
       }
-      const requestSnapshot = structuredInput.snapshot(request.params);
+      const mode = readOwnDataString(request.params, "mode");
+      const requestSnapshot = structuredInput.snapshot(request.params, {
+        richForm: mode === "openaiForm" || mode === "openai/form",
+      });
       if (
         structuredInput.isRecord(requestSnapshot) &&
         readOwnDataString(requestSnapshot, "threadId") !== params.threadId
@@ -175,18 +189,44 @@ export function createCodexUserInputBridge(params: {
           cancelValue,
           failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
           run: async (signal) => {
-            const result = await execute(compiled.input, timeoutMs, signal);
-            if (result.status === "answered") {
-              const content =
-                compiled.input.kind === "ready" && compiled.input.plan.kind === "url"
-                  ? null
-                  : result.content;
-              return createCodexElicitationResponse("accept", content);
+            const resource =
+              params.prepareResourceContext &&
+              structuredInput.isRecord(requestSnapshot) &&
+              hasResourceInput(requestSnapshot)
+                ? await params.prepareResourceContext({
+                    requestId: request.id,
+                    snapshot: requestSnapshot,
+                    signal,
+                  })
+                : undefined;
+            try {
+              signal.throwIfAborted();
+              const withResources =
+                resource && structuredInput.isRecord(requestSnapshot)
+                  ? compileCodexOrdinaryElicitation({
+                      snapshot: requestSnapshot,
+                      turnId: params.turnId,
+                      resourceContext: resource.context,
+                    })
+                  : compiled;
+              if (withResources.kind === "ignored") {
+                return cancelValue;
+              }
+              const result = await execute(withResources.input, timeoutMs, signal);
+              if (result.status === "answered") {
+                const content =
+                  compiled.input.kind === "ready" && compiled.input.plan.kind === "url"
+                    ? null
+                    : result.content;
+                return createCodexElicitationResponse("accept", content);
+              }
+              if (result.status === "declined" || result.status === "unsupported") {
+                return declineElicitation(result.message);
+              }
+              return cancelValue;
+            } finally {
+              await resource?.dispose();
             }
-            if (result.status === "declined" || result.status === "unsupported") {
-              return declineElicitation(result.message);
-            }
-            return cancelValue;
           },
         },
         requestSignal,
@@ -215,8 +255,14 @@ function readUserInputParams(value: JsonValue | undefined):
   const threadId = readBoundedUserInputText(snapshot, "threadId", MAX_USER_INPUT_ID);
   const turnId = readBoundedUserInputText(snapshot, "turnId", MAX_USER_INPUT_ID);
   const itemId = readBoundedUserInputText(snapshot, "itemId", MAX_USER_INPUT_ID);
-  const questions = readArray(snapshot, "questions", MAX_USER_INPUT_QUESTIONS);
-  if (!threadId || !turnId || !itemId || !questions) {
+  const questions = readValue(snapshot, "questions");
+  if (
+    !threadId ||
+    !turnId ||
+    !itemId ||
+    !Array.isArray(questions) ||
+    questions.length > MAX_USER_INPUT_QUESTIONS
+  ) {
     return undefined;
   }
   const parsed: AgentHarnessUserInputQuestion[] = [];
@@ -274,7 +320,7 @@ function readOptions(value: unknown): AgentHarnessUserInputOption[] | null | und
       return undefined;
     }
     const label = readBoundedUserInputText(entry, "label", MAX_USER_INPUT_ID);
-    const description = readBoundedUserInputText(entry, "description", MAX_USER_INPUT_TEXT, true);
+    const description = readBoundedUserInputText(entry, "description", MAX_USER_INPUT_TEXT);
     if (!label) {
       return undefined;
     }
@@ -291,21 +337,11 @@ function readBoundedUserInputText(
   record: Record<string, unknown>,
   key: string,
   maximum: number,
-  allowEmpty = false,
 ): string | undefined {
   const value = readValue(record, key);
-  return typeof value === "string" && value.length <= maximum && (allowEmpty || value.length > 0)
+  return typeof value === "string" && value.length <= maximum && value.length > 0
     ? value
     : undefined;
-}
-
-function readArray(
-  record: Record<string, unknown>,
-  key: string,
-  maximum: number,
-): unknown[] | undefined {
-  const value = readValue(record, key);
-  return Array.isArray(value) && value.length <= maximum ? value : undefined;
 }
 
 function readOwnDataString(value: unknown, key: string): string | undefined {
@@ -326,10 +362,17 @@ function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonO
   };
 }
 
-function emptyUserInputResponse(): JsonObject {
-  return { ...emptyAgentHarnessUserInputAnswers() };
-}
-
 function declineElicitation(message?: string) {
   return createCodexElicitationResponse("decline", null, message ? { message } : null);
+}
+
+function hasResourceInput(snapshot: Record<string, unknown>): boolean {
+  const schema = snapshot.requestedSchema;
+  const properties = structuredInput.isRecord(schema) ? schema.properties : undefined;
+  return (
+    structuredInput.isRecord(properties) &&
+    Object.values(properties).some(
+      (field) => structuredInput.isRecord(field) && Object.hasOwn(field, "x-openai-input"),
+    )
+  );
 }

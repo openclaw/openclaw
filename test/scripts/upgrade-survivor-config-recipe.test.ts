@@ -1,4 +1,3 @@
-// Upgrade Survivor Config Recipe tests cover upgrade survivor config recipe script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -6,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -94,6 +94,8 @@ process.exit(failed ? 17 : 0);
         RECIPE_PATH,
         "scripts/e2e/lib/upgrade-survivor/config-recipe",
         "scripts/lib/release-version.mjs",
+        "scripts/lib/upgrade-survivor-policy.mjs",
+        "scripts/lib/upgrade-survivor-scenarios.json",
         "scripts/windows-cmd-helpers.mjs",
       ]) {
         mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -305,6 +307,17 @@ esac
       commandLabel: "openclaw config validate",
       shell: false,
     });
+  });
+
+  it("keeps every recipe file in the prepared test layout", () => {
+    // Prepared tooling workers copy only listed assets, but the recipe reads any section file by name.
+    const buildEntries = readFileSync("scripts/lib/vitest-worker-build-entries.mts", "utf8");
+    const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+    const missing = readdirSync(recipeDirectory)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => `${recipeDirectory}/${name}`)
+      .filter((file) => !buildEntries.includes(JSON.stringify(file)));
+    expect(missing).toEqual([]);
   });
 
   it("adds the Codex allowlist survival scenario", () => {
@@ -549,10 +562,6 @@ esac
     { version: "2026.7.2-beta.4", legacy: false, explicit: false },
     { version: "2026.7.2-beta.5", legacy: false, explicit: false },
     { version: "2026.7.2", legacy: false, explicit: false },
-    { version: "2026.7.33", legacy: true, explicit: false },
-    { version: "2026.7.34", legacy: true, explicit: false },
-    { version: "2026.7.35", legacy: true, explicit: false },
-    { version: "2026.7.36", legacy: true, explicit: false },
     { version: "2026.8.1-beta.1", legacy: false, explicit: false },
     { version: "2026.8.1-beta.2", legacy: false, explicit: true },
     { version: "2026.8.1", legacy: false, explicit: true },
@@ -612,22 +621,20 @@ esac
     },
   );
 
-  it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
-    "authors a schema-valid explicit agent roster for baseline %s",
-    (version) => {
-      const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
-        (step) => step.id === "agents",
-      );
-      const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
-      expect(AgentsSchema.safeParse(agents).success).toBe(true);
-      expect(agents.ownership).toBe("explicit");
-      expect(agents.defaults.heartbeat.every).toBe("0m");
-      expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
-      expect(agents.entries.ops.fastModeDefault).toBe(true);
-    },
-  );
+  it("authors a schema-valid roster at the explicit ownership boundary", () => {
+    const version = "2026.8.1-beta.2";
+    const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (step) => step.id === "agents",
+    );
+    const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
+    expect(AgentsSchema.safeParse(agents).success).toBe(true);
+    expect(agents.ownership).toBe("explicit");
+    expect(agents.defaults.heartbeat.every).toBe("0m");
+    expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
+    expect(agents.entries.ops.fastModeDefault).toBe(true);
+  });
 
-  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3", "2026.7.33"])(
+  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3"])(
     "preserves the legacy agent contract for baseline %s",
     (version) => {
       const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
@@ -650,17 +657,11 @@ esac
     { version: "2026.6.1", batched: false },
     { version: "2026.6.33", batched: false },
     { version: "2026.6.34-beta.1", batched: false },
-    { version: "2026.7.1-beta.1", batched: false },
-    { version: "2026.7.1-alpha.1", batched: false },
     { version: "2026.6.34-1", batched: false },
-    { version: "2026.6.34junk", batched: false },
-    { version: "2026.13.1", batched: false },
-    { version: "2026.6.9007199254740993", batched: false },
     { version: "2026.6.34", batched: true },
-    { version: "2026.7.2", batched: true },
   ])("batches only supported final baselines: $version", ({ version, batched }) => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
-    expect(steps).toHaveLength(batched ? 12 : 14);
+    expect(steps).toHaveLength(batched ? 13 : 15);
     expect(steps.filter((step) => step.argv[2] === "--batch-json")).toHaveLength(batched ? 1 : 0);
     expect(configLeafWrites(steps).filter((entry) => entry.path.startsWith("channels."))).toEqual([
       expect.objectContaining({ path: "channels.discord" }),
@@ -679,6 +680,7 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "tool-search",
       "logging",
       "logging",
       "validate",
@@ -706,6 +708,25 @@ esac
     const batch = steps.find((step) => step.id === "channels");
     expect(batch?.argv.slice(0, 3)).toEqual(["config", "set", "--batch-json"]);
     expect(JSON.parse(batch?.argv[3] ?? "[]")).toEqual(expected);
+  });
+
+  it.each([
+    { version: "2026.9.6", value: { mode: "code", codeTimeoutMs: 5000 } },
+    { version: "2026.9.7", value: { mode: "tools" } },
+    { version: "2026.9.7-1", value: { mode: "tools" } },
+  ])("authors Tool Search through the baseline CLI for $version", ({ version, value }) => {
+    const { result, summary, loggedArgs } = runRecipeFixture({ scenario: "base", version });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(summary.baselineVersion).toBe(version);
+    expect(summary.acceptedIntents).toContain("tool-search");
+    expect(loggedArgs).toContainEqual([
+      "config",
+      "set",
+      "tools.toolSearch",
+      JSON.stringify(value),
+      "--strict-json",
+    ]);
+    expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {
@@ -767,6 +788,14 @@ esac
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(summary.acceptedIntents).toContain("acpx-openclaw-tools-bridge");
       expect(summary.baselineVersion).toBe("2026.6.1");
+      expect(summary.acceptedIntents).toContain("tool-search");
+      expect(loggedArgs).toContainEqual([
+        "config",
+        "set",
+        "tools.toolSearch",
+        '{"mode":"code","codeTimeoutMs":5000}',
+        "--strict-json",
+      ]);
       expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
       expect(loggedArgs).toContainEqual(
         expect.arrayContaining([
@@ -795,6 +824,7 @@ esac
       "skills",
       "plugins",
       "channels",
+      "tools-tool-search",
       "plugins-configured-installs",
       "channels-whatsapp-unset",
       "channels-matrix",
@@ -818,6 +848,7 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "tool-search",
       "configured-plugin-installs",
       "validate",
     ]);

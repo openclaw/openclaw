@@ -17,7 +17,6 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
     "src/example/runtime.ts": "export const value = 1;",
     "src/example/runtime.test.ts": 'import "./runtime.js";',
     "src/gateway/client-callsites.guard.test.ts": "export {};",
-    "src/tasks/task-boundaries.test.ts": "export {};",
   })) {
     const absolute = path.join(cwd, file);
     mkdirSync(path.dirname(absolute), { recursive: true });
@@ -47,6 +46,41 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
   }
 });
 
+it("keeps exclusive aggregates out of cold canonical metadata discovery", async () => {
+  vi.resetModules();
+  try {
+    const { nodeTestConfigRequiresCanonicalMetadata } =
+      await import("../../scripts/lib/ci-node-test-plan.mts");
+    const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");
+    const readFile = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const config of [
+        "vitest.config.ts",
+        "test/vitest/vitest.config.ts",
+        "test/vitest/vitest.full-agentic.config.ts",
+        "test/vitest/vitest.gateway.config.ts",
+      ]) {
+        expect(isExclusiveCiTestConfig(config)).toBe(true);
+        expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(false);
+      }
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      readFile.mockRestore();
+    }
+    for (const config of [
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.gateway-client.config.ts",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tui-pty.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ]) {
+      expect(nodeTestConfigRequiresCanonicalMetadata(config)).toBe(true);
+    }
+  } finally {
+    vi.resetModules();
+  }
+});
+
 it("executes the source TUI assertion helper without admitting deferred PTY builds", () => {
   const helper = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
   const changedPaths = [helper, ...tuiPtyTestFiles];
@@ -60,7 +94,7 @@ it("executes the source TUI assertion helper without admitting deferred PTY buil
   expect(targets.filter((target) => tuiPtyTestFiles.includes(target))).toEqual([]);
   expect(testProjects.buildVitestRunPlans([helper])).toEqual([
     {
-      config: "test/vitest/vitest.tui-pty.config.ts",
+      config: "test/vitest/vitest.tui.config.ts",
       forwardedArgs: [],
       includePatterns: [helper],
       watchMode: false,
@@ -90,7 +124,7 @@ it("keeps source execution when narrow config owners no longer admit an artifact
       expect(shards).not.toBeNull();
       expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
       expect(shards?.filter((shard) => shard.configs.includes(boundaryConfig))).toHaveLength(1);
-      if (changedPaths.includes(tuiConfig)) {
+      if (changedPaths.includes(helper)) {
         expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain(helper);
       }
     }
@@ -156,7 +190,7 @@ it("runs selected channel files in one config child while retaining separate con
   ).toHaveLength(1);
 });
 
-it("retains the canonical fallback for an untracked config importing a changed helper", () => {
+it("rejects unavailable canonical metadata for an untracked config consumer", () => {
   const cwd = tempDirs.make("ci-untracked-config-");
   const helper = "scripts/config-input.mts";
   const test = "test/scripts/config-input.test.ts";
@@ -174,7 +208,5 @@ it("retains the canonical fallback for an untracked config importing a changed h
   execFileSync("git", ["add", "--", helper, test], gitOptions);
   const onFallback = vi.fn();
   expect(createChangedNodeTestShards([helper], { cwd, onFallback })).toBeNull();
-  expect(onFallback).toHaveBeenCalledWith(
-    "changed Vitest configs lack canonical checkout metadata",
-  );
+  expect(onFallback).toHaveBeenCalledWith("test targets lack canonical shard metadata");
 });

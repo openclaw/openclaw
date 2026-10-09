@@ -7,11 +7,6 @@ import type { StreamFn } from "@openclaw/llm-core";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 
 type AnthropicVertexStreamFacade = {
-  createAnthropicVertexStreamFn: (
-    projectId: string | undefined,
-    region: string,
-    baseURL?: string,
-  ) => StreamFn;
   createAnthropicVertexStreamFnForModel: (
     model: { baseUrl?: string },
     env?: NodeJS.ProcessEnv,

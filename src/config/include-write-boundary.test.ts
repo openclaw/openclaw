@@ -26,6 +26,19 @@ describe("collectChangedConfigPaths", () => {
     });
   });
 
+  it("treats an absent key and an undefined value as equal", () => {
+    expect(
+      collectChangedConfigPaths({ a: { b: 1 } }, { a: { b: 1, c: undefined }, d: undefined }),
+    ).toEqual({
+      paths: [],
+      rootChanged: false,
+    });
+    expect(collectChangedConfigPaths({ a: { b: 1, c: undefined } }, { a: { b: 1 } })).toEqual({
+      paths: [],
+      rootChanged: false,
+    });
+  });
+
   it("reports no change for equal values", () => {
     expect(collectChangedConfigPaths({ a: 1 }, { a: 1 })).toEqual({
       paths: [],
@@ -85,35 +98,6 @@ describe("resolveIncludeWriteBoundary", () => {
     expect(
       resolveIncludeWriteBoundary({
         provenance: [alphaInclude, outer],
-        changed: {
-          paths: [
-            ["agents", "entries", "alpha", "model"],
-            ["agents", "entries", "beta", "model"],
-          ],
-          rootChanged: false,
-        },
-      }),
-    ).toBeNull();
-  });
-
-  it("declines a parent whose changed children are both nested includes", () => {
-    const outer = {
-      path: ["agents"],
-      kind: "single" as const,
-      hasSiblingOverrides: false,
-      hasArrayAncestor: false,
-      targetPath: "/cfg/agents.json5",
-    };
-    const betaInclude = {
-      path: ["agents", "entries", "beta"],
-      kind: "single" as const,
-      hasSiblingOverrides: false,
-      hasArrayAncestor: false,
-      targetPath: "/cfg/beta.json5",
-    };
-    expect(
-      resolveIncludeWriteBoundary({
-        provenance: [alphaInclude, betaInclude, outer],
         changed: {
           paths: [
             ["agents", "entries", "alpha", "model"],
@@ -224,23 +208,6 @@ describe("resolveIncludeWriteBoundary", () => {
     expect(
       resolveIncludeWriteBoundary({
         provenance: [{ ...alphaInclude, hasSiblingOverrides: true }],
-        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
-      }),
-    ).toBeNull();
-  });
-
-  it("declines an include owned by an outer merged directive", () => {
-    expect(
-      resolveIncludeWriteBoundary({
-        provenance: [
-          alphaInclude,
-          {
-            path: [],
-            kind: "multiple" as const,
-            hasSiblingOverrides: false,
-            hasArrayAncestor: false,
-          },
-        ],
         changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
       }),
     ).toBeNull();

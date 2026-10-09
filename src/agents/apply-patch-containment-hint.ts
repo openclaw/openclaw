@@ -8,7 +8,7 @@ import { isHostRootEscapeError } from "./sandbox-paths.js";
 import { withToolOperatorHint } from "./tool-operator-hint.js";
 
 /** Which layer contained apply_patch, and therefore which operator explanation applies. */
-export type ApplyPatchContainmentSource = "config" | "session" | "worker" | "required-root";
+export type ApplyPatchContainmentSource = "config" | "session" | "required-root";
 
 const HINTS: Record<ApplyPatchContainmentSource, string> = {
   "required-root":
@@ -22,10 +22,6 @@ const HINTS: Record<ApplyPatchContainmentSource, string> = {
   session:
     "apply_patch is workspace-contained by this session's permission mode. Only a full permission " +
     "mode lifts it; configuration settings do not override a session mode.",
-  worker:
-    "apply_patch is workspace-contained by default on worker placements, which do not read " +
-    "tools.exec.applyPatch.workspaceOnly or tools.fs.workspaceOnly. Only an explicit full session " +
-    "permission mode lifts it here.",
 };
 
 /**

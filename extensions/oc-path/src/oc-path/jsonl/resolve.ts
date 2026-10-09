@@ -50,7 +50,6 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
     return null;
   }
 
-  // No further descent — return the line entry itself.
   if (path.item === undefined && path.field === undefined) {
     return { kind: "line", node: lineEntry };
   }
@@ -63,5 +62,5 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
   if (match === null) {
     return null;
   }
-  return { ...match, line: lineEntry.line };
+  return { ...match, path: match.path.map(String), line: lineEntry.line };
 }

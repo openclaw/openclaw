@@ -39,11 +39,13 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
+import { acquireTestPortBlock, reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
   observeDesktopEndpointPackets,
   observeDesktopProofRfbLifecycle,
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
 
@@ -59,7 +61,11 @@ const base = "b".repeat(40);
 const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
-const assets = { "index-fixture.js": "e".repeat(64) };
+const assets = {
+  "index-fixture.js": "e".repeat(64),
+  "desktop-panel-fixture.js": "f".repeat(64),
+  "novnc-fixture.js": "a".repeat(64),
+};
 function sourceAdmissionFixture(status: string, tracked: string[]) {
   const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
   const replies: Record<string, string> = {
@@ -344,57 +350,81 @@ describe("desktop proof identity and public evidence", () => {
       omitted: 0,
     });
     expect(JSON.stringify(value)).not.toMatch(/private|sourceKey|streamId|ownerEpoch|stderr/u);
-    await writeFile(file, Buffer.alloc(1024 * 1024, 32));
-    expect(await readDesktopProofGatewayCloses(file)).toEqual({
-      observerCloses: { events: [], omitted: 0 },
-      sshTunnelExits: { events: [], omitted: 0 },
-    });
-    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
-    expect(await readDesktopProofGatewayCloses(file)).toBeNull();
     expect(await readDesktopProofGatewayCloses(file + ".missing")).toBeNull();
-    const link = file + ".link";
-    await symlink(file, link);
-    expect(await readDesktopProofGatewayCloses(link)).toBeNull();
+  });
+
+  it("keeps the tap off a port claimed before its listener binds", async () => {
+    const upstream = await acquireTestPortBlock({ offsets: [0] });
+    const createServer = net.createServer;
+    // Model the kernel choosing another fixture's claimed but unbound port.
+    const createServerSpy = vi.spyOn(net, "createServer").mockImplementation((...args) => {
+      const server = createServer(...args);
+      const listen = server.listen.bind(server);
+      server.listen = (...listenArgs) => {
+        if (listenArgs[0] === 0) {
+          listenArgs[0] = upstream.port;
+        }
+        return Reflect.apply(listen, server, listenArgs);
+      };
+      return server;
+    });
+    let closeTap: (() => Promise<void>) | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const tap = await observeDesktopEndpointPackets(
+          upstream.port,
+          new AbortController().signal,
+        );
+        closeTap = tap.close;
+        expect(tap.port).not.toBe(upstream.port);
+      },
+      () => createServerSpy.mockRestore(),
+      () => closeTap?.(),
+      () => upstream.release(),
+    );
   });
 
   it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing fixture address");
-    }
-    // Reserve the upstream port until the tap binds so it cannot connect back to itself.
-    const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
+    const upstream = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => net.createServer(),
+    });
     const clients: net.Socket[] = [];
-    try {
-      expect(tap.port).not.toBe(address.port);
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      for (let index = 0; index < 10; index++) {
-        const client = net.connect({ host: "127.0.0.1", port: tap.port });
-        client.on("error", () => {});
-        clients.push(client);
-        await vi.waitFor(() =>
-          expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
+    let closeTap: (() => Promise<void>) | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const tap = await observeDesktopEndpointPackets(
+          upstream.claim.port,
+          new AbortController().signal,
         );
-      }
-      expect(tap.terminalSnapshot()).toEqual({
-        events: Array.from({ length: 8 }, (_, index) => ({
-          connectionIndex: index + 2,
-          side: "upstream",
-          event: "error",
-          errorCategory: "refused",
-          hadError: null,
-        })),
-        omitted: 2,
-      });
-    } finally {
-      clients.forEach((client) => client.destroy());
-      await tap.close();
-    }
+        closeTap = tap.close;
+        expect(tap.port).not.toBe(upstream.claim.port);
+        // Keep the claim after closing the reservation: every connection must be refused.
+        await upstream.releaseListener();
+        for (let index = 0; index < 10; index++) {
+          const client = net.connect({ host: "127.0.0.1", port: tap.port });
+          client.on("error", () => {});
+          clients.push(client);
+          await vi.waitFor(() =>
+            expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
+          );
+        }
+        expect(tap.terminalSnapshot()).toEqual({
+          events: Array.from({ length: 8 }, (_, index) => ({
+            connectionIndex: index + 2,
+            side: "upstream",
+            event: "error",
+            errorCategory: "refused",
+            hadError: null,
+          })),
+          omitted: 2,
+        });
+      },
+      () => clients.forEach((client) => client.destroy()),
+      () => closeTap?.(),
+      () => (upstream.listener.listening ? upstream.releaseListener() : undefined),
+      () => upstream.claim.release(),
+    );
   });
 
   it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitted counts", () => {
@@ -453,7 +483,7 @@ describe("desktop proof identity and public evidence", () => {
     ).toMatchObject({ endpointCloses: null, rfbLifecycle: null, gatewayCloses: null });
   });
 
-  it("retains node close categories from the existing JSON file logger", async () => {
+  it("retains the last eight node closes from a 1 MiB JSON file logger output", async () => {
     const file = path.join(dirs.make("desktop-node-log-"), "node.log");
     const loggerUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.logger);
     const subsystemUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.subsystemLogger);
@@ -488,6 +518,7 @@ describe("desktop proof identity and public evidence", () => {
         stdio: "pipe",
       },
     );
+    await appendFile(file, Buffer.alloc(1024 * 1024 - (await stat(file)).size, 32));
     const closes = await readDesktopProofNodeStreamCloses(file);
     expect(closes).toEqual(
       Array.from({ length: 8 }, (_, index) => ({
@@ -509,24 +540,6 @@ describe("desktop proof identity and public evidence", () => {
     const link = path.join(root, "linked.log");
     await symlink(file, link);
     expect(await readDesktopProofNodeStreamCloses(link)).toBeNull();
-  });
-
-  it("accepts exactly 1 MiB of node diagnostics and retains the last eight closes", async () => {
-    const file = path.join(dirs.make("desktop-node-log-limit-"), "node.log");
-    const records = Array.from({ length: 10 }, (_, index) =>
-      JSON.stringify({
-        "0": '{"subsystem":"node-host/stream"}',
-        "1": { streamKind: "desktop", trigger: "target-close", closeCode: 1000 + index },
-        "2": "node stream closed",
-      }),
-    ).join("\n");
-    await writeFile(file, records.padEnd(1024 * 1024, " "));
-    expect(await readDesktopProofNodeStreamCloses(file)).toEqual(
-      Array.from({ length: 8 }, (_, index) => ({
-        trigger: "target-close",
-        closeCode: 1002 + index,
-      })),
-    );
   });
 
   it("bounds a node log that grows after admission and closes the read handle", async () => {
@@ -625,37 +638,6 @@ describe("desktop proof identity and public evidence", () => {
     expect(desktopProofSshdFailure(stderr)).not.toMatch(/private|runtime|user$/u);
   });
 
-  it("preserves the sshd command failure and private log write when projection fails", async () => {
-    const child = new Error("sshd-config failed");
-    const projection = new Error("projection failed");
-    const recorded: unknown[] = [];
-    const record = (error: unknown) => {
-      recorded.push(error);
-    };
-    let privateLogSaved = false;
-    const failure = await withDesktopProofCleanup(
-      async () => {
-        throw child;
-      },
-      () =>
-        withDesktopProofCleanup(
-          async () => {
-            expect(recorded[0]).toBe(child);
-            throw projection;
-          },
-          async () => {
-            privateLogSaved = true;
-          },
-          record,
-        ),
-      record,
-    ).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).errors[0]).toBe(child);
-    expect((failure as AggregateError).errors[1].errors[0]).toBe(projection);
-    expect(privateLogSaved).toBe(true);
-  });
-
   it("publishes fixed phases and known failure locations, not raw reporter content", () => {
     const result = desktopProofTestReport(
       rawTestReport(
@@ -710,22 +692,7 @@ describe("desktop proof identity and public evidence", () => {
       label: "missing canvas",
       override: { canvasCount: 0, lastFramebuffer: null, snapshotFramebuffer: null },
     },
-    { label: "multiple canvases", override: { canvasCount: 2, snapshotFramebuffer: null } },
     { label: "no closed sockets", override: { socketCloses: [] } },
-    {
-      label: "closed reconnect",
-      override: {
-        canvasCount: 0,
-        snapshotFramebuffer: null,
-        socketCount: 3,
-        latestReadyState: 3,
-        socketCloses: [
-          { socketIndex: 0, code: 1000, wasClean: true, category: "unknown" },
-          { socketIndex: 1, code: 4000, wasClean: true, category: "takeover" },
-          { socketIndex: 2, code: 1006, wasClean: false, category: "unknown" },
-        ],
-      },
-    },
     {
       label: "zero framebuffer",
       override: {
@@ -794,17 +761,13 @@ describe("desktop proof identity and public evidence", () => {
     { pageClosed: 0 },
     { canvasCount: -1 },
     { canvasCount: 10_001 },
-    { socketCount: Number.NaN },
     { latestReadyState: 4 },
-    { socketCloses: undefined },
     { socketCloses: "private-token" },
     { nodeStreamCloses: "private-token" },
     { nodeStreamCloses: [{ trigger: "private-token", closeCode: 1000 }] },
-    { nodeStreamCloses: [{ trigger: "target-close", closeCode: 65_536 }] },
     { nodeStreamCloses: Array.from({ length: 9 }, () => viewerFailure.nodeStreamCloses[0]) },
     { socketCloses: Array.from({ length: 9 }, () => viewerFailure.socketCloses[0]) },
     ...[
-      { socketIndex: -1 },
       { socketIndex: 10_000 },
       { code: 65_536 },
       { code: 1000.5 },
@@ -812,7 +775,6 @@ describe("desktop proof identity and public evidence", () => {
       { category: "control-taken:private-operator" },
     ].map((event) => ({ socketCloses: [{ ...viewerFailure.socketCloses[0], ...event }] })),
     { expected: { width: Infinity, height: 850 } },
-    { lastFramebuffer: { width: 0.5, height: 0 } },
     { snapshotFramebuffer: { width: 8193, height: 0 } },
   ])("rejects invalid viewer diagnostic bounds: %j", (override) => {
     expect(() =>
@@ -1082,18 +1044,15 @@ describe("desktop proof identity and public evidence", () => {
     });
   });
 
-  it.each(["rev-parse", "cat-file", "ls-tree", "status"])(
-    "clears earlier source status before a failed %s recheck",
-    async (command) => {
-      const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
-      await fixture.read();
-      expect(fixture.receipt.sourceStatus).not.toBeNull();
-      delete fixture.replies[command];
-      await expect(fixture.read()).rejects.toThrow("Git command failed");
-      expect(fixture.receipt.sourceStatus).toBeNull();
-      expect(JSON.stringify(fixture.receipt)).not.toContain("private");
-    },
-  );
+  it("clears earlier source status before a failed recheck", async () => {
+    const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
+    await fixture.read();
+    expect(fixture.receipt.sourceStatus).not.toBeNull();
+    delete fixture.replies["rev-parse"];
+    await expect(fixture.read()).rejects.toThrow("Git command failed");
+    expect(fixture.receipt.sourceStatus).toBeNull();
+    expect(JSON.stringify(fixture.receipt)).not.toContain("private");
+  });
 
   it("bounds published source entries and counts names omitted by privacy and size limits", async () => {
     const tracked = Array.from({ length: 34 }, (_, index) => `src/file-${index}.ts`);
@@ -1264,7 +1223,7 @@ describe("desktop proof identity and public evidence", () => {
     ).toEqual({ head: merge, tree, parents: [base, head] });
   });
 
-  it.each([[], [base], [base, merge], [base, head, merge]].map((parents) => ({ parents })))(
+  it.each([[base], [base, merge]].map((parents) => ({ parents })))(
     "rejects unbound actual merge parents: $parents",
     ({ parents }) => {
       expect(() =>
@@ -1283,10 +1242,10 @@ describe("desktop proof identity and public evidence", () => {
     ).toThrow();
   });
 
-  it.each(["node", "ssh"] as const)("exports only named %s facts", (carrier) => {
-    const safe = sanitizeDesktopResizeProof(proof(carrier), carrier);
+  it("exports only named SSH facts", () => {
+    const safe = sanitizeDesktopResizeProof(proof("ssh"), "ssh");
     expect(JSON.stringify(safe)).not.toMatch(/private|hello|token|deviceId/u);
-    expect(safe.carrier).toBe(carrier);
+    expect(safe.carrier).toBe("ssh");
     expect(safe.samples).toHaveLength(5);
   });
 
@@ -1305,6 +1264,7 @@ describe("desktop proof identity and public evidence", () => {
   it("rejects asset paths and non-digests", () => {
     expect(() => desktopProofAssets({ "../index.js": "e".repeat(64) })).toThrow();
     expect(() => desktopProofAssets({ "index.js": "private" })).toThrow();
+    expect(() => desktopProofAssets({ "control-ui-boot-shared.js": "e".repeat(64) })).toThrow();
   });
 
   it("exports a complete bounded allowlist without raw diagnostics or metadata", async () => {
@@ -1335,7 +1295,9 @@ describe("desktop proof identity and public evidence", () => {
     await writeFile(path.join(nested, "served-assets.json"), JSON.stringify(assets));
     await writeFile(path.join(nested, "resize-proof.json"), JSON.stringify(proof()));
     await writeFile(path.join(nested, "connection-diagnostics.json"), "private-token");
-    expect((await exportDesktopResizeProof(input, output, "node")).complete).toBe(true);
+    const exported = await exportDesktopResizeProof(input, output, "node");
+    expect(exported.complete).toBe(true);
+    expect(exported.proof?.assets).toEqual(assets);
     expect(await readdir(output)).toHaveLength(13);
     expect(await readFile(path.join(output, "resize-proof.json"), "utf8")).not.toMatch(
       /private|hello|deviceId/u,

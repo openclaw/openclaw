@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginService } from "../../extensions/workboard/api.js";
+import type { OpenClawPluginApi } from "../../extensions/workboard/api.js";
 import plugin from "../../extensions/workboard/index.js";
 import {
   createOperationalRunInstanceRef,
@@ -34,17 +34,14 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../src/plugins/runtime/gateway-request-scope.js";
 import { startPluginServices } from "../../src/plugins/services.js";
+import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "workboard-nudge-" });
 
 describe("Workboard terminal hook automation ownership", () => {
-  it.each(
-    (["agent_end", "subagent_ended"] as const).flatMap((hook) =>
-      ([false, true] as const).map((closeCaller) => ({ hook, closeCaller })),
-    ),
-  )("enqueues after $hook with closeCaller=$closeCaller", async ({ hook, closeCaller }) => {
+  it.each(["agent_end", "subagent_ended"] as const)("%s survives closure", async (hook) => {
     const sessionKey = "agent:main:subagent:workboard-d6-authority";
-    const runId = `d6-${hook}-${closeCaller}`;
+    const runId = `d6-${hook}`;
     const { storePath } = await makeStorePath();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(storePath));
     const gatewayContext = createContext();
@@ -53,7 +50,10 @@ describe("Workboard terminal hook automation ownership", () => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
     });
+    const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
+      scheduler,
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
@@ -72,7 +72,7 @@ describe("Workboard terminal hook automation ownership", () => {
       payload: { kind: "systemEvent", text: "categorize board" },
     });
     const settled = finished.waitForOk(job.id);
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     let agentEnd: PluginHookHandlerMap["agent_end"] | undefined;
     let subagentEnded: PluginHookHandlerMap["subagent_ended"] | undefined;
     const methods: GatewayMethodDescriptorInput[] = [];
@@ -103,6 +103,7 @@ describe("Workboard terminal hook automation ownership", () => {
           runtime: {
             ...api.runtime,
             gateway: {
+              ...api.runtime.gateway,
               isAvailable: async () => true,
               request: dispatchTrustedPluginGatewayMethod,
             },
@@ -122,10 +123,16 @@ describe("Workboard terminal hook automation ownership", () => {
       id: service.id,
       service: {
         ...service,
+        apiVersion: 2,
         start: (ctx) => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
       },
     });
-    const handle = await startPluginServices({ registry, config: {}, getCronService: () => cron });
+    const handle = await startPluginServices({
+      scheduler,
+      registry,
+      config: {},
+      getCronService: () => cron,
+    });
     const enqueue = vi.spyOn(cron, "enqueueRun");
     const dispatch: GatewayRequestHandler = async ({ respond }) =>
       respond(true, await cron.enqueueRun(job.id, "if-enabled"));
@@ -199,29 +206,23 @@ describe("Workboard terminal hook automation ownership", () => {
                     },
                     { childSessionKey: sessionKey, runId },
                   );
-            if (closeCaller) {
-              admission.close();
-            }
+            admission.close();
             await pending;
-            if (closeCaller) {
-              await expect(
-                dispatchTrustedPluginGatewayMethod(
-                  "cron.run",
-                  { id: job.id, mode: "if-enabled" },
-                  { scopes: ["operator.admin"] },
-                ),
-              ).rejects.toThrow("agent tool caller authority is no longer active");
-            }
+            await expect(
+              dispatchTrustedPluginGatewayMethod(
+                "cron.run",
+                { id: job.id, mode: "if-enabled" },
+                { scopes: ["operator.admin"] },
+              ),
+            ).rejects.toThrow("agent tool caller authority is no longer active");
           }),
       );
 
-      if (closeCaller) {
-        await withGatewayToolCallerIdentity({ ...caller }, async () => {
-          await expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
-            "agent tool caller authority is no longer active",
-          );
-        });
-      }
+      await withGatewayToolCallerIdentity({ ...caller }, async () => {
+        await expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
+          "agent tool caller authority is no longer active",
+        );
+      });
       await expect(request("workboard.cards.list", { boardId: "planning" })).resolves.toMatchObject(
         {
           cards: [expect.objectContaining({ id: card.id, status: "review" })],
@@ -241,6 +242,7 @@ describe("Workboard terminal hook automation ownership", () => {
       admission.close();
       await handle.stop();
       cron.stop();
+      await scheduler.stop();
       for (const lifecycle of captured.runtimeLifecycles) {
         await lifecycle.dispose?.();
       }

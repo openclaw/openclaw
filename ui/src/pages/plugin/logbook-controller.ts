@@ -1,4 +1,3 @@
-// Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type {
@@ -76,10 +75,6 @@ export function getLogbookState(host: object): LogbookControllerState {
   return state;
 }
 
-function notify(state: LogbookUiState): void {
-  state.requestUpdate?.();
-}
-
 function ownsClient(
   state: LogbookControllerState,
   client: GatewayBrowserClient,
@@ -143,7 +138,7 @@ export async function loadLogbook(
     state.loadingGeneration = generation;
     state.loading = true;
     state.error = null;
-    notify(state);
+    state.requestUpdate?.();
   }
   try {
     const [status, days, timeline] = await Promise.all([
@@ -193,7 +188,7 @@ export async function loadLogbook(
       shouldNotify = true;
     }
     if (shouldNotify) {
-      notify(state);
+      state.requestUpdate?.();
     }
     drainQueuedLogbookRefresh(state);
   }
@@ -236,16 +231,20 @@ function refreshLogbookSilently(
   return refresh;
 }
 
-/** Stops background polling; wired into tab-switch and disconnect cleanup. */
-export function stopLogbookPolling(host: object): void {
-  const state = logbookStates.get(host);
-  if (state?.pollTimer) {
+function clearLogbookPolling(state: LogbookControllerState): void {
+  if (state.pollTimer) {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
+  state.pollClient = null;
+  state.backgroundRefreshQueued = false;
+}
+
+/** Stops background polling; wired into tab-switch and disconnect cleanup. */
+export function stopLogbookPolling(host: object): void {
+  const state = logbookStates.get(host);
   if (state) {
-    state.pollClient = null;
-    state.backgroundRefreshQueued = false;
+    clearLogbookPolling(state);
     // PluginPage retires this host immediately after stop returns. Let its loads
     // settle; host identity keeps their results out of the replacement view.
   }
@@ -254,15 +253,9 @@ export function stopLogbookPolling(host: object): void {
 export function configureLogbookPolling(
   state: LogbookControllerState,
   client: GatewayBrowserClient | null,
-  active: boolean,
 ): void {
-  if (!active || !client) {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
-    state.pollClient = null;
-    state.backgroundRefreshQueued = false;
+  if (!client) {
+    clearLogbookPolling(state);
     // Unlike stopLogbookPolling's detached-host path, this state can render
     // again after reconnect. Retire every old async owner before reuse.
     bindClient(state, null);
@@ -322,7 +315,7 @@ export async function loadLogbookFramePreview(
   } finally {
     if (ownsClient(state, client, clientGeneration)) {
       state.frameLoads.delete(frameId);
-      notify(state);
+      state.requestUpdate?.();
     }
   }
 }
@@ -349,7 +342,7 @@ async function runLogbookAction(
   } finally {
     if (isCurrent()) {
       state[pending] = false;
-      notify(state);
+      state.requestUpdate?.();
       settled?.(client);
     }
   }
@@ -361,7 +354,7 @@ export function setLogbookCapturePaused(
   paused: boolean,
 ): Promise<void> {
   return runLogbookAction(state, client, "actionPending", async (current, isCurrent) => {
-    notify(state);
+    state.requestUpdate?.();
     const status = await current.request<LogbookStatusPayload>("logbook.capture.set", { paused });
     if (isCurrent()) {
       state.status = status;
@@ -378,7 +371,7 @@ export function runLogbookAnalysisNow(
     client,
     "actionPending",
     async (current, isCurrent) => {
-      notify(state);
+      state.requestUpdate?.();
       const result = await current.request<{ started: boolean; reason?: string }>(
         "logbook.analyze.now",
         {},
@@ -397,7 +390,7 @@ export function loadLogbookStandup(
   refresh: boolean,
 ): Promise<void> {
   return runLogbookAction(state, client, "standupLoading", async (current, isCurrent) => {
-    notify(state);
+    state.requestUpdate?.();
     const requestedDay = state.day;
     const standup = await current.request<{ day: string; text: string; updatedMs: number }>(
       "logbook.standup",
@@ -419,7 +412,7 @@ export async function askLogbook(
   }
   return runLogbookAction(state, client, "askLoading", async (current, isCurrent) => {
     state.askAnswer = null;
-    notify(state);
+    state.requestUpdate?.();
     const requestedDay = state.day;
     const payload = await current.request<{ answer: string }>("logbook.ask", {
       day: requestedDay,

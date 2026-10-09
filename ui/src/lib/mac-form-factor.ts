@@ -69,7 +69,9 @@ export function resolveMacFormFactor(identifier?: string): MacFormFactor | undef
   if (model.startsWith("iMac")) {
     return "imac";
   }
-  return APPLE_SILICON_FORM_FACTORS[model];
+  return Object.hasOwn(APPLE_SILICON_FORM_FACTORS, model)
+    ? APPLE_SILICON_FORM_FACTORS[model]
+    : undefined;
 }
 
 /** Presentation hint for inventories that expose a display name, not a hardware identifier. */

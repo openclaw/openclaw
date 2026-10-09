@@ -14,7 +14,10 @@ export type ModelCatalogReadScope = Pick<
   ModelsListParams,
   "agentId" | "sessionKey" | "authProfileId"
 >;
-type ModelCatalogInvalidationScope = ModelCatalogReadScope & { sessionsOnly?: boolean };
+type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
+  sessionsOnly?: boolean;
+  sessionModelRevision?: string;
+};
 export type ModelCatalogCacheUpdate =
   | { type: "published" }
   | { type: "invalidated"; matches: (scope: ModelsListParams, key: string) => boolean };
@@ -306,14 +309,20 @@ export function invalidateModelCatalogCache(
   client: ModelCatalogClient,
   scope?: ModelCatalogInvalidationScope,
   sessionDefaults?: UiSessionDefaultsHost,
-  retainedKeys?: ReadonlySet<string>,
-): void {
+): (scope: ModelsListParams | undefined) => boolean {
   const cache = modelCatalogCache.get(client);
   if (!cache) {
-    return;
+    return () => true;
   }
-  const matches = (readScope: ModelCatalogReadScope | undefined) => {
-    if (readScope && retainedKeys?.has(modelCatalogKey(modelCatalogParams(readScope)))) {
+  const unchanged = new Set(
+    scope?.sessionModelRevision
+      ? Array.from(cache.entries)
+          .filter(([, entry]) => entry.result?.sessionModelRevision === scope.sessionModelRevision)
+          .map(([key]) => key)
+      : [],
+  );
+  const matches = (readScope: ModelsListParams | undefined) => {
+    if (readScope && unchanged.has(modelCatalogKey(modelCatalogParams(readScope)))) {
       return false;
     }
     if (!scope || !readScope) {
@@ -364,4 +373,5 @@ export function invalidateModelCatalogCache(
     type: "invalidated",
     matches,
   });
+  return matches;
 }

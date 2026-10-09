@@ -27,110 +27,93 @@ beforeEach(() => {
 });
 
 suite.define(() => {
-  it.each(["return", "first visit"] as const)(
-    "retains activity across sessions for a %s and chat changes after diagnostic traffic",
-    async (visit) => {
-      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const sessionKey = "agent:main:main";
-        const otherSessionKey = "agent:main:other";
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          sessions: [
-            { key: sessionKey, kind: "direct", displayName: "Main", updatedAt: Date.now() },
-            { key: otherSessionKey, kind: "direct", displayName: "Other", updatedAt: Date.now() },
-          ],
-        });
-        const emitTool = (id: string, key: string) =>
-          gateway.emitGatewayEvent("session.tool", {
-            stream: "tool",
-            runId: `run-${id}`,
-            sessionKey: key,
-            data: {
-              phase: "result",
-              name: "read",
-              toolCallId: id,
-              result: { text: `${id} completed while this tab was open.` },
-            },
-          });
-        const fillDiagnosticLog = async () => {
-          for (let index = 0; index < 251; index += 1) {
-            await gateway.emitGatewayEvent("diagnostic", { index });
-          }
-        };
-        await page.goto(
-          `${suite.server.baseUrl}${visit === "return" ? "activity?view=live" : "settings/appearance"}`,
-        );
-        if (visit === "return") {
-          await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
-        } else {
-          await waitForControlUiSettingsTakeover(page);
-        }
-        await gateway.waitForRequest("connect");
-        await emitTool("original", sessionKey);
-        await fillDiagnosticLog();
-        if (visit === "return") {
-          await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
-          const sidebar = page.locator("openclaw-app-sidebar");
-          await sidebar.locator(".sidebar-identity-card").click();
-          await sidebar
-            .locator("wa-dropdown.sidebar-identity-menu")
-            .getByRole("menuitem", { name: "Settings", exact: true })
-            .click();
-          await waitForControlUiSettingsTakeover(page);
-        }
-        await page.locator("openclaw-activity-page").waitFor({ state: "detached" });
-        await emitTool("while-away", otherSessionKey);
-        await fillDiagnosticLog();
-        const loggedEvents = await page.evaluate(() => {
-          const app = document.querySelector<ActivityApp>("openclaw-app");
-          if (!app) {
-            throw new Error("Control UI app is unavailable");
-          }
-          return app.runtime.context.gateway.eventLog.map((event) => event.event);
-        });
-        expect(loggedEvents).toHaveLength(250);
-        expect(loggedEvents).not.toContain("session.tool");
-
-        await page.evaluate(() => {
-          const app = document.querySelector<ActivityApp>("openclaw-app");
-          if (!app) {
-            throw new Error("Control UI app is unavailable");
-          }
-          app.runtime.context.navigate("activity", { search: "?view=live" });
-        });
-        await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
-        await expect.poll(() => page.locator(".activity-entry").count()).toBe(2);
-        await page.getByRole("button", { name: "Expand all", exact: true }).click();
-        for (const id of ["original", "while-away"]) {
-          await page
-            .locator(".activity-entry__preview", {
-              hasText: `${id} completed while this tab was open.`,
-            })
-            .waitFor({ state: "visible" });
-        }
-
-        await page
-          .locator(
-            `.sidebar-recent-session[data-session-key="${otherSessionKey}"] a.sidebar-recent-session__link`,
-          )
-          .click();
-        await waitForControlUiRoute(page, { routeId: "chat" });
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.querySelector<ActivityApp>("openclaw-app")?.runtime.context.gateway
-                  .snapshot.sessionKey,
-            ),
-          )
-          .toBe(otherSessionKey);
-        await page.goBack();
-        await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
-        await expect.poll(() => page.locator(".activity-entry").count()).toBe(2);
-        expect(await gateway.getSocketCount()).toBe(1);
+  it("collects only while Live activity is visible and releases its roster on navigation", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:research:work";
+      const gateway = await installMockGateway(page, {
+        sessions: [
+          {
+            key: sessionKey,
+            agentId: "research",
+            kind: "direct",
+            displayName: "Research",
+            hasActiveRun: true,
+            status: "running",
+            updatedAt: Date.now(),
+          },
+        ],
       });
-    },
-  );
+      const emitTool = (id: string) =>
+        gateway.emitGatewayEvent("session.tool", {
+          stream: "tool",
+          runId: `run-${id}`,
+          sessionKey,
+          data: { phase: "result", name: "read", toolCallId: id, result: { text: `${id} output` } },
+        });
+      const navigate = (route: "activity" | "config") =>
+        page.evaluate((routeId) => {
+          const app = document.querySelector<ActivityApp>("openclaw-app");
+          if (!app) {
+            throw new Error("Control UI app is unavailable");
+          }
+          app.runtime.context.navigate(
+            routeId,
+            routeId === "activity" ? { search: "?view=live" } : {},
+          );
+        }, route);
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("connect");
+      await emitTool("before-open");
+      await navigate("activity");
+      await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
+      await page.locator(".activity-empty").waitFor();
+      expect(await page.locator(".activity-entry").count()).toBe(0);
+      await emitTool("visible");
+      await page.locator(".activity-entry").waitFor();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.waitForRequest("sessions.messages.unsubscribe", { match: { key: sessionKey } });
+      await emitTool("hidden");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await expect
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.messages.subscribe", { key: sessionKey })).length,
+        )
+        .toBe(2);
+      await emitTool("visible-again");
+      await expect.poll(() => page.locator(".activity-entry").count()).toBe(2);
+      await page.getByRole("button", { name: "Expand all", exact: true }).click();
+      await page.getByText("visible-again output", { exact: true }).waitFor();
+      expect(await page.getByText("hidden output", { exact: true }).count()).toBe(0);
+      await navigate("config");
+      await waitForControlUiSettingsTakeover(page);
+      await page.locator("openclaw-activity-page").waitFor({ state: "detached" });
+      await expect
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.messages.unsubscribe", { key: sessionKey }))
+              .length,
+        )
+        .toBe(2);
+      await emitTool("while-away");
+      await navigate("activity");
+      await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+      await page.locator(".activity-empty").waitFor();
+      expect(await page.locator(".activity-entry").count()).toBe(0);
+      expect(await gateway.getSocketCount()).toBe(1);
+    });
+  });
 
   it("updates one visible tool summary from running to completed output", async () => {
     if (captureUiProof) {
@@ -151,18 +134,26 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, { sessionKey: "main" });
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          sessions: [
+            { key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" },
+          ],
+        });
         const startedAt = Date.now();
 
         await page.goto(`${suite.server.baseUrl}activity?view=live`);
-        await page.getByText("No activity yet.", { exact: true }).waitFor();
+        await page.locator(".activity-empty").waitFor();
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: "agent:main:main" },
+        });
 
         await gateway.emitGatewayEvent("agent", {
           runId: "run-diagnostics",
           seq: 1,
           stream: "tool",
           ts: startedAt,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             phase: "start",
             name: "web_search",
@@ -185,7 +176,7 @@ suite.define(() => {
           seq: 2,
           stream: "tool",
           ts: startedAt + 250,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             phase: "result",
             name: "web_search",

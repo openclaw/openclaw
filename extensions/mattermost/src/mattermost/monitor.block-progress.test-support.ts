@@ -2,14 +2,7 @@ import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runt
 import { expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-type ProgressSocket = {
-  openListenerCount: number;
-  emitOpen: () => void;
-  emitClose: (code: number) => void;
-};
-
-export function registerMattermostBlockProgressTests<Socket extends ProgressSocket>(harness: {
-  FakeWebSocket: new () => Socket;
+export function registerMattermostBlockProgressTests(harness: {
   createRuntimeCore: (
     config: OpenClawConfig,
     route: undefined,
@@ -23,15 +16,8 @@ export function registerMattermostBlockProgressTests<Socket extends ProgressSock
       textChunkLimit: number;
     },
   ) => unknown;
-  startTestMonitor: (
-    config: OpenClawConfig,
-    abort: AbortController,
-    socket: Socket,
-  ) => Promise<void>;
-  emitMattermostChannelPost: (
-    socket: Socket,
-    post: { id: string; message: string },
-  ) => Promise<void>;
+  testConfig: OpenClawConfig;
+  receivePost: (post: { id: string; message: string }, config: OpenClawConfig) => Promise<unknown>;
   mockState: {
     runtimeCore: unknown;
     abortController: AbortController | undefined;
@@ -41,23 +27,12 @@ export function registerMattermostBlockProgressTests<Socket extends ProgressSock
     sendMessageMattermost: Mock;
   };
 }) {
-  const {
-    FakeWebSocket,
-    createRuntimeCore,
-    startTestMonitor,
-    emitMattermostChannelPost,
-    mockState,
-  } = harness;
+  const { testConfig, createRuntimeCore, receivePost, mockState } = harness;
   it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {
     const blockConfig: OpenClawConfig = {
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
-          dmPolicy: "open",
-          groupPolicy: "open",
+          ...testConfig.channels?.mattermost,
           streaming: {
             mode: "block",
             preview: { toolProgress: true, commandText: "raw" },
@@ -116,9 +91,6 @@ export function registerMattermostBlockProgressTests<Socket extends ProgressSock
       resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
     });
 
-    const socket = new FakeWebSocket();
-    const abortController = new AbortController();
-    mockState.abortController = abortController;
     let sameToolUpdateBoundaryCount = -1;
     let hiddenReasoningBoundaryCount = -1;
     let consecutiveToolBoundaryCount = -1;
@@ -257,22 +229,10 @@ export function registerMattermostBlockProgressTests<Socket extends ProgressSock
       finalDeliveryWaitedForBoundary = mockState.sendMessageMattermost.mock.calls.length === 0;
       releaseFinalBoundary?.();
       await finalDelivery;
-      abortController.abort();
+      mockState.abortController?.abort();
     });
 
-    const monitor = startTestMonitor(blockConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
-
-    await emitMattermostChannelPost(socket, {
-      id: "post-tool-progress",
-      message: "run a tool",
-    });
-    socket.emitClose(1000);
-    await monitor;
+    await receivePost({ id: "post-tool-progress", message: "run a tool" }, blockConfig);
 
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
     const draftStreamOptions = mockState.createMattermostDraftStream.mock.calls.at(0)?.[0] as

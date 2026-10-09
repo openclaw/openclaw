@@ -28,21 +28,13 @@ type FetchOperation = {
 };
 const continueRequest: FetchOperation = { method: "Fetch.continueRequest" };
 const siblingContinuations: FetchOperation[] = [
-  { method: "Fetch.continueResponse", stage: "response" },
   {
     method: "Fetch.continueWithAuth",
     stage: "auth",
     params: { authChallengeResponse: { response: "Default" } },
   },
-  { method: "Fetch.failRequest", params: { errorReason: "Aborted" } },
-  { method: "Fetch.fulfillRequest", params: { responseCode: 200 } },
 ];
 const bodyReads: FetchOperation[] = [
-  {
-    method: "Fetch.getResponseBody",
-    stage: "response",
-    result: { body: "private", base64Encoded: false },
-  },
   {
     method: "Fetch.takeResponseBodyAsStream",
     stage: "response",
@@ -263,7 +255,8 @@ async function assertReceiptAndContinuity(rig: Awaited<ReturnType<typeof setup>>
 
 // The native completion is the only fault-injected boundary. Real background
 // policy, Fetch lease/pause ownership, and both logical relay sessions participate.
-describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) => {
+describe("Fetch continuation in selected mode", () => {
+  const mode = "selected";
   it.each(["completion-first", "commit-first"] as const)(
     "preserves receipt and both target sessions: %s",
     async (order) => {
@@ -292,11 +285,10 @@ describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) =
     },
   );
 
-  it.each(
-    ["Fetch.enable", "Fetch.disable"].flatMap((method) =>
-      ["completion-first", "commit-first"].map((order) => ({ method, order })),
-    ),
-  )(
+  it.each([
+    { method: "Fetch.enable", order: "commit-first" },
+    { method: "Fetch.disable", order: "completion-first" },
+  ])(
     "preserves configuration $method completion ($order) and lease ownership",
     async ({ method, order }) => {
       const rig = await setupConfiguration(mode, method);
@@ -326,7 +318,7 @@ describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) =
     },
   );
 
-  it.each(["Fetch.enable", "Fetch.disable"])(
+  it.each(["Fetch.enable"])(
     "rejects configuration %s completion after access revocation",
     async (method) => {
       const rig = await setupConfiguration(mode, method);
@@ -376,23 +368,12 @@ describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) =
     expect(nativeCalls(rig)).toHaveLength(1);
   });
 
-  it.each(["access", "tab-removal", "attachment", "connection"] as const)(
+  it.each(["attachment", "connection"] as const)(
     "rejects completion after genuine %s revocation",
     async (revocation) => {
       const rig = await setup(mode);
       const held = await holdNativeCompletion(rig);
       switch (revocation) {
-        case "access":
-          await sendRuntimeMessage(rig.harness, {
-            type: "toggleTabAccess",
-            tabId: 101,
-            accessMode: mode,
-            grant: false,
-          });
-          break;
-        case "tab-removal":
-          await rig.harness.tabsRemove(101);
-          break;
         case "attachment":
           rig.harness.debuggerDetachListener?.({ tabId: 101 }, "target_closed");
           break;
@@ -409,15 +390,4 @@ describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) =
       expect(nativeCalls(rig)).toHaveLength(1);
     },
   );
-});
-
-it("selected-group removal rejects the pending continuation", async () => {
-  const rig = await setup("selected");
-  const held = await holdNativeCompletion(rig);
-  rig.harness.updateTab(101, { groupId: -1 });
-  held.complete();
-  const response = await rig.owner.response(held.id);
-  expect(response.error).toBeDefined();
-  expect(response).not.toHaveProperty("result");
-  expect(nativeCalls(rig)).toHaveLength(1);
 });

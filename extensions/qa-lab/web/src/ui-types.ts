@@ -8,7 +8,7 @@ import type {
   QaBusConversationKind,
   QaBusStateSnapshot,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import type { QaLabLatestReport, QaLabScenarioOutcome, QaLabScenarioRun } from "../../api.js";
+import type { QaLabLatestReport, QaLabScenarioRun } from "../../api.js";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
@@ -60,7 +60,7 @@ export type Bootstrap = {
   runner: RunnerSnapshot;
   runnerCatalog: {
     status: "loading" | "ready" | "failed";
-    real: RunnerModelOption[];
+    real: QaRunnerModelOption[];
     channels: string[];
     profiles: Array<{
       id: string;
@@ -71,14 +71,11 @@ export type Bootstrap = {
   };
 };
 
-export type ScenarioOutcome = QaLabScenarioOutcome;
 type ScenarioRun = QaLabScenarioRun;
 
 export type RunnerSelection = QaLabRunSelection;
 export type RunnerResolvedPlan = QaLabResolvedRunPlan;
 type RunnerSnapshot = QaLabRunnerSnapshot;
-
-export type RunnerModelOption = QaRunnerModelOption;
 
 export type OutcomesEnvelope = {
   run: ScenarioRun | null;
@@ -108,7 +105,7 @@ export type CaptureEventView = {
   captureOrigin?: string;
 };
 
-export type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
+type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
 
 export type CaptureSessionsEnvelope = {
   sessions: CaptureSessionSummary[];
@@ -219,7 +216,6 @@ export type UiState = {
   captureDetailSplitPct: number;
   captureDetailSplitDragging: boolean;
   captureDetailView: "overview" | "flow" | "payload" | "headers";
-  capturePreferredDetailView: "overview" | "flow" | "payload" | "headers" | null;
   captureFlowDetailLayout: "nav-first" | "pair-first" | null;
   capturePayloadDetailLayout: "formatted" | "raw" | null;
   capturePayloadExtent: "preview" | "full";

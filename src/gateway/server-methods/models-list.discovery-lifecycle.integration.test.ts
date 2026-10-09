@@ -4,8 +4,11 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it("models.list preserves provider starters and retires unavailable account rows after an authoritative empty refresh", async () => {
+it("models.list preserves provider starters and retires unavailable account rows after an authoritative empty refresh", async ({
+  signal,
+}) => {
   const state = await createOpenClawTestState({
     label: "models-list-discovery-lifecycle",
     env: {
@@ -129,7 +132,7 @@ it("models.list preserves provider starters and retires unavailable account rows
       },
       agents: {
         defaults: { modelPolicy: { allow: providers.map((provider) => `${provider}/*`) } },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       plugins: {
         allow: ["lifecycle-catalog"],
@@ -170,11 +173,22 @@ it("models.list preserves provider starters and retires unavailable account rows
           .filter((model) => model.provider === provider)
           .map((model) => model.id)
           .toSorted();
+      const startup = await waitForCatalogPublication({
+        signal,
+        read: () =>
+          client.request<ModelsListResult>("models.list", {
+            agentId: "main",
+            view: "all",
+          }),
+        ready: (result) =>
+          ids(result, "lifecycle-a").includes("learned") && !result.pendingProviders?.length,
+      });
+      expect(ids(startup, "lifecycle-a")).toEqual(["Learned", "learned"]);
+      expect(requests.filter((provider) => provider === "lifecycle-c")).toHaveLength(1);
+      const beforeManualRefresh = requests.length;
       expect(ids(await list("lifecycle-b"), "lifecycle-b")).toEqual([]);
       const firstUnavailable = await list("lifecycle-c");
-      expect(requests.indexOf("lifecycle-b")).toBeGreaterThanOrEqual(0);
-      expect(requests.indexOf("lifecycle-c")).toBeGreaterThan(requests.indexOf("lifecycle-b"));
-      expect(requests.filter((provider) => provider === "lifecycle-c")).toHaveLength(1);
+      expect(requests.slice(beforeManualRefresh)).toEqual(["lifecycle-b", "lifecycle-c"]);
       expect(ids(firstUnavailable, "lifecycle-c")).toEqual(["starter"]);
       expect(firstUnavailable.refreshFailed).toBe(true);
       unavailable.delete("lifecycle-c");

@@ -1,12 +1,14 @@
 import type { APIInteraction } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
-import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
+import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
+import { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
+import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contract.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
 
@@ -14,6 +16,8 @@ export abstract class Plugin {
   abstract readonly id: string;
   registerClient?(client: Client): Promise<void> | void;
 }
+
+export type RegisteredPlugin = Plugin & (GatewayPluginContract | VoicePluginContract);
 
 type AnyListener = {
   type: string;
@@ -25,13 +29,11 @@ interface ClientOptions {
   token: string;
   requestOptions?: RequestClientOptions;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
-  devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
-  restCacheTtlMs?: number;
 }
 
 export class Client {
-  plugins: Array<{ id: string; plugin: Plugin }> = [];
+  plugins: RegisteredPlugin[] = [];
   options: ClientOptions;
   commands: DiscordCommand[];
   listeners: AnyListener[];
@@ -41,8 +43,6 @@ export class Client {
   private entityCache: DiscordEntityCache;
   private eventQueue?: DiscordEventQueue;
   modalHandler = new ComponentRegistry<Modal>();
-  shardId?: number;
-  totalShards?: number;
 
   constructor(
     options: ClientOptions,
@@ -52,7 +52,7 @@ export class Client {
       components?: BaseMessageInteractiveComponent[];
       modals?: Modal[];
     },
-    plugins: Plugin[] = [],
+    plugins: RegisteredPlugin[] = [],
   ) {
     if (!options.clientId) {
       throw new Error("Missing Discord application ID");
@@ -70,55 +70,34 @@ export class Client {
     this.entityCache = new DiscordEntityCache({
       client: this,
       rest: () => this.rest,
-      ttlMs: this.options.restCacheTtlMs,
     });
     this.commandDeployer = new DiscordCommandDeployer({
       clientId: this.options.clientId,
       commands: this.commands,
-      devGuilds: this.options.devGuilds,
       hashStore: this.options.commandDeployHashStore,
       rest: () => this.rest,
     });
     for (const component of handlers.components ?? []) {
       this.componentHandler.register(component);
     }
-    for (const command of this.commands) {
-      for (const component of command.components ?? []) {
-        this.componentHandler.register(component);
-      }
-    }
     for (const modal of handlers.modals ?? []) {
       this.modalHandler.register(modal);
     }
     for (const plugin of plugins) {
       void plugin.registerClient?.(this);
-      this.plugins.push({ id: plugin.id, plugin });
+      this.plugins.push(plugin);
     }
   }
 
-  getPlugin<T = Plugin>(id: string): T | undefined {
-    return this.plugins.find((entry) => entry.id === id)?.plugin as T | undefined;
-  }
-
-  registerListener(listener: AnyListener): AnyListener {
-    if (!this.listeners.includes(listener)) {
-      this.listeners.push(listener);
-    }
-    return listener;
-  }
-
-  unregisterListener(listener: AnyListener): boolean {
-    const index = this.listeners.indexOf(listener);
-    if (index < 0) {
-      return false;
-    }
-    this.listeners.splice(index, 1);
-    return true;
+  getPlugin(id: "gateway"): GatewayPluginContract | undefined;
+  getPlugin(id: "voice"): VoicePluginContract | undefined;
+  getPlugin(id: string): RegisteredPlugin | undefined;
+  getPlugin(id: string): RegisteredPlugin | undefined {
+    return this.plugins.find((plugin) => plugin.id === id);
   }
 
   getRuntimeMetrics() {
     return {
-      request: this.rest.getSchedulerMetrics(),
       eventQueue: this.eventQueue?.getMetrics(),
     };
   }
@@ -143,8 +122,8 @@ export class Client {
     return await this.entityCache.fetchGuildEmojis(guildId, fetcher);
   }
 
-  async deployCommands(options: DeployCommandOptions = {}) {
-    return await this.commandDeployer.deploy(options);
+  async deployCommands() {
+    return await this.commandDeployer.deploy();
   }
 
   async handleInteraction(rawData: APIInteraction): Promise<void> {

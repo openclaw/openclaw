@@ -13,6 +13,7 @@ import {
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginsPageCatalogDetail, PluginsPageDetail } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
+import type { PluginToolPreview } from "./tool-preview.ts";
 
 /** Local inspection owns availability; optional metadata never delays the installed controls. */
 export async function loadInstalledPluginDetail(params: {
@@ -79,7 +80,7 @@ export async function loadInstalledPluginDetail(params: {
       if (!catalog) {
         return;
       }
-      const toolDetails = new Map<string, { name: string; description?: string }>(
+      const toolDetails = new Map<string, PluginToolPreview>(
         inspection.declared.tools.map((name) => [name, { name }]),
       );
       for (const group of catalog.groups.filter((entry) => entry.pluginId === plugin.id)) {
@@ -87,6 +88,7 @@ export async function loadInstalledPluginDetail(params: {
           toolDetails.set(tool.id, {
             name: tool.id,
             description: tool.fullDescription ?? tool.description,
+            parameters: tool.parameters,
           });
         }
       }

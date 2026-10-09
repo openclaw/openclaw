@@ -144,37 +144,6 @@ const LEGACY_MEDIA_KINDS = new Set<MediaKind>([
   "unknown",
 ]);
 
-function hasAmbiguousSparseLegacyMediaAlignment(source: MediaFactSource): boolean {
-  const paths = Array.isArray(source.MediaPaths) ? source.MediaPaths : [];
-  const urls = Array.isArray(source.MediaUrls) ? source.MediaUrls : [];
-  const types = Array.isArray(source.MediaTypes) ? source.MediaTypes : [];
-  const canonical = normalizeMediaFacts(source.media);
-  const slotCount = Math.max(paths.length, urls.length);
-  if (types.length === 0 || types.length >= slotCount) {
-    return false;
-  }
-  return Array.from({ length: slotCount }, (_, index) =>
-    Boolean(normalizeOptionalString(paths[index]) ?? normalizeOptionalString(urls[index])),
-  ).some((meaningful, index) => {
-    if (!meaningful) {
-      return false;
-    }
-    const fact = canonical[index];
-    const canonicalIdentity =
-      normalizeOptionalString(fact?.path) ?? normalizeOptionalString(fact?.url);
-    const canonicalClassification = normalizeOptionalString(fact?.contentType) ?? fact?.kind;
-    return !canonicalIdentity || !canonicalClassification;
-  });
-}
-
-function hasUnderCardinalLegacyTypes(source: MediaFactSource): boolean {
-  const paths = Array.isArray(source.MediaPaths) ? source.MediaPaths : [];
-  const urls = Array.isArray(source.MediaUrls) ? source.MediaUrls : [];
-  const types = Array.isArray(source.MediaTypes) ? source.MediaTypes : [];
-  const slotCount = Math.max(paths.length, urls.length);
-  return types.length > 0 && types.length < slotCount;
-}
-
 type CanonicalizedPersistedMediaMessage<T extends object> = {
   changed: boolean;
   hadLegacy: boolean;
@@ -196,27 +165,41 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
   const topLevelMedia = Array.isArray(record.media)
     ? (record.media as readonly MediaFactInput[])
     : undefined;
-  const source: MediaFactSource = {
+  let source: MediaFactSource = {
     ...record,
     media: (canonical ?? topLevelMedia) as readonly MediaFactInput[] | undefined,
   };
-  const hasAmbiguousLegacyAlignment = hasAmbiguousSparseLegacyMediaAlignment(source);
-  if (hadLegacy && hasAmbiguousLegacyAlignment) {
-    throw new Error("legacy media arrays have ambiguous sparse positional alignment");
+  const paths = Array.isArray(source.MediaPaths) ? source.MediaPaths : [];
+  const urls = Array.isArray(source.MediaUrls) ? source.MediaUrls : [];
+  const types = Array.isArray(source.MediaTypes) ? source.MediaTypes : [];
+  const slotCount = Math.max(paths.length, urls.length);
+  if (types.length > 0 && types.length < slotCount) {
+    const facts = normalizeMediaFacts(source.media);
+    let ambiguous = false;
+    for (let index = 0; index < slotCount; index += 1) {
+      const meaningful =
+        normalizeOptionalString(paths[index]) ?? normalizeOptionalString(urls[index]);
+      const fact = facts[index];
+      if (meaningful && (!(fact?.path ?? fact?.url) || !(fact?.contentType ?? fact?.kind))) {
+        ambiguous = true;
+        break;
+      }
+    }
+    if (hadLegacy && ambiguous) {
+      throw new Error("legacy media arrays have ambiguous sparse positional alignment");
+    }
+    if (!ambiguous) {
+      source = { ...source, MediaType: undefined, MediaTypes: [] };
+    }
   }
-  const resolvedSource =
-    hasUnderCardinalLegacyTypes(source) && !hasAmbiguousLegacyAlignment
-      ? { ...source, MediaType: undefined, MediaTypes: [] }
-      : source;
-  const resolvedMedia = resolveMediaFacts(resolvedSource);
-  const stagedMedia =
-    resolvedSource.MediaStaged === true ? resolveStagedMediaFacts(resolvedSource) : undefined;
-  const legacyTypes = Array.isArray(resolvedSource.MediaTypes) ? resolvedSource.MediaTypes : [];
-  const canonicalInputs = Array.isArray(resolvedSource.media) ? resolvedSource.media : [];
+  const resolvedMedia = resolveMediaFacts(source);
+  const stagedMedia = source.MediaStaged === true ? resolveStagedMediaFacts(source) : undefined;
+  const legacyTypes = Array.isArray(source.MediaTypes) ? source.MediaTypes : [];
+  const canonicalInputs = Array.isArray(source.media) ? source.media : [];
   const media: MediaFact[] = [];
   for (const [index, fact] of resolvedMedia.entries()) {
     const legacyType = normalizeOptionalString(
-      legacyTypes[index] ?? (index === 0 ? resolvedSource.MediaType : undefined),
+      legacyTypes[index] ?? (index === 0 ? source.MediaType : undefined),
     );
     const existing = canonicalInputs[index];
     const bareLegacyKind =
@@ -401,14 +384,10 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
 
 /** True when every path-bearing canonical fact has explicit staging proof. */
 export function hasStagedMediaFacts(media: readonly MediaFactInput[] | null | undefined): boolean {
-  const stageable = normalizeMediaFacts(media).filter((fact) =>
-    Boolean(normalizeOptionalString(fact.path)),
-  );
+  const stageable = normalizeMediaFacts(media).filter((fact) => Boolean(fact.path));
   return (
     stageable.length > 0 &&
-    stageable.every(
-      (fact) => Boolean(normalizeOptionalString(fact.workspaceDir)) || fact.staged === true,
-    )
+    stageable.every((fact) => Boolean(fact.workspaceDir) || fact.staged === true)
   );
 }
 
@@ -460,6 +439,7 @@ function resolveMediaFactsWithPrecedence(
       normalizeOptionalString(types[index]) ?? (index === 0 ? source.MediaType : undefined);
     return normalizeMediaFact(
       {
+        ...fact,
         path: legacyProjectionWins
           ? (normalizeOptionalString(legacyPath) ?? fact?.path)
           : (fact?.path ?? legacyPath),
@@ -469,28 +449,17 @@ function resolveMediaFactsWithPrecedence(
         contentType: legacyProjectionWins
           ? (legacyContentType ?? fact?.contentType)
           : (fact?.contentType ?? legacyContentType),
-        kind: fact?.kind,
-        fileName: fact?.fileName,
-        origin: fact?.origin,
-        sizeBytes: fact?.sizeBytes,
-        durationMs: fact?.durationMs,
-        width: fact?.width,
-        height: fact?.height,
         transcribed: legacyProjectionWins
           ? fact
             ? fact.transcribed === true
             : transcribed.has(index)
           : fact?.transcribed === true || transcribed.has(index),
-        messageId: fact?.messageId,
-        workspaceDir:
-          normalizeOptionalString(fact?.workspaceDir) ??
-          normalizeOptionalString(source.MediaWorkspaceDir),
+        workspaceDir: fact?.workspaceDir ?? normalizeOptionalString(source.MediaWorkspaceDir),
         staged:
           fact?.staged === true ||
           (legacyProjectionWins &&
             source.MediaStaged === true &&
             (!legacyHasPath || Boolean(normalizeOptionalString(legacyPath)))),
-        hydrationSuppressed: fact?.hydrationSuppressed,
       },
       index,
     );

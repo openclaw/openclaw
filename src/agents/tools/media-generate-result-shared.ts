@@ -4,7 +4,6 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import type { MediaGenerationExecutionResult } from "./media-generate-background-shared.js";
-import { buildTaskRunDetails } from "./media-tool-shared.js";
 
 export type MediaGenerateToolExecutionResult = MediaGenerationExecutionResult & {
   attachments: AgentGeneratedAttachment[];
@@ -42,7 +41,9 @@ export function buildMediaGenerateToolExecutionResult(params: {
       media: { mediaUrls, attachments },
       attachments,
       paths: mediaUrls,
-      ...buildTaskRunDetails(params.taskHandle),
+      ...(params.taskHandle
+        ? { task: { taskId: params.taskHandle.taskId, runId: params.taskHandle.runId } }
+        : {}),
       ...params.details,
       attempts: result.attempts,
       ...(result.normalization ? { normalization: result.normalization } : {}),
@@ -73,12 +74,15 @@ export function describeMediaGenerationResult(result: {
   return { displayProvider, displayModel, warning };
 }
 
-export function resolveMediaGenerationResultGeometry(
+export function buildMediaGenerationGeometryDetails(
+  kind: "image" | "video",
   result: {
     normalization?: MediaGenerationNormalizationMetadataInput;
     metadata?: Record<string, unknown>;
+    appliedResolution?: string;
   },
-  requestedSize?: string,
+  requested: { size?: string; aspectRatio?: string; resolution?: string },
+  ignoredOverrides?: ReadonlySet<string>,
 ) {
   const readMetadataString = (key: string) => {
     const value = result.metadata?.[key];
@@ -94,12 +98,23 @@ export function resolveMediaGenerationResultGeometry(
     result.normalization?.aspectRatio?.derivedFrom === "size" ||
     (!normalizedSize &&
       typeof result.metadata?.requestedSize === "string" &&
-      result.metadata.requestedSize === requestedSize &&
+      result.metadata.requestedSize === requested.size &&
       Boolean(normalizedAspectRatio));
+  const appliedResolution =
+    kind === "image" ? (result.appliedResolution ?? normalizedResolution) : normalizedResolution;
+  const resolutionDetails =
+    appliedResolution || (!ignoredOverrides?.has("resolution") && requested.resolution)
+      ? { resolution: appliedResolution ?? requested.resolution }
+      : {};
   return {
-    normalizedSize,
-    normalizedAspectRatio,
-    normalizedResolution,
-    sizeTranslatedToAspectRatio,
+    ...(kind === "image" ? resolutionDetails : {}),
+    ...(normalizedSize ||
+    (!ignoredOverrides?.has("size") && requested.size && !sizeTranslatedToAspectRatio)
+      ? { size: normalizedSize ?? requested.size }
+      : {}),
+    ...(normalizedAspectRatio || (!ignoredOverrides?.has("aspectRatio") && requested.aspectRatio)
+      ? { aspectRatio: normalizedAspectRatio ?? requested.aspectRatio }
+      : {}),
+    ...(kind === "video" ? resolutionDetails : {}),
   };
 }

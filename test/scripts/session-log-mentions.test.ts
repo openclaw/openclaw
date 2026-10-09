@@ -12,6 +12,46 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
+async function writeSqliteTranscript(events: string[], storage: "legacy" | "zstd" = "legacy") {
+  const root = tempRoots.make("openclaw-session-log-mentions-");
+  const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+  await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+  const db = new DatabaseSync(sqlitePath);
+  try {
+    db.exec(`
+      CREATE TABLE transcript_events (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+    `);
+    const insert = db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    );
+    events.forEach((event, index) => insert.run("sqlite-session", index + 1, event, index + 1));
+    if (storage === "zstd") {
+      db.exec(
+        "ALTER TABLE transcript_events ADD COLUMN event_zstd BLOB; ALTER TABLE transcript_events ADD COLUMN event_utf8_bytes INTEGER",
+      );
+      const update = db.prepare(
+        "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ? WHERE seq = ?",
+      );
+      for (const row of db.prepare("SELECT seq, event_json FROM transcript_events").all()) {
+        if (typeof row.event_json !== "string" || typeof row.seq !== "number") {
+          throw new Error("Invalid transcript fixture row");
+        }
+        const bytes = Buffer.from(row.event_json, "utf8");
+        update.run(zstdCompressSync(bytes), bytes.byteLength, row.seq);
+      }
+    }
+  } finally {
+    db.close();
+  }
+  return path.join(root, "agents", "main", "sessions");
+}
+
 describe("session log mention scanner", () => {
   it("counts mentions across bounded session logs", async () => {
     const root = tempRoots.make("openclaw-session-log-mentions-");
@@ -75,106 +115,45 @@ describe("session log mention scanner", () => {
     });
   });
 
-  it.each(["legacy", "zstd"])("counts mentions from %s SQLite transcript rows", async (storage) => {
-    const root = tempRoots.make("openclaw-session-log-mentions-");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
-    const db = new DatabaseSync(sqlitePath);
-    try {
-      db.exec(`
-        CREATE TABLE transcript_events (
-          session_id TEXT NOT NULL,
-          seq INTEGER NOT NULL,
-          event_json TEXT,
-          created_at INTEGER NOT NULL,
-          PRIMARY KEY (session_id, seq)
-        );
-      `);
-      const insert = db.prepare(
-        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+  it.each(["legacy", "zstd"] as const)(
+    "counts mentions from %s SQLite transcript rows",
+    async (storage) => {
+      const sessionsDir = await writeSqliteTranscript(
+        [
+          JSON.stringify({
+            message: { role: "user", content: "Use API.read and MCP.fixture from the prompt." },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
+            },
+          }),
+        ],
+        storage,
       );
-      insert.run(
-        "sqlite-session",
-        1,
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: "Use API.read and MCP.fixture from the prompt.",
-          },
-        }),
-        1,
-      );
-      insert.run(
-        "sqlite-session",
-        2,
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
-          },
-        }),
-        2,
-      );
-      if (storage === "zstd") {
-        db.exec(
-          "ALTER TABLE transcript_events ADD COLUMN event_zstd BLOB; ALTER TABLE transcript_events ADD COLUMN event_utf8_bytes INTEGER",
-        );
-        const update = db.prepare(
-          "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ? WHERE seq = ?",
-        );
-        for (const row of db.prepare("SELECT seq, event_json FROM transcript_events").all()) {
-          if (typeof row.event_json !== "string" || typeof row.seq !== "number") {
-            throw new Error("Invalid transcript fixture row");
-          }
-          const bytes = Buffer.from(row.event_json, "utf8");
-          update.run(zstdCompressSync(bytes), bytes.byteLength, row.seq);
-        }
-      }
-    } finally {
-      db.close();
-    }
 
-    await expect(
-      countSessionLogMentions({
-        sessionsDir,
-        needles: {
-          apiFileRead: "API.read",
-          mcpNamespace: "MCP.fixture",
-          mcpTool: "fixture__lookup_note",
-          toolSearchPollution: 'catalog.search("lookup note"',
-        },
-      }),
-    ).resolves.toEqual({
-      apiFileRead: 1,
-      mcpNamespace: 1,
-      mcpTool: 1,
-      toolSearchPollution: 1,
-    });
-  });
+      await expect(
+        countSessionLogMentions({
+          sessionsDir,
+          needles: {
+            apiFileRead: "API.read",
+            mcpNamespace: "MCP.fixture",
+            mcpTool: "fixture__lookup_note",
+            toolSearchPollution: 'catalog.search("lookup note"',
+          },
+        }),
+      ).resolves.toEqual({
+        apiFileRead: 1,
+        mcpNamespace: 1,
+        mcpTool: 1,
+        toolSearchPollution: 1,
+      });
+    },
+  );
 
   it("rejects oversized SQLite transcript rows before counting them", async () => {
-    const root = tempRoots.make("openclaw-session-log-mentions-");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
-    const db = new DatabaseSync(sqlitePath);
-    try {
-      db.exec(`
-        CREATE TABLE transcript_events (
-          session_id TEXT NOT NULL,
-          seq INTEGER NOT NULL,
-          event_json TEXT NOT NULL,
-          created_at INTEGER NOT NULL,
-          PRIMARY KEY (session_id, seq)
-        );
-      `);
-      db.prepare(
-        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-      ).run("sqlite-session", 1, "API.read ".repeat(16), 1);
-    } finally {
-      db.close();
-    }
+    const sessionsDir = await writeSqliteTranscript(["API.read ".repeat(16)]);
 
     await expect(
       countSessionLogMentions({

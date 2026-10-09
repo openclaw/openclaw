@@ -8,7 +8,6 @@ import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
-  checkUnusedExports,
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
@@ -159,7 +158,6 @@ describe("check-deadcode-exports", () => {
         "scripts/check-openclaw-package-tarball.mts!",
         "scripts/crabbox-wrapper.mjs!",
         "scripts/crabbox-wrapper.mts!",
-        "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
@@ -245,10 +243,6 @@ describe("check-deadcode-exports", () => {
     expect(packageJson.scripts["deadcode:full"]).toContain("--exclude duplicates");
   });
 
-  it("models the jiti virtual agent-sessions SDK entry", () => {
-    expect(knipConfig.workspaces["."].entry).toContain("src/agents/sessions/extension-sdk.ts!");
-  });
-
   it("models the spawned system-agent MCP stdio entry", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });
@@ -287,12 +281,6 @@ describe("check-deadcode-exports", () => {
         "src/config/doc-baseline.ts!",
         "src/plugins/runtime-sidecar-paths-baseline.ts!",
         "tsdown.ai.config.ts!",
-      ]),
-    );
-    expect(knipConfig.workspaces["extensions/acpx"].entry).toEqual(
-      expect.arrayContaining([
-        "src/runtime-internals/mcp-command-line.mjs!",
-        "src/runtime-internals/mcp-proxy.mjs!",
       ]),
     );
     expect(knipConfig.workspaces["extensions/canvas"].entry).toEqual(
@@ -460,30 +448,6 @@ tsdown.ai.config.ts: default
     expect(parseKnipCompactUnusedExportsResult("Unused exports (0)\n")).toEqual({
       entries: [],
       sawExportSection: true,
-    });
-  });
-
-  it("accepts an empty compact report with zero unused exports", () => {
-    expect(checkUnusedExports("")).toEqual({
-      ok: true,
-      entries: [],
-      message: "",
-    });
-  });
-
-  it("rejects every unused export without an allowlist", () => {
-    expect(
-      checkUnusedExports(`Unused exports (2)
-src/z.ts: zebra
-src/a.ts: alpha
-`),
-    ).toEqual({
-      ok: false,
-      entries: ["src/a.ts: alpha", "src/z.ts: zebra"],
-      message: `Unused exports are not allowed:
-  src/a.ts: alpha
-  src/z.ts: zebra
-Delete the exports or model their real production consumers in Knip.`,
     });
   });
 

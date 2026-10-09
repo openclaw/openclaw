@@ -1,3 +1,4 @@
+import type { UserProfile } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -32,8 +33,9 @@ export type ApplicationGatewaySnapshot = {
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
+  reconnectAt?: number;
   lastErrorAuthReason?: string | null;
-  /** Identity projected from this browser connection's own presence entry. */
+  /** This connection owns its identity; users.self resolves the canonical profile. */
   selfUser?: AuthenticatedUser | null;
 };
 
@@ -53,6 +55,7 @@ export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
+  /** Raw history is captured only while subscribeEventLog has consumers. */
   readonly eventLog: readonly EventLogEntry[];
   /** Advances when the connection or authentication context retires diagnostic history. */
   readonly eventLogRevision: number;
@@ -63,6 +66,7 @@ export type ApplicationGateway = {
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
+  loadSelfProfile: () => Promise<UserProfile | null>;
   updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
   /** True when this browser holds a stored operator device token for the current gateway. */
   hasStoredDeviceToken?: () => boolean;

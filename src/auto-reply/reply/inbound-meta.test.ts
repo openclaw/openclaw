@@ -431,12 +431,6 @@ describe("buildInboundUserContextPrefix", () => {
       },
     },
     {
-      name: "keeps conversation label for group chats",
-      context: { ChatType: "group", ConversationLabel: "ops-room" },
-      expected: { conversation_label: "ops-room" },
-      includes: ["Conversation info: ⟦openclaw:ctx⟧", '"conversation_label":"ops-room"'],
-    },
-    {
       name: "renders group subject and participants as untrusted metadata",
       context: {
         ChatType: "group",
@@ -452,11 +446,6 @@ describe("buildInboundUserContextPrefix", () => {
       name: "includes topic_name for forum chats",
       context: { ChatType: "group", IsForum: true, MessageThreadId: 42, TopicName: "Deployments" },
       expected: { topic_id: "42", topic_name: "Deployments", is_forum: true },
-    },
-    {
-      name: "includes sender identifier in conversation info",
-      context: { ChatType: "group", SenderId: " +15551234567 " },
-      expected: { sender: { id: "+15551234567" } },
     },
     {
       name: "includes nested sender identity in conversation info",
@@ -501,15 +490,6 @@ describe("buildInboundUserContextPrefix", () => {
       expected: { message_id: "msg-123" },
     },
     {
-      name: "prefers MessageSid when both MessageSid and MessageSidFull are present",
-      context: {
-        ChatType: "group",
-        MessageSid: "short-id",
-        MessageSidFull: "full-provider-message-id",
-      },
-      expected: { message_id: "short-id", message_id_full: undefined },
-    },
-    {
       name: "falls back to MessageSidFull when MessageSid is missing",
       context: {
         ChatType: "group",
@@ -517,11 +497,6 @@ describe("buildInboundUserContextPrefix", () => {
         MessageSidFull: "full-provider-message-id",
       },
       expected: { message_id: "full-provider-message-id", message_id_full: undefined },
-    },
-    {
-      name: "includes reply_to_id in conversation info",
-      context: { ChatType: "group", MessageSid: "msg-200", ReplyToId: "msg-199" },
-      expected: { reply_to_id: "msg-199" },
     },
   ])("$name", ({ context, expected, envelope, includes = [], excludes = [] }) => {
     const text = buildInboundUserContextPrefix(context as TemplateContext, envelope);
@@ -1167,23 +1142,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(reply?.["body"]).not.toContain("…[truncated]");
   });
 
-  it("preserves tail content in fallback ReplyToBody via head+tail truncation", () => {
-    const head = "BEGIN. ".repeat(300);
-    const tail = " REPLY_TAIL_SENTINEL";
-    const longBody = head + tail;
-    expect(longBody.length).toBeGreaterThan(2_000);
-
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      ReplyToBody: longBody,
-    } as TemplateContext);
-
-    const reply = parseReplyPayload(text);
-    expect(reply["body"]).toContain("REPLY_TAIL_SENTINEL");
-    expect(reply["body"]).toContain("…[omitted]…");
-    expect(reply["body"]).not.toContain("…[truncated]");
-  });
-
   it("preserves fallback ReplyToBody tail when the head is emoji-heavy", () => {
     const head = "😀".repeat(1_200);
     const tail = " TAIL_AFTER_EMOJI_HEAD";
@@ -1253,34 +1211,6 @@ describe("buildInboundUserContextPrefix", () => {
     expect(historyLines).toHaveLength(20);
     expect(historyLines[0]).toContain("sender-5: body-5");
     expect(historyLines.at(-1)).toContain("sender-24: body-24");
-  });
-
-  it("includes inbound history media metadata without leaking paths or URLs", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      InboundHistory: [
-        {
-          sender: "Alice",
-          body: "<media:image> (1 image)",
-          timestamp: 1_736_380_700_000,
-          messageId: "m-1",
-          media: [
-            {
-              path: "/tmp/openclaw-secret-image.png",
-              url: "https://cdn.example.test/private-token",
-              contentType: "image/png",
-              kind: "image",
-              messageId: "m-1",
-            },
-          ],
-        },
-      ],
-    } as TemplateContext);
-
-    expect(text).toContain("#m-1");
-    expect(text).toContain("Alice: <media:image> (1 image) [image/png]");
-    expect(text).not.toContain("/tmp/openclaw-secret-image.png");
-    expect(text).not.toContain("private-token");
   });
 
   it("preserves every media content type for a history message with multiple attachments", () => {

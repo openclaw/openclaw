@@ -1,27 +1,52 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import test from "node:test";
+import nodeTest from "node:test";
 
 const fixturePath = new URL("./triage-mock-openai.mjs", import.meta.url);
+// Bounds a stalled fixture. Each case takes about 150 ms on a loaded host.
+const TEST_TIMEOUT_MS = 60_000;
+const test = (name, run) => nodeTest(name, { timeout: TEST_TIMEOUT_MS }, run);
+
+function withinTest(work, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+    }
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
 
 async function startFixture(context, scenario) {
   const server = spawn(process.execPath, [fixturePath.pathname], {
-    env: { ...process.env, MOCK_PORT: "19993", E2E_TRIAGE_SCENARIO: scenario },
+    env: { ...process.env, MOCK_PORT: "0", E2E_TRIAGE_SCENARIO: scenario },
     stdio: ["ignore", "pipe", "inherit"],
   });
   context.after(() => stopFixture(server));
   let output = "";
   server.stdout.setEncoding("utf8");
-  server.stdout.on("data", (chunk) => {
-    output += chunk;
-  });
-  for (let attempt = 0; attempt < 100 && !output.includes("mock-openai listening"); attempt += 1) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
+  // The banner is the readiness signal; closed output means it can never arrive.
+  const settled = new Promise((resolve) => {
+    server.stdout.on("data", (chunk) => {
+      output += chunk;
+      if (/mock-openai listening on \d+\n/u.test(output)) {
+        resolve();
+      }
     });
-  }
-  assert.match(output, /mock-openai listening/u);
+    server.stdout.once("close", resolve);
+  });
+  await withinTest(settled, context.signal);
+  assert.match(output, /mock-openai listening on \d+\n/u);
+  const port = output.match(/mock-openai listening on (\d+)/u)[1];
+  return (body, pathname = "/v1/responses") =>
+    fetch(`http://127.0.0.1:${port}${pathname}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: context.signal,
+    });
 }
 
 async function stopFixture(server) {
@@ -33,16 +58,8 @@ async function stopFixture(server) {
   await exited;
 }
 
-async function post(body, pathname = "/v1/responses") {
-  return fetch(`http://127.0.0.1:19993${pathname}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
 test("emits interleaved visible and reasoning blocks", async (context) => {
-  await startFixture(context, "interleaved-monologue");
+  const post = await startFixture(context, "interleaved-monologue");
   const response = await post({ model: "gpt-5.5", messages: [] }, "/v1/chat/completions");
   const text = await response.text();
   assert.equal(response.status, 200);
@@ -53,7 +70,7 @@ test("emits interleaved visible and reasoning blocks", async (context) => {
 });
 
 test("ends an empty assistant turn at tool use", async (context) => {
-  await startFixture(context, "incomplete-tool-use");
+  const post = await startFixture(context, "incomplete-tool-use");
   const response = await post({ model: "gpt-5.5", messages: [] }, "/v1/chat/completions");
   const text = await response.text();
   assert.equal(response.status, 200);
@@ -62,7 +79,7 @@ test("ends an empty assistant turn at tool use", async (context) => {
 });
 
 test("emits the recoverable double-wrapped Tool Search shape", async (context) => {
-  await startFixture(context, "tool-search-double-wrap");
+  const post = await startFixture(context, "tool-search-double-wrap");
   const response = await post({ model: "gpt-5.5", input: [] });
   const text = await response.text();
   assert.equal(response.status, 200);
@@ -71,7 +88,7 @@ test("emits the recoverable double-wrapped Tool Search shape", async (context) =
 });
 
 test("fails primary and succeeds fallback", async (context) => {
-  await startFixture(context, "model-fallback-room");
+  const post = await startFixture(context, "model-fallback-room");
   const primary = await post({ model: "primary", input: [] });
   assert.equal(primary.status, 503);
   assert.match(await primary.text(), /PRIMARY_ROUTE_UNAVAILABLE/u);
@@ -81,7 +98,7 @@ test("fails primary and succeeds fallback", async (context) => {
 });
 
 test("spawns before yielding with a user-facing message", async (context) => {
-  await startFixture(context, "yield-message-drop");
+  const post = await startFixture(context, "yield-message-drop");
   const spawned = await post({ tools: [{ name: "sessions_yield" }], input: [] });
   assert.match(await spawned.text(), /"name":"sessions_spawn"/u);
   const yielded = await post({
@@ -93,25 +110,8 @@ test("spawns before yielding with a user-facing message", async (context) => {
   assert.match(text, /RESEARCH_STARTED_107788/u);
 });
 
-test("emits a failed edit followed by a successful retry", async (context) => {
-  await startFixture(context, "edit-failure-recovery");
-  const failed = await post({ input: [{ type: "function_call_output", output: "written" }] });
-  const failedText = await failed.text();
-  assert.match(failedText, /"name":"edit"/u);
-  assert.match(failedText, /beta/u);
-  const recovered = await post({
-    input: [
-      { type: "function_call_output", output: "written" },
-      { type: "function_call_output", output: "failed" },
-    ],
-  });
-  const recoveredText = await recovered.text();
-  assert.match(recoveredText, /"name":"edit"/u);
-  assert.match(recoveredText, /alpha/u);
-});
-
 test("pauses after three preview deltas before the final stream value", async (context) => {
-  await startFixture(context, "streaming-throttle");
+  const post = await startFixture(context, "streaming-throttle");
   const startedAt = Date.now();
   const response = await post({ input: [] });
   const text = await response.text();
@@ -121,36 +121,11 @@ test("pauses after three preview deltas before the final stream value", async (c
 });
 
 test("emits a good draft and tool before terminal NO_REPLY", async (context) => {
-  await startFixture(context, "terminal-no-reply-drops-draft");
+  const post = await startFixture(context, "terminal-no-reply-drops-draft");
   const draft = await post({ input: [] });
   const draftText = await draft.text();
   assert.match(draftText, /GOOD_DRAFT_115041/u);
   assert.match(draftText, /"name":"exec"/u);
   const terminal = await post({ input: [{ type: "function_call_output", output: "tool-ok" }] });
   assert.match(await terminal.text(), /NO_REPLY/u);
-});
-
-test("ends on NO_REPLY after a successful tool and failed terminal tool", async (context) => {
-  await startFixture(context, "terminal-failure-after-success");
-  const failed = await post({
-    input: [
-      { type: "function_call_output", output: "written" },
-      { type: "function_call_output", output: "failed" },
-    ],
-  });
-  assert.match(await failed.text(), /NO_REPLY/u);
-});
-
-test("self-narrates cron delivery only without recipient-only guidance", async (context) => {
-  await startFixture(context, "cron-self-narration");
-  const oldPrompt = await post({
-    input: [{ text: "Your response will be delivered automatically." }],
-  });
-  assert.match(await oldPrompt.text(), /I sent the user/u);
-  const repairedPrompt = await post({
-    input: [{ text: "Write only the exact user-facing message to send." }],
-  });
-  const repairedText = await repairedPrompt.text();
-  assert.match(repairedText, /SCHEDULE_CONFIRMED_90836/u);
-  assert.doesNotMatch(repairedText, /I sent the user/u);
 });

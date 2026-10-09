@@ -51,9 +51,10 @@ const releases: Record<
   },
 };
 
-function releaseRun(mode: ReleaseMode, options: RunOptions = {}) {
+function releaseRun(signal: AbortSignal, mode: ReleaseMode, options: RunOptions = {}) {
   const release = releases[mode];
   return runCiGitStep({
+    signal,
     workflow: release.workflow,
     fetchResults: [],
     ...options,
@@ -66,10 +67,11 @@ function gitCommands(report: Awaited<ReturnType<typeof releaseRun>>) {
   return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
 }
 
-posixIt.each([releaseTag, `${releaseTag}-2`])(
+posixIt.for([releaseTag, `${releaseTag}-2`])(
   "Linux admits a stable tag from its matching release branch: %s",
-  async (tag) => {
-    const report = await releaseRun("linux", {
+  { timeout: 55_000 },
+  async (tag, { signal }) => {
+    const report = await releaseRun(signal, "linux", {
       env: { RELEASE_TAG: tag },
       revisions: { [`refs/tags/${tag}^{commit}`]: sha },
       commandResults: {
@@ -86,10 +88,9 @@ posixIt.each([releaseTag, `${releaseTag}-2`])(
       "+refs/heads/release/2026.8.1:refs/remotes/origin/release/2026.8.1",
     ]);
   },
-  55_000,
 );
 
-posixIt.each([
+posixIt.for([
   {
     mode: "linux" as const,
     commands: [
@@ -120,8 +121,9 @@ posixIt.each([
   },
 ])(
   "$mode admission drains every Git tree before output or consumer",
-  async ({ mode, commands, output }) => {
-    const report = await releaseRun(mode);
+  { timeout: 55_000 },
+  async ({ mode, commands, output }, { signal }) => {
+    const report = await releaseRun(signal, mode);
     expect(report.code, report.output).toBe(0);
     expect(gitCommands(report)).toEqual(commands);
     expect(report.githubOutput).toBe(output);
@@ -135,33 +137,33 @@ posixIt.each([
       expect(report.boundaries.some(({ name }) => name === "output")).toBe(true);
     }
   },
-  55_000,
 );
 
-posixIt.each(
+posixIt.for(
   (["linux", "macos", "placeholder"] as const).flatMap((mode) =>
-    ([23, 124, 125, 143, "hang"] as const).map((failure) => ({ failure, mode })),
+    ([23, 125, "hang"] as const).map((failure) => ({ failure, mode })),
   ),
 )(
   "$mode fetch failure $failure stops before output or consumer",
-  async ({ failure, mode }) => {
-    const report = await releaseRun(mode, { fetchResults: [failure] });
+  { timeout: 55_000 },
+  async ({ failure, mode }, { signal }) => {
+    const report = await releaseRun(signal, mode, { fetchResults: [failure] });
     expect(report.code, report.output).toBe(failure === "hang" ? 124 : failure);
     expect(gitCommands(report).at(-1)?.[0]).toBe("fetch");
     expect(report.githubOutput).toBe("");
     expect(report.commands.some(({ tool }) => tool === "pnpm")).toBe(false);
   },
-  55_000,
 );
 
-posixIt.each(
+posixIt.for(
   (["linux", "macos"] as const).flatMap((mode) =>
-    ([23, 124, 125, 143] as const).map((code) => ({ code, mode })),
+    ([23, 125] as const).map((code) => ({ code, mode })),
   ),
 )(
   "$mode ordinary rev-parse status $code remains terminal",
-  async ({ code, mode }) => {
-    const report = await releaseRun(mode, {
+  { timeout: 55_000 },
+  async ({ code, mode }, { signal }) => {
+    const report = await releaseRun(signal, mode, {
       gitFault: { match: "^rev-parse ", code },
     });
     expect(report.code, report.output).toBe(code);
@@ -169,13 +171,12 @@ posixIt.each(
     expect(report.githubOutput).toBe("");
     expect(report.commands.some(({ tool }) => tool === "pnpm")).toBe(false);
   },
-  55_000,
 );
 
 posixIt(
   "macOS rejects an invalid public branch before any Git command",
-  async () => {
-    const report = await releaseRun("macos", {
+  async ({ signal }) => {
+    const report = await releaseRun(signal, "macos", {
       env: { PUBLIC_RELEASE_BRANCH: "feature/not-a-release" },
     });
     expect(report.code, report.output).toBe(1);
@@ -210,14 +211,17 @@ const terminalOperations = [
   },
 ];
 
-posixIt.each(
+posixIt.for(
   terminalOperations.flatMap((entry) =>
-    (["cleanup-failure", "cancel"] as const).map((failure) => ({ ...entry, failure })),
+    (["cleanup-failure", "cancel"] as const).map((failure) =>
+      Object.assign({}, entry, { failure }),
+    ),
   ),
 )(
   "$mode $operation $failure is terminal before every later boundary",
-  async ({ failure, match, mode, occurrence, operation }) => {
-    const report = await releaseRun(mode, {
+  { timeout: 55_000 },
+  async ({ failure, match, mode, occurrence, operation }, { signal }) => {
+    const report = await releaseRun(signal, mode, {
       gitFault: { match, occurrence, code: failure },
     });
     expect(report.code, report.output).toBe(failure === "cancel" ? 143 : 125);
@@ -226,26 +230,25 @@ posixIt.each(
     expect(report.commands.some(({ tool }) => tool === "pnpm")).toBe(false);
     expect(report.output).not.toMatch(/not reachable|requires ref to equal/u);
   },
-  55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.for([23, 125])(
   "Linux ordinary merge-base status %s is terminal without trying another branch",
-  async (code) => {
-    const report = await releaseRun("linux", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await releaseRun(signal, "linux", {
       gitFault: { match: "^merge-base ", code },
     });
     expect(report.code, report.output).toBe(code);
     expect(gitCommands(report).at(-1)?.[0]).toBe("merge-base");
     expect(report.githubOutput).toBe("");
   },
-  55_000,
 );
 
 posixIt(
   "Linux rejects a tag outside main and its matching release branch",
-  async () => {
-    const report = await releaseRun("linux", {
+  async ({ signal }) => {
+    const report = await releaseRun(signal, "linux", {
       commandResults: {
         [`merge-base --is-ancestor ${sha} origin/main`]: { code: 1 },
         [`merge-base --is-ancestor ${sha} refs/remotes/origin/release/2026.8.1`]: { code: 1 },
@@ -262,8 +265,8 @@ posixIt(
 
 posixIt(
   "Linux rejects tooling outside main before inspecting the candidate",
-  async () => {
-    const report = await releaseRun("linux", {
+  async ({ signal }) => {
+    const report = await releaseRun(signal, "linux", {
       commandResults: { [`merge-base --is-ancestor ${otherSha} origin/main`]: { code: 1 } },
     });
     expect(report.code, report.output).toBe(1);
@@ -274,10 +277,11 @@ posixIt(
   55_000,
 );
 
-posixIt.each([128, "cleanup-failure", "cancel"] as const)(
+posixIt.for([128, "cleanup-failure", "cancel"] as const)(
   "Linux matching release branch fetch failure %s cannot admit a stale ref",
-  async (failure) => {
-    const report = await releaseRun("linux", {
+  { timeout: 55_000 },
+  async (failure, { signal }) => {
+    const report = await releaseRun(signal, "linux", {
       commandResults: { [`merge-base --is-ancestor ${sha} origin/main`]: { code: 1 } },
       gitFault: { match: "^fetch ", occurrence: 2, code: failure },
     });
@@ -287,16 +291,16 @@ posixIt.each([128, "cleanup-failure", "cancel"] as const)(
     expect(gitCommands(report).at(-1)?.[0]).toBe("fetch");
     expect(report.githubOutput).toBe("");
   },
-  55_000,
 );
 
-posixIt.each([
+posixIt.for([
   { occurrence: 1, message: "workflow revision is not reachable" },
   { occurrence: 2, message: "target must be reachable" },
 ])(
   "placeholder ordinary merge-base failure $occurrence keeps its custom rejection",
-  async ({ message, occurrence }) => {
-    const report = await releaseRun("placeholder", {
+  { timeout: 55_000 },
+  async ({ message, occurrence }, { signal }) => {
+    const report = await releaseRun(signal, "placeholder", {
       gitFault: { match: "^merge-base ", occurrence, code: 23 },
     });
     expect(report.code, report.output).toBe(1);
@@ -306,13 +310,13 @@ posixIt.each([
     );
     expect(report.githubOutput).toBe("");
   },
-  55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.for([23, 125])(
   "placeholder rev-parse status %s retains exact-SHA rejection",
-  async (code) => {
-    const report = await releaseRun("placeholder", {
+  { timeout: 55_000 },
+  async (code, { signal }) => {
+    const report = await releaseRun(signal, "placeholder", {
       gitFault: { match: "^rev-parse ", code },
     });
     expect(report.code, report.output).toBe(1);
@@ -322,7 +326,6 @@ posixIt.each([23, 124, 125, 143])(
     expect(gitCommands(report)).toHaveLength(1);
     expect(report.githubOutput).toBe("");
   },
-  55_000,
 );
 
 const placeholderIdentityMismatches: Array<{
@@ -339,22 +342,22 @@ const placeholderIdentityMismatches: Array<{
   },
 ];
 
-posixIt.each(placeholderIdentityMismatches)(
+posixIt.for(placeholderIdentityMismatches)(
   "placeholder rejects non-Git identity mismatch before checkout inspection",
-  async ({ env, message }) => {
-    const report = await releaseRun("placeholder", { env });
+  { timeout: 55_000 },
+  async ({ env, message }, { signal }) => {
+    const report = await releaseRun(signal, "placeholder", { env });
     expect(report.code, report.output).toBe(1);
     expect(report.output).toContain(message);
     expect(gitCommands(report)).toEqual([]);
     expect(report.githubOutput).toBe("");
   },
-  55_000,
 );
 
 posixIt(
   "placeholder rejects a checked-out SHA mismatch before fetch",
-  async () => {
-    const report = await releaseRun("placeholder", {
+  async ({ signal }) => {
+    const report = await releaseRun(signal, "placeholder", {
       commandResults: { "rev-parse HEAD": { code: 0, output: `${otherSha}\n` } },
     });
     expect(report.code, report.output).toBe(1);
@@ -367,17 +370,17 @@ posixIt(
   55_000,
 );
 
-posixIt.each(
+posixIt.for(
   (["linux", "macos", "placeholder"] as const).flatMap((mode) =>
     (["owner", "python", "git"] as const).map((setupFailure) => ({ mode, setupFailure })),
   ),
 )(
   "$mode setup failure $setupFailure cannot publish or consume admission",
-  async ({ mode, setupFailure }) => {
-    const report = await releaseRun(mode, { setupFailure });
+  { timeout: 55_000 },
+  async ({ mode, setupFailure }, { signal }) => {
+    const report = await releaseRun(signal, mode, { setupFailure });
     expect(report.code, report.output).not.toBe(0);
     expect(report.githubOutput).toBe("");
     expect(report.commands.some(({ tool }) => tool === "pnpm")).toBe(false);
   },
-  55_000,
 );

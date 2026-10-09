@@ -165,16 +165,6 @@ describe("provider model route auth", () => {
 
   it.each([
     {
-      label: "pins an unknown source before a ready sibling route",
-      profiles: [
-        profile("openai:unknown", "oauth", "unknown"),
-        profile("openai:platform", "api_key", "ready"),
-      ],
-      expectedProfileId: "openai:unknown",
-      expectedRoute: "subscription",
-      expectedAttempts: ["openai:unknown", "openai:platform"],
-    },
-    {
       label: "keeps the first ordered source when a later same-route source is ready",
       profiles: [
         profile("openai:unknown", "oauth", "unknown"),

@@ -18,16 +18,20 @@ function unwrapExpression(node) {
   return current;
 }
 
+function repositoryPath(context) {
+  const filename = context.physicalFilename.replaceAll("\\", "/");
+  const cwd = context.cwd.replaceAll("\\", "/");
+  return filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+}
+
 function restrictedCallRule({ allowedFiles = [], message, objects, property, roots }) {
   return {
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (
-        !filename.endsWith(".ts") ||
+        !repoPath.endsWith(".ts") ||
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
-        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
+        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
       ) {
         return {};
@@ -108,9 +112,7 @@ function noChainedTypeAssertionsRule({ excludedRoots = [], roots }) {
       },
     },
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
         excludedRoots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
@@ -237,7 +239,7 @@ function assertedExpression(node) {
 
 function assertedIdentifier(node) {
   let expression = assertedExpression(node);
-  while (expression.type === "TSAsExpression" || expression.type === "TSTypeAssertion") {
+  while (isTypeAssertionExpression(expression)) {
     expression = assertedExpression(expression);
   }
   return expression.type === "Identifier" ? expression : null;
@@ -248,17 +250,12 @@ function isNestedAssertion(node) {
   while (parent?.type === "ParenthesizedExpression") {
     parent = parent.parent;
   }
-  return (
-    (parent?.type === "TSAsExpression" || parent?.type === "TSTypeAssertion") &&
-    assertedExpression(parent) === node
-  );
+  return parent && isTypeAssertionExpression(parent) && assertedExpression(parent) === node;
 }
 
 function assertionFromExpression(expression) {
   const unwrapped = unwrapExpressionParentheses(expression);
-  return unwrapped.type === "TSAsExpression" || unwrapped.type === "TSTypeAssertion"
-    ? unwrapped
-    : null;
+  return isTypeAssertionExpression(unwrapped) ? unwrapped : null;
 }
 
 function normalizedTypeText(sourceText, type) {
@@ -354,7 +351,7 @@ function variableDeclarator(variable) {
 function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   const unwrapped = unwrapExpressionParentheses(expression);
 
-  if (unwrapped.type === "TSAsExpression" || unwrapped.type === "TSTypeAssertion") {
+  if (isTypeAssertionExpression(unwrapped)) {
     if (broadTypeKind(unwrapped.typeAnnotation) !== null) {
       return null;
     }
@@ -511,9 +508,7 @@ function noWidenThenAssertRule({ roots }) {
       },
     },
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (!roots.some((root) => repoPath === root || repoPath.startsWith(`${root}/`))) {
         return {};
       }

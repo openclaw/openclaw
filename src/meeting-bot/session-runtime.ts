@@ -5,6 +5,7 @@ import type {
   TranscriptStopRequest,
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
+import { sleep } from "../utils/sleep.js";
 import {
   meetingCaptionParticipationSources,
   snapshotMeetingObservation,
@@ -331,9 +332,7 @@ export class MeetingSessionRuntime<
     );
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(250, Math.max(0, deadline - Date.now())));
-      });
+      await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;
@@ -610,16 +609,11 @@ export class MeetingSessionRuntime<
   ): Promise<MeetingSessionLeaveResult<TSession>> {
     this.#participation?.close(session.id);
     const firstAttempt = this.#sessionCleanup.begin(session.id, session.browserLeft);
+    // Ending fences new live reads; the capture queue drains already admitted reads.
     session.state = "ended";
     session.updatedAt = nowIso();
     this.#dropRuntimeHandles(session.id);
-    const transcribe = this.options.isTranscribeMode(session.mode);
     let transcriptStopped = false;
-    if (transcribe) {
-      // Fence new live reads before final capture; the store's capture chain drains
-      // reads already admitted before this terminal boundary.
-      this.#transcriptStore.startFinalizing(session.id);
-    }
     try {
       transcriptStopped = await this.#durableTranscripts.stop(session, {
         allowFallback: firstAttempt,
@@ -657,9 +651,6 @@ export class MeetingSessionRuntime<
     } finally {
       if (transcriptStopped) {
         this.#transcriptStore.retire(session.id);
-      }
-      if (transcribe) {
-        this.#transcriptStore.finishFinalizing(session.id);
       }
     }
   }

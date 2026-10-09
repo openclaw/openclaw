@@ -38,47 +38,37 @@ function runGatesBash(script: string, options: { env?: NodeJS.ProcessEnv } = {})
 
 describe("resolve_pr_gates_remote_mode", () => {
   it.each([
-    { value: undefined, expected: "local" },
-    { value: "", expected: "local" },
-    { value: "testbox", expected: "testbox" },
-    { value: "crabbox-aws", expected: "crabbox-aws" },
-    { value: "github", expected: "github" },
-  ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
-    const env: NodeJS.ProcessEnv = {};
-    if (value !== undefined) {
-      env.OPENCLAW_PR_GATES_REMOTE = value;
-    }
-    const result = runGatesBash("resolve_pr_gates_remote_mode", { env });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("preserves explicitly selected completed hosted proof", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_TESTBOX: "1" },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("local");
-  });
-
-  it("rejects unsupported values", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "azure" },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unsupported OPENCLAW_PR_GATES_REMOTE=azure");
-  });
-
-  it.each(["testbox", "crabbox-aws", "github"])(
-    "rejects the %s hosted-gates conflict before touching the worktree",
-    (mode) => {
-      const result = runGatesBash("prepare_gates 424242", {
-        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: "1" },
-      });
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain("conflicts with OPENCLAW_TESTBOX=1");
+    { mode: undefined, hosted: undefined, code: 0, output: "local" },
+    { mode: "", hosted: "1", code: 0, output: "local" },
+    { mode: "testbox", hosted: undefined, code: 0, output: "testbox" },
+    { mode: "crabbox-aws", hosted: undefined, code: 0, output: "crabbox-aws" },
+    { mode: "github", hosted: undefined, code: 0, output: "github" },
+    {
+      mode: "azure",
+      hosted: undefined,
+      code: 1,
+      output: "Unsupported OPENCLAW_PR_GATES_REMOTE=azure",
     },
-  );
+    ...["testbox", "crabbox-aws", "github"].map((mode) => ({
+      mode,
+      hosted: "1",
+      code: 2,
+      output: "conflicts with OPENCLAW_TESTBOX=1",
+    })),
+  ])("resolves gate mode $mode with hosted=$hosted", ({ mode, hosted, code, output }) => {
+    const result = runGatesBash(
+      hosted === "1" && mode ? "prepare_gates 424242" : "resolve_pr_gates_remote_mode",
+      {
+        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: hosted },
+      },
+    );
+    expect(result.status).toBe(code);
+    if (code === 0) {
+      expect(result.stdout.trim()).toBe(output);
+    } else {
+      expect(result.stderr).toContain(output);
+    }
+  });
 });
 
 describe("scripts/pr prepare mode preflight", () => {
@@ -120,6 +110,28 @@ describe("scripts/pr prepare mode preflight", () => {
         '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PR_TEST_GH_CALLS"\nexit 99\n',
       );
       chmodSync(join(bin, "gh"), 0o755);
+      for (const args of [
+        ["prepare-push", "123", "--resume-crabbox-run"],
+        ["prepare-push", "123", "--resume-crabbox-run", "0"],
+        ["prepare-push", "123", "--resume-crabbox-run", "01"],
+        ["prepare-push", "123", "--resume-crabbox-run", "9007199254740992"],
+        ["prepare-push", "123", "--resume-crabbox-run", "99", "extra"],
+        ["prepare-push", "123", "--run-id", "run_fake"],
+        ["ci-dispatch", "123", "--backend", "crabbox", "--pending-gates"],
+      ]) {
+        const result = spawnSync(join(root, "scripts/pr"), args, {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...env, PR_TEST_GH_CALLS: ghCalls },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(2);
+        expect(existsSync(ghCalls)).toBe(false);
+        expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
+        expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
+        expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
+          "",
+        );
+      }
       for (const command of ["prepare-run", "prepare-gates", "prepare-push"]) {
         for (const scenario of [
           {

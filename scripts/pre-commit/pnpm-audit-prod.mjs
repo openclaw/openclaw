@@ -16,7 +16,6 @@ import {
   pnpmLockfileDocuments,
   resolveSnapshot,
 } from "../lib/pnpm-lockfile-documents.mjs";
-export { parseSnapshotKey, stripVersionDecorators } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";

@@ -18,13 +18,6 @@ import type {
 } from "./workspace-reconcile.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
@@ -180,19 +173,19 @@ export function deferred<T>() {
 }
 
 export function memoryWorkspaceJournal(
-  onCommit?: (manifestRef: string) => void,
+  onCommit?: (manifestRef: string) => void | Promise<void>,
 ): WorkerWorkspaceReconciliationJournalAdapter {
   let pending: WorkerWorkspaceReconciliationJournal | undefined;
   return {
-    load: () => pending,
-    begin: (journal) => {
+    load: async () => pending,
+    begin: async (journal) => {
       pending = journal;
     },
-    commit: (manifestRef) => {
-      onCommit?.(manifestRef);
+    commit: async (manifestRef) => {
+      await onCommit?.(manifestRef);
       pending = undefined;
     },
-    abort: () => {
+    abort: async () => {
       pending = undefined;
     },
   };
@@ -206,6 +199,8 @@ class FakeProcess implements WorkerSshProcess {
   stopCount = 0;
   private stopPromise?: Promise<void>;
   private stopBarrier: Promise<void> | undefined;
+
+  constructor(private readonly deferStop = false) {}
 
   becomeReady() {
     this.readyDeferred.resolve();
@@ -226,8 +221,13 @@ class FakeProcess implements WorkerSshProcess {
 
   stop() {
     return (this.stopPromise ??= (async () => {
+      if (this.deferStop) {
+        await Promise.resolve();
+      }
       this.stopCount += 1;
-      await this.stopBarrier;
+      if (this.stopBarrier || !this.deferStop) {
+        await this.stopBarrier;
+      }
       this.readyDeferred.reject(new Error("stopped"));
       this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
     })());
@@ -239,18 +239,19 @@ export function fakeRunner(
     argv: string[],
     options: CommandOptions,
   ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
+  defaults: { defaultStdout?: string; deferStop?: boolean } = {},
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
   const runner: WorkerSshRunner = {
     start(argv, options) {
-      const process = new FakeProcess();
+      const process = new FakeProcess(defaults.deferStop);
       starts.push({ argv, options, process });
       return process;
     },
     async run(argv, options) {
       runs.push({ argv, options });
-      return (await onRun?.(argv, options)) ?? success();
+      return (await onRun?.(argv, options)) ?? success(defaults.defaultStdout);
     },
   };
   return { runner, runs, starts };
@@ -356,7 +357,7 @@ export async function git(root: string, ...args: string[]): Promise<string> {
 export const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
 
 export async function waitForStarts(starts: unknown[], count: number) {
-  await waitForFast(() => expect(starts).toHaveLength(count));
+  await vi.waitFor(() => expect(starts).toHaveLength(count), { interval: 1 });
 }
 
 type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner">;

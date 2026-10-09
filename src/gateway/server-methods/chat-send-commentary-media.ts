@@ -1,15 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../../config/sessions/session-message-rewrite.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import {
-  readActiveTranscriptEntryAnchor,
-  rewriteTranscriptMessageAtAnchor,
-} from "../../config/sessions/session-accessor.js";
+  recordAssistantManagedMediaUrls,
+  type PrepareAssistantTranscriptMessage,
+} from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   runWithOwnedSessionTranscriptWrite,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/transcript-write-context.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
   onInternalSessionTranscriptUpdate,
@@ -38,8 +42,7 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { publishAssistantTranscriptRewrite } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
-/** Materialize committed progress attachments within the same admitted webchat run. */
-export function observeChatSendCommentaryMedia(params: {
+type AssistantCommentaryMediaCustodyParams = {
   requesterContext?: WebchatReplyMediaRequesterContext;
   session: Pick<PreparedChatSendSession, "agentId" | "cfg" | "sessionKey" | "sessionLoadOptions">;
   accountId: string | undefined;
@@ -47,11 +50,57 @@ export function observeChatSendCommentaryMedia(params: {
   isCurrent: () => boolean;
   abortSignal?: AbortSignal;
   logGateway: GatewayRequestContext["logGateway"];
-}) {
+};
+type CommentaryMediaRewrite = { sessionId: string; generation: string };
+
+/** Own authored progress attachments while the caller retains its admitted run. */
+export function createAssistantCommentaryMediaCustody(
+  params: AssistantCommentaryMediaCustodyParams & {
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  },
+) {
+  let preparingTranscript = false;
+  let lastRewrite: CommentaryMediaRewrite | undefined;
+  const prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage = (
+    message,
+    sourceText,
+  ) => {
+    if (!preparingTranscript || !params.isCurrent() || params.abortSignal?.aborted || !sourceText) {
+      return message;
+    }
+    // Delivery provenance comes from pre-hook text, never from local-file trust.
+    const prepared = recordAssistantManagedMediaUrls(
+      message,
+      splitMediaFromOutput(sourceText).mediaUrls,
+    );
+    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
+  };
+  return {
+    prepareAssistantTranscriptMessage,
+    get lastRewrite() {
+      return lastRewrite;
+    },
+    async run<T>(operation: () => Promise<T>): Promise<T> {
+      lastRewrite = undefined;
+      preparingTranscript = true;
+      const observer = observeChatSendCommentaryMedia(params);
+      try {
+        return await operation();
+      } finally {
+        preparingTranscript = false;
+        lastRewrite = await observer.close();
+      }
+    },
+  };
+}
+
+/** Materialize committed progress attachments within the same admitted Gateway run. */
+function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyParams) {
   const { session } = params;
   const seen = new Set<string>();
   let pending = Promise.resolve();
-  let lastRewrite: { sessionId: string; generation: string } | undefined;
+  let uncertainRewrite = false;
+  let lastRewrite: CommentaryMediaRewrite | undefined;
   const reportPreparationFailure = (error: unknown) => {
     if (!(error instanceof SessionTranscriptWriterClaimReboundError)) {
       params.logGateway.warn(`webchat commentary media preparation failed: ${formatForLog(error)}`);
@@ -69,6 +118,7 @@ export function observeChatSendCommentaryMedia(params: {
       message?.role !== "assistant" ||
       readSessionTranscriptRunId(message) !== params.getRunId() ||
       !params.isCurrent() ||
+      uncertainRewrite ||
       !Array.isArray(message.content) ||
       Array.isArray(message[ASSISTANT_DISPLAY_CONTENT_FIELD])
     ) {
@@ -113,13 +163,21 @@ export function observeChatSendCommentaryMedia(params: {
     const lifecycleRevision = current.entry.lifecycleRevision;
     const scope = { ...target, storePath: current.storePath };
     const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
-    const assertCurrent = () => {
+    const assertLive = () => {
       assertOwned();
-      const latest = loadSessionEntry(session.sessionKey, session.sessionLoadOptions);
       if (
+        uncertainRewrite ||
         !params.isCurrent() ||
         params.abortSignal?.aborted ||
-        params.getRunId() !== runId ||
+        params.getRunId() !== runId
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    };
+    const assertCurrent = () => {
+      assertLive();
+      const latest = loadSessionEntry(session.sessionKey, session.sessionLoadOptions);
+      if (
         latest.entry?.sessionId !== scope.sessionId ||
         latest.entry.lifecycleRevision !== lifecycleRevision
       ) {
@@ -134,13 +192,15 @@ export function observeChatSendCommentaryMedia(params: {
       previous
         .then(async () => {
           assertCurrent();
-          let anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+          let anchor = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: messageId });
+          assertCurrent();
           if (!anchor) {
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
             await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
-            anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+            anchor = await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: messageId });
+            assertCurrent();
           }
           if (!anchor) {
             return;
@@ -162,6 +222,7 @@ export function observeChatSendCommentaryMedia(params: {
                 ...mediaScope,
                 payloads: mediaUrls.map((url) => ({ mediaUrls: [url] })),
               });
+              const localRoots = getWebchatReplyMediaLocalRoots(mediaScope);
               assertCurrent();
               for (const [index, payload] of payloads.entries()) {
                 // History ownership starts after the rewrite; GC can run during preparation.
@@ -169,9 +230,7 @@ export function observeChatSendCommentaryMedia(params: {
                   sessionKey: scope.sessionKey,
                   agentId: scope.agentId,
                   items: prepareOutgoingMediaFromReplyPayload(payload),
-                  localRoots: getWebchatReplyMediaLocalRoots({
-                    ...mediaScope,
-                  }),
+                  localRoots,
                   continueOnPrepareError: true,
                   assertCurrent: mediaScope.assertCurrent,
                   abortSignal: params.abortSignal,
@@ -189,42 +248,49 @@ export function observeChatSendCommentaryMedia(params: {
               await import("../../config/sessions/session-transcript-reconcile.js");
             await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
-            const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
-              assertCurrent();
-              const active = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
-              const currentMessage = asOptionalRecord(value);
-              if (
-                active?.rawSeq !== anchor.rawSeq ||
-                !currentMessage ||
-                readSessionTranscriptRunId(currentMessage) !== runId ||
-                !isDeepStrictEqual(currentMessage.content, originalContent)
-              ) {
-                return undefined;
-              }
-              const displayContent: unknown[] = [];
-              for (const [index, raw] of originalContent.entries()) {
-                const block = asOptionalRecord(raw);
-                if (!block || !commentaryIndexes.has(index) || typeof block.text !== "string") {
-                  displayContent.push(raw);
-                  continue;
+            const rewritten = await rewritePreparedTranscriptMessageAtAnchor(
+              anchor,
+              (value) => {
+                assertLive();
+                const currentMessage = asOptionalRecord(value);
+                if (
+                  !currentMessage ||
+                  readSessionTranscriptRunId(currentMessage) !== runId ||
+                  !isDeepStrictEqual(currentMessage.content, originalContent)
+                ) {
+                  return undefined;
                 }
-                const parsed = splitMediaFromOutput(block.text);
-                const segments = parsed.segments ?? [{ type: "text" as const, text: block.text }];
-                displayContent.push({ ...block, text: "" });
-                for (const segment of segments) {
-                  if (segment.type === "text") {
-                    displayContent.push({ ...block, text: segment.text });
-                  } else {
-                    displayContent.push(
-                      ...(managedMedia.get(segment.url) ?? [
-                        { ...block, text: `MEDIA:${segment.url}` },
-                      ]),
-                    );
+                const displayContent: unknown[] = [];
+                for (const [index, raw] of originalContent.entries()) {
+                  const block = asOptionalRecord(raw);
+                  if (!block || !commentaryIndexes.has(index) || typeof block.text !== "string") {
+                    displayContent.push(raw);
+                    continue;
+                  }
+                  const parsed = splitMediaFromOutput(block.text);
+                  const segments = parsed.segments ?? [{ type: "text" as const, text: block.text }];
+                  displayContent.push({ ...block, text: "" });
+                  for (const segment of segments) {
+                    if (segment.type === "text") {
+                      displayContent.push({ ...block, text: segment.text });
+                    } else {
+                      displayContent.push(
+                        ...(managedMedia.get(segment.url) ?? [
+                          { ...block, text: `MEDIA:${segment.url}` },
+                        ]),
+                      );
+                    }
                   }
                 }
-              }
-              return { ...currentMessage, [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent };
-            });
+                return { ...currentMessage, [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent };
+              },
+              {
+                active: "sequence",
+                expectedEntry: { lifecycleRevision: lifecycleRevision ?? null },
+                assertCurrent: assertLive,
+                assertNativeCurrent: assertCurrent,
+              },
+            );
             if (rewritten) {
               // Publication failures must not discard originals already referenced by history.
               committed = true;
@@ -241,12 +307,38 @@ export function observeChatSendCommentaryMedia(params: {
                 );
               if (
                 mediaBlocks.length > 0 &&
-                !attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks })
+                !(await attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks }))
               ) {
                 throw new Error("Webchat commentary media ownership could not be persisted");
               }
               await publishAssistantTranscriptRewrite({ scope, rewritten: [{ messageId }] });
             }
+          } catch (error) {
+            if (hasSqliteWorkerOutcomeUnknown(error)) {
+              uncertainRewrite = true;
+              // The rewrite may own these bytes. Let the media owner inspect the
+              // exact transcript references during reclamation instead of deleting them here.
+              committed = true;
+              try {
+                if (
+                  !(await attachManagedOutgoingMediaToMessage({
+                    messageId,
+                    blocks: [...managedMedia.values()].flat(),
+                  }))
+                ) {
+                  throw new Error("Uncertain commentary media ownership could not be retained", {
+                    cause: error,
+                  });
+                }
+              } catch (retentionError) {
+                throw createSqliteLifecycleAggregateError(
+                  [error, retentionError],
+                  "Transcript rewrite and media retention failed",
+                  error,
+                );
+              }
+            }
+            throw error;
           } finally {
             if (!committed) {
               await removeManagedOutgoingMediaBlocks({

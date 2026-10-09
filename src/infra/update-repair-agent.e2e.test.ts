@@ -166,7 +166,7 @@ async function runRepairEnvelope(
                 targetVersion,
                 symptoms,
               },
-              budget: updateRepairBudgetSchema.parse(params.budget),
+              budget: updateRepairBudgetSchema.parse({ ...params.budget, maxTurns: 1 }),
             });
           } else if (message.type === "validate") {
             const validation = await params.validate(controller.signal);
@@ -243,6 +243,7 @@ describe("update repair with a local model provider", () => {
     { phase: "verifying", entry: "manual" },
     { phase: "validating", entry: "turn" },
     { phase: "verifying", entry: "turn" },
+    { phase: "verifying", entry: "revoked-turn" },
     { phase: "verifying", entry: "wrong-receiver-turn" },
     { phase: "verifying", entry: "unowned-turn" },
     { phase: "verifying", entry: "unidentified-turn" },
@@ -297,6 +298,15 @@ describe("update repair with a local model provider", () => {
                 }
                 if (body.tools?.some((tool) => tool.name === "exec") && !issuedRepair) {
                   issuedRepair = true;
+                  if (entry === "revoked-turn") {
+                    // Remove the requester's owner permission while inference is awaiting.
+                    const current = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+                    await fs.writeFile(
+                      state.configPath,
+                      JSON.stringify({ ...current, commands: { ownerAllowFrom: ["other-owner"] } }),
+                    );
+                    diagnostics.record("requester-revoked");
+                  }
                   writeRepairToolCall(response, "exec");
                   diagnostics.record("provider-exec-response");
                   return;
@@ -408,7 +418,7 @@ describe("update repair with a local model provider", () => {
                   installRoot: state.workspaceDir,
                 },
                 context: { error: "Synthetic repair marker is missing.", phase },
-                budget: { maxTurns: 1, wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
+                budget: { wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
                 validate: vi.fn(async () => {
                   const text = await fs.readFile(marker, "utf8").catch(() => "");
                   const ok = text === expected;
@@ -499,6 +509,16 @@ describe("update repair with a local model provider", () => {
               if (entry === "unidentified-turn") {
                 await expect(runTurn()).rejects.toThrow("worker exited 1");
                 expect(requests).toEqual([]);
+                await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                return;
+              }
+              if (entry === "revoked-turn") {
+                const result = await runTurn();
+                expect(result, JSON.stringify(result)).toMatchObject({
+                  status: "aborted",
+                  reason: "requester-revoked",
+                });
+                expect(issuedRepair).toBe(true);
                 await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
                 return;
               }

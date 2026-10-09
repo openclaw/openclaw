@@ -1,16 +1,13 @@
-/**
- * Browser context and emulation state helpers for Playwright-backed tools.
- */
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { BrowserContextOptions, CDPSession, Page } from "playwright-core";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import {
   assertInteractionCurrent,
-  awaitActionWithAbort,
   type InteractionTargetOptions,
-  createAbortPromiseWithListener,
 } from "./pw-tools-core.interactions.navigation.js";
 
 type DeviceSize = { width: number; height: number };
@@ -74,7 +71,6 @@ export async function runPageEmulationTransition<T>(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, interrupted.signal])
     : interrupted.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   const previous = emulation.transitionTail ?? Promise.resolve();
   const transition = previous
     .catch(() => {})
@@ -109,14 +105,11 @@ export async function runPageEmulationTransition<T>(params: {
       }
     });
   emulation.transitionTail = tail;
-  try {
-    return await awaitActionWithAbort(transition, abortPromise);
-  } finally {
-    cleanup();
-  }
+  return await racePromiseWithAbortSignal(transition, signal, ({ reason }) =>
+    toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+  );
 }
 
-/** Toggles offline mode for the target page context. */
 export async function setOfflineViaPlaywright(
   opts: InteractionTargetOptions & {
     offline: boolean;
@@ -129,7 +122,6 @@ export async function setOfflineViaPlaywright(
   await page.context().setOffline(opts.offline);
 }
 
-/** Replaces extra HTTP headers for the target page context. */
 export async function setExtraHTTPHeadersViaPlaywright(
   opts: InteractionTargetOptions & {
     headers: Record<string, string>;
@@ -142,7 +134,6 @@ export async function setExtraHTTPHeadersViaPlaywright(
   await page.context().setExtraHTTPHeaders(opts.headers);
 }
 
-/** Sets or clears HTTP basic-auth credentials for the target page context. */
 export async function setHttpCredentialsViaPlaywright(
   opts: InteractionTargetOptions & {
     username?: string;
@@ -166,7 +157,6 @@ export async function setHttpCredentialsViaPlaywright(
   await page.context().setHTTPCredentials({ username, password });
 }
 
-/** Sets or clears geolocation and grants page-origin geolocation permission. */
 export async function setGeolocationViaPlaywright(
   opts: InteractionTargetOptions & {
     latitude?: number;
@@ -212,7 +202,6 @@ export async function setGeolocationViaPlaywright(
   }
 }
 
-/** Emulates the requested media color scheme on the target page. */
 export async function emulateMediaViaPlaywright(
   opts: InteractionTargetOptions & {
     colorScheme: "dark" | "light" | "no-preference" | null;
@@ -225,7 +214,6 @@ export async function emulateMediaViaPlaywright(
   await page.emulateMedia({ colorScheme: opts.colorScheme });
 }
 
-/** Applies a locale override through page-scoped CDP. */
 export async function setLocaleViaPlaywright(
   opts: InteractionTargetOptions & {
     locale: string;
@@ -250,7 +238,6 @@ export async function setLocaleViaPlaywright(
   }
 }
 
-/** Applies a timezone override through page-scoped CDP. */
 export async function setTimezoneViaPlaywright(
   opts: InteractionTargetOptions & {
     timezoneId: string;
@@ -280,7 +267,6 @@ export async function setTimezoneViaPlaywright(
   }
 }
 
-/** Applies a Playwright device descriptor to viewport, user agent, and touch state. */
 export async function setDeviceViaPlaywright(
   opts: InteractionTargetOptions & {
     name: string;

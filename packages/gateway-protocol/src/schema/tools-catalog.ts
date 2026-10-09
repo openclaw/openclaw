@@ -33,6 +33,16 @@ export const ToolCatalogEntrySchema = closedObject({
   ),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   fullDescription: Type.Optional(Type.String()),
+  parameters: Type.Optional(
+    Type.Array(
+      closedObject({
+        name: NonEmptyString,
+        required: Type.Boolean(),
+        type: Type.Optional(NonEmptyString),
+        description: Type.Optional(Type.String()),
+      }),
+    ),
+  ),
   defaultProfiles: Type.Array(
     Type.Union([
       Type.Literal("minimal"),

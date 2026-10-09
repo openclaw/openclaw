@@ -3,16 +3,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
-import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  UpdateRunResult,
+  UpdateRunnerOptions,
+  UpdateStepProgress,
+} from "./update-runner-types.js";
 
 const { runCommandWithTimeout } = processExec;
 
@@ -21,9 +25,85 @@ export async function runFixtureGit(root: string, ...args: string[]) {
     timeoutMs: 5000,
   });
   if (result.code !== 0) {
-    throw new Error(result.stderr);
+    throw new Error(
+      `git ${args.join(" ")} failed (code=${result.code}, termination=${result.termination}): ${result.stderr}`,
+    );
   }
   return result.stdout.trim();
+}
+
+export async function writeGitFixtureManifest(
+  root: string,
+  overrides: Record<string, unknown> = {},
+) {
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2026.9.1",
+      packageManager: "pnpm@12.0.0",
+      ...overrides,
+    }),
+  );
+}
+
+export async function createGitFixtureCheckout(
+  directory: string,
+  manifest: Record<string, unknown> = {},
+) {
+  // Keep fixture-local identity authoritative during candidate rebases.
+  vi.stubEnv("GIT_CONFIG_COUNT", "0");
+  for (const key of [
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+  const root = path.join(directory, "checkout");
+  const remote = path.join(directory, "remote");
+  await fs.mkdir(remote);
+  await runFixtureGit(remote, "init", "--initial-branch=main");
+  await runFixtureGit(remote, "config", "user.name", "OpenClaw Test");
+  await runFixtureGit(remote, "config", "user.email", "openclaw@example.com");
+  await writeGitFixtureManifest(remote, manifest);
+  await fs.writeFile(path.join(remote, "openclaw.mjs"), "export {};\n");
+  await fs.mkdir(path.join(remote, "packages", "runtime"), { recursive: true });
+  await fs.writeFile(
+    path.join(remote, "packages", "runtime", "index.js"),
+    "module.exports = require('./node_modules/nested.cjs');",
+  );
+  await fs.writeFile(
+    path.join(remote, ".gitignore"),
+    "node_modules/\ndist/\ndist-runtime/\n.artifacts\n.pnpm\ncache/\n",
+  );
+  await runFixtureGit(remote, "add", ".");
+  await runFixtureGit(remote, "commit", "-m", "base");
+  const beforeSha = await runFixtureGit(remote, "rev-parse", "HEAD");
+  await runFixtureGit(directory, "clone", "--quiet", remote, root);
+  await runFixtureGit(root, "config", "user.name", "OpenClaw Test");
+  await runFixtureGit(root, "config", "user.email", "openclaw@example.com");
+  return { root, remote, beforeSha };
+}
+
+export async function advanceFixtureRemote(remote: string) {
+  await fs.writeFile(path.join(remote, "candidate.txt"), "candidate\n");
+  await runFixtureGit(remote, "add", ".");
+  await runFixtureGit(remote, "commit", "-m", "candidate");
+  return runFixtureGit(remote, "rev-parse", "HEAD");
+}
+
+export async function prepareDeletedTrackedRuntimeAsset(remote: string, root: string) {
+  const asset = "dist/tracked-runtime.txt";
+  await fs.mkdir(path.join(remote, "dist"));
+  await fs.writeFile(path.join(remote, asset), "original tracked runtime\n");
+  await runFixtureGit(remote, "add", "-f", asset);
+  await runFixtureGit(remote, "commit", "-m", "tracked runtime");
+  await runFixtureGit(root, "pull", "--ff-only");
+  const beforeSha = await runFixtureGit(root, "rev-parse", "HEAD");
+  await runFixtureGit(remote, "rm", asset);
+  return { beforeSha, asset: path.join(root, asset) };
 }
 
 export async function resolveCandidateNodeRuntimeForTest(): Promise<{
@@ -45,13 +125,20 @@ export async function expectCancelledGitCandidateCleanup({
   fixture: { localRoot, baseSha, targetSha },
   pnpmVersion,
   runRealGit,
+  progress,
+  onAbort,
 }: {
   phase: "build" | "locked worktree creation";
   fixture: { localRoot: string; baseSha: string; targetSha: string };
   pnpmVersion: string;
   runRealGit: (cwd: string, ...args: string[]) => Promise<string>;
+  progress?: UpdateStepProgress;
+  onAbort?: () => void;
 }) {
   const controller = new AbortController();
+  if (onAbort) {
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+  }
   const stopped = new Error("preflight owner stopped");
   const beforeGitMutation = vi.fn(async () => {
     throw new Error("cancelled update reached mutation");
@@ -116,6 +203,7 @@ export async function expectCancelledGitCandidateCleanup({
           signal: options.signal ?? controller.signal,
         }),
       opts: {
+        progress,
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
         inspectGitTarget: async () => {},
         validateCandidate: async () => {
@@ -126,9 +214,23 @@ export async function expectCancelledGitCandidateCleanup({
           throw new Error("cancelled update reached Doctor");
         },
       },
+    }).catch((error: unknown) => {
+      if (
+        !progress ||
+        !controller.signal.aborted ||
+        hasCommandProcessCleanupError(error) ||
+        !collectNestedErrorCandidates(error).some(
+          (cause) => cause instanceof UpdateRequesterRevokedError,
+        )
+      ) {
+        throw error;
+      }
+      return undefined;
     });
     expect(controller.signal.reason).toBe(stopped);
-    expect(result.status).toBe("error");
+    if (result) {
+      expect(result.status).toBe("error");
+    }
     expect(beforeGitMutation).not.toHaveBeenCalled();
   } finally {
     commandSpy.mockRestore();
@@ -235,7 +337,7 @@ export async function writeRuntime(directory: string, sha: string, store: string
   ]);
 }
 
-export async function expectRuntime(root: string, sha: string) {
+export async function expectRuntime(root: string, sha: string, trackedAsset?: string) {
   const child = await processExec.runCommandWithTimeout(
     [process.execPath, path.join(root, "dist", "entry.js")],
     {
@@ -244,204 +346,10 @@ export async function expectRuntime(root: string, sha: string) {
   );
   expect(child.code, child.stderr).toBe(0);
   expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
-}
-
-export function registerGitActivationDoctorOutcomeTests(
-  getFixture: () => {
-    root: string;
-    beforeSha: string;
-    events: string[];
-    isStopped: () => boolean;
-    advanceRemote: () => Promise<string>;
-    git: (root: string, ...args: string[]) => Promise<string>;
-    update: (
-      opts: Pick<UpdateRunnerOptions, "runGitDoctor" | "onTransaction">,
-    ) => Promise<UpdateRunResult>;
-    expectNoRuntimeStagingPaths: () => Promise<void>;
-  },
-) {
-  it.each(["restore", "complete", "cleanup-failed", "source-changed", "runtime-changed"] as const)(
-    "retains the activated Git transaction through finalization: %s",
-    async (outcome) => {
-      const { root, beforeSha, advanceRemote, git, update, expectNoRuntimeStagingPaths } =
-        getFixture();
-      const targetSha = await advanceRemote();
-      let retained: PackageUpdateTransaction | undefined;
-      const result = await update({
-        onTransaction: (transaction) => {
-          retained = transaction;
-        },
-      });
-      expect(result.status).toBe("ok");
-      assert(retained, "Finalization must receive the retained Git runtime transaction");
-      await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
-      expect(result.gitRuntime).toEqual({
-        commit: targetSha,
-        distDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
-      });
-      if (outcome === "cleanup-failed") {
-        const remove = fs.rm.bind(fs);
-        const backupRoot = retained.backupRoot;
-        const removal = vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
-          if (entry === backupRoot) {
-            throw Object.assign(new Error("backup cleanup denied"), { code: "EACCES" });
-          }
-          return remove(entry, options);
-        });
-        try {
-          const warning = await retained.complete({ activationVerified: true }, () => {});
-          expect(warning).toMatchObject({
-            advisory: {
-              kind: "recoverable-maintenance",
-              message: expect.stringContaining(backupRoot),
-            },
-          });
-          expect(await retained.complete({ activationVerified: true }, () => {})).toBe(warning);
-          await expectRuntime(root, targetSha);
-          await expect(fs.stat(backupRoot)).resolves.toBeDefined();
-        } finally {
-          removal.mockRestore();
-        }
-        return;
-      }
-      if (outcome === "complete") {
-        await retained.complete({ activationVerified: true }, () => {});
-        await expectRuntime(root, targetSha);
-        await expectNoRuntimeStagingPaths();
-        return;
-      }
-      if (outcome === "source-changed") {
-        await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
-        await expect(retained.rollback(() => {})).rejects.toThrow("changed after activation");
-        await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow(
-          "changed after activation",
-        );
-        expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
-        expect(await fs.readFile(path.join(root, "operator-edit.txt"), "utf8")).toBe(
-          "preserve this edit\n",
-        );
-        await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
-        return;
-      } else if (outcome === "runtime-changed") {
-        await fs.writeFile(path.join(root, "dist", "operator-chunk.mjs"), "export {};\n");
-      }
-      const restored = await retained.rollback(() => {});
-      expect(restored.exitCode).toBe(0);
-      await retained.complete({ activationVerified: false }, () => {});
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-      await expectRuntime(root, beforeSha);
-      await expectNoRuntimeStagingPaths();
-    },
-  );
-  it.each([
-    ["success", undefined],
-    ["config-refused", "repair-requires-config-change"],
-    ["requester-revoked", "requester-revoked"],
-    ["doctor-error", "doctor-failed"],
-    ["doctor-zero-exit-timeout", "doctor-failed"],
-    ["doctor-zero-exit-output-limit", "doctor-failed"],
-    ["doctor-throw", "unexpected-error"],
-    ["cleanup-uncertain", undefined],
-    ["missing", "doctor-entry-missing"],
-  ] as const)(
-    "uses the CLI activation Doctor and preserves its outcome: %s",
-    async (outcome, reason) => {
-      const {
-        root,
-        beforeSha,
-        events,
-        isStopped,
-        advanceRemote,
-        git,
-        update,
-        expectNoRuntimeStagingPaths,
-      } = getFixture();
-      const targetSha = await advanceRemote();
-      const configChanges: UpdateDoctorConfigChange[] = [{ kind: "key", key: "agents" }];
-      const cleanupError = new Error("Doctor child cleanup remains unresolved", {
-        cause: new CommandProcessCleanupError(),
-      });
-      const runGitDoctor = vi.fn(async (doctorRoot: string) => {
-        expect(isStopped()).toBe(true);
-        await expectRuntime(doctorRoot, targetSha);
-        events.push("owned-doctor");
-        if (outcome === "requester-revoked") {
-          throw new UpdateRequesterRevokedError();
-        }
-        if (outcome === "doctor-throw") {
-          throw new Error("Doctor failed after starting migration");
-        }
-        if (outcome === "cleanup-uncertain") {
-          throw cleanupError;
-        }
-        if (outcome === "missing") {
-          return null;
-        }
-        return {
-          name: "openclaw doctor",
-          command: "candidate doctor",
-          cwd: doctorRoot,
-          durationMs: 1,
-          exitCode: outcome === "success" || outcome.startsWith("doctor-zero-exit-") ? 0 : 1,
-          ...(outcome === "doctor-zero-exit-timeout" ? { termination: "timeout" as const } : {}),
-          ...(outcome === "doctor-zero-exit-output-limit" ? { outputLimitExceeded: true } : {}),
-          configChanges,
-          ...(outcome === "config-refused"
-            ? {
-                configWriteRefusal: {
-                  reason: "include-ownership",
-                  message: "An included file owns the pending config change.",
-                  keys: ["agents"],
-                },
-              }
-            : {}),
-        };
-      });
-
-      const running = update({ runGitDoctor });
-      if (outcome === "cleanup-uncertain") {
-        await expect(running).rejects.toBe(cleanupError);
-        expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root, []);
-        expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
-        expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
-        await expectRuntime(root, targetSha);
-        const backups = (await fs.readdir(root)).filter(
-          (entry) => entry.startsWith("dist.openclaw-update-") && entry.endsWith(".tmp"),
-        );
-        expect(backups).toHaveLength(1);
-        const backup = backups[0];
-        assert(backup);
-        expect(
-          JSON.parse(
-            await fs.readFile(path.join(root, backup, "previous", "build-info.json"), "utf8"),
-          ),
-        ).toMatchObject({ commit: beforeSha, buildId: beforeSha });
-        return;
-      }
-      const result = await running;
-
-      expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root, []);
-      expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
-      expect(result.status).toBe(outcome === "success" ? "ok" : "error");
-      expect(result.reason).toBe(reason);
-      const expectedSha = outcome === "missing" ? beforeSha : targetSha;
-      expect(await git(root, "rev-parse", "HEAD")).toBe(expectedSha);
-      await expectRuntime(root, expectedSha);
-      await expectNoRuntimeStagingPaths();
-      if (outcome !== "success") {
-        expect(result.recovery).toMatchObject(
-          outcome === "missing"
-            ? { serviceRestartSafe: true, buildId: beforeSha }
-            : { serviceRestartSafe: false, reason: "state-migration-started" },
-        );
-      }
-      if (outcome !== "requester-revoked" && outcome !== "doctor-throw" && outcome !== "missing") {
-        expect(result.steps.find((step) => step.name === "openclaw doctor")?.configChanges).toEqual(
-          configChanges,
-        );
-      }
-    },
-  );
+  if (trackedAsset) {
+    expect(await fs.readFile(trackedAsset, "utf8")).toBe("original tracked runtime\n");
+    expect(await runFixtureGit(root, "diff", "--name-only", "HEAD")).toBe("");
+  }
 }
 
 export function registerGitRuntimeStagingTests(
@@ -648,4 +556,16 @@ export function registerGitRuntimeRestorationTests(
       await expect(fs.stat(path.dirname(distBackup))).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+}
+
+export async function expectNoGitRuntimeStagingPaths(root: string, inspectionRoots: string[]) {
+  for (const inspectionRoot of inspectionRoots) {
+    await expect(fs.stat(inspectionRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  const entries = await fs.readdir(root, { recursive: true });
+  expect(
+    entries.filter((entry) =>
+      /\.openclaw-update-[0-9a-f]{8}-[0-9a-f-]{27}\.tmp(?:\/|$)/u.test(entry),
+    ),
+  ).toEqual([]);
 }

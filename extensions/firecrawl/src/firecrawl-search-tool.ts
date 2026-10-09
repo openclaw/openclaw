@@ -1,4 +1,3 @@
-// Firecrawl plugin module implements firecrawl search tool behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
@@ -87,35 +86,23 @@ export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
       signal?: AbortSignal,
     ) => {
       signal?.throwIfAborted();
-      const query = readStringParam(rawParams, "query", { required: true });
-      const count = readPositiveIntegerParam(rawParams, "count", {
-        max: 100,
-        message: "count must be an integer from 1 to 100",
-      });
-      const timeoutSeconds = readPositiveIntegerParam(rawParams, "timeoutSeconds");
-      const sources = readStringArrayParam(rawParams, "sources");
-      const categories = readStringArrayParam(rawParams, "categories");
-      const includeDomains = readStringArrayParam(rawParams, "includeDomains");
-      const excludeDomains = readStringArrayParam(rawParams, "excludeDomains");
-      const tbs = readStringParam(rawParams, "tbs");
-      const location = readStringParam(rawParams, "location");
-      const country = readStringParam(rawParams, "country");
-      const scrapeResults = rawParams.scrapeResults === true;
-
       return jsonResult(
         await runFirecrawlSearch({
+          query: readStringParam(rawParams, "query", { required: true }),
+          count: readPositiveIntegerParam(rawParams, "count", {
+            max: 100,
+            message: "count must be an integer from 1 to 100",
+          }),
+          timeoutSeconds: readPositiveIntegerParam(rawParams, "timeoutSeconds"),
+          sources: readStringArrayParam(rawParams, "sources"),
+          categories: readStringArrayParam(rawParams, "categories"),
+          includeDomains: readStringArrayParam(rawParams, "includeDomains"),
+          excludeDomains: readStringArrayParam(rawParams, "excludeDomains"),
+          tbs: readStringParam(rawParams, "tbs"),
+          location: readStringParam(rawParams, "location"),
+          country: readStringParam(rawParams, "country"),
+          scrapeResults: rawParams.scrapeResults === true,
           cfg: api.config,
-          query,
-          count,
-          timeoutSeconds,
-          sources,
-          categories,
-          includeDomains,
-          excludeDomains,
-          tbs,
-          location,
-          country,
-          scrapeResults,
           ...(signal ? { signal } : {}),
         }),
       );

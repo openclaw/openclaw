@@ -48,43 +48,24 @@ const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedSessionDelivery>();
 
-async function notifySessionDeliverySettled(params: {
+async function finalizeSessionDeliverySettlement(params: {
   entry: QueuedSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
   outcome: SessionDeliverySettledOutcome;
   queueContext: OpenClawStateWorkerContext;
 }): Promise<boolean> {
+  let phase = "settled callback";
   try {
     params.queueContext.admission.assertCurrent();
     await params.onSettled?.(params.entry, params.outcome, params.queueContext);
+    phase = `${params.outcome} finalization`;
+    const finalize =
+      params.outcome === "recovered" ? completeSessionDelivery : moveSessionDeliveryToFailed;
+    await finalize(params.entry.id, params.queueContext);
     return true;
   } catch (error) {
-    params.log.error(
-      `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
-    );
-    return false;
-  }
-}
-
-async function finalizeSessionDeliverySettlement(
-  params: Parameters<typeof notifySessionDeliverySettled>[0],
-): Promise<boolean> {
-  const callbackSettled = await notifySessionDeliverySettled(params);
-  if (!callbackSettled) {
-    return false;
-  }
-  try {
-    if (params.outcome === "recovered") {
-      await completeSessionDelivery(params.entry.id, params.queueContext);
-    } else {
-      await moveSessionDeliveryToFailed(params.entry.id, params.queueContext);
-    }
-    return true;
-  } catch (error) {
-    params.log.error(
-      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${String(error)}`,
-    );
+    params.log.error(`session delivery: ${phase} failed for ${params.entry.id}: ${String(error)}`);
     return false;
   }
 }
@@ -93,18 +74,6 @@ function resolvePendingSettlementOutcome(
   entry: QueuedSessionDelivery,
 ): SessionDeliverySettledOutcome | undefined {
   return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
-}
-
-function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
-  return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
-}
-
-function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDelivery): boolean {
-  return (
-    entry.kind === "agentTurn" &&
-    entry.deliveryStartedAt !== undefined &&
-    entry.retryCount === resolveSessionDeliveryMaxRetries(entry)
-  );
 }
 
 function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: number) {
@@ -121,6 +90,7 @@ function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: numbe
 }
 
 type SessionDeliveryDrainContext = {
+  now?: () => number;
   logLabel: string;
   log: SessionDeliveryRecoveryLogger;
   queueContext: OpenClawStateWorkerContext;
@@ -145,10 +115,12 @@ async function processPendingSessionDelivery(opts: {
     });
     return { status: pendingSettlementOutcome, finalized };
   }
-  if (
-    !canReconcileStartedAgentAttemptAtRetryLimit(entry) &&
-    entry.retryCount >= resolveSessionDeliveryMaxRetries(entry)
-  ) {
+  const maxRetries = entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+  const canReconcileStartedAgentAttempt =
+    entry.kind === "agentTurn" &&
+    entry.deliveryStartedAt !== undefined &&
+    entry.retryCount === maxRetries;
+  if (!canReconcileStartedAgentAttempt && entry.retryCount >= maxRetries) {
     await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
     const finalized = await finalizeSessionDeliverySettlement({
       ...context,
@@ -159,7 +131,7 @@ async function processPendingSessionDelivery(opts: {
   }
 
   if (!opts.bypassBackoff) {
-    const retryEligibility = resolveSessionRetryEligibility(entry, Date.now());
+    const retryEligibility = resolveSessionRetryEligibility(entry, (context.now ?? Date.now)());
     if (!retryEligibility.eligible) {
       return {
         status: "backoff",

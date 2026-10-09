@@ -54,7 +54,7 @@ const failureFamilies = {
     "head-verification-failed",
     "target-sha-mismatch",
   ],
-  schema: ["database-schema-preflight", "invalid-config"],
+  schema: ["database-schema-preflight", "invalid-config", "config-read-failed"],
   doctor: [
     "post-update-failed",
     "doctor-failed",
@@ -93,28 +93,6 @@ function validateTriagePendingMigrations(
     formatDeferredPluginMigration(pending, env),
   );
   return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
-}
-
-async function readGitHead(params: {
-  installRoot: string;
-  env: NodeJS.ProcessEnv;
-  signal: AbortSignal;
-}): Promise<string | undefined> {
-  const head = await runUtf8CommandWithTimeout(
-    ["git", "-C", params.installRoot, "rev-parse", "HEAD"],
-    {
-      signal: params.signal,
-      env: params.env,
-      input: "",
-      killProcessTree: true,
-      maxOutputBytes: 4096,
-      terminateOnOutputLimit: true,
-    },
-  );
-  params.signal.throwIfAborted();
-  return head.code === 0 && head.termination === "exit" && !head.outputLimitExceeded
-    ? head.stdout.trim() || undefined
-    : undefined;
 }
 
 /** Resolve the attributed blocker without rewriting the updater's historical outcome. */
@@ -240,7 +218,19 @@ export async function validateTriageUpdateResolution(params: {
   }
   let errors: string[];
   if (target.kind === "git") {
-    const head = await readGitHead(params);
+    const probe = await runUtf8CommandWithTimeout(["git", "-C", installRoot, "rev-parse", "HEAD"], {
+      signal,
+      env,
+      input: "",
+      killProcessTree: true,
+      maxOutputBytes: 4096,
+      terminateOnOutputLimit: true,
+    });
+    signal.throwIfAborted();
+    const head =
+      probe.code === 0 && probe.termination === "exit" && !probe.outputLimitExceeded
+        ? probe.stdout.trim() || undefined
+        : undefined;
     if (!head || (expected.sha && head !== expected.sha)) {
       return unresolved("The checkout does not match the updater's recorded commit.");
     }

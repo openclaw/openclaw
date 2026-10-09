@@ -13,6 +13,7 @@ import {
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   registerServiceInstallationConvergenceTests,
@@ -50,7 +51,7 @@ const mocks = vi.hoisted(() => ({
     >(),
   revalidateService:
     vi.fn<
-      typeof import("./update-command-service.js").revalidateManagedGatewayServiceAfterUpdate
+      typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
     >(),
   updatePlugins: vi.fn(),
   writeSentinel: vi.fn<
@@ -114,11 +115,14 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
 vi.mock("./update-command-plugins.js", () => ({
   updatePluginsAfterCoreUpdate: mocks.updatePlugins,
 }));
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restartService,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopService,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-result.js")>()),
@@ -179,6 +183,10 @@ describe("successful update finalization ordering", () => {
   });
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
+  registerCurrentCoreServiceReceiptTests({
+    makeHome: () => tempDirs.make("current-core-service-receipt-"),
+    mocks,
+  });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
 
   it("keeps an absent service out of already-current maintenance steps", async () => {
@@ -309,10 +317,15 @@ describe("successful update finalization ordering", () => {
         events.push("start");
         return "ok";
       });
-      const finishing = finishSuccessfulPackageSwitch({
-        restartEnvironment: process.env,
-        windowsTaskAutoStartRecovery: recovery,
-      });
+      const onGatewayStartAttempted = vi.fn(() => events.push("activation-attempt"));
+      const finishing = finishSuccessfulPackageSwitch(
+        {
+          restartEnvironment: process.env,
+          windowsTaskAutoStartRecovery: recovery,
+        },
+        {},
+        { onGatewayStartAttempted },
+      );
       try {
         try {
           await Promise.race([
@@ -323,6 +336,7 @@ describe("successful update finalization ordering", () => {
           ]);
           expect.soft(mocks.restartService).not.toHaveBeenCalled();
           expect.soft(recovery.restore).not.toHaveBeenCalled();
+          expect.soft(onGatewayStartAttempted).not.toHaveBeenCalled();
         } finally {
           release.resolve();
         }
@@ -332,6 +346,9 @@ describe("successful update finalization ordering", () => {
       }
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("start"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
+      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
     },
@@ -796,7 +813,10 @@ describe("successful update finalization ordering", () => {
           ...(restartFailed ? ["rollback"] : []),
         ]);
         expect(mocks.stopService).not.toHaveBeenCalled();
-        expect(oldRecovery.restore).toHaveBeenCalledWith(true, expect.any(Function), undefined);
+        expect(oldRecovery.restore.mock.lastCall?.slice(0, 2)).toEqual([
+          true,
+          expect.any(Function),
+        ]);
         expect(oldRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
         expect(windowsEvents.at(-1)).toBe("old-complete");
         expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({

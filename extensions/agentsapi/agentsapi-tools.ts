@@ -1,3 +1,4 @@
+import type { AgentToolParam } from "openai/resources/beta/agents/agents";
 import {
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
@@ -50,11 +51,8 @@ import {
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  AgentsApiFunctionCall,
-  AgentsApiFunctionDeclaration,
-  AgentsApiFunctionResult,
-} from "./agentsapi-client.js";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import type { AgentsApiFunctionCall, AgentsApiFunctionResult } from "./agentsapi-client.js";
 import { recordAgentsApiToolTranscript } from "./agentsapi-transcript.js";
 
 type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
@@ -70,7 +68,7 @@ export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
 };
 
 export type AgentsApiToolSurface = {
-  declarations: AgentsApiFunctionDeclaration[];
+  declarations: AgentToolParam.AgentToolConfigParamFunction[];
   execute: (call: AgentsApiFunctionCall) => Promise<AgentsApiToolExecutionResult>;
   delivery: ToolDelivery;
   runtimeFacts: Pick<AgentHarnessAttemptResult, "acceptedSessionSpawns">;
@@ -79,12 +77,12 @@ export type AgentsApiToolSurface = {
 };
 
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
-export function buildAgentsApiToolSurface(
+export async function buildAgentsApiToolSurface(
   params: AgentHarnessAttemptParamsV2,
   signal: AbortSignal,
   assertCurrent: () => void,
   registerCleanup: (cleanup: (reason: string) => Promise<void>) => void,
-): AgentsApiToolSurface {
+): Promise<AgentsApiToolSurface> {
   assertCurrent();
   const agentId = params.agentId;
   if (!agentId) {
@@ -100,13 +98,13 @@ export function buildAgentsApiToolSurface(
     ...params,
     sessionKey: policySessionKey,
   }).channelId;
-  const createToolSurface = params.hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = params.hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Agents API tool construction requires a current host capability");
   }
   const constructed = params.disableTools
     ? []
-    : createToolSurface(
+    : await createToolSurfaceAsync(
         {
           ...runContext,
           agentId,
@@ -170,6 +168,8 @@ export function buildAgentsApiToolSurface(
         },
         { cwd },
       );
+  assertCurrent();
+  signal.throwIfAborted();
   const tools = applyEmbeddedAttemptToolsAllow(
     // Search stays native; requester yields and image generation are outside this prototype.
     constructed.filter(
@@ -210,12 +210,14 @@ export function buildAgentsApiToolSurface(
       };
     });
   const toolMap = new Map(entries.map((entry) => [entry.tool.name, entry]));
-  const declarations: AgentsApiFunctionDeclaration[] = entries.map(({ tool, schema }) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: schema,
-  }));
+  const declarations: AgentToolParam.AgentToolConfigParamFunction[] = entries.map(
+    ({ tool, schema }) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: schema,
+    }),
+  );
   const middleware = createAgentToolResultMiddlewareRunner({
     runtime: "agentsapi",
     agentId,
@@ -266,16 +268,13 @@ export function buildAgentsApiToolSurface(
       let asyncTaskIds: ReturnType<typeof readAsyncStartedTaskIds> = {};
       let sourceReplyDelivered = false;
       let terminate = false;
-      const captureArguments = () => {
-        executionBoundary.capture();
-        executedArgs = executionBoundary.executedArguments;
-      };
       const observeTerminal = (result: unknown, outcome: "success" | "failure", error?: string) => {
         if (terminalObserved) {
           return;
         }
         terminalObserved = true;
-        captureArguments();
+        executionBoundary.capture();
+        executedArgs = executionBoundary.executedArguments;
         const ownerKey = entry ? getPluginToolSideEffectOwnerKey(entry.tool) : undefined;
         const pluginMeta = entry ? getPluginToolMeta(entry.tool) : undefined;
         const resolution = params.observeToolTerminal?.({
@@ -377,7 +376,7 @@ export function buildAgentsApiToolSurface(
         hasRepliedRef: params.hasRepliedRef ? { value: params.hasRepliedRef.value } : undefined,
       };
       const { transcriptResult, ...nativeResult } = await runAgentHarnessToolInvocation<
-        AgentsApiToolExecutionResult & {
+        AgentsApiFunctionResult & {
           transcriptResult: Awaited<ReturnType<AnyAgentTool["execute"]>>;
         }
       >({
@@ -495,8 +494,6 @@ export function buildAgentsApiToolSurface(
             ...(isError
               ? { success: false as const, error: text }
               : { success: true as const, output: text }),
-            ...(sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
-            ...(terminate ? { terminate: true as const } : {}),
           };
         },
         onError: ({
@@ -515,10 +512,7 @@ export function buildAgentsApiToolSurface(
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
-          const failed = {
-            content: [{ type: "text" as const, text: message }],
-            details: { status: disposition, error: message },
-          };
+          const failed = textResult(message, { status: disposition, error: message });
           observeTerminal(rawResult ?? error, "failure", message);
           finishPresentation(failed, true);
           signal.throwIfAborted();
@@ -528,8 +522,6 @@ export function buildAgentsApiToolSurface(
             transcriptResult: failed,
             success: false,
             error: sliceToolResultTextToBudget(message, maxChars),
-            ...(sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
-            ...(terminate ? { terminate: true } : {}),
           };
         },
       });
@@ -540,7 +532,11 @@ export function buildAgentsApiToolSurface(
         !nativeResult.success,
         assertCurrent,
       );
-      return nativeResult;
+      return {
+        ...nativeResult,
+        ...(sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
+        ...(terminate ? { terminate: true as const } : {}),
+      };
     },
   };
 }

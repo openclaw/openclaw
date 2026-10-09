@@ -1,4 +1,3 @@
-// Test Skip Inventory tests cover skipped, conditional, todo, and focused test reporting.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -85,112 +84,28 @@ describe("collectTestSkipInventoryReport", () => {
     const report = collectTestSkipInventoryReport({ repoRoot: makeSkipInventoryFixture() });
 
     expect(
-      report.findings.map((finding) => ({
-        file: finding.file,
-        kind: finding.kind,
-        method: finding.method,
-        reason: finding.reason,
-        target: finding.target,
-      })),
+      report.findings.map(({ file, kind, method, reason, target }) => [
+        file,
+        kind,
+        method,
+        reason,
+        target,
+      ]),
     ).toEqual([
-      {
-        file: "extensions/provider/live.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "live-gate",
-        target: "describe",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skip",
-        reason: "explicit-skip",
-        target: "describe",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skipIf",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "todo",
-        reason: "todo",
-        target: "test",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "only",
-        reason: "focused-only",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skip",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "runIf",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "runIf",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "conditional-skip",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "only",
-        reason: "focused-only",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skip",
-        reason: "explicit-skip",
-        target: "test",
-      },
-      {
-        file: "test/scripts/test-live.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "ui/src/e2e/chat-flow.e2e.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "optional-dependency",
-        target: "describe",
-      },
+      ["extensions/provider/live.test.ts", "alias", "skip", "live-gate", "describe"],
+      ["src/example.test.ts", "call", "skip", "explicit-skip", "describe"],
+      ["src/example.test.ts", "call", "skipIf", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "todo", "todo", "test"],
+      ["src/example.test.ts", "call", "only", "focused-only", "it"],
+      ["src/example.test.ts", "alias", "skip", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "skip", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "runIf", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "runIf", "platform-gate", "it"],
+      ["src/example.test.ts", "alias", "skip", "conditional-skip", "it"],
+      ["src/example.test.ts", "call", "only", "focused-only", "it"],
+      ["src/example.test.ts", "call", "skip", "explicit-skip", "test"],
+      ["test/scripts/test-live.test.ts", "alias", "skip", "platform-gate", "it"],
+      ["ui/src/e2e/chat-flow.e2e.test.ts", "alias", "skip", "optional-dependency", "describe"],
     ]);
     expect(report.summary).toMatchObject({
       findingCount: 14,

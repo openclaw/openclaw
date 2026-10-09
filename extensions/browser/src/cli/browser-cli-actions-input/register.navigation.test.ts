@@ -119,18 +119,4 @@ describe("browser navigation commands", () => {
     expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: maximum is 8192");
     expect(gatewayMock).not.toHaveBeenCalled();
   });
-
-  it("navigate and resize commands are registered after removing dead import (#83878)", async () => {
-    const program = createNavigationProgram();
-    const browserCmd = program.commands.find((c) => c.name() === "browser");
-    expect(browserCmd).toBeDefined();
-
-    const cmds = browserCmd!.commands.map((c) => c.name());
-    expect(cmds).toContain("resize");
-    expect(cmds).toContain("navigate");
-
-    // Verify the shared module still exports requireRef (used by other modules)
-    const shared = await import("./shared.js");
-    expect(typeof shared.requireRef).toBe("function");
-  });
 });

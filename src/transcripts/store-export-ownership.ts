@@ -1,6 +1,6 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
@@ -140,10 +140,9 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
     if (metadataStat.isSymbolicLink() || !metadataStat.isFile()) {
       return false;
     }
-    let handle;
     try {
-      handle = await fs.open(metadataPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-      const metadata = JSON.parse(await handle.readFile("utf8")) as {
+      const { buffer } = await readRegularFile({ filePath: metadataPath });
+      const metadata = JSON.parse(buffer.toString("utf8")) as {
         sessionId?: unknown;
         startedAt?: unknown;
       };
@@ -152,8 +151,6 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
       );
     } catch {
       return false;
-    } finally {
-      await handle?.close();
     }
   }
   if (!owner && !metadataArtifact) {

@@ -321,9 +321,9 @@ export async function mutateManagedPluginEnabled(
         }))
       : await readPluginMutationSnapshot(env, beforePersistentApply);
     const metadata = loadFreshManagedPluginMetadata(snapshot.config, env);
-    const pluginId = cli
-      ? normalizePluginId(params.pluginId)
-      : metadata.normalizePluginId(params.pluginId.trim());
+    const pluginId = metadata.normalizePluginId(
+      cli ? normalizePluginId(params.pluginId) : params.pluginId.trim(),
+    );
     const installedPlugin = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
     if (!installedPlugin) {
       return { status: "missing" as const, pluginId };
@@ -351,8 +351,7 @@ export async function mutateManagedPluginEnabled(
       await resolveConsent();
     }
     let next = snapshot.config;
-    const slotWarnings: string[] = [];
-    let policyPluginId = pluginId;
+    let policyPluginId = normalizePluginId(pluginId);
     if (params.enabled) {
       // Admin selection admits one installed plugin; CLI preserves restrictive policy.
       if (!preserveAllowlist && (next.plugins?.allow?.length ?? 0) > 0) {
@@ -374,14 +373,7 @@ export async function mutateManagedPluginEnabled(
       // still needs the enabled config to resolve legacy runtime-only kinds.
       const slotMetadata = cli && !isBundledManifestOwner(installedPlugin) ? undefined : metadata;
       beforePersistentApply();
-      const slotResult = await applySlotSelectionForPlugin(
-        next,
-        pluginId,
-        slotMetadata,
-        beforePersistentApply,
-      );
-      next = slotResult.config;
-      slotWarnings.push(...slotResult.warnings);
+      next = await applySlotSelectionForPlugin(next, pluginId, slotMetadata, beforePersistentApply);
     } else {
       next = setPluginEnabledInConfig(next, pluginId, false, { updateChannelConfig: false });
     }
@@ -421,9 +413,7 @@ export async function mutateManagedPluginEnabled(
       pluginId,
       config: next,
       changedPaths: [...changedPaths].filter(Boolean).toSorted(),
-      warnings: cli
-        ? [...registryWarnings, ...slotWarnings]
-        : [...slotWarnings, ...registryWarnings],
+      warnings: registryWarnings,
     };
   });
 }
@@ -554,6 +544,7 @@ export async function reloadManagedPlugin(
         config,
         pluginIds,
         reason: "reload",
+        ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
         ...(resolved.every((target) => target.install !== undefined)
           ? {

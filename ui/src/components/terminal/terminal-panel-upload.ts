@@ -1,10 +1,13 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
 import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
+import { renderPanelIconButton } from "../panel-icon-button.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   encodeTerminalUpload,
@@ -20,6 +23,7 @@ type TerminalUploadTab = {
 };
 
 type TerminalPanelUploadHost = {
+  config?: () => ApplicationConfigCapability | undefined;
   activeTab: () => TerminalUploadTab | undefined;
   client: () => TerminalGatewayClient | null;
   isCurrent: (tab: TerminalUploadTab) => boolean;
@@ -40,17 +44,6 @@ type TerminalUploadBatch = {
   abortController: AbortController;
 };
 
-type TerminalUploadProgress = {
-  completed: number;
-  canInsert: boolean;
-  current: number;
-  error: string | null;
-  fileName: string;
-  retryable: boolean;
-  state: TerminalUploadBatch["state"];
-  total: number;
-};
-
 function isRetryableUploadError(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "retryable" in error) {
     const gatewayError = error as { gatewayCode?: unknown; code?: unknown; retryable?: unknown };
@@ -69,6 +62,27 @@ export class TerminalPanelUploadController {
 
   constructor(private readonly host: TerminalPanelUploadHost) {}
 
+  uploadsEnabled(): boolean {
+    return uploadsEnabled(this.host.config?.());
+  }
+
+  syncPolicy(): void {
+    if (!this.uploadsEnabled()) {
+      this.cancel();
+      this.dragActive = false;
+      this.dragDepth = 0;
+    }
+  }
+
+  private admitUpload(): boolean {
+    if (this.uploadsEnabled()) {
+      return true;
+    }
+    this.host.setError(uploadsDisabledMessage());
+    this.syncPolicy();
+    return false;
+  }
+
   hasActiveTab(): boolean {
     return Boolean(this.host.activeTab());
   }
@@ -77,7 +91,7 @@ export class TerminalPanelUploadController {
     return this.batch !== null;
   }
 
-  get progress(): TerminalUploadProgress | null {
+  get progress() {
     const batch = this.batch;
     if (!batch) {
       return null;
@@ -98,11 +112,17 @@ export class TerminalPanelUploadController {
   }
 
   chooseFiles = (): void => {
-    this.host.fileInput()?.click();
+    if (this.admitUpload()) {
+      this.host.fileInput()?.click();
+    }
   };
 
   handleFileSelection = (event: Event): void => {
     const input = event.currentTarget as HTMLInputElement;
+    if (!this.admitUpload()) {
+      input.value = "";
+      return;
+    }
     const files = Array.from(input.files ?? []);
     input.value = "";
     this.uploadFiles(files);
@@ -112,8 +132,22 @@ export class TerminalPanelUploadController {
     return Array.from(event.dataTransfer?.types ?? []).includes("Files");
   }
 
+  private admitDraggedFiles(event: DragEvent): boolean {
+    if (!this.hasDraggedFiles(event)) {
+      return false;
+    }
+    if (!this.uploadsEnabled()) {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "none";
+      }
+      return false;
+    }
+    return this.hasActiveTab() && !this.hasPendingBatch();
+  }
+
   handleDragEnter = (event: DragEvent): void => {
-    if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
+    if (!this.admitDraggedFiles(event)) {
       return;
     }
     event.preventDefault();
@@ -123,7 +157,7 @@ export class TerminalPanelUploadController {
   };
 
   handleDragOver = (event: DragEvent): void => {
-    if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
+    if (!this.admitDraggedFiles(event)) {
       return;
     }
     event.preventDefault();
@@ -158,6 +192,9 @@ export class TerminalPanelUploadController {
   };
 
   private uploadFiles(files: File[]): void {
+    if (!this.admitUpload()) {
+      return;
+    }
     const tab = this.host.activeTab();
     if (files.length === 0 || !tab || !this.host.client() || this.hasPendingBatch()) {
       return;
@@ -185,6 +222,11 @@ export class TerminalPanelUploadController {
 
   private ensureCurrent(batch: TerminalUploadBatch): boolean {
     if (!this.isActive(batch)) {
+      return false;
+    }
+    if (!this.uploadsEnabled()) {
+      this.host.setError(uploadsDisabledMessage());
+      this.cancelBatch(batch);
       return false;
     }
     if (!this.host.isCurrent(batch.tab)) {
@@ -295,6 +337,9 @@ export class TerminalPanelUploadController {
   };
 
   retry = (): void => {
+    if (!this.admitUpload()) {
+      return;
+    }
     const batch = this.batch;
     if (!batch || batch.state !== "failed" || !batch.retryable) {
       return;
@@ -351,6 +396,7 @@ export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
   embedded?: boolean;
   dock: "bottom" | "right" | "main";
+  dockDisabled?: boolean;
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
   onDock: (dock: "bottom" | "right" | "main") => void;
@@ -358,75 +404,69 @@ export function renderTerminalPanelActions(params: {
   onHide: () => void;
 }) {
   return html`<div class="rail-header__actions tp-actions">
-    <button
-      class="rail-header__action tp-icon tp-upload"
-      type="button"
-      title=${t("terminal.addFiles")}
-      aria-label=${t("terminal.addFiles")}
-      ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
-      @click=${params.upload.chooseFiles}
-    >
-      ${icons.paperclip}
-    </button>
+    ${
+      params.upload.uploadsEnabled()
+        ? renderPanelIconButton({
+            className: "rail-header__action tp-icon tp-upload",
+            label: t("terminal.addFiles"),
+            icon: icons.paperclip,
+            disabled: params.upload.hasPendingBatch() || !params.upload.hasActiveTab(),
+            onClick: params.upload.chooseFiles,
+          })
+        : nothing
+    }
     ${
       params.fullscreen
         ? nothing
         : html`${params.sessionPicker}${
             params.embedded
-              ? html`<button
-                  class="rail-header__action tp-icon"
-                  type="button"
-                  title=${t("terminal.dockBottom")}
-                  aria-label=${t("terminal.dockBottom")}
-                  @click=${() => params.onDock("bottom")}
-                >
-                  ${icons.panelBottomOpen}
-                </button>`
+              ? renderPanelIconButton({
+                  className: "rail-header__action tp-icon",
+                  label: t("terminal.dockBottom"),
+                  icon: icons.panelBottomOpen,
+                  disabled: params.dockDisabled,
+                  onClick: () => params.onDock("bottom"),
+                })
               : html`${renderDockDestinations({
-                    current: params.dock,
-                    groupClass: "tp-dock-modes",
-                    groupLabel: t("terminal.dockMode"),
-                    destinations: [
-                      {
-                        dock: "bottom",
-                        label: t("terminal.dockBottom"),
-                        icon: icons.panelBottomOpen,
-                        className: "tp-icon",
-                      },
-                      {
-                        dock: "right",
-                        label: t("terminal.dockRight"),
-                        icon: icons.panelRightOpen,
-                        className: "tp-icon",
-                      },
-                      {
-                        dock: "main",
-                        label: t("terminal.dockMain"),
-                        icon: icons.columns2,
-                        className: "tp-icon",
-                      },
-                    ],
-                    onSelect: params.onDock,
-                  })}
-                  <button
-                    class="rail-header__action tp-icon tp-open-fullscreen"
-                    type="button"
-                    data-new-tab-action
-                    title=${t("terminal.openWindow")}
-                    aria-label=${t("terminal.openWindow")}
-                    @click=${params.onOpenFullscreen}
-                  >
-                    ${icons.maximize}
-                  </button>
-                  <button
-                    class="rail-header__action tp-icon"
-                    type="button"
-                    title=${t("terminal.hide")}
-                    aria-label=${t("terminal.hide")}
-                    @click=${params.onHide}
-                  >
-                    ${icons.x}
-                  </button>`
+                  current: params.dock,
+                  disabled: params.dockDisabled,
+                  groupClass: "tp-dock-modes",
+                  groupLabel: t("terminal.dockMode"),
+                  destinations: [
+                    {
+                      dock: "bottom",
+                      label: t("terminal.dockBottom"),
+                      icon: icons.panelBottomOpen,
+                      className: "tp-icon",
+                    },
+                    {
+                      dock: "right",
+                      label: t("terminal.dockRight"),
+                      icon: icons.panelRightOpen,
+                      className: "tp-icon",
+                    },
+                    {
+                      dock: "main",
+                      label: t("terminal.dockMain"),
+                      icon: icons.columns2,
+                      className: "tp-icon",
+                    },
+                  ],
+                  onSelect: params.onDock,
+                })}
+                ${renderPanelIconButton({
+                  className: "rail-header__action tp-icon tp-open-fullscreen",
+                  label: t("terminal.openWindow"),
+                  icon: icons.maximize,
+                  newTab: true,
+                  onClick: params.onOpenFullscreen,
+                })}
+                ${renderPanelIconButton({
+                  className: "rail-header__action tp-icon",
+                  label: t("terminal.hide"),
+                  icon: icons.x,
+                  onClick: params.onHide,
+                })}`
           }`
     }
   </div>`;

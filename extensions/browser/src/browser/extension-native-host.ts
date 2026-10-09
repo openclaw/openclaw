@@ -2,6 +2,7 @@ import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
 import { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.constants.js";
 import {
@@ -12,14 +13,6 @@ import {
   readBrowserNativeFrame,
 } from "./extension-native-protocol.js";
 const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}\/$/;
-
-type NativeHostManifest = {
-  name: string;
-  description: string;
-  path: string;
-  type: string;
-  allowed_origins: string[];
-};
 
 function validateExpectedOrigins(origins: string[]): string[] {
   const canonical = [...new Set(origins)].toSorted();
@@ -81,16 +74,13 @@ async function validateNativeManifest(params: {
     throw new Error("launcher is outside the managed root");
   }
   const parsed: unknown = JSON.parse(manifestFile.buffer.toString("utf8"));
-  const manifestRecord = asNullableRecord(parsed);
-  if (!manifestRecord) {
+  const manifest = asNullableRecord(parsed);
+  if (!manifest) {
     throw new Error("invalid manifest");
   }
-  const manifest = manifestRecord as NativeHostManifest;
   const expectedOrigins = validateExpectedOrigins(params.expectedOrigins);
-  const keys = ["name", "description", "path", "type", "allowed_origins"];
   if (
-    Object.keys(manifest).length !== keys.length ||
-    !keys.every((key) => Object.hasOwn(manifest, key)) ||
+    !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
     manifest.name !== BROWSER_NATIVE_HOST_NAME ||
     manifest.type !== "stdio" ||
     (process.platform === "win32"
@@ -153,15 +143,11 @@ export async function runBrowserNativeHost(params: {
         params.write(encodeBrowserNativeResponse(response));
         return response;
       }
-      if (decoded.request.op === "ensure_relay") {
-        try {
+      try {
+        if (decoded.request.op === "ensure_relay") {
           const relay = await params.ensureRelay(decoded.request.relayPort);
           response = { v: 1, ok: true, nonce: decoded.request.nonce, relay };
-        } catch {
-          response = { v: 1, ok: false, code: "relay_unavailable" };
-        }
-      } else {
-        try {
+        } else {
           const pairing = await params.buildPairing(boundProfile);
           response =
             pairing.topology === "direct-remote"
@@ -172,16 +158,18 @@ export async function runBrowserNativeHost(params: {
                   nonce: decoded.request.nonce,
                   pairingString: pairing.pairingString,
                 };
-        } catch (error) {
-          response = {
-            v: 1,
-            ok: false,
-            code:
-              error instanceof Error && error.message.includes("--gateway-url")
+        }
+      } catch (error) {
+        response = {
+          v: 1,
+          ok: false,
+          code:
+            decoded.request.op === "ensure_relay"
+              ? "relay_unavailable"
+              : error instanceof Error && error.message.includes("--gateway-url")
                 ? "manual_required"
                 : "pairing_unavailable",
-          };
-        }
+        };
       }
     }
   } catch {

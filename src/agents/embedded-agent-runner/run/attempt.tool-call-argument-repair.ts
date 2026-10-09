@@ -1,6 +1,3 @@
-/**
- * Repairs malformed tool-call arguments in embedded-agent stream results.
- */
 import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -16,10 +13,6 @@ const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
 const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
-const TOOLCALL_REPAIR_RESPONSES_APIS = new Set([
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-]);
 const TOOLCALL_REPAIR_SMART_QUOTES = new Set(["\u201c", "\u201d", "\u201e", "\u201f"]);
 const MAX_TOOLCALL_REPAIR_MEMBER_KEY_CHARS = 96;
 const TOOLCALL_REPAIR_KNOWN_ARG_KEYS = new Set([
@@ -74,10 +67,6 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
-const TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS = new Map<
-  string,
-  ReadonlyMap<string, readonly string[]>
->([["read", new Map([["path", ["offset", "limit"]]])]]);
 const TOOLCALL_REPAIR_JSON_STRING_ESCAPES: Record<string, string> = {
   '"': '"',
   "\\": "\\",
@@ -109,101 +98,85 @@ type ToolCallArgumentRepair = {
 };
 
 function isAllowedToolCallRepairLeadingPrefix(prefix: string): boolean {
-  if (!prefix) {
-    return true;
-  }
-  if (prefix.length > MAX_TOOLCALL_REPAIR_LEADING_CHARS) {
-    return false;
-  }
-  if (!TOOLCALL_REPAIR_ALLOWED_LEADING_RE.test(prefix)) {
-    return false;
-  }
-  return /^[.:'"`-]/.test(prefix) || /^(?:functions?|tools?)[._:/-]?/i.test(prefix);
-}
-
-function isWhitespace(char: string | undefined): boolean {
-  return char !== undefined && char.trim() === "";
+  return (
+    !prefix ||
+    (prefix.length <= MAX_TOOLCALL_REPAIR_LEADING_CHARS &&
+      TOOLCALL_REPAIR_ALLOWED_LEADING_RE.test(prefix) &&
+      (/^[.:'"`-]/.test(prefix) || /^(?:functions?|tools?)[._:/-]?/i.test(prefix)))
+  );
 }
 
 function skipWhitespace(raw: string, index: number): number {
-  for (let i = index; i < raw.length; i += 1) {
-    if (!isWhitespace(raw[i])) {
-      return i;
-    }
+  let next = index;
+  while (next < raw.length && raw[next]?.trim() === "") {
+    next += 1;
   }
-  return raw.length;
+  return next;
 }
 
 function isToolCallRepairSmartQuote(char: string | undefined): boolean {
   return char !== undefined && TOOLCALL_REPAIR_SMART_QUOTES.has(char);
 }
 
-type ToolCallRepairStringToken = {
-  value: string;
+type ToolCallRepairJsonValue<T = unknown> = {
+  value: T;
   endIndex: number;
 };
 
-type ToolCallRepairJsonValue = {
-  value: unknown;
-  endIndex: number;
-};
-
-type ToolCallRepairParsedObject = {
-  args: Record<string, unknown>;
-  endIndex: number;
-};
-
-function findAsciiStringEnd(raw: string, startIndex: number): number {
-  let escaped = false;
+function findAsciiQuotedStringEnd(raw: string, startIndex: number): number | undefined {
   for (let i = startIndex + 1; i < raw.length; i += 1) {
-    const char = raw[i];
-    if (escaped) {
-      escaped = false;
-    } else if (char === "\\") {
-      escaped = true;
-    } else if (char === '"') {
-      return i;
+    if (raw[i] === "\\") {
+      i += 1;
+    } else if (raw[i] === '"') {
+      return i + 1;
     }
   }
-  return -1;
+  return undefined;
 }
 
 function readAsciiQuotedString(
   raw: string,
   startIndex: number,
-): ToolCallRepairStringToken | undefined {
-  const endIndex = findAsciiStringEnd(raw, startIndex);
-  if (endIndex < 0) {
-    return undefined;
-  }
-  const parsed = safeParseJson(raw.slice(startIndex, endIndex + 1));
-  return typeof parsed === "string" ? { value: parsed, endIndex: endIndex + 1 } : undefined;
+): ToolCallRepairJsonValue<string> | undefined {
+  const endIndex = findAsciiQuotedStringEnd(raw, startIndex);
+  const parsed =
+    endIndex === undefined ? undefined : safeParseJson(raw.slice(startIndex, endIndex));
+  return typeof parsed === "string" && endIndex !== undefined
+    ? { value: parsed, endIndex }
+    : undefined;
 }
 
-function readSmartQuotedObjectKey(
+function readSmartQuotedString(
   raw: string,
   startIndex: number,
-): ToolCallRepairStringToken | undefined {
-  let value = "";
+  closesAt: (index: number) => boolean,
+  maxChars = Infinity,
+): ToolCallRepairJsonValue<string> | undefined {
   for (let i = startIndex + 1; i < raw.length; i += 1) {
-    const char = raw[i];
-    if (isToolCallRepairSmartQuote(char) && raw[skipWhitespace(raw, i + 1)] === ":") {
-      return { value, endIndex: i + 1 };
+    if (isToolCallRepairSmartQuote(raw[i]) && closesAt(i)) {
+      return { value: raw.slice(startIndex + 1, i), endIndex: i + 1 };
     }
-    value += char;
-    if (value.length > MAX_TOOLCALL_REPAIR_MEMBER_KEY_CHARS) {
+    if (i - startIndex > maxChars) {
       return undefined;
     }
   }
   return undefined;
 }
 
-function readObjectKey(raw: string, startIndex: number): ToolCallRepairStringToken | undefined {
+function readObjectKey(
+  raw: string,
+  startIndex: number,
+): ToolCallRepairJsonValue<string> | undefined {
   const char = raw[startIndex];
   return char === '"'
     ? readAsciiQuotedString(raw, startIndex)
     : isToolCallRepairSmartQuote(char)
-      ? readSmartQuotedObjectKey(raw, startIndex)
+      ? readSmartQuotedString(
+          raw,
+          startIndex,
+          (index) => raw[skipWhitespace(raw, index + 1)] === ":",
+          MAX_TOOLCALL_REPAIR_MEMBER_KEY_CHARS,
+        )
       : undefined;
 }
 
@@ -218,10 +191,7 @@ function readObjectMemberKeyAfterComma(raw: string, commaIndex: number): string 
 
 function normalizeToolCallRepairToolName(value: string): string | undefined {
   const trimmed = value.trim();
-  if (!/^[a-z0-9_-]{1,128}$/i.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return /^[a-z0-9_-]{1,128}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined;
 }
 
 function extractToolNameFromLeadingPrefix(prefix: string): string | undefined {
@@ -251,10 +221,7 @@ function shouldCloseSmartQuotedValueAt(
   if (!TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(valueKey)) {
     return (
       TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey) ||
-      (TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS.get(toolName ?? "")
-        ?.get(valueKey)
-        ?.includes(nextKey) ??
-        false)
+      (toolName === "read" && valueKey === "path" && (nextKey === "offset" || nextKey === "limit"))
     );
   }
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;
@@ -271,55 +238,24 @@ function decodeSmartQuotedJsonStringEscapes(value: string): string {
   });
 }
 
-function readSmartQuotedValue(
-  raw: string,
-  startIndex: number,
-  key: string,
-  toolName?: string,
-): ToolCallRepairJsonValue | undefined {
-  let value = "";
-  for (let i = startIndex + 1; i < raw.length; i += 1) {
-    const char = raw[i];
-    if (isToolCallRepairSmartQuote(char) && shouldCloseSmartQuotedValueAt(raw, i, key, toolName)) {
-      return { value: decodeSmartQuotedJsonStringEscapes(value), endIndex: i + 1 };
-    }
-    value += char;
-  }
-  return undefined;
-}
-
 function readJsonValue(raw: string, startIndex: number): ToolCallRepairJsonValue | undefined {
   let depth = 0;
-  let inString = false;
-  let escaped = false;
   for (let i = startIndex; i < raw.length; i += 1) {
     const char = raw[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
     if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{" || char === "[") {
+      const endIndex = findAsciiQuotedStringEnd(raw, i);
+      if (endIndex === undefined) {
+        return undefined;
+      }
+      i = endIndex - 1;
+    } else if (char === "{" || char === "[") {
       depth += 1;
-      continue;
-    }
-    if (char === "}" || char === "]") {
+    } else if (char === "}" || char === "]") {
       if (depth === 0) {
         return parseJsonValuePrefix(raw, startIndex, i);
       }
       depth -= 1;
-      continue;
-    }
-    if (char === "," && depth === 0) {
+    } else if (char === "," && depth === 0) {
       return parseJsonValuePrefix(raw, startIndex, i);
     }
   }
@@ -335,36 +271,27 @@ function parseJsonValuePrefix(
   return value === undefined ? undefined : { value, endIndex };
 }
 
-function readSmartQuotedEditArray(
+function readCommaSeparatedBody(
   raw: string,
   startIndex: number,
-): ToolCallRepairJsonValue | undefined {
-  if (raw[startIndex] !== "[") {
-    return undefined;
-  }
-
-  const edits: Record<string, unknown>[] = [];
+  closing: "}" | "]",
+  readEntry: (index: number) => number | undefined,
+): number | undefined {
   let index = skipWhitespace(raw, startIndex + 1);
-  if (raw[index] === "]") {
-    return { value: edits, endIndex: index + 1 };
+  if (raw[index] === closing) {
+    return index + 1;
   }
-
   while (index < raw.length) {
-    const edit = parseSmartQuotedToolCallObject(raw, index);
-    if (!edit) {
+    const endIndex = readEntry(index);
+    if (endIndex === undefined) {
       return undefined;
     }
-    edits.push(edit.args);
-
-    index = skipWhitespace(raw, edit.endIndex);
+    index = skipWhitespace(raw, endIndex);
     if (raw[index] === ",") {
       index = skipWhitespace(raw, index + 1);
       continue;
     }
-    if (raw[index] === "]") {
-      return { value: edits, endIndex: index + 1 };
-    }
-    return undefined;
+    return raw[index] === closing ? index + 1 : undefined;
   }
 
   return undefined;
@@ -381,10 +308,22 @@ function readObjectValue(
     return readAsciiQuotedString(raw, startIndex);
   }
   if (isToolCallRepairSmartQuote(char)) {
-    return readSmartQuotedValue(raw, startIndex, key, toolName);
+    const parsed = readSmartQuotedString(raw, startIndex, (index) =>
+      shouldCloseSmartQuotedValueAt(raw, index, key, toolName),
+    );
+    return parsed && { ...parsed, value: decodeSmartQuotedJsonStringEscapes(parsed.value) };
   }
   if (key === "edits" && char === "[") {
-    return readSmartQuotedEditArray(raw, startIndex);
+    const edits: Record<string, unknown>[] = [];
+    const endIndex = readCommaSeparatedBody(raw, startIndex, "]", (index) => {
+      const edit = parseSmartQuotedToolCallObject(raw, index);
+      if (!edit) {
+        return undefined;
+      }
+      edits.push(edit.value);
+      return edit.endIndex;
+    });
+    return endIndex === undefined ? undefined : { value: edits, endIndex };
   }
   return readJsonValue(raw, startIndex);
 }
@@ -393,47 +332,32 @@ function parseSmartQuotedToolCallObject(
   raw: string,
   startIndex: number,
   toolName?: string,
-): ToolCallRepairParsedObject | undefined {
+): ToolCallRepairJsonValue<Record<string, unknown>> | undefined {
   if (raw[startIndex] !== "{") {
     return undefined;
   }
   const args: Record<string, unknown> = {};
   const seenKeys = new Set<string>();
-  let index = skipWhitespace(raw, startIndex + 1);
-  if (raw[index] === "}") {
-    return { args, endIndex: index + 1 };
-  }
-
-  while (index < raw.length) {
+  const endIndex = readCommaSeparatedBody(raw, startIndex, "}", (index) => {
     const key = readObjectKey(raw, index);
     if (!key || seenKeys.has(key.value)) {
       return undefined;
     }
     seenKeys.add(key.value);
 
-    index = skipWhitespace(raw, key.endIndex);
-    if (raw[index] !== ":") {
+    const colonIndex = skipWhitespace(raw, key.endIndex);
+    if (raw[colonIndex] !== ":") {
       return undefined;
     }
 
-    const value = readObjectValue(raw, skipWhitespace(raw, index + 1), key.value, toolName);
+    const value = readObjectValue(raw, skipWhitespace(raw, colonIndex + 1), key.value, toolName);
     if (!value) {
       return undefined;
     }
     args[key.value] = value.value;
-
-    index = skipWhitespace(raw, value.endIndex);
-    if (raw[index] === ",") {
-      index = skipWhitespace(raw, index + 1);
-      continue;
-    }
-    if (raw[index] === "}") {
-      return { args, endIndex: index + 1 };
-    }
-    return undefined;
-  }
-
-  return undefined;
+    return value.endIndex;
+  });
+  return endIndex === undefined ? undefined : { value: args, endIndex };
 }
 
 function tryExtractUsableToolCallArgumentsFromJson(
@@ -451,23 +375,22 @@ function tryExtractUsableToolCallArgumentsFromJson(
   if (leadingPrefix.length === 0 && suffix.length === 0) {
     return undefined;
   }
+  return finishToolCallArgumentRepair(safeParseJsonRecord(extracted.json), leadingPrefix, suffix);
+}
+
+function finishToolCallArgumentRepair(
+  args: Record<string, unknown> | undefined,
+  leadingPrefix: string,
+  trailingSuffix: string,
+): ToolCallArgumentRepair | undefined {
   if (
-    suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-    (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
+    !args ||
+    trailingSuffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
+    (trailingSuffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(trailingSuffix))
   ) {
     return undefined;
   }
-
-  const parsedExtracted = safeParseJsonRecord(extracted.json);
-  if (!parsedExtracted) {
-    return undefined;
-  }
-  return {
-    args: parsedExtracted,
-    kind: "repaired",
-    leadingPrefix,
-    trailingSuffix: suffix,
-  };
+  return { args, kind: "repaired", leadingPrefix, trailingSuffix };
 }
 
 function tryExtractSmartQuotedToolCallArguments(
@@ -493,19 +416,11 @@ function tryExtractSmartQuotedToolCallArguments(
   if (!parsed) {
     return undefined;
   }
-  const suffix = raw.slice(parsed.endIndex).trim();
-  if (
-    suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-    (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
-  ) {
-    return undefined;
-  }
-  return {
-    args: parsed.args,
-    kind: "repaired",
+  return finishToolCallArgumentRepair(
+    parsed.value,
     leadingPrefix,
-    trailingSuffix: suffix,
-  };
+    raw.slice(parsed.endIndex).trim(),
+  );
 }
 
 function tryExtractUsableToolCallArguments(
@@ -660,6 +575,7 @@ export function shouldRepairMalformedToolCallArguments(params: {
   return (
     (normalizeProviderId(params.provider ?? "") === "kimi" && modelApi === "anthropic-messages") ||
     modelApi === "openai-completions" ||
-    TOOLCALL_REPAIR_RESPONSES_APIS.has(modelApi)
+    modelApi === "azure-openai-responses" ||
+    modelApi === "openai-chatgpt-responses"
   );
 }

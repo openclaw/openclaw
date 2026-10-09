@@ -1,4 +1,3 @@
-/** Doctor diagnostics for pending, paired, and locally cached device auth state. */
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -71,7 +70,7 @@ async function loadDoctorPairingSnapshot(params: {
       });
       return {
         pending: payload.pending,
-        paired: payload.paired.map((device) => normalizeGatewayPairedDevice(device)),
+        paired: payload.paired.map(normalizeGatewayPairedDevice),
       };
     } catch {
       // Gateway health already reported separately. Fall back to local pairing
@@ -84,7 +83,7 @@ async function loadDoctorPairingSnapshot(params: {
   const local = await listDevicePairingReadOnly();
   return {
     pending: local.pending,
-    paired: local.paired.map((device) => normalizeLocalPairedDevice(device)),
+    paired: local.paired.map(normalizeLocalPairedDevice),
   };
 }
 
@@ -100,6 +99,10 @@ function formatValues(values: string[]): string {
 
 function formatCliArgs(args: string[]): string {
   return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
+function formatRotateCommand(deviceId: string, role: string): string {
+  return formatCliArgs(["openclaw", "devices", "rotate", "--device", deviceId, "--role", role]);
 }
 
 function describeDevice(params: {
@@ -119,35 +122,6 @@ function findTokenSummary(
 ): DeviceAuthTokenSummary | undefined {
   const normalizedRole = role.trim();
   return device.tokenSummaries.find((entry) => entry.role === normalizedRole && !entry.revokedAtMs);
-}
-
-function hasPendingScopeUpgrade(params: {
-  requestedRoles: string[];
-  pendingScopes: string[];
-  approvedRoles: string[];
-  approvedScopes: string[];
-}): boolean {
-  for (const role of params.requestedRoles) {
-    if (!params.approvedRoles.includes(role)) {
-      continue;
-    }
-    const requestedForRole = params.pendingScopes.filter((scope) =>
-      role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
-    );
-    if (requestedForRole.length === 0) {
-      continue;
-    }
-    if (
-      !roleScopesAllow({
-        role,
-        requestedScopes: requestedForRole,
-        allowedScopes: params.approvedScopes,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthFinding[] {
@@ -196,12 +170,16 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     const approvedScopes = resolveApprovedScopes(paired);
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     if (
-      hasPendingScopeUpgrade({
-        requestedRoles,
-        pendingScopes: requestedScopes,
-        approvedRoles,
-        approvedScopes,
-      })
+      requestedRoles.some(
+        (role) =>
+          !roleScopesAllow({
+            role,
+            requestedScopes: requestedScopes.filter((scope) =>
+              role === "operator" ? scope.startsWith("operator.") : !scope.startsWith("operator."),
+            ),
+            allowedScopes: approvedScopes,
+          }),
+      )
     ) {
       return {
         ...finding,
@@ -238,15 +216,7 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
     }
     for (const role of approvedRoles) {
       const token = findTokenSummary(device, role);
-      const rotateCommand = formatCliArgs([
-        "openclaw",
-        "devices",
-        "rotate",
-        "--device",
-        device.deviceId,
-        "--role",
-        role,
-      ]);
+      const rotateCommand = formatRotateCommand(device.deviceId, role);
       if (!token) {
         findings.push({
           ...finding,
@@ -279,19 +249,11 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
-function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
+function readLocalIdentity(): { deviceId: string } | null {
   try {
-    return loadDeviceIdentityIfPresent({ env });
+    return loadDeviceIdentityIfPresent({ env: process.env });
   } catch {
     return null;
-  }
-}
-
-async function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
-  try {
-    return await loadDeviceAuthTokens({ deviceId, env });
-  } catch {
-    return [];
   }
 }
 
@@ -302,7 +264,10 @@ async function collectLocalDeviceAuthFindings(
   if (!identity) {
     return [];
   }
-  const localTokens = await readLocalDeviceAuthTokens(identity.deviceId);
+  const localTokens = await loadDeviceAuthTokens({
+    deviceId: identity.deviceId,
+    env: process.env,
+  }).catch(() => []);
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -334,15 +299,7 @@ async function collectLocalDeviceAuthFindings(
       });
       continue;
     }
-    const rotateCommand = formatCliArgs([
-      "openclaw",
-      "devices",
-      "rotate",
-      "--device",
-      paired.deviceId,
-      "--role",
-      role,
-    ]);
+    const rotateCommand = formatRotateCommand(paired.deviceId, role);
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
     // Local device auth survives gateway restarts; compare timestamps to catch stale cached tokens.
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
@@ -368,7 +325,6 @@ async function collectLocalDeviceAuthFindings(
   return findings;
 }
 
-/** Warn about retired pairing stores that still need Doctor repair. */
 async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<HealthFinding[]> {
   if (cfg.gateway?.mode === "remote") {
     return [];

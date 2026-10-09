@@ -1,23 +1,19 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI image lightbox",
+  trackBrowserContexts: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let proofDir: string;
 beforeEach(() => {
@@ -26,24 +22,9 @@ beforeEach(() => {
   }
 });
 
-let server: ControlUiE2eServer;
-let browser: Browser;
-const openContexts = new Set<BrowserContext>();
-
-async function newContext(options: Parameters<Browser["newContext"]>[0]) {
-  const context = await browser.newContext(options);
-  openContexts.add(context);
-  return context;
-}
-
-async function closeContext(context: BrowserContext) {
-  openContexts.delete(context);
-  await context.close().catch(() => {});
-}
-
 async function installImageGalleries(page: Page) {
   const images = await page.evaluate(() =>
-    Array.from({ length: 12 }, (_, index) => {
+    Array.from({ length: 5 }, (_, index) => {
       const canvas = document.createElement("canvas");
       canvas.width = index % 2 ? 360 : 720;
       canvas.height = index % 2 ? 640 : 400;
@@ -57,7 +38,7 @@ async function installImageGalleries(page: Page) {
     }),
   );
   const gateway = await installMockGateway(page, {
-    historyMessages: [1, 2, 5, 12].map((count) => ({
+    historyMessages: [1, 2, 5].map((count) => ({
       role: "assistant",
       content: images.slice(0, count).map((url, index) => ({
         type: "image",
@@ -67,34 +48,16 @@ async function installImageGalleries(page: Page) {
       timestamp: 1_800_000_000_000 + count,
     })),
   });
-  await page.goto(`${server.baseUrl}chat`);
+  await page.goto(`${suite.server.baseUrl}chat`);
   await gateway.waitForRequest("chat.startup");
 }
 
-describeControlUiE2e("Control UI image lightbox", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    server = await startControlUiE2eServer();
-  });
-
-  afterEach(async () => {
-    await Promise.all([...openContexts].map((context) => closeContext(context)));
-  });
-
-  afterAll(async () => {
-    await Promise.all([...openContexts].map((context) => closeContext(context)));
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("opens transcript and sidebar images in one accessible modal", async () => {
     const banner = await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"));
     const bannerBase64 = banner.toString("base64");
     const dataUrl = `data:image/png;base64,${bannerBase64}`;
-    const context = await newContext({
+    const context = await suite.newBrowserContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
         ? { dir: proofDir, size: { height: 900, width: 1440 } }
@@ -151,7 +114,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
 
       const transcriptTrigger = page.getByRole("button", { name: "Open image OpenClaw banner" });
@@ -200,26 +163,16 @@ describeControlUiE2e("Control UI image lightbox", () => {
           (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
           theme,
         );
-        await expect.poll(readControlContrast).toEqual([
-          expect.objectContaining({
-            backdropFilter: expect.stringContaining("blur(16px)"),
-            backgroundColor,
-            borderWidth: "0px",
-            color: "rgb(255, 255, 255)",
-          }),
-          expect.objectContaining({
-            backdropFilter: expect.stringContaining("blur(16px)"),
-            backgroundColor,
-            borderWidth: "0px",
-            color: "rgb(255, 255, 255)",
-          }),
-          expect.objectContaining({
-            backdropFilter: expect.stringContaining("blur(16px)"),
-            backgroundColor,
-            borderWidth: "0px",
-            color: "rgb(255, 255, 255)",
-          }),
-        ]);
+        await expect.poll(readControlContrast).toEqual(
+          Array.from({ length: 3 }, () =>
+            expect.objectContaining({
+              backdropFilter: expect.stringContaining("blur(16px)"),
+              backgroundColor,
+              borderWidth: "0px",
+              color: "rgb(255, 255, 255)",
+            }),
+          ),
+        );
       }
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       const focusIsInsideLightbox = () =>
@@ -382,31 +335,17 @@ describeControlUiE2e("Control UI image lightbox", () => {
       expect(landscapeLayout.overlapsHeader).toBe(false);
       expect(landscapeLayout.overlapsControls).toBe(false);
       await page.setViewportSize({ height: 844, width: 390 });
+      const readMobileScale = () =>
+        mobileImage.evaluate((image) =>
+          Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
+        );
       await mobileImage.dblclick();
-      await expect
-        .poll(() =>
-          mobileImage.evaluate((image) =>
-            Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
-          ),
-        )
-        .toBeGreaterThan(1);
+      await expect.poll(readMobileScale).toBeGreaterThan(1);
       await page.getByRole("button", { name: "Reset zoom" }).click();
-      await expect
-        .poll(() =>
-          mobileImage.evaluate((image) =>
-            Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
-          ),
-        )
-        .toBe(1);
+      await expect.poll(readMobileScale).toBe(1);
       const zoomIn = page.getByRole("button", { name: "Zoom in" });
       await zoomIn.click();
-      await expect
-        .poll(() =>
-          mobileImage.evaluate((image) =>
-            Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
-          ),
-        )
-        .toBeGreaterThan(1);
+      await expect.poll(readMobileScale).toBeGreaterThan(1);
       const zoomedImageBox = await mobileImage.boundingBox();
       expect((zoomedImageBox?.x ?? 0) + (zoomedImageBox?.width ?? 0)).toBeGreaterThan(0);
       expect((zoomedImageBox?.y ?? 0) + (zoomedImageBox?.height ?? 0)).toBeGreaterThan(0);
@@ -421,12 +360,12 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await page.keyboard.press("Escape");
       await expect.poll(() => sidebarDialog.count()).toBe(0);
     } finally {
-      await closeContext(context);
+      await suite.closeBrowserContext(context);
     }
   });
 
   it("navigates local MEDIA images in their message after history reload", async () => {
-    const context = await newContext({
+    const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -489,7 +428,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
         },
       ],
     });
-    await page.goto(server.baseUrl + "chat");
+    await page.goto(suite.server.baseUrl + "chat");
     await gateway.waitForRequest("chat.startup");
     const trigger = page.getByRole("button", { name: "Open image before.png", exact: true });
     const lightbox = page.locator("openclaw-image-lightbox");
@@ -537,7 +476,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
   });
 
   it("navigates only the opened message gallery and restores its original tile focus", async () => {
-    const context = await newContext({
+    const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -549,7 +488,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
     const previous = lightbox.getByRole("button", { name: "Previous image", exact: true });
     const next = lightbox.getByRole("button", { name: "Next image", exact: true });
     const image = lightbox.locator(".image");
-    for (const count of [1, 2, 5, 12]) {
+    for (const count of [1, 2, 5]) {
       const openedIndex = count > 1 ? 2 : 1;
       const trigger = page.getByRole("button", {
         name: `Open image Gallery ${count} image ${openedIndex}`,
@@ -611,7 +550,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
   });
 
   it("tracks touch swipes, cancels short and vertical gestures, and preserves pinch zoom", async () => {
-    const context = await newContext({
+    const context = await suite.newBrowserContext({
       locale: "en-US",
       hasTouch: true,
       isMobile: true,

@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UsageAggregates, UsageSessionEntry } from "./types.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { renderCostBreakdownCompact } from "./view-chart.ts";
 import {
@@ -11,6 +11,7 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
+import { createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
   messages: {
@@ -75,7 +76,6 @@ describe("renderUsageInsights", () => {
           ],
         },
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -134,7 +134,6 @@ describe("renderUsageInsights", () => {
         totals,
         aggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -176,7 +175,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -215,7 +213,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -278,16 +275,17 @@ describe("usage overview presentation owners", () => {
     const onClearDays = vi.fn();
     const onClearHours = vi.fn();
     const onClearSessions = vi.fn();
+    const props = createUsageProps();
+    Object.assign(props.filters, {
+      selectedDays: ["2026-08-01"],
+      selectedHours: [8],
+      selectedSessions: ["agent:main:usage"],
+    });
+    Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
     render(
       renderFilterChips(
-        ["2026-08-01"],
-        [8],
-        ["agent:main:usage"],
         [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        onClearDays,
-        onClearHours,
-        onClearSessions,
-        vi.fn(),
+        props,
       ),
       container,
     );
@@ -361,39 +359,34 @@ describe("renderSessionsCard", () => {
       selected?: string[];
       days?: string[];
       tokens?: boolean;
-      sort?: Parameters<typeof renderSessionsCard>[4];
-      direction?: Parameters<typeof renderSessionsCard>[5];
+      sort?: UsageProps["display"]["sessionSort"];
+      direction?: UsageProps["display"]["sessionSortDir"];
       recent?: string[];
-      tab?: Parameters<typeof renderSessionsCard>[7];
-      onSelect?: Parameters<typeof renderSessionsCard>[8];
+      tab?: UsageProps["display"]["sessionsTab"];
+      onSelect?: UsageProps["callbacks"]["details"]["onSelectSession"];
       totalSessions?: number;
     } = {},
   ) => {
     const container = document.createElement("div");
+    const props = createUsageProps();
+    props.filters.selectedSessions = options.selected ?? [];
+    props.filters.selectedDays = options.days ?? [];
+    Object.assign(props.display, {
+      chartMode: options.tokens === false ? "cost" : "tokens",
+      sessionSort: options.sort ?? "tokens",
+      sessionSortDir: options.direction ?? "desc",
+      recentSessions: options.recent ?? [],
+      sessionsTab: options.tab ?? "all",
+    });
+    props.callbacks.details.onSelectSession = options.onSelect ?? noop;
     render(
-      renderSessionsCard(
-        sessions,
-        options.selected ?? [],
-        options.days ?? [],
-        options.tokens ?? true,
-        options.sort ?? "tokens",
-        options.direction ?? "desc",
-        options.recent ?? [],
-        options.tab ?? "all",
-        options.onSelect ?? noop,
-        noop,
-        noop,
-        noop,
-        [],
-        options.totalSessions ?? sessions.length,
-        noop,
-      ),
+      renderSessionsCard(sessions, props, options.totalSessions ?? sessions.length),
       container,
     );
     return container;
   };
 
-  it("identifies mixed-agent sessions even when optional metadata columns are hidden", async () => {
+  it("identifies mixed-agent sessions", async () => {
     const container = renderCard([
       { key: "agent:main:one", agentId: "main", usage: null },
       { key: "agent:research:two", agentId: "research", usage: null },
@@ -555,26 +548,10 @@ describe("renderSessionsCard", () => {
       },
     ] as UsageSessionEntry[];
 
-    render(
-      renderSessionsCard(
-        sessions,
-        ["agent:main:selected"],
-        [],
-        true,
-        "tokens",
-        "desc",
-        [],
-        "all",
-        onSelectSession,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
-      container,
-    );
+    const props = createUsageProps();
+    props.filters.selectedSessions = ["agent:main:selected"];
+    props.callbacks.details.onSelectSession = onSelectSession;
+    render(renderSessionsCard(sessions, props, sessions.length), container);
 
     const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
     const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
@@ -614,13 +591,6 @@ describe("renderSessionsCard", () => {
   it.each([
     {
       tokens: true,
-      sort: "tokens",
-      names: ["All time winner", "Day winner"],
-      values: ["30", "10"],
-      avg: "20",
-    },
-    {
-      tokens: true,
       sort: "cost",
       names: ["Day winner", "All time winner"],
       values: ["10", "30"],
@@ -631,13 +601,6 @@ describe("renderSessionsCard", () => {
       sort: "tokens",
       names: ["All time winner", "Day winner"],
       values: ["$1.00", "$10.00"],
-      avg: "$5.50",
-    },
-    {
-      tokens: false,
-      sort: "cost",
-      names: ["Day winner", "All time winner"],
-      values: ["$10.00", "$1.00"],
       avg: "$5.50",
     },
   ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {

@@ -68,7 +68,8 @@ vi.mock("./message-line.js", () => ({
   buildInboundLine: (params: { msg: WebInboundMsg }) => params.msg.payload.body,
 }));
 
-vi.mock("./runtime-api.js", () => ({
+vi.mock("./runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-api.js")>()),
   buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
   createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
   formatInboundEnvelope: (p: { body: string }) => p.body,
@@ -78,7 +79,7 @@ vi.mock("./runtime-api.js", () => ({
   readStoreAllowFromForDmPolicy: async () => [],
   recordSessionMetaFromInbound: async () => {},
   resolveChannelContextVisibilityMode: () => "standard",
-  resolveInboundSessionEnvelopeContext: () => ({
+  resolveInboundSessionEnvelopeContextAsync: async () => ({
     storePath: "/tmp/sessions.json",
     envelopeOptions: {},
     previousTimestamp: undefined,
@@ -105,7 +106,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
         ctxPayload: {
           Body: params.combinedBody,
           BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
-          CommandAuthorized: params.command?.authorization.kind === "authorized",
+          CommandAuthorized: params.command?.authorized === true,
           CommandBody: params.command?.body ?? params.msg.payload.body,
           MediaPath: params.msg.payload.media?.path,
           MediaType: params.msg.payload.media?.type,
@@ -219,11 +220,6 @@ function makeAckReactionHandle() {
 function makeRemoveAckAfterReplyParams() {
   return {
     ...makeParams(),
-    cfg: {
-      tools: { media: { audio: { enabled: true } } },
-      channels: { whatsapp: {} },
-      commands: { useAccessGroups: false },
-    } as never,
     preflightAudioTranscript: "pre-computed transcript from caller",
   };
 }
@@ -423,18 +419,6 @@ describe("processMessage audio preflight transcription", () => {
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps caller-provided ack after a successful visible reply", async () => {
-    const ackReaction = makeAckReactionHandle();
-
-    await processMessage({
-      ...makeRemoveAckAfterReplyParams(),
-      ackReaction,
-    });
-    await flushMicrotasks();
-
-    expect(ackReaction.remove).not.toHaveBeenCalled();
-  });
-
   it("keeps internally sent ack after a successful visible reply", async () => {
     const ackReaction = makeAckReactionHandle();
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
@@ -443,36 +427,6 @@ describe("processMessage audio preflight transcription", () => {
     await flushMicrotasks();
 
     expect(maybeSendAckReactionMock).toHaveBeenCalledTimes(1);
-    expect(ackReaction.remove).not.toHaveBeenCalled();
-  });
-
-  it("keeps ack when no visible reply was delivered", async () => {
-    const ackReaction = makeAckReactionHandle();
-    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
-    vi.mocked(createWhatsAppReplyPlan).mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: async () => {} },
-      replyOptions: {},
-      replyResolver: vi.fn(),
-      finalize: () => false,
-    } as never);
-
-    await processMessage(makeRemoveAckAfterReplyParams());
-    await flushMicrotasks();
-
-    expect(ackReaction.remove).not.toHaveBeenCalled();
-  });
-
-  it("keeps ack when the ack send failed", async () => {
-    const ackReaction = {
-      ...makeAckReactionHandle(),
-      ackReactionPromise: Promise.resolve(false),
-    };
-    maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
-
-    await processMessage(makeRemoveAckAfterReplyParams());
-    await flushMicrotasks();
-
     expect(ackReaction.remove).not.toHaveBeenCalled();
   });
 

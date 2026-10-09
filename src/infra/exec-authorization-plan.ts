@@ -26,8 +26,6 @@ import {
 } from "./shell-inline-command.js";
 import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_PARSEABLE_SHELL_WRAPPERS);
-
 type ExecAuthorizationDialect = "argv" | "posix-shell" | "windows-cmd" | "powershell";
 
 type ExecAuthorizationRelationship = "simple" | "pipeline";
@@ -169,26 +167,15 @@ function commandSegmentFromArgv(
 
 type AuthorizationOperator = ShellChainOperator | "pipe";
 
-function authorizationOperatorForTopology(operator: CommandOperator): AuthorizationOperator {
-  switch (operator.kind) {
-    case "and":
-      return "&&";
-    case "or":
-      return "||";
-    case "pipe":
-    case "stderr-pipe":
-      return "pipe";
-    case "sequence":
-    case "newline-sequence":
-      return ";";
-    case "background":
-      return "&";
-    default: {
-      const unreachable: never = operator.kind;
-      return unreachable;
-    }
-  }
-}
+const AUTHORIZATION_OPERATOR_BY_KIND: Record<CommandOperator["kind"], AuthorizationOperator> = {
+  and: "&&",
+  or: "||",
+  pipe: "pipe",
+  "stderr-pipe": "pipe",
+  sequence: ";",
+  "newline-sequence": ";",
+  background: "&",
+};
 
 function riskInsideStep(risk: CommandRisk, step: CommandStep): boolean {
   return risk.span.startIndex >= step.span.startIndex && risk.span.endIndex <= step.span.endIndex;
@@ -268,14 +255,11 @@ function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
 
-function hasResolvedExecutionPath(segment: ExecCommandSegment): boolean {
-  const execution = segment.resolution?.execution;
-  return Boolean(execution?.resolvedPath?.trim() || execution?.resolvedRealPath?.trim());
-}
-
 function isUnresolvedPathScopedExecutable(segment: ExecCommandSegment): boolean {
+  const execution = segment.resolution?.execution;
   return (
-    isPathScopedExecutableToken(segment.argv[0]?.trim() ?? "") && !hasResolvedExecutionPath(segment)
+    isPathScopedExecutableToken(segment.argv[0]?.trim() ?? "") &&
+    !(execution?.resolvedPath?.trim() || execution?.resolvedRealPath?.trim())
   );
 }
 
@@ -296,7 +280,7 @@ export function canUseReusableWrapperPayloadCandidates(
 
 function isShellExecutable(argv: readonly string[]): boolean {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  return POSIX_SHELL_NAMES.has(executable);
+  return POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable);
 }
 
 function canUseWrapperShellInvocation(segment: ExecCommandSegment): boolean {
@@ -348,7 +332,7 @@ function positionalCarrierSteps(params: {
   if (
     isDispatchWrapperExecutable(carriedName) ||
     POSITIONAL_CARRIER_BLOCKED_EXECUTABLES.has(carriedName) ||
-    POSIX_SHELL_NAMES.has(carriedName) ||
+    POSIX_PARSEABLE_SHELL_WRAPPERS.has(carriedName) ||
     carriedName.endsWith("-wrapper")
   ) {
     return null;
@@ -378,20 +362,6 @@ function positionalCarrierSteps(params: {
       ),
     },
   ];
-}
-
-function shouldPersistCandidate(params: {
-  segment: ExecCommandSegment;
-  relationship: ExecAuthorizationRelationship;
-  trustMode: ExecAuthorizationTrustMode;
-}): boolean {
-  if (params.trustMode !== "executable") {
-    return false;
-  }
-  if (params.relationship === "pipeline" && isShellExecutable(params.segment.argv)) {
-    return false;
-  }
-  return params.segment.resolution?.policyBlocked !== true;
 }
 
 function createCandidate(params: {
@@ -435,23 +405,19 @@ function createCandidate(params: {
     trustMode,
     allowAlways:
       stepNonReusableReasons.length === 0 &&
-      shouldPersistCandidate({
-        segment: params.segment,
-        relationship: params.relationship,
-        trustMode,
-      }),
+      trustMode === "executable" &&
+      !(params.relationship === "pipeline" && isShellExecutable(params.segment.argv)),
     reasons,
   };
 }
 
 function finalizeGroup(params: {
   steps: CommandStepWithSegment[];
-  relationship: ExecAuthorizationRelationship;
   opToNext: ShellChainOperator | null;
   transport: ExecAuthorizationTransport;
   risks: readonly CommandRisk[];
 }): ExecAuthorizationGroup {
-  const relationship = params.steps.length > 1 ? "pipeline" : params.relationship;
+  const relationship = params.steps.length > 1 ? "pipeline" : "simple";
   return {
     opToNext: params.opToNext,
     candidates: params.steps.map((entry) =>
@@ -479,14 +445,16 @@ function groupsFromSteps(params: {
   let current: CommandStepWithSegment[] = [];
   const operatorByFromCommandId = new Map<string, AuthorizationOperator>();
   for (const operator of params.operators ?? []) {
-    operatorByFromCommandId.set(operator.fromCommandId, authorizationOperatorForTopology(operator));
+    operatorByFromCommandId.set(
+      operator.fromCommandId,
+      AUTHORIZATION_OPERATOR_BY_KIND[operator.kind],
+    );
   }
 
   if (sorted.length > 1 && operatorByFromCommandId.size === 0) {
     return [
       finalizeGroup({
         steps: sorted,
-        relationship: "pipeline",
         opToNext: null,
         transport: params.transport,
         risks: params.risks,
@@ -495,10 +463,6 @@ function groupsFromSteps(params: {
   }
 
   for (const entry of sorted) {
-    if (current.length === 0) {
-      current = [entry];
-      continue;
-    }
     const previous = current[current.length - 1];
     if (!previous) {
       current = [entry];
@@ -510,15 +474,10 @@ function groupsFromSteps(params: {
       current.push(entry);
       continue;
     }
-    const opToNext =
-      operator === "&&" || operator === "||" || operator === ";" || operator === "&"
-        ? operator
-        : ";";
     groups.push(
       finalizeGroup({
         steps: current,
-        relationship: "simple",
-        opToNext,
+        opToNext: operator ?? ";",
         transport: params.transport,
         risks: params.risks,
       }),
@@ -530,7 +489,6 @@ function groupsFromSteps(params: {
     groups.push(
       finalizeGroup({
         steps: current,
-        relationship: "simple",
         opToNext: null,
         transport: params.transport,
         risks: params.risks,
@@ -550,43 +508,6 @@ function shellWrapperRiskForStep(
       entry.kind === "shell-wrapper" && riskInsideStep(entry, step),
   );
   return risk ?? null;
-}
-
-function shouldUseWrapperPayload(params: {
-  wrapperCommandId?: string;
-  topLevelSteps: readonly CommandStepWithSegment[];
-  nestedSteps: readonly CommandStepWithSegment[];
-  risks: readonly CommandRisk[];
-}): boolean {
-  if (params.topLevelSteps.length !== 1 || params.nestedSteps.length === 0) {
-    return false;
-  }
-  const wrapperStep = params.topLevelSteps[0]?.step;
-  if (!wrapperStep || !shellWrapperRiskForStep(wrapperStep, params.risks)) {
-    return false;
-  }
-  const nestedStepsForWrapper = params.wrapperCommandId
-    ? params.nestedSteps.filter((entry) => entry.step.parentCommandId === params.wrapperCommandId)
-    : params.nestedSteps;
-  return canUseReusableWrapperPayloadCandidates(
-    nestedStepsForWrapper.map((entry) => entry.segment),
-  );
-}
-
-function applyWrapperPayloadPersistenceBoundary(params: {
-  wrapper: CommandStepWithSegment;
-  groups: ExecAuthorizationGroup[];
-}): ExecAuthorizationGroup[] {
-  if (!isUnresolvedPathScopedExecutable(params.wrapper.segment)) {
-    return params.groups;
-  }
-  return params.groups.map((group) => ({
-    ...group,
-    candidates: group.candidates.map((candidate) => ({
-      ...candidate,
-      allowAlways: false,
-    })),
-  }));
 }
 
 function wrapperPayloadPlan(params: {
@@ -615,14 +536,13 @@ function wrapperPayloadPlan(params: {
     return null;
   }
   const carriedSteps = positionalCarrierSteps({ wrapper, context: params.context });
+  const nestedStepsForWrapper = wrapper.step.id
+    ? params.nestedSteps.filter((entry) => entry.step.parentCommandId === wrapper.step.id)
+    : params.nestedSteps;
   if (
     !carriedSteps &&
-    !shouldUseWrapperPayload({
-      wrapperCommandId: wrapper.step.id,
-      topLevelSteps: params.topLevelSteps,
-      nestedSteps: params.nestedSteps,
-      risks: params.risks,
-    })
+    (params.topLevelSteps.length !== 1 ||
+      !canUseReusableWrapperPayloadCandidates(nestedStepsForWrapper.map((entry) => entry.segment)))
   ) {
     return null;
   }
@@ -633,9 +553,6 @@ function wrapperPayloadPlan(params: {
     wrapperPrefix: wrapperPrefixForStep(wrapper.step),
     inlineCommand: wrapperRisk.payload,
   };
-  const nestedStepsForWrapper = wrapper.step.id
-    ? params.nestedSteps.filter((entry) => entry.step.parentCommandId === wrapper.step.id)
-    : params.nestedSteps;
   const operatorsForWrapper = wrapper.step.id
     ? params.operators.filter((operator) => operator.parentCommandId === wrapper.step.id)
     : params.operators;
@@ -645,7 +562,7 @@ function wrapperPayloadPlan(params: {
     transport,
     risks: params.risks,
   });
-  return groups.length > 0 ? applyWrapperPayloadPersistenceBoundary({ wrapper, groups }) : null;
+  return groups.length > 0 ? groups : null;
 }
 
 function dialectForArgv(argv: readonly string[]): ExecAuthorizationDialect {
@@ -709,11 +626,7 @@ function planFromExplanation(params: {
 
   const payloadPlan = wrapperPayloadPlan({
     context: params.context,
-    allowNestedPayload:
-      !blockingRisk &&
-      !params.explanation.shapes.some((shape) =>
-        UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES.has(shape),
-      ),
+    allowNestedPayload: !blockingRisk,
     topLevelSteps,
     nestedSteps,
     operators: params.explanation.operators ?? [],
@@ -822,7 +735,7 @@ export async function planExecAuthorization(params: {
         const nestedSegments = shellPlan.groups.flatMap((group) =>
           group.candidates.map((candidate) => candidate.sourceSegment),
         );
-        if (wrapperSegment && canUseReusableWrapperPayloadCandidates(nestedSegments)) {
+        if (canUseReusableWrapperPayloadCandidates(nestedSegments)) {
           const persistNestedPayloads = !isUnresolvedPathScopedExecutable(wrapperSegment);
           const groups = shellPlan.groups.map((group) => ({
             ...group,

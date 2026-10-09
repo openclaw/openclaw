@@ -175,6 +175,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
                   revision,
                   entryUrl: `/__openclaw__/plugins/control-ui/review/${revision}/index.js`,
                   styles: [],
+                  uiCapabilities: ["replacement", "widget"],
                 },
               ]
             : [],
@@ -241,10 +242,37 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       runtime.selectReplacement("composer", "review/composer");
       const first = runtime.selectedReplacement("composer")!;
 
+      // Optional contributions can be absent at activation or registered later.
+      expect(runtime.errors).toEqual([]);
+      first.host.ui.registerWidget({ id: "late", label: "Late widget", mount: () => undefined });
+      expect(runtime.registrations("widgets")).toHaveLength(1);
+      expect(runtime.errors).toEqual([]);
+      const removePanel = first.host.ui.registerPanel({
+        id: "undeclared",
+        label: "Panel",
+        mount: () => undefined,
+      });
+      expect(runtime.registrations("panels")).toHaveLength(1);
+      const warning = {
+        pluginId: "review",
+        message:
+          'Registered UI capability "panel" is missing from uiCapabilities in openclaw.plugin.json.',
+      };
+      expect(runtime.errors).toContainEqual(warning);
+      runtime.reportError("review", "Activation receipt unavailable");
+      expect(runtime.errors).toContainEqual(warning);
+      expect(runtime.errors).toContainEqual({
+        pluginId: "review",
+        message: "Activation receipt unavailable",
+      });
+
       await changed("one");
       expect(runtime.selectedReplacement("composer")?.signal).toBe(first.signal);
       expect(runtime.registrations("replacements")[0]?.host).toBe(first.host);
       expect(first.signal.aborted).toBe(false);
+      expect(runtime.errors).toContainEqual(warning);
+      removePanel();
+      expect(runtime.errors).toEqual([]);
 
       await changed("two");
       const second = runtime.selectedReplacement("composer")!;

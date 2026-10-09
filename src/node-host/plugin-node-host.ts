@@ -1,4 +1,3 @@
-/** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -22,13 +21,6 @@ import type {
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
-
-/**
- * Plugin node-host command registry bridge.
- *
- * Node hosts load the active plugin registry, expose registered capabilities
- * and commands, and dispatch incoming node-host commands by exact command id.
- */
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
   () => import("../plugins/loader.js"),
@@ -76,13 +68,8 @@ export async function ensureNodeHostPluginRegistry(params: {
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
-  options: { includeDuplex?: boolean; commandAllowlist?: ReadonlySet<string> } = {},
-): {
-  caps: string[];
-  commands: string[];
-  computerUse?: ComputerUseCapabilityDescriptor;
-  nodePluginTools: NodePluginToolDescriptor[];
-} {
+  options: { commandAllowlist?: ReadonlySet<string> } = {},
+) {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
@@ -91,9 +78,6 @@ export function listRegisteredNodeHostCapsAndCommands(
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (options.commandAllowlist && !options.commandAllowlist.has(entry.command.command)) {
-        continue;
-      }
-      if (entry.command.duplex === true && options.includeDuplex === false) {
         continue;
       }
       // Availability belongs to the node-local plugin. Gateway policy still keeps
@@ -228,10 +212,6 @@ export function hasRegisteredNodeHostCommandActiveWork(): boolean {
   });
 }
 
-function isProviderSafeToolName(value: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
-}
-
 function buildNodePluginToolDescriptor(
   entry: PluginNodeHostCommandRegistration,
 ): NodePluginToolDescriptor | null {
@@ -241,7 +221,7 @@ function buildNodePluginToolDescriptor(
   }
   const name = normalizeOptionalString(agentTool.name) ?? "";
   const description = normalizeOptionalString(agentTool.description) ?? "";
-  if (!isProviderSafeToolName(name) || !description) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) || !description) {
     return null;
   }
   const mcpServer = normalizeOptionalString(agentTool.mcp?.server) ?? "";

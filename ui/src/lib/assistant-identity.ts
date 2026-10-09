@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements assistant identity behavior.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentIdentityResult } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";

@@ -18,31 +18,16 @@ export type {
   OnboardingRecommendationsRecord,
 } from "./onboarding-recommendations.contract.js";
 
-export type OnboardingRecommendationsStore = {
-  read: () => Promise<OnboardingRecommendationsRecord | null>;
-  writeOffer: (
-    params: WriteOnboardingRecommendationsOfferParams,
-  ) => Promise<OnboardingRecommendationsRecord>;
-  acknowledge: (
-    params?: AcknowledgeOnboardingRecommendationsParams,
-  ) => Promise<OnboardingRecommendationsRecord | null>;
-  updatePending: (
-    params: UpdatePendingOnboardingRecommendationsParams,
-  ) => Promise<OnboardingRecommendationsRecord | null>;
-  clearPending: (params: ClearPendingOnboardingRecommendationsParams) => Promise<boolean>;
-  clear: () => Promise<boolean>;
-};
-
 export function createOnboardingRecommendationsStore(params: {
   workspaceDir: string;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
-}): OnboardingRecommendationsStore {
+}) {
   // Doctor owns the one-time `primary` migration; a runtime fallback would recreate
   // cross-workspace reads. Every operation stays bound to one canonical workspace key.
   const configKey = `onboarding.recommendations.${resolveWorkspaceStateIdentity(params.workspaceDir).workspaceKey}`;
   const database = params.database ?? {};
   return {
-    async read() {
+    read: async (): Promise<OnboardingRecommendationsRecord | null> => {
       const result = await executeExistingOpenClawStateRead(database, {
         type: "onboardingRecommendations.read",
         configKey,
@@ -55,7 +40,7 @@ export function createOnboardingRecommendationsStore(params: {
       }
       throw new Error("Unexpected onboarding recommendations read result");
     },
-    writeOffer(offer) {
+    writeOffer: (offer: WriteOnboardingRecommendationsOfferParams) => {
       const captured = prepareOnboardingRecommendationOffer(offer);
       const context = captureOpenClawStateWorkerContext(database);
       return executeOpenClawStateWorker(context, {
@@ -63,7 +48,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    acknowledge(options = {}) {
+    acknowledge: (options: AcknowledgeOnboardingRecommendationsParams = {}) => {
       const context = captureOpenClawStateWorkerContext(database);
       const captured = structuredClone({ ...options, nowMs: options.nowMs ?? Date.now() });
       return executeOpenClawStateWorker(context, {
@@ -71,7 +56,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    updatePending(options) {
+    updatePending: (options: UpdatePendingOnboardingRecommendationsParams) => {
       const captured = prepareOnboardingRecommendationPending(options);
       const context = captureOpenClawStateWorkerContext(database);
       return executeOpenClawStateWorker(context, {
@@ -79,7 +64,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    clearPending(options) {
+    clearPending: (options: ClearPendingOnboardingRecommendationsParams) => {
       const context = captureOpenClawStateWorkerContext(database);
       const captured = structuredClone(options);
       return executeOpenClawStateWorker(context, {
@@ -87,7 +72,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    clear() {
+    clear: () => {
       return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
         type: "onboardingRecommendations.clear",
         input: { configKey },
@@ -95,3 +80,7 @@ export function createOnboardingRecommendationsStore(params: {
     },
   };
 }
+
+export type OnboardingRecommendationsStore = ReturnType<
+  typeof createOnboardingRecommendationsStore
+>;

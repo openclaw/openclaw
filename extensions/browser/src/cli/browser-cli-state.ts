@@ -1,7 +1,3 @@
-/**
- * Browser CLI state commands for cookies, storage, viewport, emulation, and
- * HTTP context settings.
- */
 import type { Command } from "commander";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
@@ -10,7 +6,7 @@ import {
   normalizeOptionalString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseBrowserViewportDimension, runBrowserResizeWithOutput } from "./browser-cli-resize.js";
+import { registerBrowserResizeCommand } from "./browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
@@ -34,7 +30,6 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
   return parsed;
 }
 
-/** Registers Browser state/configuration commands. */
 export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -43,26 +38,11 @@ export function registerBrowserStateCommands(
 
   const set = browser.command("set").description("Browser environment settings");
 
-  set
-    .command("viewport")
-    .description("Set viewport size (alias for resize)")
-    .argument("<width>", "Viewport width")
-    .argument("<height>", "Viewport height")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
-      const width = parseBrowserViewportDimension(widthRaw, "width");
-      const height = parseBrowserViewportDimension(heightRaw, "height");
-      if (width === undefined || height === undefined) {
-        return;
-      }
-      await runBrowserResizeWithOutput({
-        parent: parentOpts(cmd),
-        width,
-        height,
-        targetId: opts.targetId,
-        successMessage: `viewport set: ${width}x${height}`,
-      });
-    });
+  registerBrowserResizeCommand(
+    set.command("viewport").description("Set viewport size (alias for resize)"),
+    parentOpts,
+    true,
+  );
 
   set
     .command("offline")

@@ -12,6 +12,12 @@ sidebarTitle: "Plugins"
 
 Manage Gateway plugins, hook packs, and compatible bundles.
 
+`plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
+when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
+policy keys in config use the canonical lowercase form.
+The same policy applies to live activation and the next Gateway start. Runtime
+IDs and Gateway method names retain the plugin's declared spelling.
+
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
     End-user guide for installing, enabling, and troubleshooting plugins.
@@ -41,7 +47,7 @@ openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
 openclaw plugins enable <ids...> [--accept-capabilities]
 openclaw plugins disable <ids...>
-openclaw plugins reload <ids...> [--accept-capabilities] [--json]
+openclaw plugins reload <ids...> [--wait] [--accept-capabilities] [--json]
 openclaw plugins uninstall <ids...> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <ids-or-npm-specs...> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]

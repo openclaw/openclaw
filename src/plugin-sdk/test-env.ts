@@ -14,12 +14,14 @@ export {
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 export { useIsolatedStateGuard } from "../test-utils/state-path-guard.js";
+export { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
 export { acquireTestPortBlock } from "../test-utils/port-claims.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+export { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 export { withTempDir } from "../test-utils/temp-dir.js";
 export { createStagedInputOwnershipFixture } from "../media/staged-inputs.test-support.js";

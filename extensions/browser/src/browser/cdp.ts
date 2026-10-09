@@ -1,13 +1,7 @@
 import type { lookup as dnsLookupCb } from "node:dns";
-/**
- * Chrome DevTools Protocol browser operations.
- *
- * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
- * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
- */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { axValue, type RawAXNode } from "./cdp-ax.js";
+import { axValue, type AriaSnapshotNode, type RawAXNode } from "./cdp-ax.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
@@ -29,7 +23,7 @@ import {
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
-export type { RawAXNode } from "./cdp-ax.js";
+export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
 export { snapshotRoleViaCdp } from "./cdp-role-snapshot.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
@@ -45,7 +39,6 @@ export async function getDocumentIdentitiesViaCdp(opts: {
   });
 }
 
-/** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
   lookup?: typeof dnsLookupCb;
@@ -153,14 +146,13 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      const endpointSource =
-        candidateWsUrl === opts.cdpUrl
-          ? ({ source: "configured" } as const)
-          : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
       const candidateCdpPin =
         candidateWsUrl === opts.cdpUrl
           ? configuredCdpPin
-          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
+          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, {
+              source: "discovered",
+              configuredUrl: opts.cdpUrl,
+            });
       opts.signal?.throwIfAborted();
       return await withCdpSocket(
         candidateWsUrl,
@@ -206,22 +198,9 @@ export async function createTargetViaCdp(opts: {
   throw new Error("CDP Target.createTarget failed");
 }
 
-/** Normalized accessibility tree node returned by ARIA snapshots. */
-export type AriaSnapshotNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
-
-/** Prefix assigned to generated accessibility-node refs. */
 const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
-/** Format raw AX nodes into bounded ARIA snapshot nodes. */
 export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
@@ -276,7 +255,6 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   return out;
 }
 
-/** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
   lookup?: typeof dnsLookupCb;

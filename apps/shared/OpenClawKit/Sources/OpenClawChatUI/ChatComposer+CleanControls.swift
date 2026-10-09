@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 extension OpenClawChatComposer {
     @ViewBuilder
@@ -11,32 +14,55 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.plain)
         .controlSize(.small)
-        .help("Add Attachment")
+        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)
         #else
-        OpenClawChatAttachmentMenu(
-            showsPhotoPicker: self.photoPickerPresentation,
-            showsFileImporter: self.fileImporterPresentation,
-            showsCameraPicker: self.cameraPickerPresentation,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled)
-        {
+        Menu {
+            Button {
+                self.photoPickerPresentation.wrappedValue = true
+            } label: {
+                chatActionLabel(Text("Photo Library"), systemImage: "photo.on.rectangle")
+            }
+            .disabled(!self.isAttachmentInputEnabled)
+
+            #if canImport(UIKit)
+            Button {
+                self.cameraPickerPresentation.wrappedValue = true
+            } label: {
+                chatActionLabel(Text("Camera"), systemImage: "camera")
+            }
+            .disabled(
+                !self.isAttachmentInputEnabled ||
+                    !UIImagePickerController.isSourceTypeAvailable(.camera))
+            #endif
+
+            Button {
+                self.fileImporterPresentation.wrappedValue = true
+            } label: {
+                chatActionLabel(Text("File"), systemImage: "folder")
+            }
+            .disabled(!self.isAttachmentInputEnabled)
+
+            Divider()
             if self.viewModel.sessionBranches.count > 1 {
                 self.branchMenu
             }
             self.verbosityPicker
                 .disabled(!self.viewModel.composerEffortMutationAvailable)
             self.cleanComposerCapabilityItems
+        } label: {
+            CompactChatAttachmentLabel()
         }
+        .help("Composer options")
+        .accessibilityLabel("Composer options")
+        .accessibilityIdentifier("chat-attachment-picker")
+        .buttonStyle(.plain)
         .task(id: self.viewModel.composerCapabilityOwnerID) {
             await self.viewModel.loadComposerCapabilities()
         }
         #endif
-    }
-
-    var sendButtonAccessibilityLabel: String {
-        "Send message"
     }
 
     #if os(iOS)
@@ -55,7 +81,7 @@ extension OpenClawChatComposer {
             Button {
                 self.pickFilesMac()
             } label: {
-                Label("Add Attachment", systemImage: "paperclip")
+                Label("Attach…", systemImage: "paperclip")
             }
             .disabled(!self.isAttachmentInputEnabled)
             Divider()
@@ -134,17 +160,17 @@ extension OpenClawChatComposer {
                 }
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
-                        self.cleanInlineModelOptions(sections.pinned)
+                        self.modelOptions(sections.pinned, showsDefaultBadge: false)
                     }
                 }
                 if !sections.recent.isEmpty {
                     Section("Recent") {
-                        self.cleanInlineModelOptions(sections.recent)
+                        self.modelOptions(sections.recent, showsDefaultBadge: false)
                     }
                 }
                 ForEach(sections.providers) { provider in
                     Section(provider.displayName) {
-                        self.cleanInlineModelOptions(provider.models)
+                        self.modelOptions(provider.models, showsDefaultBadge: false)
                     }
                 }
             }
@@ -228,18 +254,6 @@ extension OpenClawChatComposer {
                 .contentShape(Rectangle())
         }
         #endif
-    }
-
-    private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
-        ForEach(models) { model in
-            let unavailable = self.viewModel.modelUnavailableDescription(model)
-            self.modelMenuOption(
-                [model.displayLabel, model.capabilityDescription, unavailable].compactMap(\.self)
-                    .filter { !$0.isEmpty }.joined(separator: " — "),
-                selectionID: model.selectionID)
-                .disabled(unavailable != nil)
-                .accessibilityHint(unavailable ?? "")
-        }
     }
 
     private var cleanInlineEffortMenu: some View {

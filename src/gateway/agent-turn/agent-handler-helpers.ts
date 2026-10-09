@@ -1,18 +1,15 @@
-import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionWorkStartError,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  CronScheduledToolCallerOrigin,
-  CronScheduledToolPolicy,
-  CronToolsAllowExecTarget,
-} from "../../cron/scheduled-tool-policy.js";
-import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
@@ -20,38 +17,44 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import {
-  emitGatewaySessionEndPluginHook,
-  emitGatewaySessionStartPluginHook,
-} from "../session-reset-service.js";
-import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
+import { loadSessionEntry, prepareDeletedAgentSessionCheck } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
-export type RestoredCronContinuation = {
-  lifecycleRevision: string;
+export function canPrepareAgentSessionWorktree(
+  sessionKey: string | undefined,
+  entry: InternalSessionEntry | undefined,
+): boolean {
+  return Boolean(sessionKey && entry?.pendingWorktree) && entry?.pendingProjectGitUrl === undefined;
+}
+
+export function resolveAgentSessionWorkStartError(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): string | undefined {
+  return resolveSessionWorkStartError(
+    sessionKey,
+    entry,
+    canPrepareAgentSessionWorktree(sessionKey, entry) ? { allowPendingWorkspace: true } : undefined,
+  );
+}
+
+export type RestoredCronContinuation = Pick<
+  NonNullable<SessionEntry["cronRunContinuation"]>,
+  | "lifecycleRevision"
+  | "toolsAllow"
+  | "toolsAllowIsDefault"
+  | "scheduledToolPolicy"
+  | "scheduledToolCallerOrigin"
+  | "toolsAllowExecTarget"
+  | "cliSessionBindingFacts"
+> & {
   sessionId: string;
   provider: string;
   model: string;
   thinking?: string;
-  toolsAllow?: string[];
-  toolsAllowIsDefault?: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
-  scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
-  cliSessionBindingFacts?: {
-    extraSystemPromptStatic?: string;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    requireExplicitMessageTarget?: boolean;
-  };
 };
-
-export function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
 
 export function respondDeletedAgentSession(params: {
   cfg: OpenClawConfig;
@@ -59,25 +62,35 @@ export function respondDeletedAgentSession(params: {
   entry?: SessionEntry | null;
   acpMetadataSessionKey?: string;
   respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
-    params.cfg,
-    params.canonicalKey,
-    params.entry,
-    { acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey },
-  );
-  if (deletedAgentId === null) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Agent "${deletedAgentId}" no longer exists in configuration`,
-    ),
-  );
-  return true;
+  assertCurrent?: () => void;
+}): boolean | Promise<boolean> {
+  const deletedAgentId = prepareDeletedAgentSessionCheck({
+    cfg: params.cfg,
+    sessionKey: params.canonicalKey,
+    entry: params.entry,
+    acpMetadataSessionKey: params.acpMetadataSessionKey,
+    assertCurrent: params.assertCurrent,
+  });
+  const respond = (agentId: string | null) => {
+    if (agentId === null) {
+      return false;
+    }
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Agent "${agentId}" no longer exists in configuration`,
+      ),
+    );
+    return true;
+  };
+  return deletedAgentId instanceof Promise
+    ? deletedAgentId.then((agentId) => {
+        params.assertCurrent?.();
+        return respond(agentId);
+      })
+    : respond(deletedAgentId);
 }
 
 export function respondUnavailableAgentSessionForKey(params: {
@@ -86,53 +99,44 @@ export function respondUnavailableAgentSessionForKey(params: {
   isRawModelRun: boolean;
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
+  assertCurrent?: () => void;
+}): boolean | Promise<boolean> {
   const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     clone: false,
     projection: "list",
   });
-  if (
-    respondDeletedAgentSession({
-      cfg,
-      canonicalKey,
-      entry,
-      acpMetadataSessionKey: legacyKey,
-      respond: params.respond,
-    })
-  ) {
+  const deleted = respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+    assertCurrent: params.assertCurrent,
+  });
+  const respondUnavailable = (isDeleted: boolean) => {
+    if (isDeleted) {
+      return true;
+    }
+    const sessionError =
+      resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
+      resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
+      (params.isRawModelRun && entry?.modelSelectionLocked === true
+        ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
+        : undefined) ||
+      resolveAgentSessionWorkStartError(canonicalKey, entry);
+    if (!sessionError) {
+      return false;
+    }
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
     return true;
-  }
-  const sessionError =
-    resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
-    resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
-    (params.isRawModelRun && entry?.modelSelectionLocked === true
-      ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
-      : undefined) ||
-    resolveSessionWorkStartError(canonicalKey, entry);
-  if (!sessionError) {
-    return false;
-  }
-  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
-  return true;
-}
-
-export function resolveAllowModelOverrideFromClient(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return clientHasAdminScope(client) || client?.internal?.allowModelOverride === true;
-}
-
-export function resolveCanUseInternalRuntimeHandoff(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
-}
-
-export function resolveCanUseCronRunContinuation(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.internal?.cronRunContinuation === true;
+  };
+  return deleted instanceof Promise
+    ? deleted.then((isDeleted) => {
+        params.assertCurrent?.();
+        return respondUnavailable(isDeleted);
+      })
+    : respondUnavailable(deleted);
 }
 
 export function cronContinuationHasReusableRuntime(params: {
@@ -158,50 +162,6 @@ export function cronContinuationHasReusableRuntime(params: {
 export function withoutCronRunContinuation(entry: SessionEntry): SessionEntry {
   const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = entry;
   return baseEntry;
-}
-
-export function emitAgentSendSessionLifecycleTransition(
-  transition:
-    | {
-        cfg: OpenClawConfig;
-        sessionKey: string;
-        sessionId: string;
-        storePath: string;
-        sessionFile?: string;
-        agentId: string;
-        workspaceDir?: string;
-        previousSessionId?: string;
-        previousSessionFile?: string;
-        previousEndReason?: PluginHookSessionEndReason;
-      }
-    | undefined,
-): void {
-  if (!transition) {
-    return;
-  }
-  if (transition.previousSessionId) {
-    emitGatewaySessionEndPluginHook({
-      cfg: transition.cfg,
-      sessionKey: transition.sessionKey,
-      sessionId: transition.previousSessionId,
-      storePath: transition.storePath,
-      sessionFile: transition.previousSessionFile,
-      agentId: transition.agentId,
-      workspaceDir: transition.workspaceDir,
-      reason: transition.previousEndReason ?? "unknown",
-      nextSessionId: transition.sessionId,
-      nextSessionKey: transition.sessionKey,
-    });
-  }
-  emitGatewaySessionStartPluginHook({
-    cfg: transition.cfg,
-    sessionKey: transition.sessionKey,
-    sessionId: transition.sessionId,
-    resumedFrom: transition.previousSessionId,
-    storePath: transition.storePath,
-    sessionFile: transition.sessionFile,
-    agentId: transition.agentId,
-  });
 }
 
 export function shouldSuppressAgentPromptPersistence(params: {

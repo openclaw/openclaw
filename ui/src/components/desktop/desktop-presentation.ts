@@ -2,10 +2,10 @@ import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-p
 import { html, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
+import type { DesktopFullscreenController } from "../fullscreen-controller.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
-import type { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { renderDesktopPanelRecovery, type DesktopPanelState } from "./desktop-panel-state.ts";
 import {
   renderDesktopCredentials,
@@ -39,7 +39,7 @@ type DesktopPresentation = {
   pictureInPictureControl: TemplateResult;
   audioControl?: TemplateResult;
   dockLayout: DockLayoutController<"bottom" | "right">;
-  fullscreenMode: DesktopPanelFullscreenController;
+  fullscreenMode: DesktopFullscreenController;
   onControlToggle: () => void;
   onTakeControl: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
@@ -115,7 +115,6 @@ export function renderDesktopPresentation(view: DesktopPresentation) {
     connection: {
       controlling: view.controlling,
       desktopApps: view.desktopApps,
-      environmentSelected: focus.source !== null,
       launchingApp: view.launchingApp,
       showApps:
         focus.source !== null &&

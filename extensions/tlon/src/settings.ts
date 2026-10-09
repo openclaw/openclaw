@@ -1,6 +1,8 @@
 // Settings in Urbit's %settings agent hot-reload without restarting the Gateway.
-import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
+
+export const TLON_PENDING_APPROVAL_LIMIT = 100;
 
 /** Pending approval request stored for persistence */
 export type PendingApproval = {
@@ -36,6 +38,7 @@ export type TlonSettingsStore = {
     {
       mode?: "restricted" | "open";
       allowedShips?: string[];
+      requireMentionInBotThreads?: boolean;
     }
   >;
   defaultAuthorizedShips?: string[];
@@ -45,41 +48,24 @@ export type TlonSettingsStore = {
   pendingApprovals?: PendingApproval[];
 };
 
-type TlonSettingsState = {
-  current: TlonSettingsStore;
-  loaded: boolean;
-};
-
 const SETTINGS_DESK = "moltbot";
 const SETTINGS_BUCKET = "tlon";
 
-/**
- * Parse channelRules - handles both JSON string and object formats.
- * Settings-store doesn't support nested objects, so we store as JSON string.
- */
-function parseChannelRules(
-  value: unknown,
-): Record<string, { mode?: "restricted" | "open"; allowedShips?: string[] }> | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (isChannelRulesObject(parsed)) {
-        return parsed;
-      }
-    } catch {
-      return undefined;
-    }
-  }
-
-  if (isChannelRulesObject(value)) {
+// The settings store encodes nested structures as JSON strings.
+function parseJsonSetting(value: unknown): unknown {
+  if (typeof value !== "string") {
     return value;
   }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
 
-  return undefined;
+function parseChannelRules(value: unknown): TlonSettingsStore["channelRules"] {
+  const parsed = parseJsonSetting(value);
+  return isChannelRulesObject(parsed) ? parsed : undefined;
 }
 
 /**
@@ -106,17 +92,10 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
     dmAllowlist: Array.isArray(settings.dmAllowlist)
       ? filterStringEntries(settings.dmAllowlist)
       : undefined,
-    autoDiscoverChannels:
-      typeof settings.autoDiscoverChannels === "boolean"
-        ? settings.autoDiscoverChannels
-        : undefined,
-    showModelSig: typeof settings.showModelSig === "boolean" ? settings.showModelSig : undefined,
-    autoAcceptDmInvites:
-      typeof settings.autoAcceptDmInvites === "boolean" ? settings.autoAcceptDmInvites : undefined,
-    autoAcceptGroupInvites:
-      typeof settings.autoAcceptGroupInvites === "boolean"
-        ? settings.autoAcceptGroupInvites
-        : undefined,
+    autoDiscoverChannels: asBoolean(settings.autoDiscoverChannels),
+    showModelSig: asBoolean(settings.showModelSig),
+    autoAcceptDmInvites: asBoolean(settings.autoAcceptDmInvites),
+    autoAcceptGroupInvites: asBoolean(settings.autoAcceptGroupInvites),
     groupInviteAllowlist: Array.isArray(settings.groupInviteAllowlist)
       ? filterStringEntries(settings.groupInviteAllowlist)
       : undefined,
@@ -129,38 +108,15 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
   };
 }
 
-function isChannelRulesObject(
-  val: unknown,
-): val is Record<string, { mode?: "restricted" | "open"; allowedShips?: string[] }> {
+function isChannelRulesObject(val: unknown): val is NonNullable<TlonSettingsStore["channelRules"]> {
   if (!val || typeof val !== "object" || Array.isArray(val)) {
     return false;
   }
-  for (const [, rule] of Object.entries(val)) {
-    if (!rule || typeof rule !== "object") {
-      return false;
-    }
-  }
-  return true;
+  return Object.values(val).every((rule) => rule && typeof rule === "object");
 }
 
-/**
- * Parse pendingApprovals - handles both JSON string and array formats.
- * Settings-store stores complex objects as JSON strings.
- */
 function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  let parsed: unknown = value;
-  if (typeof value === "string") {
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
-  }
-
+  const parsed = parseJsonSetting(value);
   if (!Array.isArray(parsed)) {
     return undefined;
   }
@@ -233,58 +189,27 @@ type SettingsLogger = {
 };
 
 export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogger) {
-  const state: TlonSettingsState = {
-    current: {},
-    loaded: false,
-  };
-
-  const listeners = new Set<(settings: TlonSettingsStore) => void>();
-
-  const notify = () => {
-    for (const listener of listeners) {
-      try {
-        listener(state.current);
-      } catch (err) {
-        logger?.error?.(`[settings] Listener error: ${String(err)}`);
-      }
-    }
-  };
+  let current: TlonSettingsStore = {};
 
   return {
-    /**
-     * Get current settings (may be empty if not loaded yet).
-     */
-    get current(): TlonSettingsStore {
-      return state.current;
-    },
-
-    /**
-     * Whether initial settings have been loaded.
-     */
-    get loaded(): boolean {
-      return state.loaded;
-    },
-
     async load(): Promise<TlonSettingsStore> {
       try {
         const raw = await api.scry("/settings/all.json");
         // Response shape: { all: { [desk]: { [bucket]: { [key]: value } } } }
         const allData = raw as { all?: Record<string, Record<string, unknown>> };
         const deskData = allData?.all?.[SETTINGS_DESK];
-        state.current = parseSettingsResponse(deskData ?? {});
-        state.loaded = true;
-        logger?.log?.(`[settings] Loaded: ${JSON.stringify(state.current)}`);
-        return state.current;
+        current = parseSettingsResponse(deskData ?? {});
+        logger?.log?.(`[settings] Loaded: ${JSON.stringify(current)}`);
+        return current;
       } catch (err) {
         // Settings desk may not exist yet - that's fine, use defaults
         logger?.log?.(`[settings] No settings found (using defaults): ${String(err)}`);
-        state.current = {};
-        state.loaded = true;
-        return state.current;
+        current = {};
+        return current;
       }
     },
 
-    async startSubscription(): Promise<void> {
+    async startSubscription(onChange: (settings: TlonSettingsStore) => void): Promise<void> {
       await api.subscribe({
         app: "settings",
         path: "/desk/" + SETTINGS_DESK,
@@ -295,8 +220,12 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
           }
 
           logger?.log?.(`[settings] Update: ${update.key} = ${JSON.stringify(update.value)}`);
-          state.current = applySettingsUpdate(state.current, update.key, update.value);
-          notify();
+          current = applySettingsUpdate(current, update.key, update.value);
+          try {
+            onChange(current);
+          } catch (err) {
+            logger?.error?.(`[settings] Listener error: ${String(err)}`);
+          }
         },
         err: (error) => {
           logger?.error?.(`[settings] Subscription error: ${String(error)}`);
@@ -306,11 +235,6 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
         },
       });
       logger?.log?.("[settings] Subscribed to settings updates");
-    },
-
-    onChange(listener: (settings: TlonSettingsStore) => void): () => void {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
     },
   };
 }

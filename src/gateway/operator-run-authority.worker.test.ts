@@ -11,8 +11,10 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
@@ -29,10 +31,55 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 
+it("preserves the live operator source through principal capture without trusting copied labels", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = ensureProfileForEmail("principal-source@example.test");
+    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
+    const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
+    const context = createContext();
+    const source = new AbortController();
+    const sourceAuthority = {
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+    };
+    const captures = await Promise.all(
+      [principal, client, { ...client }].map(async (input) =>
+        expectDefined(
+          await captureGatewayOperatorRunAuthority({
+            client: input,
+            context,
+            sourceAuthority,
+          }),
+          "operator source",
+        ),
+      ),
+    );
+    try {
+      const principalSource = expectDefined(captures[0], "principal authority").authority.source;
+      const originalSource = expectDefined(captures[1], "socket authority").authority.source;
+      const copiedSource = expectDefined(captures[2], "copied authority").authority.source;
+      expect(originalSource).toBeDefined();
+      expect(principalSource).toBe(originalSource);
+      expect(copiedSource).not.toBe(originalSource);
+      for (const capture of captures) {
+        expect(capture.authority.assertCurrent).not.toThrow();
+      }
+      source.abort(new Error("source revoked"));
+      for (const capture of captures) {
+        expect(capture.authority.assertCurrent).toThrow();
+      }
+    } finally {
+      for (const capture of captures) {
+        capture.release();
+      }
+    }
+  });
+});
+
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
   async (entry) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("operator-sql@example.test");
       setUserProfileRole(profile.id, "reader");
       const sourceScopes: GatewayOperatorRoleDefinition["scopes"] =
@@ -72,7 +119,7 @@ it.each(["capture", "operator tool"])(
             },
           },
         ]);
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       try {
         const calibration = new DatabaseSync(":memory:");
         try {
@@ -95,53 +142,33 @@ it.each(["capture", "operator tool"])(
             await captureGatewayOperatorRunAuthority({ client, context }),
             "operator authority",
           );
+          const { authority } = retained;
           try {
-            retained.authority.assertCurrent();
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
-            ).toBe(true);
+            authority.assertCurrent();
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(true);
             cfg = {
               ...cfg,
               agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
             };
             publishOperatorRoleConfigChange(context);
-            expect(retained.authority.modelPolicy?.models).toEqual([
+            expect(authority.modelPolicy?.models).toEqual([
               { provider: "fixture", model: "b" },
               { provider: "fixture", model: "a" },
             ]);
-            const roles = expectDefined(cfg.gateway?.roles, "configured roles");
-            cfg = {
-              ...cfg,
-              gateway: {
-                ...cfg.gateway,
-                roles: {
-                  ...roles,
-                  definitions: {
-                    ...roles.definitions,
-                    reader: {
-                      ...expectDefined(roles.definitions.reader, "reader role"),
-                      modelPolicy: { allow: ["fixture/b", "fixture/c"] },
-                    },
-                  },
-                },
-              },
+            cfg = structuredClone(cfg);
+            expectDefined(cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
+              allow: ["fixture/b", "fixture/c"],
             };
             publishOperatorRoleConfigChange(context);
-            expect(retained.authority.signal?.aborted).toBe(false);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
-            ).toBe(false);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "b" }),
-            ).toBe(true);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "c" }),
-            ).toBe(false);
-            const release = expectDefined(retained.authority.retain, "operator retention")();
+            expect(authority.signal?.aborted).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(false);
+            const release = expectDefined(authority.retain, "operator retention")();
             retained.release();
-            retained.authority.assertCurrent();
+            authority.assertCurrent();
             release();
-            expect(retained.authority.assertCurrent).toThrow("no longer active");
+            expect(authority.assertCurrent).toThrow("no longer active");
           } finally {
             retained.release();
           }

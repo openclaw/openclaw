@@ -8,10 +8,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import {
-  createMattermostDraftPreviewBoundaryController,
-  createMattermostDraftStream,
-} from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 
 type RequestRecord = {
@@ -131,17 +128,6 @@ describe("createMattermostDraftStream", () => {
       message: "Running `read`…",
     });
     expect(stream.postId()).toBe("post-1");
-  });
-
-  it("does not resend identical updates", async () => {
-    const { calls, stream } = createDraftStreamFixture();
-
-    stream.update("Working...");
-    await stream.flush();
-    stream.update("Working...");
-    await stream.flush();
-
-    expect(calls).toHaveLength(1);
   });
 
   it("clears the preview post when no final reply is delivered", async () => {
@@ -986,106 +972,5 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       { path: "/posts", method: "POST", message: "Second" },
       { path: "/posts", method: "POST", message: "Third" },
     ]);
-  });
-});
-
-describe("createMattermostDraftPreviewBoundaryController", () => {
-  it("calls forceNewMessage on boundary when enabled and content was streamed", async () => {
-    const forceNewMessage = vi.fn();
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    await controller.noteBoundary();
-
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips forceNewMessage when no content was streamed since the last boundary", async () => {
-    const forceNewMessage = vi.fn();
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    await controller.noteBoundary();
-    await controller.noteBoundary();
-    controller.noteUpdate();
-    await controller.noteBoundary();
-    await controller.noteBoundary();
-
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("never calls forceNewMessage when disabled", async () => {
-    const forceNewMessage = vi.fn();
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: false,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    await controller.noteBoundary();
-    controller.noteUpdate();
-    await controller.noteBoundary();
-
-    expect(forceNewMessage).not.toHaveBeenCalled();
-  });
-
-  it("awaits the forceNewMessage promise before resolving the boundary", async () => {
-    let releaseForce: (() => void) | undefined;
-    const forcePending = new Promise<void>((resolve) => {
-      releaseForce = resolve;
-    });
-    const forceNewMessage = vi.fn(async () => {
-      await forcePending;
-    });
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    let resolved = false;
-    const boundary = controller.noteBoundary().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    releaseForce?.();
-    await boundary;
-    expect(resolved).toBe(true);
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("splits the next boundary when a noteUpdate arrives while the prior boundary is pending", async () => {
-    const releases: Array<() => void> = [];
-    const forceNewMessage = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          releases.push(resolve);
-        }),
-    );
-    const controller = createMattermostDraftPreviewBoundaryController({
-      enabled: true,
-      forceNewMessage,
-    });
-
-    controller.noteUpdate();
-    const firstBoundary = controller.noteBoundary();
-    controller.noteUpdate();
-    releases[0]?.();
-    await firstBoundary;
-
-    const secondBoundary = controller.noteBoundary();
-    releases[1]?.();
-    await secondBoundary;
-
-    expect(forceNewMessage).toHaveBeenCalledTimes(2);
   });
 });

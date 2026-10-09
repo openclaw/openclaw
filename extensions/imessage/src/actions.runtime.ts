@@ -13,10 +13,6 @@ import { resolveIMessageMessageId } from "./monitor-reply-cache.js";
 import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 
-type IMessageBridgeActionOptions = IMessageActionTransportOptions & {
-  chatGuid: string;
-};
-
 type IMessageBridgeSendResult = {
   messageId: string;
 };
@@ -25,6 +21,16 @@ type IMessageBridgeSendResult = {
 export type IMessagePollSentOption = {
   id: string;
   text: string;
+};
+
+type ChatActionParams = {
+  chatGuid: string;
+  options: IMessageActionTransportOptions;
+};
+
+type MessageActionParams = ChatActionParams & {
+  messageId: string;
+  partIndex?: number;
 };
 
 type TempFileInput = {
@@ -103,53 +109,68 @@ async function withTempFile<T>(
   );
 }
 
+async function runMessageAction(
+  params: MessageActionParams,
+  method: string,
+  command: string,
+  fields: Record<string, unknown> = {},
+  args: string[] = [],
+  trailingArgs: string[] = [],
+): Promise<void> {
+  await runIMessageAction(
+    params.options,
+    method,
+    {
+      chat_guid: params.chatGuid,
+      message_id: params.messageId,
+      part_index: params.partIndex ?? 0,
+      ...fields,
+    },
+    [
+      command,
+      "--chat",
+      params.chatGuid,
+      "--message",
+      params.messageId,
+      ...args,
+      "--part",
+      String(params.partIndex ?? 0),
+      ...trailingArgs,
+    ],
+  );
+}
+
+function participantAction(method: string, command: string) {
+  return async (params: ChatActionParams & { address: string }) => {
+    await runIMessageAction(
+      params.options,
+      method,
+      { chat_guid: params.chatGuid, address: params.address },
+      [command, "--chat", params.chatGuid, "--address", params.address],
+    );
+  };
+}
+
 export const imessageActionsRuntime = {
   resolveIMessageMessageId,
   authorizeMessageReference: authorizeIMessageResourceReference,
 
   resolveChatGuidForTarget: resolveIMessageActionChatGuid,
 
-  async sendReaction(params: {
-    chatGuid: string;
-    messageId: string;
-    reaction: string;
-    remove?: boolean;
-    partIndex?: number;
-    options: IMessageBridgeActionOptions;
-  }) {
-    await runIMessageAction(
-      params.options,
+  async sendReaction(params: MessageActionParams & { reaction: string; remove?: boolean }) {
+    await runMessageAction(
+      params,
       "tapback",
-      {
-        chat_guid: params.chatGuid,
-        message_id: params.messageId,
-        reaction: params.reaction,
-        part_index: params.partIndex ?? 0,
-        ...(params.remove ? { remove: true } : {}),
-      },
-      [
-        "tapback",
-        "--chat",
-        params.chatGuid,
-        "--message",
-        params.messageId,
-        "--kind",
-        params.reaction,
-        "--part",
-        String(params.partIndex ?? 0),
-        ...(params.remove ? ["--remove"] : []),
-      ],
+      "tapback",
+      { reaction: params.reaction, ...(params.remove ? { remove: true } : {}) },
+      ["--kind", params.reaction],
+      params.remove ? ["--remove"] : [],
     );
   },
 
-  async editMessage(params: {
-    chatGuid: string;
-    messageId: string;
-    text: string;
-    backwardsCompatMessage?: string;
-    partIndex?: number;
-    options: IMessageBridgeActionOptions;
-  }) {
+  async editMessage(
+    params: MessageActionParams & { text: string; backwardsCompatMessage?: string },
+  ) {
     const text = sanitizeIMessageFinalOutboundText(params.text).text;
     const backwardsCompatMessage = sanitizeIMessageFinalOutboundText(
       params.backwardsCompatMessage ?? params.text,
@@ -157,56 +178,17 @@ export const imessageActionsRuntime = {
     if (!text.trim() || !backwardsCompatMessage.trim()) {
       throw new Error("iMessage edit requires non-empty text after sanitization");
     }
-    await runIMessageAction(
-      params.options,
+    await runMessageAction(
+      params,
       "message.edit",
-      {
-        chat_guid: params.chatGuid,
-        message_id: params.messageId,
-        text,
-        backwards_compatibility_message: backwardsCompatMessage,
-        part_index: params.partIndex ?? 0,
-      },
-      [
-        "edit",
-        "--chat",
-        params.chatGuid,
-        "--message",
-        params.messageId,
-        "--new-text",
-        text,
-        "--bc-text",
-        backwardsCompatMessage,
-        "--part",
-        String(params.partIndex ?? 0),
-      ],
+      "edit",
+      { text, backwards_compatibility_message: backwardsCompatMessage },
+      ["--new-text", text, "--bc-text", backwardsCompatMessage],
     );
   },
 
-  async unsendMessage(params: {
-    chatGuid: string;
-    messageId: string;
-    partIndex?: number;
-    options: IMessageBridgeActionOptions;
-  }) {
-    await runIMessageAction(
-      params.options,
-      "message.unsend",
-      {
-        chat_guid: params.chatGuid,
-        message_id: params.messageId,
-        part_index: params.partIndex ?? 0,
-      },
-      [
-        "unsend",
-        "--chat",
-        params.chatGuid,
-        "--message",
-        params.messageId,
-        "--part",
-        String(params.partIndex ?? 0),
-      ],
-    );
+  async unsendMessage(params: MessageActionParams) {
+    await runMessageAction(params, "message.unsend", "unsend");
   },
 
   async sendRichMessage(params: {
@@ -215,22 +197,11 @@ export const imessageActionsRuntime = {
     effectId?: string;
     replyToMessageId?: string;
     partIndex?: number;
-    // Optional attachment as an in-memory buffer that we stage to a temp
-    // file before invoking imsg. The buffer must already have been loaded
-    // by the outbound media resolver (mediaLocalRoots/sandbox/size limits)
-    // — this runtime intentionally does not accept a raw filesystem path,
-    // because that would let an attacker-controlled path bypass the
-    // resolver and let imsg send any host-readable file. Requires an imsg
-    // local build that accepts `send-rich --file` (openclaw/imsg#114). Remote
-    // accounts route the same payload through the exact `send` RPC contract.
+    // Only accept resolver-admitted bytes: raw paths would bypass media policy.
+    // Local imsg needs send-rich --file; remote accounts use the send RPC.
     attachment?: { kind: "buffer"; buffer: Uint8Array; filename: string };
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult> {
-    // Extract markdown bold/italic/underline/strikethrough into typed-run
-    // ranges so the recipient sees actual styling rather than literal
-    // asterisks. This mirrors the same extraction the rpc-send path does;
-    // any caller that hits the bridge via `imsg send-rich` benefits without
-    // needing to pre-format the text themselves.
     const formatted = sanitizeIMessageFinalOutboundText(params.text, {
       formatMarkdown: true,
     });
@@ -288,19 +259,11 @@ export const imessageActionsRuntime = {
       return { messageId: resolveMessageId(result) };
     };
     return params.attachment
-      ? await withTempFile(
-          { buffer: params.attachment.buffer, filename: params.attachment.filename },
-          params.options,
-          send,
-        )
+      ? await withTempFile(params.attachment, params.options, send)
       : await send();
   },
 
-  async renameGroup(params: {
-    chatGuid: string;
-    displayName: string;
-    options: IMessageBridgeActionOptions;
-  }) {
+  async renameGroup(params: ChatActionParams & { displayName: string }) {
     await runIMessageAction(
       params.options,
       "group.rename",
@@ -309,53 +272,21 @@ export const imessageActionsRuntime = {
     );
   },
 
-  async setGroupIcon(params: {
-    chatGuid: string;
-    buffer: Uint8Array;
-    filename: string;
-    options: IMessageBridgeActionOptions;
-  }) {
-    await withTempFile(
-      { buffer: params.buffer, filename: params.filename },
-      params.options,
-      async (filePath) => {
-        await runIMessageAction(
-          params.options,
-          "group.setIcon",
-          { chat_guid: params.chatGuid, file: filePath },
-          ["chat-photo", "--chat", params.chatGuid, "--file", filePath],
-        );
-      },
-    );
+  async setGroupIcon(params: ChatActionParams & TempFileInput) {
+    await withTempFile(params, params.options, async (filePath) => {
+      await runIMessageAction(
+        params.options,
+        "group.setIcon",
+        { chat_guid: params.chatGuid, file: filePath },
+        ["chat-photo", "--chat", params.chatGuid, "--file", filePath],
+      );
+    });
   },
 
-  async addParticipant(params: {
-    chatGuid: string;
-    address: string;
-    options: IMessageBridgeActionOptions;
-  }) {
-    await runIMessageAction(
-      params.options,
-      "group.addParticipant",
-      { chat_guid: params.chatGuid, address: params.address },
-      ["chat-add-member", "--chat", params.chatGuid, "--address", params.address],
-    );
-  },
+  addParticipant: participantAction("group.addParticipant", "chat-add-member"),
+  removeParticipant: participantAction("group.removeParticipant", "chat-remove-member"),
 
-  async removeParticipant(params: {
-    chatGuid: string;
-    address: string;
-    options: IMessageBridgeActionOptions;
-  }) {
-    await runIMessageAction(
-      params.options,
-      "group.removeParticipant",
-      { chat_guid: params.chatGuid, address: params.address },
-      ["chat-remove-member", "--chat", params.chatGuid, "--address", params.address],
-    );
-  },
-
-  async leaveGroup(params: { chatGuid: string; options: IMessageBridgeActionOptions }) {
+  async leaveGroup(params: ChatActionParams) {
     await runIMessageAction(params.options, "group.leave", { chat_guid: params.chatGuid }, [
       "chat-leave",
       "--chat",
@@ -371,7 +302,7 @@ export const imessageActionsRuntime = {
     choices: readonly string[];
     replyToMessageId?: string;
     suppressComment?: boolean;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
     const question = sanitizeIMessageFinalOutboundText(params.question).text;
     const choices = params.choices.map((choice) => sanitizeIMessageFinalOutboundText(choice).text);
@@ -413,7 +344,7 @@ export const imessageActionsRuntime = {
     optionIndex?: number;
     optionId?: string;
     optionText?: string;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult & { optionText?: string }> {
     if (params.options.remoteHost && !params.optionId) {
       throwIMessageRemoteUnsupported(
@@ -438,38 +369,28 @@ export const imessageActionsRuntime = {
     return { messageId: resolveMessageId(result), ...(optionText ? { optionText } : {}) };
   },
 
-  async sendAttachment(params: {
-    chatGuid: string;
-    buffer: Uint8Array;
-    filename: string;
-    asVoice?: boolean;
-    options: IMessageBridgeActionOptions;
-  }): Promise<IMessageBridgeSendResult> {
-    return await withTempFile(
-      { buffer: params.buffer, filename: params.filename },
-      params.options,
-      async (filePath) => {
-        const result = await runIMessageAction(
-          params.options,
-          "send.attachment",
-          {
-            chat_guid: params.chatGuid,
-            file: filePath,
-            ...(params.asVoice ? { audio: true } : {}),
-          },
-          [
-            "send-attachment",
-            "--chat",
-            params.chatGuid,
-            "--file",
-            filePath,
-            ...(params.asVoice ? ["--audio"] : []),
-          ],
-        );
-        return { messageId: resolveMessageId(result) };
-      },
-    );
+  async sendAttachment(
+    params: ChatActionParams & TempFileInput & { asVoice?: boolean },
+  ): Promise<IMessageBridgeSendResult> {
+    return await withTempFile(params, params.options, async (filePath) => {
+      const result = await runIMessageAction(
+        params.options,
+        "send.attachment",
+        {
+          chat_guid: params.chatGuid,
+          file: filePath,
+          ...(params.asVoice ? { audio: true } : {}),
+        },
+        [
+          "send-attachment",
+          "--chat",
+          params.chatGuid,
+          "--file",
+          filePath,
+          ...(params.asVoice ? ["--audio"] : []),
+        ],
+      );
+      return { messageId: resolveMessageId(result) };
+    });
   },
 };
-
-export type IMessageActionsRuntime = typeof imessageActionsRuntime;

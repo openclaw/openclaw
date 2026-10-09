@@ -9,6 +9,7 @@ import {
   createChatFlowE2eSuite,
   captureUiProof,
   installMockGateway,
+  scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 
@@ -183,6 +184,9 @@ suite.define(() => {
             },
           });
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          if (direction === "rtl") {
+            await page.addInitScript(() => localStorage.setItem("openclaw.i18n.locale", "ar"));
+          }
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
           const card = page.locator(".session-progress-card--composer");
@@ -210,6 +214,9 @@ suite.define(() => {
           const bounds = () =>
             track.evaluate((element) => element.getBoundingClientRect().toJSON());
           const collapsed = await bounds();
+          const transcriptBounds = (await page.locator(".chat-thread").boundingBox())!;
+          expect(collapsed.left).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(collapsed.right).toBeLessThanOrEqual(transcriptBounds.x + transcriptBounds.width);
           const collapsedComposer = (await composer.boundingBox())!;
           if (count === 80 && direction === "ltr") {
             const transcript = page.locator(".chat-thread");
@@ -463,6 +470,11 @@ suite.define(() => {
             );
           await expect.poll(() => preview.textContent()).toContain(`checkpoint ${count}:`);
           await expect.poll(previewClearsComposer).toBe(true);
+          const previewBounds = (await preview.boundingBox())!;
+          expect(previewBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(previewBounds.x + previewBounds.width).toBeLessThanOrEqual(
+            transcriptBounds.x + transcriptBounds.width,
+          );
           await markers.last().press("Escape");
           // The button is already visible; avoid locator hover's extra scrollIntoView.
           const point = await markers.last().evaluate((element) => {
@@ -511,10 +523,8 @@ suite.define(() => {
           await page.setViewportSize({ width: 390, height: 844 });
           await track.waitFor({ state: "hidden" });
           if (count === 80 && direction === "ltr") {
-            const transcript = page.locator(".chat-thread");
-            await transcript.hover();
-            await page.mouse.wheel(0, -30000);
-            await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+            await waitForChatScrollIdle(page);
+            await scrollChatThreadToTop(page);
             await page.setViewportSize({ width: 1440, height: 1000 });
             await track.waitFor();
             await expect

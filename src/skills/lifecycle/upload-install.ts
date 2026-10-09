@@ -47,6 +47,7 @@ export async function installUploadedSkillArchive(params: {
   config: OpenClawConfig;
   log?: ArchiveLogger;
   store?: SkillUploadStore;
+  beforePersistentApply?: () => void;
 }): Promise<UploadedSkillInstallResult> {
   const store = params.store ?? defaultSkillUploadStore;
   if (!areUploadedSkillArchivesEnabled(params.config)) {
@@ -57,6 +58,7 @@ export async function installUploadedSkillArchive(params: {
     };
   }
   try {
+    params.beforePersistentApply?.();
     const requestedSlug = validateRequestedSkillSlug(params.slug);
     const requestedSha = normalizeSkillUploadSha256(params.sha256);
     return await store.withCommittedUpload(params.uploadId, async (record, upload) => {
@@ -64,9 +66,6 @@ export async function installUploadedSkillArchive(params: {
         await upload.remove().catch(() => undefined);
         return { ok: false, error, errorKind: "invalid-request" };
       };
-      if (record.kind !== "skill-archive") {
-        return await rejectInvalid("unsupported upload kind");
-      }
       if (record.slug !== requestedSlug) {
         return await rejectInvalid("install slug does not match upload slug");
       }
@@ -87,6 +86,7 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
+        beforePersistentApply: params.beforePersistentApply,
         policy: {
           config: params.config,
           installId: "upload",
@@ -122,25 +122,14 @@ export async function installUploadedSkillArchive(params: {
       };
     });
   } catch (err) {
-    if (err instanceof SkillUploadRequestError) {
-      return {
-        ok: false,
-        error: err.message,
-        errorKind: "invalid-request",
-      };
-    }
-    const error = formatErrorMessage(err);
-    if (error.startsWith("Invalid skill slug")) {
-      return {
-        ok: false,
-        error,
-        errorKind: "invalid-request",
-      };
-    }
+    const error = err instanceof SkillUploadRequestError ? err.message : formatErrorMessage(err);
     return {
       ok: false,
       error,
-      errorKind: "unavailable",
+      errorKind:
+        err instanceof SkillUploadRequestError || error.startsWith("Invalid skill slug")
+          ? "invalid-request"
+          : "unavailable",
     };
   }
 }

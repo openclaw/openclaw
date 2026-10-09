@@ -1,9 +1,5 @@
-import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
-import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import {
@@ -38,39 +34,6 @@ const loadGoogleVideoGenerationProvider = createLazyRuntimeSurface(
   (mod) => mod.buildGoogleVideoGenerationProvider(),
 );
 
-function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
-  return {
-    ...createGoogleImageGenerationProviderMetadata(),
-    generateImage: async (req) => (await loadGoogleImageGenerationProvider()).generateImage(req),
-  };
-}
-
-function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvider {
-  return {
-    ...createGoogleMediaUnderstandingProviderMetadata(),
-    transcribeAudio: async (...args) =>
-      await (await loadGoogleMediaUnderstandingProvider()).transcribeAudio(...args),
-    describeVideo: async (...args) =>
-      await (await loadGoogleMediaUnderstandingProvider()).describeVideo(...args),
-  };
-}
-
-function createLazyGoogleMusicGenerationProvider(): MusicGenerationProvider {
-  return {
-    ...createGoogleMusicGenerationProviderMetadata(),
-    generateMusic: async (...args) =>
-      await (await loadGoogleMusicGenerationProvider()).generateMusic(...args),
-  };
-}
-
-function createLazyGoogleVideoGenerationProvider(): VideoGenerationProvider {
-  return {
-    ...createGoogleVideoGenerationProviderMetadata(),
-    generateVideo: async (...args) =>
-      await (await loadGoogleVideoGenerationProvider()).generateVideo(...args),
-  };
-}
-
 export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
@@ -80,12 +43,27 @@ export default definePluginEntry({
     api.registerProvider(buildGoogleGeminiCliProvider());
     api.registerProvider(buildGoogleProvider());
     api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
-    api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
-    api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
-    api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());
+    api.registerImageGenerationProvider({
+      ...createGoogleImageGenerationProviderMetadata(),
+      generateImage: async (req) => (await loadGoogleImageGenerationProvider()).generateImage(req),
+    });
+    api.registerMediaUnderstandingProvider({
+      ...createGoogleMediaUnderstandingProviderMetadata(),
+      transcribeAudio: async (...args) =>
+        (await loadGoogleMediaUnderstandingProvider()).transcribeAudio(...args),
+      describeVideo: async (...args) =>
+        (await loadGoogleMediaUnderstandingProvider()).describeVideo(...args),
+    });
+    api.registerMusicGenerationProvider({
+      ...createGoogleMusicGenerationProviderMetadata(),
+      generateMusic: async (req) => (await loadGoogleMusicGenerationProvider()).generateMusic(req),
+    });
     api.registerRealtimeVoiceProvider(createLazyGoogleRealtimeVoiceProvider());
     api.registerSpeechProvider(buildGoogleSpeechProvider());
-    api.registerVideoGenerationProvider(createLazyGoogleVideoGenerationProvider());
+    api.registerVideoGenerationProvider({
+      ...createGoogleVideoGenerationProviderMetadata(),
+      generateVideo: async (req) => (await loadGoogleVideoGenerationProvider()).generateVideo(req),
+    });
     api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },
 });

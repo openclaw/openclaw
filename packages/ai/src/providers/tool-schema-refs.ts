@@ -1,3 +1,4 @@
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 
 export function setOwnSchemaProperty(
@@ -37,15 +38,10 @@ function extendSchemaDefs(
     return defs;
   }
 
-  const next: SchemaDefs = defs
-    ? {
-        $defs: new Map(defs.$defs),
-        definitions: new Map(defs.definitions),
-      }
-    : {
-        $defs: new Map<string, unknown>(),
-        definitions: new Map<string, unknown>(),
-      };
+  const next: SchemaDefs = {
+    $defs: new Map(defs?.$defs),
+    definitions: new Map(defs?.definitions),
+  };
   if (defsEntry) {
     for (const [key, value] of Object.entries(defsEntry)) {
       next.$defs.set(key, value);
@@ -59,17 +55,12 @@ function extendSchemaDefs(
   return next;
 }
 
-function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
-}
-
-function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
+function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unknown {
   let current = value;
-  for (const segment of segments) {
+  for (const key of tokens) {
     if (!current || typeof current !== "object") {
       return undefined;
     }
-    const key = decodeJsonPointerSegment(segment);
     if (Array.isArray(current)) {
       const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
       if (index < 0 || index >= current.length) {
@@ -87,10 +78,8 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
 }
 
 function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
-  if (!ref.startsWith("#/")) {
-    return undefined;
-  }
-  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
+  const tokens = parseLocalSchemaRefPointer(ref);
+  return tokens ? resolveJsonPointerPath(rootDocument, tokens) : undefined;
 }
 
 export const SCHEMA_MAP_KEYS = new Set([
@@ -121,17 +110,18 @@ function tryResolveLocalRef(
   defs: SchemaDefs | undefined,
   rootDocument: unknown,
 ): unknown {
-  const match = ref.match(/^#\/(\$defs|definitions)\/([^/]+)(?:\/(.*))?$/);
-  if (match && defs) {
-    const namespace = match[1] === "$defs" ? defs.$defs : defs.definitions;
-    const name = decodeJsonPointerSegment(match[2] ?? "");
-    const resolved = name ? namespace.get(name) : undefined;
+  const tokens = parseLocalSchemaRefPointer(ref);
+  if (!tokens) {
+    return undefined;
+  }
+  const [table, name, ...remainingPath] = tokens;
+  if (defs && name && (table === "$defs" || table === "definitions")) {
+    const resolved = (table === "$defs" ? defs.$defs : defs.definitions).get(name);
     if (resolved !== undefined) {
-      const remainingPath = match[3] ? match[3].split("/") : [];
       return resolveJsonPointerPath(resolved, remainingPath);
     }
   }
-  return resolveLocalJsonPointer(rootDocument, ref);
+  return resolveJsonPointerPath(rootDocument, tokens);
 }
 
 function inlineLocalSchemaRefsWithDefs(
@@ -160,12 +150,13 @@ function inlineLocalSchemaRefsWithDefs(
     }
     const resolved = tryResolveLocalRef(refValue, nextDefs, rootDocument);
     if (resolved === undefined) {
-      if (refValue.startsWith("#/")) {
+      // Keep definition tables for any local pointer left in place, encoded or not.
+      if (refValue.startsWith("#/") || parseLocalSchemaRefPointer(refValue)) {
         state.unresolvedLocalRefs = true;
       }
       return { ...obj };
     }
-    const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+    const nextRefStack = new Set(refStack);
     nextRefStack.add(refValue);
     const inlined = inlineLocalSchemaRefsWithDefs(
       resolved,
@@ -190,47 +181,27 @@ function inlineLocalSchemaRefsWithDefs(
     if (key === "$defs" || key === "definitions" || key === "components") {
       continue;
     }
-    if (SCHEMA_LITERAL_KEYS.has(key)) {
-      setOwnSchemaProperty(result, key, value);
-      continue;
-    }
+    let next = value;
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
         entry[1] = inlineLocalSchemaRefsWithDefs(entry[1], nextDefs, refStack, state, rootDocument);
       }
-      setOwnSchemaProperty(result, key, Object.fromEntries(entries));
-      continue;
-    }
-    if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument),
+      next = Object.fromEntries(entries);
+    } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
+      next = inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument);
+    } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+      next = value.map((entry) =>
+        inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
       );
-      continue;
     }
-    if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        value.map((entry) =>
-          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
-        ),
-      );
-      continue;
-    }
-    setOwnSchemaProperty(result, key, value);
+    setOwnSchemaProperty(result, key, next);
   }
   if (state.unresolvedLocalRefs) {
-    if ("$defs" in obj) {
-      result.$defs = obj.$defs;
-    }
-    if ("definitions" in obj) {
-      result.definitions = obj.definitions;
-    }
-    if ("components" in obj) {
-      result.components = obj.components;
+    for (const key of ["$defs", "definitions", "components"]) {
+      if (key in obj) {
+        result[key] = obj[key];
+      }
     }
   }
   return result;

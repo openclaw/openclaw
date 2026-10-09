@@ -1,4 +1,3 @@
-// Analyze script supports OpenClaw repository automation.
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
@@ -9,15 +8,16 @@ import {
   createProgramContext,
   getRepoRevision,
 } from "./context.js";
+import { classifyUsageBucket, consumerOwner } from "./scope.js";
 import type {
   ProgramContext,
   PublicEntrypoint,
   RankedCandidates,
-  ReferenceEvent,
   TopologyEnvelope,
   TopologyRecord,
   TopologyReportName,
   TopologyScope,
+  UsageBucket,
 } from "./types.js";
 
 function pushUnique(values: string[], next: string | null | undefined) {
@@ -29,16 +29,8 @@ function pushUnique(values: string[], next: string | null | undefined) {
   }
 }
 
-function sortUnique(values: string[]) {
-  values.sort((left, right) => left.localeCompare(right));
-}
-
 function clampScore(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function isTypeOnlyCandidate(record: Pick<TopologyRecord, "kind">): boolean {
-  return record.kind === "interface" || record.kind === "type";
 }
 
 function computeSharednessScore(record: TopologyRecord): number {
@@ -79,11 +71,7 @@ function computeMoveBackToOwnerScore(record: TopologyRecord): number {
 
 function createRecord(info: ReturnType<typeof canonicalSymbolInfo>): TopologyRecord {
   return {
-    canonicalKey: info.canonicalKey,
-    declarationPath: info.declarationPath,
-    declarationLine: info.declarationLine,
-    kind: info.kind,
-    aliasName: info.aliasName,
+    ...info,
     entrypoints: [],
     exportNames: [],
     publicSpecifiers: [],
@@ -105,25 +93,24 @@ function createRecord(info: ReturnType<typeof canonicalSymbolInfo>): TopologyRec
   };
 }
 
-function bucketConsumer(record: TopologyRecord, event: ReferenceEvent) {
-  if (event.bucket === "internal") {
-    record.internalImportCount += event.importCount;
-    record.internalRefCount += event.usageCount;
-    pushUnique(record.internalConsumers, event.consumerPath);
-    return;
+function recordConsumer(
+  record: TopologyRecord,
+  bucket: UsageBucket,
+  usageCount: number,
+  relPath: string,
+) {
+  record[`${bucket}ImportCount`] += 1;
+  record[`${bucket}RefCount`] += usageCount;
+  pushUnique(record[`${bucket}Consumers`], relPath);
+  if (bucket === "production") {
+    const owner = consumerOwner(relPath);
+    pushUnique(record.productionOwners, owner);
+    if (owner?.startsWith("extension:")) {
+      pushUnique(record.productionExtensions, owner.slice("extension:".length));
+    } else {
+      pushUnique(record.productionPackages, owner);
+    }
   }
-  if (event.bucket === "test") {
-    record.testImportCount += event.importCount;
-    record.testRefCount += event.usageCount;
-    pushUnique(record.testConsumers, event.consumerPath);
-    return;
-  }
-  record.productionImportCount += event.importCount;
-  record.productionRefCount += event.usageCount;
-  pushUnique(record.productionConsumers, event.consumerPath);
-  pushUnique(record.productionExtensions, event.extensionId);
-  pushUnique(record.productionPackages, event.packageOwner);
-  pushUnique(record.productionOwners, event.owner);
 }
 
 function addEntrypointMetadata(
@@ -171,13 +158,12 @@ function buildScopeMaps(context: ProgramContext, scope: TopologyScope) {
   return { recordByCanonicalKey, recordBySpecifierAndExportName };
 }
 
-function collectReferenceEvents(
+function collectConsumers(
   context: ProgramContext,
   scope: TopologyScope,
   recordBySpecifierAndExportName: Map<string, Map<string, TopologyRecord>>,
   includeTests: boolean,
-): ReferenceEvent[] {
-  const events: ReferenceEvent[] = [];
+) {
   for (const fileName of context.project.program.getSourceFileNames()) {
     const sourceFile = context.project.program.getSourceFile(fileName);
     if (!sourceFile || sourceFile.isDeclarationFile) {
@@ -188,7 +174,7 @@ function collectReferenceEvents(
       continue;
     }
     const relPath = context.relativeToRepo(sourceFile.fileName);
-    const bucket = scope.classifyUsageBucket(relPath);
+    const bucket = classifyUsageBucket(scope, relPath);
     if (!includeTests && bucket === "test") {
       continue;
     }
@@ -198,9 +184,6 @@ function collectReferenceEvents(
         continue;
       }
       const importSpecifier = statement.moduleSpecifier.text.trim();
-      if (!scope.importFilter(importSpecifier)) {
-        continue;
-      }
       const recordMap = recordBySpecifierAndExportName.get(importSpecifier);
       if (!recordMap) {
         continue;
@@ -227,17 +210,12 @@ function collectReferenceEvents(
           if (!localSymbol) {
             continue;
           }
-          events.push({
-            canonicalKey: record.canonicalKey,
+          recordConsumer(
+            record,
             bucket,
-            consumerPath: relPath,
-            usageCount: countIdentifierUsages(context, sourceFile, localSymbol, element.name.text),
-            importCount: 1,
-            importSpecifier,
-            owner: bucket === "production" ? scope.ownerForPath(relPath) : null,
-            extensionId: bucket === "production" ? scope.extensionForPath(relPath) : null,
-            packageOwner: bucket === "production" ? scope.packageOwnerForPath(relPath) : null,
-          });
+            countIdentifierUsages(context, sourceFile, localSymbol, element.name.text),
+            relPath,
+          );
         }
         continue;
       }
@@ -257,36 +235,28 @@ function collectReferenceEvents(
           if (usageCount <= 0) {
             continue;
           }
-          events.push({
-            canonicalKey: record.canonicalKey,
-            bucket,
-            consumerPath: relPath,
-            usageCount,
-            importCount: 1,
-            importSpecifier,
-            owner: bucket === "production" ? scope.ownerForPath(relPath) : null,
-            extensionId: bucket === "production" ? scope.extensionForPath(relPath) : null,
-            packageOwner: bucket === "production" ? scope.packageOwnerForPath(relPath) : null,
-          });
+          recordConsumer(record, bucket, usageCount, relPath);
         }
       }
     }
   }
-  return events;
 }
 
 function finalizeRecords(records: TopologyRecord[]) {
   for (const record of records) {
-    sortUnique(record.entrypoints);
-    sortUnique(record.exportNames);
-    sortUnique(record.publicSpecifiers);
-    sortUnique(record.internalConsumers);
-    sortUnique(record.productionConsumers);
-    sortUnique(record.testConsumers);
-    sortUnique(record.productionExtensions);
-    sortUnique(record.productionPackages);
-    sortUnique(record.productionOwners);
-    record.isTypeOnlyCandidate = isTypeOnlyCandidate(record);
+    for (const values of [
+      record.entrypoints,
+      record.exportNames,
+      record.publicSpecifiers,
+      record.internalConsumers,
+      record.productionConsumers,
+      record.testConsumers,
+      record.productionExtensions,
+      record.productionPackages,
+      record.productionOwners,
+    ]) {
+      values.sort((left, right) => left.localeCompare(right));
+    }
     record.sharednessScore = computeSharednessScore(record);
     record.moveBackToOwnerScore = computeMoveBackToOwnerScore(record);
   }
@@ -325,8 +295,7 @@ function buildRankedCandidates(records: TopologyRecord[], limit: number): Ranked
       .filter((record) => record.publicSpecifiers.length > 1)
       .toSorted((left, right) => right.publicSpecifiers.length - left.publicSpecifiers.length)
       .slice(0, limit),
-    singleOwnerShared: records
-      .filter((record) => record.productionOwners.length === 1 && record.productionImportCount > 0)
+    singleOwnerShared: filterRecordsForReport(records, "single-owner-shared")
       .toSorted((left, right) => right.productionRefCount - left.productionRefCount)
       .slice(0, limit),
   };
@@ -348,18 +317,7 @@ export function analyzeTopology(options: {
       context,
       options.scope,
     );
-    const events = collectReferenceEvents(
-      context,
-      options.scope,
-      recordBySpecifierAndExportName,
-      includeTests,
-    );
-    for (const event of events) {
-      const record = recordByCanonicalKey.get(event.canonicalKey);
-      if (record) {
-        bucketConsumer(record, event);
-      }
-    }
+    collectConsumers(context, options.scope, recordBySpecifierAndExportName, includeTests);
     const allRecords = finalizeRecords([...recordByCanonicalKey.values()]);
     const filteredRecords = filterRecordsForReport(allRecords, options.report);
 
@@ -384,15 +342,8 @@ export function analyzeTopology(options: {
         usedByProduction: allRecords.filter((record) => record.productionImportCount > 0).length,
         usedByTests: allRecords.filter((record) => record.testImportCount > 0).length,
         usedInternally: allRecords.filter((record) => record.internalImportCount > 0).length,
-        singleOwnerShared: allRecords.filter(
-          (record) => record.productionOwners.length === 1 && record.productionImportCount > 0,
-        ).length,
-        unused: allRecords.filter(
-          (record) =>
-            record.productionImportCount === 0 &&
-            record.testImportCount === 0 &&
-            record.internalImportCount === 0,
-        ).length,
+        singleOwnerShared: filterRecordsForReport(allRecords, "single-owner-shared").length,
+        unused: filterRecordsForReport(allRecords, "unused-public-surface").length,
       },
       rankedCandidates: buildRankedCandidates(allRecords, limit),
       records: filteredRecords,

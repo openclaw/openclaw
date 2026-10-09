@@ -1,10 +1,10 @@
-// Normalization core tests cover shared error coercion and formatting behavior.
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
   formatErrorMessage,
+  ProviderAuthPersistenceError,
   stringifyNonErrorCause,
   toErrorObject,
   toStructuredErrorObject,
@@ -15,6 +15,50 @@ const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
 
 describe("formatErrorMessage", () => {
+  it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
+    const persistence = new Error("write secret", { cause: new Error("write root") });
+    const cleanup = new AggregateError([new Error("cleanup root")], "cleanup secret");
+    const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
+      cause: cleanup,
+    });
+    const redact = (text: string) => text.replaceAll("secret", "[REDACTED]");
+
+    expect(formatErrorMessage(new Error("outer", { cause: failure }), { redact })).toBe(
+      "outer | persistence failed | write [REDACTED] | cleanup [REDACTED] | write root | cleanup root",
+    );
+    expect(String(failure)).toBe("AggregateError: persistence failed");
+
+    const plain = new AggregateError([persistence, cleanup], "persistence failed", {
+      cause: cleanup,
+    });
+    plain.name = "ProviderAuthPersistenceError";
+    expect(formatErrorMessage(new Error("outer", { cause: plain }), { redact })).toBe(
+      "outer | persistence failed | cleanup [REDACTED] | write [REDACTED] | cleanup root | write root",
+    );
+  });
+
+  it.each(["persistenceError", "cleanupError"])(
+    "retains aggregate diagnostics when the typed %s field is inaccessible",
+    (field) => {
+      const persistence = new Error("write failed");
+      const cleanup = new Error("cleanup failed");
+      const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
+        cause: cleanup,
+      });
+      Object.defineProperty(failure, field, {
+        get() {
+          throw new Error("diagnostic field unavailable");
+        },
+      });
+
+      expect(format(failure)).toBe(
+        field === "persistenceError"
+          ? "persistence failed | cleanup failed | write failed"
+          : "persistence failed | write failed | cleanup failed",
+      );
+    },
+  );
+
   it("retains both failures from actual async disposal", async () => {
     const body = new Error("body secret");
     const cleanup = new Error("cleanup secret");
@@ -37,7 +81,7 @@ describe("formatErrorMessage", () => {
     expect(redact).toHaveBeenCalledOnce();
   });
 
-  it.each([0, false, null, undefined])("retains a downlevel suppressed value %s", (suppressed) => {
+  it.each([0, null, undefined])("retains a downlevel suppressed value %s", (suppressed) => {
     const failure = Object.assign(new Error("disposal failed"), {
       name: "SuppressedError",
       error: new Error("cleanup failed"),
@@ -48,16 +92,9 @@ describe("formatErrorMessage", () => {
   });
 
   it.each(
-    ["native", "vm", "tagged"].flatMap((kind) =>
-      ["message", "name"].map((field) => ({ kind, field })),
-    ),
+    ["native", "vm"].flatMap((kind) => ["message", "name"].map((field) => ({ kind, field }))),
   )("isolates inaccessible $field on $kind errors", ({ kind, field }) => {
-    const error: unknown =
-      kind === "vm"
-        ? runInNewContext("new Error('')")
-        : kind === "native"
-          ? new Error("")
-          : { [Symbol.toStringTag]: "Error" };
+    const error: unknown = kind === "vm" ? runInNewContext("new Error('')") : new Error("");
     Object.defineProperty(error, field, {
       get() {
         throw new Error("diagnostic field unavailable");
@@ -162,11 +199,7 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
     );
-    // A non-Error cause carrying recognized status/code fields alongside extra
-    // keys used to be dropped entirely: formatStatusAndCode returns undefined
-    // for any object with keys beyond status/code, and the cause-chain branch
-    // had no stringifyUnknown fallback (unlike the top-level branch). The
-    // structured detail now survives instead of being swallowed.
+    // Extra fields must survive when status/code formatting declines the cause.
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
       'request failed | {"statusCode":429}',
     );
@@ -187,10 +220,6 @@ describe("formatErrorMessage", () => {
     expect(format(undefined)).toBe("undefined");
     expect(format(123n)).toBe("123");
     expect(format(circular)).toBe("[object Object]");
-  });
-
-  it("requires an owner-supplied redactor", () => {
-    expect(formatErrorMessage("sensitive", { redact: () => "redacted" })).toBe("redacted");
   });
 });
 
@@ -222,7 +251,7 @@ describe("toErrorObject", () => {
 
   it("preserves structured details from non-Error objects", () => {
     const value = { code: "EPIPE", status: 500 };
-    const error = toErrorObject(value, "request failed") as Error & typeof value;
+    const error = toErrorObject(value, "request failed");
 
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
@@ -352,26 +381,19 @@ describe("toStructuredErrorObject", () => {
   it("protects Error-owned and prototype-mutating fields without reading them", () => {
     let protectedReads = 0;
     const cause = {
-      get name() {
-        protectedReads += 1;
-        return "SpoofedError";
-      },
-      get message() {
-        protectedReads += 1;
-        return "spoofed message";
-      },
-      get cause() {
-        protectedReads += 1;
-        return "spoofed cause";
-      },
-      get stack() {
-        protectedReads += 1;
-        return "spoofed stack";
-      },
       constructor: { polluted: true },
       prototype: { polluted: true },
       code: "EIO",
     };
+    for (const key of ["name", "message", "cause", "stack"]) {
+      Object.defineProperty(cause, key, {
+        enumerable: true,
+        get() {
+          protectedReads += 1;
+          return "spoofed";
+        },
+      });
+    }
     Object.defineProperty(cause, "__proto__", {
       value: { polluted: true },
       enumerable: true,

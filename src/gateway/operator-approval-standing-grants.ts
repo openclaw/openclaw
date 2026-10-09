@@ -4,18 +4,22 @@
 // one cron job re-execute without re-prompting while it revalidates.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
+import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
   loadedCronStoreFromRows,
   resolveCronJobGrantDefinitionGenerationFloor,
   resolveCronJobGrantDefinitionRevision,
 } from "../cron/store/row-codec.js";
+import { readCronRunReceiptCurrentFactsInDatabase } from "../cron/store/run-receipt-read.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { buildSystemRunApprovalEnvBinding } from "../infra/system-run-approval-binding.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -24,7 +28,14 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
+import type {
+  CronStandingGrantMintSpec,
+  CronStandingGrantLookupInput,
+  CronStandingGrantRecord,
+  ConsumeCronStandingGrantResult,
+  CronStandingGrantListing,
+  RevokeCronStandingGrantResult,
+} from "./operator-approval-standing-grants.types.js";
 
 const STANDING_GRANT_TABLE = "operator_approval_standing_grants";
 const STANDING_GRANT_GENERATION_TABLE = "operator_approval_standing_grant_generations";
@@ -67,28 +78,22 @@ type StandingGrantDatabase = Pick<
   | "cron_jobs"
 >;
 
-type CronStandingGrantRecord = CronStandingGrantMintSpec & {
-  grantId: string;
-  mintedByApprovalId: string;
-  createdAtMs: number;
-  /** NULL means the grant lives until revoked or superseded. */
-  expiresAtMs: number | null;
-  lastUsedAtMs: number | null;
-  useCount: number;
-};
-
-export type ConsumeCronStandingGrantResult =
-  | { outcome: "consumed"; grant: CronStandingGrantRecord }
-  | {
-      outcome:
-        | "no-grant"
-        | "revoked"
-        | "expired"
-        | "job-missing"
-        | "job-revision-changed"
-        | "approval-missing"
-        | "approval-not-allow-always";
-    };
+function projectCronStandingGrant(
+  row: Selectable<StandingGrantDatabase[typeof STANDING_GRANT_TABLE]>,
+): CronStandingGrantRecord {
+  return {
+    grantId: row.grant_id,
+    mintedByApprovalId: row.minted_by_approval_id,
+    agentId: row.agent_id,
+    cronJobId: row.cron_job_id,
+    jobConfigRevision: row.job_config_revision,
+    operationBinding: row.operation_binding,
+    createdAtMs: row.created_at_ms,
+    expiresAtMs: row.expires_at_ms,
+    lastUsedAtMs: row.last_used_at_ms,
+    useCount: row.use_count,
+  };
+}
 
 /**
  * Exact gateway-exec operation binding: trimmed command text, cwd, and the
@@ -255,52 +260,20 @@ export function mintCronStandingGrantLocked(
   );
 }
 
-type CronStandingGrantLookupParams = {
-  agentId: string;
-  cronJobId: string;
-  jobConfigRevision: string;
-  operationBinding: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-};
-
-/**
- * Validates a standing grant without recording a use. Callers that skip the
- * prompt on this result must still call consumeCronStandingGrant at the final
- * execution boundary: authority is recorded only where the process spawns, so
- * a revocation or job edit during awaited pre-spawn work still fails closed.
- */
-export function validateCronStandingGrant(
-  params: CronStandingGrantLookupParams,
+/** Worker snapshot lookup; only committed consumption authorizes a launch. */
+export function lookupCronStandingGrantInDatabase(
+  db: DatabaseSync,
+  params: CronStandingGrantLookupInput,
+  recordUse: boolean,
 ): ConsumeCronStandingGrantResult {
-  return lookupCronStandingGrant(params, { recordUse: false });
-}
-
-/**
- * Validates and consumes one standing grant for a cron-context exec. All
- * revalidation happens against authoritative rows inside one synchronous write
- * transaction: expiry, revocation, the cron job still existing with the same
- * config revision, and the minting approval row still holding allow-always.
- * Every non-consumed outcome means the caller falls through to prompting.
- */
-export function consumeCronStandingGrant(
-  params: CronStandingGrantLookupParams,
-): ConsumeCronStandingGrantResult {
-  return lookupCronStandingGrant(params, { recordUse: true });
-}
-
-function lookupCronStandingGrant(
-  params: CronStandingGrantLookupParams,
-  opts: { recordUse: boolean },
-): ConsumeCronStandingGrantResult {
-  return runOpenClawStateWriteTransaction((database) => {
-    if (!tableExists(database.db, STANDING_GRANT_TABLE)) {
+  return runSqliteDeferredTransactionSync(db, () => {
+    if (!tableExists(db, STANDING_GRANT_TABLE)) {
       return { outcome: "no-grant" };
     }
     const nowMs = params.nowMs ?? Date.now();
-    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
+    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(db);
     const grant = executeSqliteQueryTakeFirstSync(
-      database.db,
+      db,
       stateDb
         .selectFrom(STANDING_GRANT_TABLE)
         .selectAll()
@@ -311,7 +284,12 @@ function lookupCronStandingGrant(
         .orderBy("grant_id", "desc")
         .limit(1),
     );
-    if (!grant) {
+    if (
+      !grant ||
+      (params.expectedGrant &&
+        (grant.grant_id !== params.expectedGrant.grantId ||
+          grant.minted_by_approval_id !== params.expectedGrant.mintedByApprovalId))
+    ) {
       return { outcome: "no-grant" };
     }
     if (grant.revoked_at_ms !== null) {
@@ -326,7 +304,7 @@ function lookupCronStandingGrant(
       return { outcome: "job-revision-changed" };
     }
     const jobRows = executeSqliteQuerySync(
-      database.db,
+      db,
       stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", params.cronJobId).limit(2),
     ).rows;
     // Ambiguous multi-store rows fail closed to prompting like a missing job.
@@ -348,9 +326,9 @@ function lookupCronStandingGrant(
     if (jobRow.grant_definition_updated_at !== jobRow.updated_at) {
       return { outcome: "job-revision-changed" };
     }
-    const grantGenerationRow = tableExists(database.db, STANDING_GRANT_GENERATION_TABLE)
+    const grantGenerationRow = tableExists(db, STANDING_GRANT_GENERATION_TABLE)
       ? executeSqliteQueryTakeFirstSync(
-          database.db,
+          db,
           stateDb
             .selectFrom(STANDING_GRANT_GENERATION_TABLE)
             .select("job_definition_generation")
@@ -364,10 +342,28 @@ function lookupCronStandingGrant(
     if (grantGeneration === null || jobGeneration === null || grantGeneration !== jobGeneration) {
       return { outcome: "job-revision-changed" };
     }
+    const { handle } = params;
+    const facts = readCronRunReceiptCurrentFactsInDatabase(db, {
+      type: "cron.currentReceipt",
+      handle,
+      includeJob: false,
+      includeAvailability: true,
+    });
+    if (
+      !isDeepStrictEqual(facts.receipt, handle) ||
+      facts.deletionBlocked ||
+      handle.agentId !== params.agentId ||
+      handle.jobId !== params.cronJobId ||
+      handle.storeKey !== jobRow.store_key ||
+      handle.configRevision !== params.jobConfigRevision ||
+      (job.agentId !== undefined && job.agentId !== handle.agentId)
+    ) {
+      return { outcome: "receipt-not-current" };
+    }
     // Parent reversal fails closed: the approval row is the sole authorization
     // owner, so a pruned/reversed row invalidates its derivative grant.
     const approvalRow = executeSqliteQueryTakeFirstSync(
-      database.db,
+      db,
       stateDb
         .selectFrom("operator_approvals")
         .select(["status", "decision"])
@@ -379,26 +375,15 @@ function lookupCronStandingGrant(
     if (approvalRow.status !== "allowed" || approvalRow.decision !== "allow-always") {
       return { outcome: "approval-not-allow-always" };
     }
-    if (!opts.recordUse) {
+    if (!recordUse) {
       return {
         outcome: "consumed",
-        grant: {
-          grantId: grant.grant_id,
-          mintedByApprovalId: grant.minted_by_approval_id,
-          agentId: grant.agent_id,
-          cronJobId: grant.cron_job_id,
-          jobConfigRevision: grant.job_config_revision,
-          operationBinding: grant.operation_binding,
-          createdAtMs: grant.created_at_ms,
-          expiresAtMs: grant.expires_at_ms,
-          lastUsedAtMs: grant.last_used_at_ms,
-          useCount: grant.use_count,
-        },
+        grant: projectCronStandingGrant(grant),
       };
     }
     const nextUseCount = grant.use_count + 1;
     const updated = executeSqliteQuerySync(
-      database.db,
+      db,
       stateDb
         .updateTable(STANDING_GRANT_TABLE)
         .set({ last_used_at_ms: nowMs, use_count: nextUseCount })
@@ -412,87 +397,59 @@ function lookupCronStandingGrant(
     return {
       outcome: "consumed",
       grant: {
-        grantId: grant.grant_id,
-        mintedByApprovalId: grant.minted_by_approval_id,
-        agentId: grant.agent_id,
-        cronJobId: grant.cron_job_id,
-        jobConfigRevision: grant.job_config_revision,
-        operationBinding: grant.operation_binding,
-        createdAtMs: grant.created_at_ms,
-        expiresAtMs: grant.expires_at_ms,
+        ...projectCronStandingGrant(grant),
         lastUsedAtMs: nowMs,
         useCount: nextUseCount,
       },
     };
-  }, params.databaseOptions);
+  });
 }
 
-/** One grant row projected for operator surfaces (list, CLI, cards). */
-export type CronStandingGrantListing = CronStandingGrantRecord & {
-  /** Display name from the owning cron job row; null when the job is gone. */
-  cronJobName: string | null;
-  revokedAtMs: number | null;
-  revokedBy: string | null;
-};
-
-/**
- * Lists standing grants for operator surfaces, newest first. Includes revoked
- * and expired rows so the ledger explains recent history; callers render the
- * state from the row facts instead of filtering here.
- */
-export function listCronStandingGrants(
-  params: {
-    limit?: number;
+/** Called only by the existing shared-state writer transaction. */
+export function consumeCronStandingGrantInDatabase(
+  params: CronStandingGrantLookupInput & {
+    recordUse: boolean;
     databaseOptions?: OpenClawStateDatabaseOptions;
-  } = {},
+  },
+): ConsumeCronStandingGrantResult {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => lookupCronStandingGrantInDatabase(db, params, params.recordUse),
+    params.databaseOptions,
+  );
+}
+
+/** Includes revoked and expired grants so the operator ledger retains history. */
+export function listCronStandingGrantsInDatabase(
+  db: DatabaseSync,
+  params: { limit?: number } = {},
 ): CronStandingGrantListing[] {
   const limit = Math.max(1, Math.min(params.limit ?? 200, 500));
-  return runOpenClawStateWriteTransaction((database) => {
-    if (!tableExists(database.db, STANDING_GRANT_TABLE)) {
-      return [];
-    }
-    const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(database.db);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .selectFrom(STANDING_GRANT_TABLE)
-        .leftJoin("cron_jobs", "cron_jobs.job_id", "operator_approval_standing_grants.cron_job_id")
-        .selectAll(STANDING_GRANT_TABLE)
-        .select("cron_jobs.name as cron_job_name")
-        .orderBy("operator_approval_standing_grants.created_at_ms", "desc")
-        .orderBy("operator_approval_standing_grants.grant_id", "desc")
-        .limit(limit),
-    ).rows;
-    return rows.map((row) => ({
-      grantId: row.grant_id,
-      mintedByApprovalId: row.minted_by_approval_id,
-      agentId: row.agent_id,
-      cronJobId: row.cron_job_id,
-      jobConfigRevision: row.job_config_revision,
-      operationBinding: row.operation_binding,
-      createdAtMs: row.created_at_ms,
-      expiresAtMs: row.expires_at_ms,
-      lastUsedAtMs: row.last_used_at_ms,
-      useCount: row.use_count,
+  if (!tableExists(db, STANDING_GRANT_TABLE)) {
+    return [];
+  }
+  const stateDb = getNodeSqliteKysely<StandingGrantDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom(STANDING_GRANT_TABLE)
+      .leftJoin("cron_jobs", "cron_jobs.job_id", "operator_approval_standing_grants.cron_job_id")
+      .selectAll(STANDING_GRANT_TABLE)
+      .select("cron_jobs.name as cron_job_name")
+      .orderBy("operator_approval_standing_grants.created_at_ms", "desc")
+      .orderBy("operator_approval_standing_grants.grant_id", "desc")
+      .limit(limit),
+  ).rows;
+  return rows.map((row) =>
+    Object.assign(projectCronStandingGrant(row), {
       cronJobName: row.cron_job_name ?? null,
       revokedAtMs: row.revoked_at_ms,
       revokedBy: row.revoked_by,
-    }));
-  }, params.databaseOptions);
+    }),
+  );
 }
 
-export type RevokeCronStandingGrantResult =
-  | { outcome: "revoked"; grant: CronStandingGrantListing }
-  | { outcome: "already-revoked" }
-  | { outcome: "not-found" };
-
-/**
- * Revokes one standing grant. Idempotent: a second revoke reports
- * already-revoked without touching the recorded revocation provenance. The
- * consume path fails closed on revoked_at_ms, so this takes effect at the
- * next occurrence's spawn boundary.
- */
-export function revokeCronStandingGrant(params: {
+/** Repeated revocation preserves the original actor and timestamp. */
+export function revokeCronStandingGrantInDatabase(params: {
   grantId: string;
   revokedBy: string;
   nowMs?: number;
@@ -525,16 +482,7 @@ export function revokeCronStandingGrant(params: {
     return {
       outcome: "revoked",
       grant: {
-        grantId: grant.grant_id,
-        mintedByApprovalId: grant.minted_by_approval_id,
-        agentId: grant.agent_id,
-        cronJobId: grant.cron_job_id,
-        jobConfigRevision: grant.job_config_revision,
-        operationBinding: grant.operation_binding,
-        createdAtMs: grant.created_at_ms,
-        expiresAtMs: grant.expires_at_ms,
-        lastUsedAtMs: grant.last_used_at_ms,
-        useCount: grant.use_count,
+        ...projectCronStandingGrant(grant),
         cronJobName: null,
         revokedAtMs: nowMs,
         revokedBy: params.revokedBy,

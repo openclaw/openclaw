@@ -18,31 +18,21 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  expectedCurrentSessionBinding,
+  type CurrentSessionBindingExpectation,
+} from "../../../infra/outbound/session-binding-native-selection.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import type { SessionBindingBindInput } from "../../../infra/outbound/session-binding.types.js";
 import type { ReplyPayload } from "../../types.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
-
-function resolveAcpBindingLabelNoun(params: {
-  conversationId?: string;
-  placement: "current" | "child";
-  threadId?: string;
-}): string {
-  if (params.placement === "child") {
-    return "thread";
-  }
-  if (!params.threadId) {
-    return "conversation";
-  }
-  return params.conversationId === params.threadId ? "thread" : "conversation";
-}
 
 export async function resolveBoundReplyPayload(params: {
   binding: SessionBindingRecord;
@@ -62,46 +52,6 @@ export async function resolveBoundReplyPayload(params: {
     conversation: params.binding.conversation,
   });
   return resolved ?? undefined;
-}
-
-function buildSpawnedAcpBindingMetadata(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId: string;
-  sessionKey: string;
-  agentId: string;
-  label: string;
-  senderId: string;
-  sessionMeta?: SessionAcpMeta;
-}): Record<string, unknown> {
-  return {
-    threadName: resolveThreadBindingThreadName({
-      agentId: params.agentId,
-      label: params.label,
-    }),
-    agentId: params.agentId,
-    label: params.label,
-    boundBy: params.senderId || "unknown",
-    introText: resolveThreadBindingIntroText({
-      agentId: params.agentId,
-      label: params.label,
-      idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
-        cfg: params.cfg,
-        channel: params.channel,
-        accountId: params.accountId,
-      }),
-      maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
-        cfg: params.cfg,
-        channel: params.channel,
-        accountId: params.accountId,
-      }),
-      sessionCwd: resolveAcpSessionCwd(params.sessionMeta),
-      sessionDetails: resolveAcpThreadSessionDetailLines({
-        sessionKey: params.sessionKey,
-        meta: params.sessionMeta,
-      }),
-    }),
-  };
 }
 
 export type SpawnedAcpSessionBinding = {
@@ -196,9 +146,11 @@ export async function bindSpawnedAcpSession(params: {
     conversationId,
     parentConversationId: bindingContext.parentConversationId,
   });
-  const labelNoun = resolveAcpBindingLabelNoun({ placement, threadId, conversationId });
+  const labelNoun =
+    placement === "child" || (threadId && conversationId === threadId) ? "thread" : "conversation";
+  let existingBinding: SessionBindingRecord | null | undefined;
   if (placement === "current") {
-    const existingBinding = bindingService.resolveByConversation(conversationRef);
+    existingBinding = await bindingService.resolveByConversationAsync(conversationRef);
     const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
       return { ok: false, error: `Only ${boundBy} can rebind this ${labelNoun}.` };
@@ -207,22 +159,38 @@ export async function bindSpawnedAcpSession(params: {
 
   try {
     commandParams.command.assertOwnerCurrent?.();
-    const binding = await bindingService.bind({
+    const label = params.label || params.agentId;
+    const lifecycleScope = {
+      cfg: commandParams.cfg,
+      channel: policy.channel,
+      accountId: policy.accountId,
+    };
+    const bindingInput: SessionBindingBindInput & CurrentSessionBindingExpectation = {
+      [expectedCurrentSessionBinding]: existingBinding,
       targetSessionKey: params.sessionKey,
       targetKind: "session",
       conversation: conversationRef,
       placement,
-      metadata: buildSpawnedAcpBindingMetadata({
-        cfg: commandParams.cfg,
-        channel: policy.channel,
-        accountId: policy.accountId,
-        sessionKey: params.sessionKey,
+      assertCurrent: commandParams.command.assertOwnerCurrent,
+      metadata: {
+        threadName: resolveThreadBindingThreadName({ agentId: params.agentId, label }),
         agentId: params.agentId,
-        label: params.label || params.agentId,
-        senderId,
-        sessionMeta: params.sessionMeta,
-      }),
-    });
+        label,
+        boundBy: senderId || "unknown",
+        introText: resolveThreadBindingIntroText({
+          agentId: params.agentId,
+          label,
+          idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel(lifecycleScope),
+          maxAgeMs: resolveThreadBindingMaxAgeMsForChannel(lifecycleScope),
+          sessionCwd: resolveAcpSessionCwd(params.sessionMeta),
+          sessionDetails: resolveAcpThreadSessionDetailLines({
+            sessionKey: params.sessionKey,
+            meta: params.sessionMeta,
+          }),
+        }),
+      },
+    };
+    const binding = await bindingService.bind(bindingInput);
     return { ok: true, bound: { binding, placement, labelNoun } };
   } catch (error) {
     return {

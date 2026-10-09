@@ -1,4 +1,7 @@
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
@@ -56,7 +59,7 @@ export function stripAssistantMediaDirectivesForDisplay(
   text: string,
   managedMediaUrls: readonly string[],
 ): string {
-  if (managedMediaUrls.length === 0 || !/(?:^|\n)\s*MEDIA:/iu.test(text)) {
+  if (managedMediaUrls.length === 0 || !/(?:^|[\r\n])\s*MEDIA:/iu.test(text)) {
     return text;
   }
   const managed = new Set(managedMediaUrls.map((url) => url.trim()).filter(Boolean));
@@ -105,11 +108,8 @@ export function truncateChatHistoryText(
 }
 
 export function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
+  const entry = readObjectRecord(message);
+  if (entry?.role !== "assistant") {
     return undefined;
   }
   if (typeof entry.text === "string") {
@@ -124,10 +124,10 @@ export function extractAssistantTextForSilentCheck(message: unknown): string | u
 
   const texts: string[] = [];
   for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
+    const typed = readObjectRecord(block);
+    if (!typed) {
       return undefined;
     }
-    const typed = block as { type?: unknown; text?: unknown };
     if (isAssistantInternalReasoningContentType(typed.type)) {
       continue;
     }
@@ -148,35 +148,28 @@ export function isAssistantInternalReasoningContentType(type: unknown): boolean 
 }
 
 export function hasAssistantNonTextContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      !isAssistantTextContentType((block as { type?: unknown }).type),
+  const content = readObjectRecord(message)?.content;
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      const entry = readObjectRecord(block);
+      return entry && !isAssistantTextContentType(entry.type);
+    })
   );
 }
 
 export function hasAssistantDisplayableNonTextContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      !isAssistantTextContentType((block as { type?: unknown }).type) &&
-      !isAssistantInternalReasoningContentType((block as { type?: unknown }).type),
+  const content = readObjectRecord(message)?.content;
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      const entry = readObjectRecord(block);
+      return (
+        entry &&
+        !isAssistantTextContentType(entry.type) &&
+        !isAssistantInternalReasoningContentType(entry.type)
+      );
+    })
   );
 }
 
@@ -193,11 +186,8 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
       ? [content]
       : Array.isArray(content)
         ? content.flatMap((block) => {
-            if (!block || typeof block !== "object" || Array.isArray(block)) {
-              return [];
-            }
-            const typed = block as { type?: unknown; text?: unknown };
-            return isAssistantTextContentType(typed.type) && typeof typed.text === "string"
+            const typed = readRecord(block);
+            return isAssistantTextContentType(typed?.type) && typeof typed?.text === "string"
               ? [typed.text]
               : [];
           })
@@ -228,11 +218,8 @@ export function isEmptyTextOnlyContent(content: unknown): boolean {
     return false;
   }
   for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text" || typeof entry.text !== "string" || entry.text.trim().length > 0) {
+    const entry = readObjectRecord(block);
+    if (entry?.type !== "text" || typeof entry.text !== "string" || entry.text.trim().length > 0) {
       return false;
     }
   }
@@ -252,10 +239,7 @@ export function extractProjectedText(content: unknown): string {
   }
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
+    const text = readObjectRecord(block)?.text;
     if (typeof text === "string") {
       parts.push(text);
     }
@@ -273,20 +257,14 @@ export function isCronRunMessage(message: Record<string, unknown>): boolean {
 }
 
 export function isForwardedUserMessage(message: Record<string, unknown>): boolean {
-  if (message.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(message.provenance);
-  return (
-    (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
-    isCronRunMessage(message)
-  );
+  return message.role === "user" && hasForwardedMessageProvenance(message);
 }
 
 export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
+  return message.role === "assistant" && hasForwardedMessageProvenance(message);
+}
+
+function hasForwardedMessageProvenance(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
   return (
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||

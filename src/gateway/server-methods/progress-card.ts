@@ -14,8 +14,7 @@ import {
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -26,20 +25,16 @@ function resolveProgressCardSession(
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
 ): { sessionKey: string; agentId: string; scopeKey: string } | undefined {
   const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  const requested = resolveRequestedSessionStoreTarget(cfg, params.sessionKey, params.agentId);
   if (!requested.ok) {
     respond(false, undefined, requested.error);
     return undefined;
   }
-  const canonicalKey = resolveSessionStoreKey({
-    cfg,
-    sessionKey: params.sessionKey,
-    storeAgentId: requested.agentId,
-  });
+  const { sessionKey, agentId } = requested.value;
   return {
-    sessionKey: canonicalKey,
-    agentId: requested.agentId,
-    scopeKey: sessionObserverScopeKey(canonicalKey, requested.agentId),
+    sessionKey,
+    agentId,
+    scopeKey: sessionObserverScopeKey(sessionKey, agentId),
   };
 }
 

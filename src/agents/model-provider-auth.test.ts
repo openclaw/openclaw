@@ -31,7 +31,6 @@ const modelAuthMocks = vi.hoisted(() => ({
       authEvidenceMap: {},
     },
     syntheticAuthProviderRefs: [],
-    syntheticAuthProviderRefsComplete: true,
   })),
   prepareRuntimeAvailableProviderAuth:
     vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
@@ -47,7 +46,6 @@ const modelAuthAvailabilityMocks = vi.hoisted(() => {
       evaluateModelAuth,
       evaluateRuntimeModelAuth: evaluateModelAuth,
       resolveProviderAuthAvailability: vi.fn(() => false),
-      hasSyntheticAuth: vi.fn(() => false),
     })),
   };
 });
@@ -183,7 +181,6 @@ describe("model auth checker", () => {
     expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
-        allowPreparedRuntimeAuth: true,
         externalCliProviderIds: ["openai"],
         syntheticAuthProviderRefs: [],
       }),
@@ -227,6 +224,27 @@ describe("model auth checker", () => {
     await expect(hasAuth.evaluateModelAuth("openai", ref)).resolves.toBe(evaluation);
     await expect(hasAuth("openai", { ...ref })).resolves.toBe(true);
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
+  });
+
+  it("retries a rejected route evaluation while sharing concurrent callers", async () => {
+    const failure = new Error("catalog unavailable");
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const hasAuth = createProviderAuthChecker({ cfg: {} });
+    const ref = { modelId: "fixture-model" };
+    const first = hasAuth.evaluateModelAuth("fixture", ref);
+    const concurrent = hasAuth.evaluateModelAuth("fixture", { ...ref });
+    await expect(first).rejects.toBe(failure);
+    await expect(concurrent).rejects.toBe(failure);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
+
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
+      availability: true,
+      routeResolution: null,
+    });
+    await expect(hasAuth("fixture", ref)).resolves.toBe(true);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
   });
 
   it("uses shared model auth evaluation for a non-OpenAI AWS SDK model", async () => {

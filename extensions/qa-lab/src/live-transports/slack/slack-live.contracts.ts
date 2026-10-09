@@ -1,4 +1,3 @@
-// QA Lab Slack live domain contracts and wire schemas.
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
@@ -15,15 +14,6 @@ export type SlackQaFetchFunction = NonNullable<
 type WebClient = SlackQaWebClient;
 
 export type SlackQaRuntimeEnv = z.infer<typeof slackQaCredentialPayloadSchema>;
-
-export type SlackChannelStatus = {
-  connected?: boolean;
-  lastConnectedAt?: number;
-  lastDisconnect?: unknown;
-  lastError?: string | null;
-  restartPending?: boolean;
-  running?: boolean;
-};
 
 export type SlackChannelReadinessMode = "connected" | "started";
 
@@ -121,7 +111,6 @@ export type SlackQaMessageScenarioRun = {
   matchText: string;
   /** Observation window for negative scenarios; must stay below the enclosing flow deadline. */
   noReplyObservationMs?: number;
-  preserveGatewayDebug?: boolean;
   settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
   verifyObserved?: (params: {
@@ -210,11 +199,16 @@ export type SlackQaScenarioContext = {
   channelId: string;
   driverClient: WebClient;
   gateway: QaGatewayChild;
-  postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
   sutReadClient: WebClient;
-  waitForReady: () => Promise<void>;
+};
+
+export type SlackQaApprovalContext = Pick<
+  SlackQaScenarioContext,
+  "sutIdentity" | "sutReadClient"
+> & {
+  gateway: Pick<QaGatewayChild, "call">;
 };
 
 export type SlackQaScenarioImplementation = {
@@ -288,13 +282,6 @@ export const SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV = "OPENCLAW_QA_SLACK_APPROVAL_
 export const SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV =
   "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS";
 export const SLACK_QA_WEB_API_TIMEOUT_MS = 45_000;
-export const SLACK_QA_ENV_KEYS = [
-  "OPENCLAW_QA_SLACK_CHANNEL_ID",
-  "OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN",
-  "OPENCLAW_QA_SLACK_SUT_BOT_TOKEN",
-  "OPENCLAW_QA_SLACK_SUT_APP_TOKEN",
-] as const;
-
 export const slackQaCredentialPayloadSchema = z.object({
   channelId: z.string().trim().min(1),
   driverBotToken: z.string().trim().min(1),

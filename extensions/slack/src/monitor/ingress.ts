@@ -11,7 +11,10 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
 import { parseSlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
@@ -23,6 +26,10 @@ const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
 const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
+// Socket/HTTP receivers authenticate before admission; the durable kind preserves
+// that provenance across restarts, independently of the current configured mode.
+const SLACK_NATIVE_INGRESS_CONTEXT_KEY = "openclawSlackNativeIngress";
+const nativeIngress = Symbol("slack-native-ingress");
 
 type SlackIngressPayload = SlackIngressBody & { version: number };
 
@@ -94,8 +101,7 @@ type SlackDurableIngress = {
 const SlackIngressPayloadError = createChannelIngressError("SlackIngressPayloadError");
 
 function resolveSlackEventId(body: unknown): string | null {
-  const eventId = asOptionalRecord(body)?.event_id;
-  return typeof eventId === "string" && eventId.trim() ? eventId.trim() : null;
+  return normalizeOptionalString(asOptionalRecord(body)?.event_id) ?? null;
 }
 
 function resolveSlackIngressLane(body: unknown, eventId: string): string {
@@ -105,10 +111,8 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
   const assistantThread = asOptionalRecord(event?.assistant_thread);
   const team = asOptionalRecord(envelope?.team);
   const teamId =
-    [envelope?.team_id, team?.id, event?.team]
-      .find((value) => typeof value === "string" && value.trim())
-      ?.toString()
-      .trim() || "workspace";
+    [envelope?.team_id, team?.id, event?.team].map(normalizeOptionalString).find(Boolean) ??
+    "workspace";
   // New-channel traffic must stay behind channel_id_changed migration work.
   // The new ID owns the post-change conversation lane, not the retired old ID.
   const channelId = [
@@ -118,16 +122,12 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
     item?.channel,
     assistantThread?.channel_id,
   ]
-    .find((value) => typeof value === "string" && value.trim())
-    ?.toString()
-    .trim();
+    .map(normalizeOptionalString)
+    .find(Boolean);
   if (channelId) {
     return `team:${teamId}:conversation:${channelId}`;
   }
-  const userId = [event?.user, event?.user_id]
-    .find((value) => typeof value === "string" && value.trim())
-    ?.toString()
-    .trim();
+  const userId = [event?.user, event?.user_id].map(normalizeOptionalString).find(Boolean);
   return userId ? `team:${teamId}:user:${userId}` : `event:${eventId}`;
 }
 
@@ -145,7 +145,11 @@ function decodeSlackIngressPayload(
     }
     return { version: payload.version, body: payload };
   }
-  if (!asOptionalRecord(payload.body) || resolveSlackEventId(payload.body) !== eventId) {
+  if (
+    payload.kind !== "events-api" ||
+    !asOptionalRecord(payload.body) ||
+    resolveSlackEventId(payload.body) !== eventId
+  ) {
     throw new SlackIngressPayloadError(`Slack ingress payload ${eventId} was invalid.`);
   }
   return { version: payload.version, body: payload };
@@ -204,6 +208,12 @@ export function resolveSlackIngressTurnLifecycle(
   return typeof lifecycle.onAdopted === "function" && lifecycle.abortSignal instanceof AbortSignal
     ? (lifecycle as SlackIngressTurnLifecycle)
     : null;
+}
+
+export function resolveSlackSenderAuthentication(context: unknown): "verified" | "asserted" {
+  return asOptionalRecord(context)?.[SLACK_NATIVE_INGRESS_CONTEXT_KEY] === nativeIngress
+    ? "verified"
+    : "asserted";
 }
 
 export function createSlackDurableIngress(
@@ -394,6 +404,7 @@ export function createSlackDurableIngress(
             ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
             customProperties: {
               [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: routedLifecycle,
+              [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
             },
           });
         }
@@ -435,7 +446,13 @@ export function createSlackDurableIngress(
       if (!app) {
         throw new Error("Slack ingress receiver is not attached to a Bolt app.");
       }
-      await app.processEvent(event);
+      await app.processEvent({
+        ...event,
+        customProperties: {
+          ...event.customProperties,
+          [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
+        },
+      });
       return;
     }
     await monitor.admit({

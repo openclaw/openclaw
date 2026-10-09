@@ -99,43 +99,50 @@ function pushHunkLine(
   collector: PatchCollector,
   section: PatchSection,
   raw: string,
-  hunk: HunkState,
-): void {
-  let kind: DiffLineKind;
-  let lineNo: number | undefined;
-  if (raw.startsWith("+")) {
-    kind = "add";
-    lineNo = hunk.newLine;
-    if (hunk.newLine !== undefined) {
-      hunk.newLine += 1;
-      hunk.newLeft = Math.max(0, (hunk.newLeft ?? 0) - 1);
-    }
-  } else if (raw.startsWith("-")) {
-    kind = "del";
-    lineNo = hunk.oldLine;
-    if (hunk.oldLine !== undefined) {
+  hunk: HunkState | null,
+): HunkState | null {
+  const kind: DiffLineKind = raw.startsWith("+") ? "add" : raw.startsWith("-") ? "del" : "ctx";
+  const lineNo = kind === "del" ? hunk?.oldLine : hunk?.newLine;
+  // Context consumes both sides together; unnumbered patch hunks keep both absent.
+  if (hunk && (kind !== "ctx" || (hunk.oldLine !== undefined && hunk.newLine !== undefined))) {
+    if (kind !== "add" && hunk.oldLine !== undefined) {
       hunk.oldLine += 1;
       hunk.oldLeft = Math.max(0, (hunk.oldLeft ?? 0) - 1);
     }
-  } else {
-    kind = "ctx";
-    lineNo = hunk.newLine;
-    if (hunk.oldLine !== undefined && hunk.newLine !== undefined) {
-      hunk.oldLine += 1;
+    if (kind !== "del" && hunk.newLine !== undefined) {
       hunk.newLine += 1;
-      hunk.oldLeft = Math.max(0, (hunk.oldLeft ?? 0) - 1);
       hunk.newLeft = Math.max(0, (hunk.newLeft ?? 0) - 1);
     }
   }
   pushLine(collector, section, {
     kind,
     ...(lineNo !== undefined ? { lineNo } : {}),
-    text: raw === "" ? "" : raw.slice(1),
+    text: raw.slice(1),
   });
+  return hunk?.oldLeft === 0 && hunk.newLeft === 0 ? null : hunk;
 }
 
-function hunkComplete(hunk: HunkState): boolean {
-  return hunk.oldLeft !== undefined && hunk.oldLeft === 0 && hunk.newLeft === 0;
+function appendHunk(
+  collector: PatchCollector,
+  section: PatchSection | null,
+  raw: string,
+  hunk: HunkState | null,
+  allowUnnumbered = false,
+): HunkState | null {
+  if (raw.startsWith("@@")) {
+    if (section) {
+      separateHunk(collector, section);
+    }
+    return parseHunkHeader(raw);
+  }
+  return section &&
+    (hunk || allowUnnumbered) &&
+    (raw.startsWith("+") ||
+      raw.startsWith("-") ||
+      raw.startsWith(" ") ||
+      (allowUnnumbered && raw === ""))
+    ? pushHunkLine(collector, section, raw, hunk)
+    : hunk;
 }
 
 function sectionLabel(section: PatchSection): string {
@@ -203,23 +210,18 @@ function finish(collector: PatchCollector): PatchViewData | null {
 function parseCodexPatch(text: string): PatchViewData | null {
   const collector: PatchCollector = { sections: [], storedRows: 0, truncated: false };
   let current: PatchSection | null = null;
-  let mode: PatchOperation | "outside" = "outside";
   let hunk: HunkState | null = null;
   for (const raw of splitDiffLines(text)) {
-    const structural = mode === "update" ? raw.trimEnd() : raw.trim();
+    const structural = current?.operation === "update" ? raw.trimEnd() : raw.trim();
     const fileMatch = structural.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
     if (fileMatch) {
-      const operation = fileMatch[1];
-      const path = fileMatch[2];
-      if (!operation || !path) {
-        continue;
-      }
-      mode = operation.toLowerCase() as PatchOperation;
-      current = startSection(collector, mode, path);
+      const operation = fileMatch[1]!.toLowerCase() as PatchOperation;
+      current = startSection(collector, operation, fileMatch[2]!);
       hunk = null;
       continue;
     }
-    const moveMatch = mode === "update" ? structural.match(/^\*\*\* Move to: (.+)$/) : null;
+    const moveMatch =
+      current?.operation === "update" ? structural.match(/^\*\*\* Move to: (.+)$/) : null;
     if (moveMatch && current) {
       current.path = moveMatch[1]?.trim() ?? current.path;
       continue;
@@ -235,26 +237,14 @@ function parseCodexPatch(text: string): PatchViewData | null {
     if (!current) {
       continue;
     }
-    if (mode === "update" && raw.startsWith("@@")) {
-      separateHunk(collector, current);
-      hunk = parseHunkHeader(raw);
-      continue;
-    }
-    if (mode === "add" && raw.startsWith("+")) {
+    if (current.operation === "add" && raw.startsWith("+")) {
       pushLine(collector, current, {
         kind: "add",
         lineNo: current.stat.added + 1,
         text: raw.slice(1),
       });
-    } else if (
-      mode === "update" &&
-      (raw === "" || raw.startsWith("+") || raw.startsWith("-") || raw.startsWith(" "))
-    ) {
-      const activeHunk = hunk ?? {};
-      pushHunkLine(collector, current, raw, activeHunk);
-      if (hunk && hunkComplete(hunk)) {
-        hunk = null;
-      }
+    } else if (current.operation === "update") {
+      hunk = appendHunk(collector, current, raw, hunk, true);
     }
   }
   return finish(collector);
@@ -292,19 +282,11 @@ function parseUnifiedPatch(text: string): PatchViewData | null {
   let hunk: HunkState | null = null;
   let awaitingGitHeaders = false;
   for (let index = 0; index < rawLines.length; index++) {
-    const raw = rawLines[index];
-    if (raw === undefined) {
-      continue;
-    }
+    const raw = rawLines[index]!;
     const gitHeader = raw.match(/^diff --git a\/(.+) b\/(.+)$/);
     if (gitHeader) {
-      const sourcePath = gitHeader[1];
-      const path = gitHeader[2];
-      if (!sourcePath || !path) {
-        continue;
-      }
-      current = startSection(collector, "update", path);
-      current.sourcePath = sourcePath;
+      current = startSection(collector, "update", gitHeader[2]!);
+      current.sourcePath = gitHeader[1]!;
       hunk = null;
       awaitingGitHeaders = true;
       continue;
@@ -317,22 +299,12 @@ function parseUnifiedPatch(text: string): PatchViewData | null {
       continue;
     }
     if (raw.startsWith("@@")) {
-      if (current) {
-        separateHunk(collector, current);
-      }
-      hunk = parseHunkHeader(raw);
       awaitingGitHeaders = false;
-      continue;
     }
     if (/^index |^new file mode |^deleted file mode |^similarity index /.test(raw)) {
       continue;
     }
-    if (current && hunk && (raw.startsWith("+") || raw.startsWith("-") || raw.startsWith(" "))) {
-      pushHunkLine(collector, current, raw, hunk);
-      if (hunkComplete(hunk)) {
-        hunk = null;
-      }
-    }
+    hunk = appendHunk(collector, current, raw, hunk);
   }
   return finish(collector);
 }
@@ -349,25 +321,6 @@ function readStat(value: unknown): DiffStat | null {
   return typeof added === "number" && typeof removed === "number" && added >= 0 && removed >= 0
     ? { added: Math.trunc(added), removed: Math.trunc(removed) }
     : null;
-}
-
-function appendStructuredUpdate(
-  collector: PatchCollector,
-  section: PatchSection,
-  diff: string,
-): void {
-  let hunk: HunkState | null = null;
-  for (const raw of splitDiffLines(diff)) {
-    if (raw.startsWith("@@")) {
-      separateHunk(collector, section);
-      hunk = parseHunkHeader(raw);
-    } else if (hunk && (raw.startsWith("+") || raw.startsWith("-") || raw.startsWith(" "))) {
-      pushHunkLine(collector, section, raw, hunk);
-      if (hunkComplete(hunk)) {
-        hunk = null;
-      }
-    }
-  }
 }
 
 function parseStructuredPatch(changes: unknown[]): PatchViewData | null {
@@ -388,7 +341,10 @@ function parseStructuredPatch(changes: unknown[]): PatchViewData | null {
     }
     if (typeof record.diff === "string") {
       if (operation === "update") {
-        appendStructuredUpdate(collector, section, record.diff);
+        let hunk: HunkState | null = null;
+        for (const raw of splitDiffLines(record.diff)) {
+          hunk = appendHunk(collector, section, raw, hunk);
+        }
       } else {
         const kind = operation === "add" ? "add" : "del";
         for (const [index, text] of splitDiffLines(record.diff).entries()) {

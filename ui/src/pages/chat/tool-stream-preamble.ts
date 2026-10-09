@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isCompleteAgentPreamble } from "../../../../src/agents/agent-activity-presentation.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
-import { retireCommentaryStream } from "./stream-segment-pruning.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { acceptsToolStreamSession } from "./tool-stream-status.ts";
 
@@ -32,7 +31,9 @@ function normalizePreambleProgressText(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  const stripped = stripInlineDirectiveTagsForDelivery(value).text.trim();
+  const stripped = stripInlineDirectiveTagsForDelivery(value)
+    .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
+    .trimEnd();
   const normalized = stripped.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
   return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
 }
@@ -58,32 +59,20 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   if (progress.text) {
     reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
-  const existingIndex = progress.itemId
-    ? host.chatStreamSegments.findIndex(
-        (segment) => segment.itemId === progress.itemId && segment.runId === payload.runId,
-      )
-    : -1;
-  const existing = host.chatStreamSegments[existingIndex];
-  const handoff =
-    progress.itemId && progress.text
-      ? retireCommentaryStream(host, {
-          runId: payload.runId,
-          itemId: progress.itemId,
-          text: progress.text,
-          timestamp: payload.ts,
-        })
-      : null;
-  progress.text = handoff?.text ?? progress.text;
-  const persisted =
-    progress.itemId &&
-    host.chatMessages?.some((message) => {
-      const identity = readAssistantStreamSegmentIdentity(message);
-      return identity?.itemId === progress.itemId && identity?.runId === payload.runId;
-    });
-  if (persisted || (progress.itemId && !progress.text.trim())) {
+  // An unkeyed preamble owns its event, independently of cumulative chat text.
+  const itemId =
+    progress.itemId ?? JSON.stringify(["openclaw-ui-preamble", payload.runId, payload.seq]);
+  const existing = host.chatStreamSegments.find(
+    (segment) => segment.itemId === itemId && segment.runId === payload.runId,
+  );
+  const persisted = host.chatMessages?.some((message) => {
+    const identity = readAssistantStreamSegmentIdentity(message);
+    return identity?.itemId === itemId && identity?.runId === payload.runId;
+  });
+  if (persisted || !progress.text.trim()) {
     // Durable or empty commentary retires only its matching keyed live copy.
     host.chatStreamSegments = host.chatStreamSegments.filter(
-      (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
+      (segment) => segment.itemId !== itemId || segment.runId !== payload.runId,
     );
     return true;
   }
@@ -92,17 +81,10 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       segment === existing
         ? {
             ...segment,
-            text:
-              segment.text.replace(/\s+/gu, " ").trim() === progress.text
-                ? segment.text
-                : progress.text,
+            text: progress.text,
           }
         : segment,
     );
-    return true;
-  }
-  const last = host.chatStreamSegments[host.chatStreamSegments.length - 1];
-  if (!progress.itemId && last && !last.toolCallId && last.text === progress.text) {
     return true;
   }
   host.chatStreamSegments = [
@@ -111,7 +93,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       text: progress.text,
       ts: payload.ts,
       runId: payload.runId,
-      ...(progress.itemId ? { itemId: progress.itemId } : {}),
+      itemId,
     },
   ];
   return true;

@@ -1,4 +1,3 @@
-// Timestamp helpers validate time zones and format log and diagnostic timestamps.
 const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
@@ -64,7 +63,7 @@ function getTimestampParts(date: Date, timeZone?: string) {
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
-      fractionalSecondDigits: 3 as 1 | 2 | 3,
+      fractionalSecondDigits: 3,
       timeZoneName: "longOffset",
     });
     timestampFormatterCache.set(effectiveTimeZone, fmt);

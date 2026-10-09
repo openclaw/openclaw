@@ -217,12 +217,12 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe(code);
   });
 
-  test("normalizes a single tab after a quote marker as prose", () => {
+  test("keeps authored spacing after a quote marker", () => {
     const result = parseInlineDirectives('[[reply_to_current]]\n> \tprint("a  b")');
 
     expect(result.hasReplyTag).toBe(true);
     expect(result.replyToCurrent).toBe(true);
-    expect(result.text).toBe('> print("a b")');
+    expect(result.text).toBe('> \tprint("a  b")');
   });
 
   test("preserves quoted directive examples beside an active audio directive", () => {
@@ -232,21 +232,6 @@ describe("parseInlineDirectives", () => {
     expect(result.audioAsVoice).toBe(true);
     expect(result.hasReplyTag).toBe(false);
     expect(result.text).toBe(code);
-  });
-
-  test("preserves fenced code block indentation after stripping a reply tag", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "```python",
-      "    if True:",
-      "        print('ok')",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      ["```python", "    if True:", "        print('ok')", "```"].join("\n"),
-    );
   });
 
   test("preserves word boundaries when a reply tag is adjacent to text", () => {
@@ -263,56 +248,21 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("text");
   });
 
-  // --- code-fence aware normalizeDirectiveWhitespace ---
-
-  test("preserves indented code block (4-space) inside a fenced block after stripping a directive", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "```js",
-      "function foo() {",
-      "    return 42;",
-      "        const nested = true;",
-      "}",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
+  test.each([
+    [
+      "backtick",
+      ["```js", "function foo() {", "    return 42;", "        const nested = true;", "}", "```"],
+    ],
+    [
+      "tab-indented",
+      ["```go", "func main() {", '\tfmt.Println("hello")', "\t\tif true {", "\t\t}", "}", "```"],
+    ],
+    ["tilde", ["~~~python", "    x  =  1", "        y  =  2", "~~~"]],
+  ])("preserves %s fenced code bytes after stripping a reply tag", (_name, lines) => {
+    const code = lines.join("\n");
+    const result = parseInlineDirectives(`[[reply_to_current]]\n${code}`);
     expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      [
-        "```js",
-        "function foo() {",
-        "    return 42;",
-        "        const nested = true;",
-        "}",
-        "```",
-      ].join("\n"),
-    );
-  });
-
-  test("preserves tab-indented lines inside a fenced code block", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "```go",
-      "func main() {",
-      '\tfmt.Println("hello")',
-      "\t\tif true {",
-      "\t\t}",
-      "}",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      [
-        "```go",
-        "func main() {",
-        '\tfmt.Println("hello")',
-        "\t\tif true {",
-        "\t\t}",
-        "}",
-        "```",
-      ].join("\n"),
-    );
+    expect(result.text).toBe(code);
   });
 
   test("preserves indent-code-block lines (4-space prefix) outside a fenced block", () => {
@@ -322,55 +272,31 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("Here is some code:\n\n    const x = 1;\n    const y = 2;");
   });
 
-  test("collapses multiple spaces on normal prose lines but not inside code blocks", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "prose  with  extra  spaces",
-      "```",
-      "  preserved   spacing  inside",
-      "```",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(
-      ["prose with extra spaces", "```", "  preserved   spacing  inside", "```"].join("\n"),
-    );
-  });
-
-  test("handles tilde fenced blocks (~~~) the same as backtick blocks", () => {
-    const input = [
-      "[[reply_to_current]]",
-      "~~~python",
-      "    x  =  1",
-      "        y  =  2",
-      "~~~",
-    ].join("\n");
-    const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.text).toBe(["~~~python", "    x  =  1", "        y  =  2", "~~~"].join("\n"));
+  test.each([
+    ["without directives", ""],
+    ["after a stripped reply tag", "[[reply_to_current]]\n"],
+  ])("keeps authored column spacing in HTML <pre> %s", (_name, prefix) => {
+    const pre = "<pre>#  Model    Index\n🥇 Opus     58     —      $5.98\n4  Fable    53</pre>";
+    const result = parseInlineDirectives(`${prefix}<b>Top</b>\n${pre}`);
+    expect(result.text).toBe(`<b>Top</b>\n${pre}`);
   });
 
   test.each([
-    [
-      "a false closing marker",
-      ["```python", "value = 'a  b'", "``` not a close", "x = 'c  d'", "```"],
-    ],
-    ["an unclosed fence", ["```python", "value = 'a  b'", "x = 'c  d'"]],
-    ["an indented closing fence", ["```python", "value = 'a  b'", "   ```"]],
-  ])("preserves canonical code fences with %s after removing directives", (_name, lines) => {
-    const code = lines.join("\n");
-    const result = parseInlineDirectives(`[[reply_to_current]]\n[[audio_as_voice]]\n${code}`);
-
-    expect(result.hasReplyTag).toBe(true);
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe(code);
+    ["between words", "Hello  [[reply_to_current]]  world", "Hello world"],
+    ["at line end", "Hello  [[audio_as_voice]]  \nworld", "Hello\nworld"],
+    ["on its own line", "Hello\n\n[[audio_as_voice]]\n\n\nworld", "Hello\n\nworld"],
+  ])("closes only the gap left by a directive %s", (_name, input, expected) => {
+    expect(parseInlineDirectives(input).text).toBe(expected);
   });
 
-  test("normalizes plain text without directives using code-fence awareness", () => {
-    const input = "plain  text  with  extra  spaces\n\n```\n    code  preserved\n```";
+  test("strips many separated directives while keeping each gap local", () => {
+    const count = 2_000;
+    const input = Array.from({ length: count }, (_, i) => `w${i}  [[audio_as_voice]]  x`).join(
+      "\n",
+    );
     const result = parseInlineDirectives(input);
-    expect(result.hasReplyTag).toBe(false);
-    expect(result.text).toBe("plain text with extra spaces\n\n```\n    code  preserved\n```");
+    expect(result.audioAsVoice).toBe(true);
+    expect(result.text).toBe(Array.from({ length: count }, (_, i) => `w${i} x`).join("\n"));
   });
 
   test.each([
@@ -385,19 +311,10 @@ describe("parseInlineDirectives", () => {
   ])("preserves the complete $name suffix only when requested", ({ suffix, inline }) => {
     const input = `first  line\r\nlast  line${inline ? "[[reply_to_current]]" : ""}${suffix}`;
 
-    expect(parseInlineDirectives(input).text).toBe("first line\nlast line");
+    expect(parseInlineDirectives(input).text).toBe("first  line\r\nlast  line");
     expect(parseInlineDirectives(input, { preserveTrailingWhitespace: true }).text).toBe(
-      `first line\nlast line${suffix}`,
+      `first  line\r\nlast  line${suffix}`,
     );
-  });
-
-  test("audio_as_voice directive does not corrupt adjacent fenced code block indentation", () => {
-    const input = ["[[audio_as_voice]]", "```bash", "  echo 'hello'", "    indented", "```"].join(
-      "\n",
-    );
-    const result = parseInlineDirectives(input);
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe(["```bash", "  echo 'hello'", "    indented", "```"].join("\n"));
   });
 
   test("preserves literal sentinel-like text while restoring masked code blocks", () => {

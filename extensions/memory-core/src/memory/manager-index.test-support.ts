@@ -447,7 +447,7 @@ export function createManagerIndexFixture(deps: {
       },
       agents: {
         defaults: { workspace },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);
@@ -457,7 +457,7 @@ export function createManagerIndexFixture(deps: {
     missingMessage = "manager missing",
   ): MemoryIndexManager => {
     if (!result.manager) {
-      throw new Error(missingMessage);
+      throw new Error(result.error ?? missingMessage);
     }
     return result.manager as unknown as MemoryIndexManager;
   };

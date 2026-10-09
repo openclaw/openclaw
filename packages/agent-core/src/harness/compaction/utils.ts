@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message } from "@openclaw/llm-core";
+import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
@@ -95,7 +95,7 @@ export function computeFileLists(fileOps: FileOperations): {
 // sessions. Hard caps keep the model-visible section bounded per the
 // context-budget invariant; overflow collapses to a "...and N more" line.
 export const MAX_FILE_OPS_SECTION_CHARS = 2_000;
-export const MAX_FILE_OPS_LIST_CHARS = 900;
+const MAX_FILE_OPS_LIST_CHARS = 900;
 
 function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
   if (files.length === 0 || maxChars <= 0) {
@@ -131,13 +131,8 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
     formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
     formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
   ].filter(Boolean);
-  if (sections.length === 0) {
-    return "";
-  }
-  const joined = `\n\n${sections.join("\n\n")}`;
-  return joined.length > MAX_FILE_OPS_SECTION_CHARS
-    ? joined.slice(0, MAX_FILE_OPS_SECTION_CHARS)
-    : joined;
+  // Both 900-character lists and their separators fit the 2,000-character section cap.
+  return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
 }
 
 /** Extract visible summary text without normalizing valid model output. */
@@ -246,12 +241,6 @@ export function getCompactionContent(
 const MAX_OMISSION_MESSAGES = 8;
 const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
 
-type PersistedSender = {
-  id?: string;
-  name?: string;
-  username?: string;
-};
-
 // Compaction sees both model messages and harness-only AgentMessages. Sender
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
@@ -260,7 +249,7 @@ type PersistedSenderCarrier = {
   role: string;
 };
 
-function readPersistedSender(message: PersistedSenderCarrier): PersistedSender | undefined {
+function readPersistedSender(message: PersistedSenderCarrier) {
   if (message.role !== "user") {
     return undefined;
   }
@@ -296,13 +285,6 @@ export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): st
   return sender ? ` sender=${JSON.stringify(sender)}` : "";
 }
 
-function formatConversationSpeaker(message: Message): string {
-  if (message.role !== "user") {
-    return message.role === "toolResult" ? "Tool result" : "User";
-  }
-  return `User${formatPersistedSenderSuffix(message)}`;
-}
-
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
@@ -311,7 +293,7 @@ export function serializeConversation(messages: Message[]): string {
   for (const msg of messages) {
     // Carriers remain in replay for thinking-prefix binding, not in summaries
     // where runtime-only context could become durable assistant-authored text.
-    if (msg.role === "user" && msg.runtimeContextCarrier === true) {
+    if (hasRuntimeContextMarker(msg)) {
       continue;
     }
     if (msg.role === "user" || msg.role === "toolResult") {
@@ -328,7 +310,9 @@ export function serializeConversation(messages: Message[]): string {
         .filter(Boolean)
         .join("\n");
       if (content) {
-        parts.push(`[${formatConversationSpeaker(msg)}]: ${content}`);
+        const speaker =
+          msg.role === "toolResult" ? "Tool result" : `User${formatPersistedSenderSuffix(msg)}`;
+        parts.push(`[${speaker}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];

@@ -8,7 +8,10 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
-import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureEffectAuthority,
+  captureChannelReadAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { captureFeishuSendContext } from "./send-context.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
@@ -23,7 +26,6 @@ const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
 } as const;
 
-/** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
@@ -220,7 +222,6 @@ type FeishuRequestAuthority = {
   beforeDispatch?: () => Promise<void>;
 };
 
-// Multi-account client cache
 const clientCache = new Map<
   string,
   {
@@ -235,12 +236,6 @@ function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
   return domain === "lark" ? Lark.Domain.Lark : Lark.Domain.Feishu;
 }
 
-/**
- * Create an HTTP instance that delegates to the Lark SDK's default instance
- * but injects a default request timeout and User-Agent header to prevent
- * indefinite hangs, set a standardized User-Agent per OAPI best practices, and
- * keep axios from taking a separate ambient proxy path for HTTPS requests.
- */
 function createFeishuHttpInstance(
   defaultTimeoutMs: number,
   configuredDomain?: FeishuDomain,
@@ -393,42 +388,57 @@ function createFeishuHttpInstance(
     }
   }
 
+  async function dispatch<T, D>(
+    authority: FeishuRequestAuthority | undefined,
+    options: Lark.HttpRequestOptions<D> | undefined,
+    send: (options: FeishuProxyAwareHttpRequestOptions<D>) => Promise<T>,
+  ): Promise<T> {
+    const effect = captureEffectAuthority();
+    const prepared = await injectRequestOptions(options, authority);
+    return effect.initiate(() => {
+      authority?.assertCurrent();
+      return send(prepared);
+    });
+  }
+
   return {
     request: (opts) =>
       // SDK message requests reach this seam after formatPayload/auth. Token
       // requests use post below and must never mark a message as dispatched.
       runRequest(
-        async (authority) =>
-          base.request(await injectRequestOptions(normalizeMultipartUploadData(opts), authority)),
+        (authority) =>
+          dispatch(authority, normalizeMultipartUploadData(opts), (prepared) =>
+            base.request(prepared),
+          ),
         "request",
       ),
     get: (url, opts) =>
-      runRequest(async (assert) =>
-        base.get(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.get(resolveRequestUrl(url), prepared)),
       ),
     post: (url, data, opts) =>
-      runRequest(async (assert) =>
-        base.post(resolveRequestUrl(url), data, await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.post(resolveRequestUrl(url), data, prepared)),
       ),
     put: (url, data, opts) =>
-      runRequest(async (assert) =>
-        base.put(resolveRequestUrl(url), data, await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.put(resolveRequestUrl(url), data, prepared)),
       ),
     patch: (url, data, opts) =>
-      runRequest(async (assert) =>
-        base.patch(resolveRequestUrl(url), data, await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.patch(resolveRequestUrl(url), data, prepared)),
       ),
     delete: (url, opts) =>
-      runRequest(async (assert) =>
-        base.delete(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.delete(resolveRequestUrl(url), prepared)),
       ),
     head: (url, opts) =>
-      runRequest(async (assert) =>
-        base.head(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.head(resolveRequestUrl(url), prepared)),
       ),
     options: (url, opts) =>
-      runRequest(async (assert) =>
-        base.options(resolveRequestUrl(url), await injectRequestOptions(opts, assert)),
+      runRequest((assert) =>
+        dispatch(assert, opts, (prepared) => base.options(resolveRequestUrl(url), prepared)),
       ),
   };
 }
@@ -446,10 +456,6 @@ export type FeishuClientCredentials = {
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
 
-/**
- * Create or get a cached Feishu client for an account.
- * Accepts any object with appId, appSecret, and optional domain/accountId.
- */
 export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
   const { accountId = "default", appId, appSecret, domain } = creds;
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
@@ -458,7 +464,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  // Check cache
   const cached = clientCache.get(accountId);
   if (
     cached &&
@@ -470,7 +475,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client with timeout-aware HTTP instance
   const client = new Lark.Client({
     appId,
     appSecret,
@@ -479,7 +483,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
   });
 
-  // Cache it
   clientCache.set(accountId, {
     client,
     config: { appId, appSecret, domain, httpTimeoutMs: defaultHttpTimeoutMs },
@@ -493,10 +496,7 @@ type FeishuWsClientCallbacks = Pick<
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
-/**
- * Create a Feishu WebSocket client for an account.
- * Note: WSClient is not cached since each call creates a new connection.
- */
+/** WSClient is not cached since each call creates a new connection. */
 export async function createFeishuWSClient(
   account: ResolvedFeishuAccount,
   callbacks: FeishuWsClientCallbacks = {},
@@ -521,9 +521,6 @@ export async function createFeishuWSClient(
   });
 }
 
-/**
- * Create an event dispatcher for an account.
- */
 export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.EventDispatcher {
   return new Lark.EventDispatcher({
     encryptKey: account.encryptKey,

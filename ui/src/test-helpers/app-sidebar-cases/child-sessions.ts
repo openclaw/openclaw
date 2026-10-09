@@ -84,11 +84,14 @@ describe("AppSidebar agent chip", () => {
     );
 
     expect(harness.list).toHaveBeenCalledWith({
+      rowMode: "compact",
+      source: "sidebar",
       spawnedBy: "agent:main:parent",
       limit: 100,
       includeGlobal: false,
       includeUnknown: false,
       configuredAgentsOnly: true,
+      excludeDock: true,
     });
     const childRows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-recent-session--child")];
     const parentTree = sidebar.querySelector('[data-session-tree="agent:main:parent"]');

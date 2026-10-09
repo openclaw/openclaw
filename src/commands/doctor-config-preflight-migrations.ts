@@ -1,5 +1,4 @@
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -30,17 +29,21 @@ import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration
 export async function prepareDoctorMigrationPlugins(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  retainedPluginIds?: readonly string[];
   measure?: ConfigSnapshotReadMeasure;
   snapshotRead: ConfigPreflightSnapshotRead;
   readRefreshedSnapshot: () => Promise<ConfigPreflightSnapshotRead>;
   onDeferredPlugins: (
     pending: readonly DeferredPluginMigration[],
     inspection?: PluginMigrationInspection,
-  ) => void;
+  ) => Promise<void>;
 }): Promise<ConfigPreflightSnapshotRead> {
   const convergence = await runDoctorPluginConvergence(params);
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
-  params.onDeferredPlugins(convergence.deferredPlugins ?? [], convergence.migrationInspection);
+  await params.onDeferredPlugins(
+    convergence.deferredPlugins ?? [],
+    convergence.migrationInspection,
+  );
   const refreshed = await params.readRefreshedSnapshot();
   assertPreflightConfigUnchanged(params.snapshotRead.snapshot, refreshed.snapshot);
   return refreshed;
@@ -100,13 +103,5 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
       }
     }
     throw error;
-  }
-}
-
-export function noteStateMigrationResult(result: MigrationMessages): void {
-  for (const key of ["changes", "notices", "warnings"] as const) {
-    if (result[key]?.length) {
-      note(result[key].map((entry) => `- ${entry}`).join("\n"), `Doctor ${key}`);
-    }
   }
 }

@@ -1,19 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-
-type NormalizeOpenAIStrictCompatOptions = {
-  promoteEmptyObject: boolean;
-};
-
-const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  // Draft-07 dependencies mix schema values with property-name arrays. The
-  // recursive helpers leave scalar array entries untouched.
-  "dependencies",
-  "patternProperties",
-  "properties",
-]);
+import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 
 // Annotation-only keywords whose null values can be dropped without changing
 // what the schema accepts; null constraint keywords must stay so projection
@@ -26,27 +13,12 @@ const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
   "title",
 ]);
 
-const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "allOf",
-  "anyOf",
-  "contains",
-  "contentSchema",
-  "else",
-  "if",
-  "items",
-  "not",
-  "oneOf",
-  "prefixItems",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
+const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set(
+  [...SCHEMA_OBJECT_KEYS, ...SCHEMA_ARRAY_KEYS].toSorted(),
+);
 
 function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+  if (!isRecord(schema)) {
     return schema;
   }
 
@@ -54,9 +26,7 @@ function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
   // Schema names are literal data; indexed writes would invoke __proto__'s setter.
   const normalized = Object.fromEntries<unknown>(
     Object.entries(schema).map(([key, value]) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(value, {
-        promoteEmptyObject: false,
-      });
+      const next = normalizeOpenAIStrictCompatSchemaRecursive(value);
       changed ||= next !== value;
       return [key, next];
     }),
@@ -66,14 +36,12 @@ function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
 
 function normalizeOpenAIStrictCompatSchemaRecursive(
   schema: unknown,
-  options: NormalizeOpenAIStrictCompatOptions,
+  promoteEmptyObject = false,
 ): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry, {
-        promoteEmptyObject: false,
-      });
+      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry);
       changed ||= next !== entry;
       return next;
     });
@@ -94,12 +62,10 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
       changed = true;
       return [];
     }
-    const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
+    const next = SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
-        ? normalizeOpenAIStrictCompatSchemaRecursive(value, {
-            promoteEmptyObject: false,
-          })
+        ? normalizeOpenAIStrictCompatSchemaRecursive(value)
         : value;
     changed ||= next !== value;
     return [[key, next]];
@@ -107,7 +73,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   const normalized = Object.fromEntries<unknown>(entries);
 
   if (Object.keys(normalized).length === 0) {
-    if (!options.promoteEmptyObject) {
+    if (!promoteEmptyObject) {
       return schema;
     }
     return {
@@ -138,10 +104,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   }
 
   const hasEmptyProperties =
-    normalized.properties &&
-    typeof normalized.properties === "object" &&
-    !Array.isArray(normalized.properties) &&
-    Object.keys(normalized.properties as Record<string, unknown>).length === 0;
+    isRecord(normalized.properties) && Object.keys(normalized.properties).length === 0;
 
   if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
     normalized.required = [];
@@ -161,9 +124,28 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
 export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeOpenAIStrictCompatSchemaRecursive(schema, {
-    promoteEmptyObject: true,
-  }) as TSchema;
+  return normalizeOpenAIStrictCompatSchemaRecursive(schema, true) as TSchema;
+}
+
+/**
+ * Returns whether a regex pattern contains a lookahead or lookbehind group.
+ * Escaped parentheses, character classes, and named groups are not lookarounds.
+ */
+function hasRegexLookaround(pattern: string): boolean {
+  let inCharacterClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "\\") {
+      index += 1;
+    } else if (inCharacterClass) {
+      inCharacterClass = char !== "]";
+    } else if (char === "[") {
+      inCharacterClass = true;
+    } else if (char === "(" && /^\?<?[=!]/.test(pattern.slice(index + 1, index + 4))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Finds schema paths that violate OpenAI strict tool-schema requirements. */
@@ -194,11 +176,11 @@ export function findOpenAIStrictSchemaViolations(
   if (Array.isArray(record.type)) {
     violations.push(`${path}.type`);
   }
+  if (typeof record.pattern === "string" && hasRegexLookaround(record.pattern)) {
+    violations.push(`${path}.pattern`);
+  }
 
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
+  const properties = isRecord(record.properties) ? record.properties : undefined;
 
   if (record.type === "object") {
     if (record.additionalProperties !== false) {
@@ -221,12 +203,12 @@ export function findOpenAIStrictSchemaViolations(
 
   // Schema maps contain user-chosen names. Walk their values as schemas, but
   // never interpret map keys such as `$defs.anyOf` as schema keywords.
-  for (const key of OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS) {
+  for (const key of SCHEMA_MAP_KEYS) {
     const schemaMap = record[key];
-    if (!schemaMap || typeof schemaMap !== "object" || Array.isArray(schemaMap)) {
+    if (!isRecord(schemaMap)) {
       continue;
     }
-    for (const [entryKey, value] of Object.entries(schemaMap as Record<string, unknown>)) {
+    for (const [entryKey, value] of Object.entries(schemaMap)) {
       violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
     }
   }

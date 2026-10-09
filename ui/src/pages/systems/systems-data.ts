@@ -84,13 +84,9 @@ export function projectSystemsInventory(
   const nodes = new Map(inventory.nodes.map((node) => [`node:${node.nodeId}`, node]));
   const relations = new Map<string, SystemsSessionRelation[]>();
   const add = (id: string, kind: SystemsSessionRelation["kind"], session: GatewaySessionRow) => {
-    const existing = relations.get(id);
-    const relation = { kind, session };
-    if (existing) {
-      existing.push(relation);
-    } else {
-      relations.set(id, [relation]);
-    }
+    const existing = relations.get(id) ?? [];
+    existing.push({ kind, session });
+    relations.set(id, existing);
   };
   for (const session of sessions) {
     const placement = session.placement;
@@ -123,13 +119,11 @@ export function projectSystemsInventory(
         (environment.worker?.state !== "destroyed" && environment.worker?.state !== "failed")
       );
     })
-    .map((environment) => {
-      return {
-        environment,
-        node: environment.type === "node" ? nodes.get(environment.id) : undefined,
-        gatewaySystemInfo:
-          environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
-        sessions: relations.get(environment.id) ?? [],
-      };
-    });
+    .map((environment) => ({
+      environment,
+      node: environment.type === "node" ? nodes.get(environment.id) : undefined,
+      gatewaySystemInfo:
+        environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
+      sessions: relations.get(environment.id) ?? [],
+    }));
 }

@@ -1,11 +1,28 @@
-/** Shared CLI formatting for gateway health failures, channels, and delivery queues. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
@@ -32,7 +49,6 @@ const formatKv = (line: string, rich: boolean) => {
   return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
 };
 
-/** Formats thrown health errors with rich detail lines when terminal color is enabled. */
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
@@ -70,6 +86,10 @@ const formatProbeLine = (
   const record = asNullableRecord(probe);
   if (!record) {
     return null;
+  }
+  if (record.timedOut === true) {
+    const error = typeof record.error === "string" ? record.error : "health collection timed out";
+    return `warning - ${sanitizeTerminalText(error)}`;
   }
   const ok = typeof record.ok === "boolean" ? record.ok : undefined;
   if (ok === undefined) {
@@ -132,7 +152,15 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
   return `${handle}:${accountId}:${timing}`;
 };
 
-/** Formats terse channel and activated-plugin health lines for shared CLI surfaces. */
+function formatPluginDiagnostic(text: string, maxChars: number): string {
+  // Terminal cleanup can join fragments into a secret; mask both complete forms before truncating.
+  const normalized = sanitizeTerminalText(redactToolPayloadText(text)).replace(
+    /[\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu,
+    "",
+  );
+  return truncateUtf16Safe(redactToolPayloadText(normalized), maxChars);
+}
+
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -215,9 +243,11 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    const failedSummary = activeSummaries.find(
-      (account) => asNullableRecord(account.probe)?.ok === false,
-    );
+    const failedSummary =
+      activeSummaries.find((account) => {
+        const probe = asNullableRecord(account.probe);
+        return probe?.ok === false && probe.timedOut !== true;
+      }) ?? activeSummaries.find((account) => asNullableRecord(account.probe)?.timedOut === true);
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe);
       if (failureLine) {
@@ -258,21 +288,38 @@ export const formatHealthChannelLines = (
             : "unknown";
     lines.push(`${label}: ${passiveState}`);
   }
-  const failedPlugins = (summary.plugins?.errors ?? []).filter((plugin) => plugin.activated);
-  for (const plugin of failedPlugins.slice(0, 20)) {
-    const id = sanitizeTerminalText(plugin.id).slice(0, 120);
-    const error = sanitizeTerminalText(plugin.error).slice(0, 500);
-    lines.push(`Plugin ${id}: failed - ${error}; run openclaw doctor`);
+  const pluginWarnings = [
+    ...(summary.plugins?.errors ?? [])
+      .filter(
+        (plugin) =>
+          plugin.activated ||
+          plugin.activationSource === "explicit" ||
+          plugin.activationSource === "auto" ||
+          plugin.activationSource === "default",
+      )
+      .map(({ id, error }) => ({ id, state: "failed", detail: error })),
+    ...(summary.plugins?.unavailable ?? []).map(({ id, diagnostic }) => ({
+      id,
+      state: "unavailable",
+      detail: diagnostic.detail ? `${diagnostic.reason}: ${diagnostic.detail}` : diagnostic.reason,
+    })),
+  ];
+  for (const plugin of pluginWarnings.slice(0, 20)) {
+    const id = formatPluginDiagnostic(plugin.id, 120);
+    const diagnostic = formatPluginDiagnostic(plugin.detail, 500);
+    // Deep status splits at the first colon, so plugin IDs must not become its state prefix.
+    const label = id.includes(":") ? "Plugin" : `Plugin ${id}`;
+    const detail = id.includes(":") ? `${id}: ${diagnostic}` : diagnostic;
+    lines.push(`${label}: ${plugin.state} - ${detail}; run openclaw doctor`);
   }
-  if (failedPlugins.length > 20) {
+  if (pluginWarnings.length > 20) {
     lines.push(
-      `Plugins: failed - ${failedPlugins.length - 20} additional activated failures; run openclaw doctor`,
+      `Plugins: warning - ${pluginWarnings.length - 20} additional plugin warnings; run openclaw doctor`,
     );
   }
   return lines;
 };
 
-/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),

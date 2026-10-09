@@ -92,6 +92,29 @@ function parseAuditStateRecord(value: ReefAuditStateRecord | undefined): ReefAud
   return value!;
 }
 
+export function verifyReefAuditWindow(
+  reversed: AuditEntry[],
+  head: ReefAuditHeadRecord,
+  maxEntries: number,
+): AuditEntry[] {
+  if (reversed.length !== Math.min(head.seq, maxEntries)) {
+    throw new Error("Reef audit chain is shorter than its committed retention window");
+  }
+  const entries = reversed.toReversed();
+  const first = entries[0];
+  if (
+    !first ||
+    !verifyChainSegment(entries, {
+      previousHash: first.prevHash,
+      previousSeq: first.event.seq - 1,
+      head: head.hash,
+    })
+  ) {
+    throw new Error("invalid Reef audit chain state");
+  }
+  return entries;
+}
+
 class ReefSqliteAuditStore implements AuditStore {
   readonly #auditKey: Uint8Array;
   readonly #rng: (length: number) => Uint8Array;
@@ -259,13 +282,10 @@ class ReefSqliteAuditStore implements AuditStore {
             if (latestHead.pending?.owner !== owner) {
               throw new Error("Reef audit append lease was lost before linking");
             }
-            const replacesStaleLink =
-              previous.nextHash !== undefined &&
-              staleEntryKey === reefAuditEntryKey(previous.nextHash);
             if (previous.nextHash === entry.entryHash) {
               return previous;
             }
-            if (previous.nextHash !== undefined && !replacesStaleLink) {
+            if (previous.nextHash !== undefined) {
               throw new Error("Reef audit head already links a committed successor");
             }
             return { ...previous, nextHash: entry.entryHash };
@@ -385,23 +405,7 @@ class ReefSqliteAuditStore implements AuditStore {
       reversed.push(entry);
       hash = entry.prevHash;
     }
-    const expectedEntries = Math.min(head.seq, this.#maxEntries);
-    if (reversed.length !== expectedEntries) {
-      throw new Error("Reef audit chain is shorter than its committed retention window");
-    }
-    const entries = reversed.toReversed();
-    const first = entries[0];
-    if (
-      !first ||
-      !verifyChainSegment(entries, {
-        previousHash: first.prevHash,
-        previousSeq: first.event.seq - 1,
-        head: head.hash,
-      })
-    ) {
-      throw new Error("invalid Reef audit chain state");
-    }
-    return structuredClone(entries);
+    return structuredClone(verifyReefAuditWindow(reversed, head, this.#maxEntries));
   }
 }
 

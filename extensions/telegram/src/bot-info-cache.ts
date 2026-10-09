@@ -1,7 +1,7 @@
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
-import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
+import { fingerprintOptionalTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
 const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
@@ -13,26 +13,9 @@ type TelegramBotInfoCacheState = {
   botInfo: TelegramBotInfo;
 };
 
-type CachedTelegramBotInfo = {
-  botInfo: TelegramBotInfo;
-  fetchedAt: string;
-};
+type CachedTelegramBotInfo = Pick<TelegramBotInfoCacheState, "botInfo" | "fetchedAt">;
 
-type TelegramBotInfoCacheStore = {
-  register(key: string, value: TelegramBotInfoCacheState): Promise<void>;
-  lookup(key: string): Promise<TelegramBotInfoCacheState | undefined>;
-  delete(key: string): Promise<boolean>;
-};
-
-function fingerprintFromToken(botToken?: string): string | null {
-  const trimmed = botToken?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fingerprintTelegramBotToken(trimmed);
-}
-
-function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
+function openBotInfoCacheStore() {
   return getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
     namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
@@ -68,7 +51,7 @@ export async function readCachedTelegramBotInfo(params: {
   botToken?: string;
   now?: Date;
 }): Promise<CachedTelegramBotInfo | null> {
-  const tokenFingerprint = fingerprintFromToken(params.botToken);
+  const tokenFingerprint = fingerprintOptionalTelegramBotToken(params.botToken);
   if (!tokenFingerprint) {
     return null;
   }
@@ -91,7 +74,7 @@ export async function writeCachedTelegramBotInfo(params: {
   botToken: string;
   botInfo: TelegramBotInfo;
 }): Promise<void> {
-  const tokenFingerprint = fingerprintFromToken(params.botToken);
+  const tokenFingerprint = fingerprintOptionalTelegramBotToken(params.botToken);
   if (!tokenFingerprint) {
     return;
   }

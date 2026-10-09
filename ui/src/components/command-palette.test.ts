@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createContext,
   createGateway,
@@ -15,6 +14,7 @@ import {
   expectPalettePromptMode,
   findPaletteOption,
   mountPalette,
+  registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
 import {
@@ -26,31 +26,7 @@ import {
 type CustodianPanelToggleDetail = { open?: boolean };
 
 describe("CommandPalette search", () => {
-  let restoreDialogPolyfill: () => void;
-  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-    Object.defineProperty(Element.prototype, "scrollIntoView", {
-      configurable: true,
-      value: vi.fn(),
-    });
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    if (scrollIntoViewDescriptor) {
-      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
-    } else {
-      delete (Element.prototype as Partial<Element>).scrollIntoView;
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  registerCommandPaletteTestHooks();
 
   it("lazily searches compact automation names once per connection", async () => {
     const request = vi.fn(async (method: string) => {
@@ -202,7 +178,7 @@ describe("CommandPalette search", () => {
   );
 
   it.each([false, true])(
-    "shows an internal catalog failure and empty recovery (retained rows: %s)",
+    "keeps catalog refresh diagnostics out of search and navigation (retained rows: %s)",
     async (hasRows) => {
       const request = vi
         .fn()
@@ -230,11 +206,15 @@ describe("CommandPalette search", () => {
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
       expect(palette.querySelectorAll('[role="option"]')).toHaveLength(hasRows ? 1 : 0);
-      expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
-        hasRows
-          ? "Some models could not be refreshed. Open Models to try again."
-          : "Models unavailable",
-      );
+      expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+      expect(Boolean(palette.querySelector(".cmd-palette__no-results"))).toBe(!hasRows);
+
+      await enterQuery(palette, "");
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Agents")).toBeDefined();
+      expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(200);
 
       harness.emit("chat.metadata.changed");
       await vi.advanceTimersByTimeAsync(200);
@@ -816,6 +796,7 @@ describe("CommandPalette search", () => {
     await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(list).toHaveBeenCalledExactlyOnceWith({
+      source: "command-palette",
       search: "planning",
       limit: 10,
       includeGlobal: false,
@@ -824,6 +805,7 @@ describe("CommandPalette search", () => {
       excludeSubagents: true,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     });
     expect(palette.textContent).toContain("Visible planning");
   });
@@ -939,27 +921,21 @@ describe("CommandPalette search", () => {
     expect(palette.isOpen).toBe(false);
   });
 
-  it.each([
-    { available: true, expectedCount: 1 },
-    { available: false, expectedCount: 0 },
-  ])(
-    "shows the desktop action only when availability is $available",
-    async ({ available, expectedCount }) => {
-      const { gateway } = createGateway(true);
-      const { palette } = await mountPalette(
-        createContext(
-          gateway,
-          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-        ),
-      );
-      palette.desktopAvailable = available;
-      await enterQuery(palette, "desktop");
-      await vi.advanceTimersByTimeAsync(200);
-      await palette.updateComplete;
+  it("hides Desktop when unavailable", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.desktopAvailable = false;
+    await enterQuery(palette, "desktop");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
 
-      expect(findPaletteOption(palette, "Desktop", true) ? 1 : 0).toBe(expectedCount);
-    },
-  );
+    expect(findPaletteOption(palette, "Desktop", true)).toBeUndefined();
+  });
 
   it("opens the desktop panel from its palette action", async () => {
     const { gateway } = createGateway(true);
@@ -986,27 +962,21 @@ describe("CommandPalette search", () => {
     expect(events[0]?.detail).toEqual({ open: true });
   });
 
-  it.each([
-    { available: true, expectedCount: 1 },
-    { available: false, expectedCount: 0 },
-  ])(
-    "shows Ask OpenClaw only when availability is $available",
-    async ({ available, expectedCount }) => {
-      const { gateway } = createGateway(true);
-      const { palette } = await mountPalette(
-        createContext(
-          gateway,
-          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
-        ),
-      );
-      palette.custodianAvailable = available;
-      await enterQuery(palette, "openclaw");
-      await vi.advanceTimersByTimeAsync(200);
-      await palette.updateComplete;
+  it("hides Ask OpenClaw when unavailable", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.custodianAvailable = false;
+    await enterQuery(palette, "openclaw");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
 
-      expect(findPaletteOption(palette, "Ask OpenClaw", true) ? 1 : 0).toBe(expectedCount);
-    },
-  );
+    expect(findPaletteOption(palette, "Ask OpenClaw", true)).toBeUndefined();
+  });
 
   it("opens Ask OpenClaw from its palette action", async () => {
     const { gateway } = createGateway(true);

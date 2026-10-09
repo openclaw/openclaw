@@ -1,37 +1,21 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
 import { createRuntimeEnv, setupFeishuBroadcastTestHarness } from "./bot.broadcast.test-support.js";
-import type { FeishuMessageEvent } from "./bot.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
+const emptyCounts = {
+  delivered: 0,
+  deliveredNotVisible: 0,
+  cancelled: 0,
+  failedBeforeSend: 0,
+  failedAfterSend: 0,
+};
 const failedFinalReceipt = {
-  counts: {
-    tool: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    block: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 0,
-      failedAfterSend: 0,
-    },
-    final: {
-      delivered: 0,
-      deliveredNotVisible: 0,
-      cancelled: 0,
-      failedBeforeSend: 1,
-      failedAfterSend: 0,
-    },
-  },
+  counts: { tool: emptyCounts, block: emptyCounts, final: { ...emptyCounts, failedBeforeSend: 1 } },
   anyVisibleDelivered: false,
-} as const;
+};
 
 function createIngressLifecycle() {
   const calls = {
@@ -60,6 +44,22 @@ function createReplayClaim(key: string): FeishuMessageProcessingClaim {
   };
 }
 
+function mockBroadcastClaims(key: string) {
+  const broadcastClaim = createReplayClaim(key);
+  const susanClaim = createReplayClaim(`${key}-susan`);
+  const mainClaim = createReplayClaim(`${key}-main`);
+  vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
+    kind: "claimed",
+    handle:
+      options?.namespace === "broadcast:susan"
+        ? susanClaim
+        : options?.namespace === "broadcast:main"
+          ? mainClaim
+          : broadcastClaim,
+  }));
+  return { broadcastClaim, susanClaim, mainClaim };
+}
+
 describe("broadcast dispatch", () => {
   const {
     builtInboundContextCalls,
@@ -73,70 +73,18 @@ describe("broadcast dispatch", () => {
     resolvedTurnCalls,
   } = setupFeishuBroadcastTestHarness();
 
-  it("keeps the observer adapter isolated from active delivery", async () => {
-    const activeDeliver = vi.fn(async () => undefined);
-    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: activeDeliver },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback: vi.fn(),
-    });
-
-    await handleFeishuMessage({
+  function dispatchBroadcast(
+    messageId: string,
+    options: { turnAdoptionLifecycle?: FeishuIngressLifecycle } = {},
+  ) {
+    return handleFeishuMessage({
       cfg: createBroadcastConfig(),
-      event: createBroadcastEvent({
-        messageId: "msg-broadcast-observer-isolation",
-        text: "hello @bot",
-        botMentioned: true,
-      }),
+      event: createBroadcastEvent({ messageId, text: "hello @bot", botMentioned: true }),
       botOpenId: "bot-open-id",
       runtime: createRuntimeEnv(),
+      ...options,
     });
-
-    const observerTurn = resolvedTurnCalls.find(
-      (turn) => (turn["admission"] as { kind?: string } | undefined)?.kind === "observeOnly",
-    );
-    const observerDelivery = observerTurn?.["delivery"] as
-      | { deliver: (payload: unknown, context: unknown) => Promise<unknown> }
-      | undefined;
-    expect(observerDelivery?.deliver).not.toBe(activeDeliver);
-    await expect(observerDelivery?.deliver({}, {})).resolves.toEqual({ visibleReplySent: false });
-    expect(activeDeliver).not.toHaveBeenCalled();
-  });
-
-  it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
-    mockDispatchReply
-      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
-      .mockResolvedValueOnce({
-        queuedFinal: false,
-        counts: { final: 0 },
-        noVisibleReplyFallbackEligible: true,
-      });
-    const ensureNoVisibleReplyFallback = vi.fn();
-    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback,
-    });
-    const cfg = createBroadcastConfig();
-    const event = createBroadcastEvent({
-      messageId: "msg-broadcast-zero-final",
-      text: "hello @bot",
-      botMentioned: true,
-    });
-
-    await handleFeishuMessage({
-      cfg,
-      event,
-      botOpenId: "bot-open-id",
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
-      "broadcast-dispatch-complete-no-visible-reply",
-    );
-  });
+  }
 
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
     mockDispatchReply
@@ -147,29 +95,27 @@ describe("broadcast dispatch", () => {
         settledReceipt: failedFinalReceipt,
       });
     const ensureNoVisibleReplyFallback = vi.fn();
+    const activeDeliver = vi.fn(async () => undefined);
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
       dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
+      delivery: { deliver: activeDeliver },
       replyOptions: {},
       ensureNoVisibleReplyFallback,
     });
-    const cfg = createBroadcastConfig();
-    const event = createBroadcastEvent({
-      messageId: "msg-broadcast-final-failed",
-      text: "hello @bot",
-      botMentioned: true,
-    });
-
-    await handleFeishuMessage({
-      cfg,
-      event,
-      botOpenId: "bot-open-id",
-      runtime: createRuntimeEnv(),
-    });
+    await dispatchBroadcast("msg-broadcast-final-failed");
 
     expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
       "broadcast-dispatch-complete-no-visible-reply",
     );
+    const observerTurn = resolvedTurnCalls.find(
+      (turn) => (turn["admission"] as { kind?: string } | undefined)?.kind === "observeOnly",
+    );
+    const observerDelivery = observerTurn?.["delivery"] as
+      | { deliver: (payload: unknown, context: unknown) => Promise<unknown> }
+      | undefined;
+    expect(observerDelivery?.deliver).not.toBe(activeDeliver);
+    await expect(observerDelivery?.deliver({}, {})).resolves.toEqual({ visibleReplySent: false });
+    expect(activeDeliver).not.toHaveBeenCalled();
   });
 
   it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
@@ -188,50 +134,20 @@ describe("broadcast dispatch", () => {
       replyOptions: {},
       ensureNoVisibleReplyFallback,
     });
-    const cfg = createBroadcastConfig();
-    const event = createBroadcastEvent({
-      messageId: "msg-broadcast-source-suppressed",
-      text: "hello @bot",
-      botMentioned: true,
-    });
-
-    await handleFeishuMessage({
-      cfg,
-      event,
-      botOpenId: "bot-open-id",
-      runtime: createRuntimeEnv(),
-    });
+    await dispatchBroadcast("msg-broadcast-source-suppressed");
 
     expect(ensureNoVisibleReplyFallback).not.toHaveBeenCalled();
   });
 
   it("cross-account broadcast dedup: second account skips dispatch", async () => {
-    const cfg: ClawdbotConfig = {
-      broadcast: { "oc-broadcast-group": ["susan", "main"] },
-      agents: { list: [{ id: "main" }, { id: "susan" }] },
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: "sec_test", // pragma: allowlist secret
-          groups: {
-            "oc-broadcast-group": {
-              requireMention: false,
-            },
-          },
-        },
+    const cfg = createBroadcastConfig();
+    cfg.channels = {
+      feishu: {
+        ...cfg.channels?.feishu,
+        groups: { "oc-broadcast-group": { requireMention: false } },
       },
     };
-
-    const event: FeishuMessageEvent = {
-      sender: { sender_id: { open_id: "ou-sender" } },
-      message: {
-        message_id: "msg-multi-account-dedup",
-        chat_id: "oc-broadcast-group",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({ text: "hello" }),
-      },
-    };
+    const event = createBroadcastEvent({ messageId: "msg-multi-account-dedup", text: "hello" });
 
     await handleFeishuMessage({
       cfg,
@@ -261,29 +177,18 @@ describe("broadcast dispatch", () => {
     const firstSusanClaim = createReplayClaim("broadcast-susan-first-attempt");
     const retrySusanClaim = createReplayClaim("broadcast-susan-retry");
     const mainClaim = createReplayClaim("broadcast-main");
-    let broadcastAttempt = 0;
-    let susanAttempt = 0;
-    let mainAttempt = 0;
+    const claims = new Map([
+      ["broadcast", [firstClaim, retryClaim]],
+      ["broadcast:susan", [firstSusanClaim, retrySusanClaim]],
+      ["broadcast:main", [mainClaim]],
+    ]);
     vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => {
-      if (options?.namespace === "broadcast") {
-        broadcastAttempt += 1;
-        return {
-          kind: "claimed",
-          handle: broadcastAttempt === 1 ? firstClaim : retryClaim,
-        };
+      const attempts = claims.get(options?.namespace ?? "");
+      if (!attempts) {
+        return { kind: "invalid" };
       }
-      if (options?.namespace === "broadcast:susan") {
-        susanAttempt += 1;
-        return {
-          kind: "claimed",
-          handle: susanAttempt === 1 ? firstSusanClaim : retrySusanClaim,
-        };
-      }
-      if (options?.namespace === "broadcast:main") {
-        mainAttempt += 1;
-        return mainAttempt === 1 ? { kind: "claimed", handle: mainClaim } : { kind: "duplicate" };
-      }
-      return { kind: "invalid" };
+      const handle = attempts.shift();
+      return handle ? { kind: "claimed", handle } : { kind: "duplicate" };
     });
     mockDispatchReply
       .mockRejectedValueOnce(new Error("observer dispatch failed"))
@@ -295,7 +200,7 @@ describe("broadcast dispatch", () => {
     });
     const firstTransport = createIngressLifecycle();
     const cfg = createBroadcastConfig();
-    (cfg.broadcast as Record<string, unknown>).strategy = "sequential";
+    cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
 
     await expect(
       handleFeishuMessage({
@@ -338,18 +243,9 @@ describe("broadcast dispatch", () => {
   });
 
   it("keeps an adopted active lane committed when its no-visible fallback fails", async () => {
-    const broadcastClaim = createReplayClaim("broadcast-fallback-failure");
-    const susanClaim = createReplayClaim("broadcast-fallback-failure-susan");
-    const mainClaim = createReplayClaim("broadcast-fallback-failure-main");
-    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
-      kind: "claimed",
-      handle:
-        options?.namespace === "broadcast:susan"
-          ? susanClaim
-          : options?.namespace === "broadcast:main"
-            ? mainClaim
-            : broadcastClaim,
-    }));
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims(
+      "broadcast-fallback-failure",
+    );
     mockDispatchReply.mockImplementation(async ({ ctx }) =>
       String(ctx.SessionKey).startsWith("agent:main:")
         ? {
@@ -370,15 +266,7 @@ describe("broadcast dispatch", () => {
     const transport = createIngressLifecycle();
 
     await expect(
-      handleFeishuMessage({
-        cfg: createBroadcastConfig(),
-        event: createBroadcastEvent({
-          messageId: "msg-broadcast-fallback-failure",
-          text: "fallback must retry",
-          botMentioned: true,
-        }),
-        botOpenId: "bot-open-id",
-        runtime: createRuntimeEnv(),
+      dispatchBroadcast("msg-broadcast-fallback-failure", {
         turnAdoptionLifecycle: transport.lifecycle,
       }),
     ).rejects.toThrow("fallback send failed");
@@ -392,18 +280,8 @@ describe("broadcast dispatch", () => {
   });
 
   it("releases an agent claim when broadcast lane setup fails", async () => {
-    const broadcastClaim = createReplayClaim("broadcast-setup-failure");
-    const susanClaim = createReplayClaim("broadcast-setup-failure-susan");
-    const mainClaim = createReplayClaim("broadcast-setup-failure-main");
-    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
-      kind: "claimed",
-      handle:
-        options?.namespace === "broadcast:susan"
-          ? susanClaim
-          : options?.namespace === "broadcast:main"
-            ? mainClaim
-            : broadcastClaim,
-    }));
+    const { broadcastClaim, susanClaim, mainClaim } =
+      mockBroadcastClaims("broadcast-setup-failure");
     mockResolveStorePath.mockImplementation((_store, options?: { agentId?: string }) => {
       if (options?.agentId === "susan") {
         throw new Error("session path failed");
@@ -411,7 +289,7 @@ describe("broadcast dispatch", () => {
       return "/tmp/feishu-session-store.json";
     });
     const cfg = createBroadcastConfig();
-    (cfg.broadcast as Record<string, unknown>).strategy = "sequential";
+    cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
     const transport = createIngressLifecycle();
 
     await expect(
@@ -436,18 +314,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("abandons the shared claim when an agent lane is not dispatched", async () => {
-    const broadcastClaim = createReplayClaim("broadcast-undispatched");
-    const susanClaim = createReplayClaim("broadcast-undispatched-susan");
-    const mainClaim = createReplayClaim("broadcast-undispatched-main");
-    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
-      kind: "claimed",
-      handle:
-        options?.namespace === "broadcast:susan"
-          ? susanClaim
-          : options?.namespace === "broadcast:main"
-            ? mainClaim
-            : broadcastClaim,
-    }));
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("broadcast-undispatched");
     mockDispatchReply.mockImplementation(async ({ ctx }) =>
       String(ctx.SessionKey).startsWith("agent:susan:")
         ? { queuedFinal: false, counts: { final: 0 }, undispatched: true }
@@ -455,15 +322,7 @@ describe("broadcast dispatch", () => {
     );
     const transport = createIngressLifecycle();
 
-    await handleFeishuMessage({
-      cfg: createBroadcastConfig(),
-      event: createBroadcastEvent({
-        messageId: "msg-broadcast-undispatched",
-        text: "do not tombstone",
-        botMentioned: true,
-      }),
-      botOpenId: "bot-open-id",
-      runtime: createRuntimeEnv(),
+    await dispatchBroadcast("msg-broadcast-undispatched", {
       turnAdoptionLifecycle: transport.lifecycle,
     });
 
@@ -477,44 +336,29 @@ describe("broadcast dispatch", () => {
   });
 
   it("commits the shared broadcast claim only after transport adoption", async () => {
-    const broadcastClaim = createReplayClaim("broadcast-adoption-order");
-    const susanClaim = createReplayClaim("broadcast-adoption-order-susan");
-    const mainClaim = createReplayClaim("broadcast-adoption-order-main");
-    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
-      kind: "claimed",
-      handle:
-        options?.namespace === "broadcast:susan"
-          ? susanClaim
-          : options?.namespace === "broadcast:main"
-            ? mainClaim
-            : broadcastClaim,
-    }));
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims(
+      "broadcast-adoption-order",
+    );
     const transport = createIngressLifecycle();
-    let finishAdoption!: () => void;
-    const adoptionGate = new Promise<void>((resolve) => {
-      finishAdoption = resolve;
+    const adoptionStarted = createDeferred<void>();
+    const adoptionGate = createDeferred<void>();
+    transport.calls.adopted.mockImplementationOnce(async () => {
+      adoptionStarted.resolve();
+      await adoptionGate.promise;
     });
-    transport.calls.adopted.mockImplementationOnce(async () => await adoptionGate);
 
-    const handling = handleFeishuMessage({
-      cfg: createBroadcastConfig(),
-      event: createBroadcastEvent({
-        messageId: "msg-broadcast-adoption-order",
-        text: "adopt before dedupe",
-        botMentioned: true,
-      }),
-      botOpenId: "bot-open-id",
-      runtime: createRuntimeEnv(),
+    const handling = dispatchBroadcast("msg-broadcast-adoption-order", {
       turnAdoptionLifecycle: transport.lifecycle,
     });
 
-    await vi.waitFor(() => expect(transport.calls.adopted).toHaveBeenCalledTimes(1));
+    await adoptionStarted.promise;
+    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
     expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
     expect(broadcastClaim.commit).not.toHaveBeenCalled();
     expect(susanClaim.commit).toHaveBeenCalledTimes(1);
     expect(mainClaim.commit).toHaveBeenCalledTimes(1);
 
-    finishAdoption();
+    adoptionGate.resolve();
     await handling;
 
     expect(broadcastClaim.commit).toHaveBeenCalledTimes(1);
@@ -525,18 +369,7 @@ describe("broadcast dispatch", () => {
   });
 
   it("waits for every independently deferred broadcast lane before adoption", async () => {
-    const broadcastClaim = createReplayClaim("broadcast-deferred");
-    const susanClaim = createReplayClaim("broadcast-deferred-susan");
-    const mainClaim = createReplayClaim("broadcast-deferred-main");
-    vi.spyOn(feishuDedupeState.guard, "claim").mockImplementation(async (_messageId, options) => ({
-      kind: "claimed",
-      handle:
-        options?.namespace === "broadcast:susan"
-          ? susanClaim
-          : options?.namespace === "broadcast:main"
-            ? mainClaim
-            : broadcastClaim,
-    }));
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("broadcast-deferred");
     let deferredLifecycle:
       | Pick<
           FeishuIngressLifecycle,
@@ -553,15 +386,7 @@ describe("broadcast dispatch", () => {
     });
     const transport = createIngressLifecycle();
 
-    await handleFeishuMessage({
-      cfg: createBroadcastConfig(),
-      event: createBroadcastEvent({
-        messageId: "msg-broadcast-deferred",
-        text: "wait for every lane",
-        botMentioned: true,
-      }),
-      botOpenId: "bot-open-id",
-      runtime: createRuntimeEnv(),
+    await dispatchBroadcast("msg-broadcast-deferred", {
       turnAdoptionLifecycle: transport.lifecycle,
     });
 

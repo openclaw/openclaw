@@ -5,6 +5,10 @@ import {
   resolveUserPath,
   type FastModeAutoProgressState,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  createNativeSessionBindingAuthority,
+  prepareNativeSessionGenerationAuthority,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
@@ -47,7 +51,6 @@ import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import {
   createCodexSessionGenerationSupersededError,
   resolveCodexSessionBinding,
-  resolveCodexRunSessionBindingAuthority,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
@@ -62,6 +65,7 @@ import {
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -160,6 +164,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
   let shellEnvironment = baseShellEnvironment;
   let shellPathPrepend: readonly string[] | undefined;
+  let shellGitConfigParameters: string | undefined;
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
     // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
@@ -167,14 +172,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
     // Resolve placement before projecting host PATH; socket peers and remote workspaces
     // own their tool lookup even when their control connection runs on this machine.
-    const localToolEnv =
+    const ownedLocalProcess =
       !sandbox?.enabled &&
       !remoteExec &&
       appServer.start.transport === "stdio" &&
       !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot
-        ? preparedEnvironment?.localToolEnv
-        : undefined;
+      !appServer.remoteWorkspaceRoot;
+    const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
+    shellGitConfigParameters = ownedLocalProcess
+      ? preparedEnvironment?.localGitConfigParameters
+      : undefined;
     const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
     shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
     shellEnvironment = hasLocalToolEnv
@@ -182,12 +189,18 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       : baseShellEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    return shellEnvironment
+    const prepared = shellEnvironment
       ? {
           ...appServer,
           start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
         }
       : appServer;
+    return shellGitConfigParameters
+      ? {
+          ...prepared,
+          start: withCodexAppServerGitConfig(prepared.start, shellGitConfigParameters),
+        }
+      : prepared;
   };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -205,10 +218,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // Only a durable session row authorizes stable-key ownership. Caller-owned
   // transcripts omit a store target, so classify them against the default store too.
   if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const authority = resolveCodexRunSessionBindingAuthority({
-      identity: bindingIdentity,
+    const { state: authority } = await prepareNativeSessionGenerationAuthority({
       config: params.config,
       storePath: params.sessionTarget?.storePath,
+      target: bindingIdentity,
+      createSupersededError: createCodexSessionGenerationSupersededError,
     });
     if (authority === "superseded") {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
@@ -234,7 +248,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
     | undefined;
   const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
-  const { binding: admittedBinding, assertCurrent: assertBindingCurrent } =
+  const { binding: admittedBinding, authority: bindingAuthority } =
     await resolveCodexSessionBinding({
       reclaimStale: true,
       bindingStore,
@@ -249,9 +263,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : undefined,
     });
   const assertCurrent = () => {
-    assertBindingCurrent();
+    bindingAuthority.assertCurrent();
     assertModelExecutionCurrent();
   };
+  const authority = createNativeSessionBindingAuthority(bindingAuthority.lineage, assertCurrent);
   let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
@@ -355,10 +370,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   };
   let reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
   preDynamicStartupStages.mark("auth-profile");
-  let configuredAppServer = await resolveRuntimeOptionsForBinding(startupBinding, {
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-  });
+  let configuredAppServer = await resolveRuntimeOptionsForBinding(
+    startupBinding,
+    reviewerPolicyContext,
+  );
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -382,12 +397,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   }
   preDynamicStartupStages.mark("effective-workspace");
-  const applySessionPermissionPolicy = (
-    appServer: typeof configuredAppServer,
+  const resolveFinalAppServer = (
+    configured: typeof configuredAppServer,
     selection: { modelProvider?: string; model?: string },
-  ) =>
-    applyCodexSessionPermissionPolicy({
-      appServer,
+  ) => {
+    const session = applyCodexSessionPermissionPolicy({
+      appServer: configured,
       permissionMode: params.permissionMode,
       sessionRoot: params.sessionRoot,
       defaultRoot: effectiveWorkspace,
@@ -396,20 +411,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         modelProvider: selection.modelProvider,
         model: selection.model,
         config: params.config,
-        env: { ...process.env, ...appServer.start.env, ...shellEnvironment },
+        env: { ...process.env, ...configured.start.env, ...shellEnvironment },
         agentDir,
-        homeScope: appServer.start.homeScope,
-        codexArgs: appServer.start.args,
+        homeScope: configured.start.homeScope,
+        codexArgs: configured.start.args,
       }),
       requirementsToml,
       policyLocked: startupBinding?.connectionScope === "supervision",
       execMode: execPolicy.mode,
     });
-  const resolveFinalAppServer = (
-    configured: typeof configuredAppServer,
-    selection: { modelProvider?: string; model?: string },
-  ) => {
-    const session = applySessionPermissionPolicy(configured, selection);
     const trusted = resolveCodexAppServerForModelProvider({
       appServer: session,
       provider: selection.modelProvider,
@@ -418,10 +428,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: { ...process.env, ...session.start.env, ...shellEnvironment },
       agentDir,
     });
-    return { session, appServer: withPreparedProcessEnv(trusted) };
+    return withPreparedProcessEnv(trusted);
   };
-  let resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-  let appServer = resolvedAppServer.appServer;
+  let appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
@@ -470,6 +479,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent,
+      authority,
       binding: startupBinding,
       bindingStore,
       identity: bindingIdentity,
@@ -487,12 +497,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // cleared or replaced native thread changes its model, policy, or connection.
     if (startupBinding !== startupBindingBeforeRotation) {
       reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-      configuredAppServer = await resolveRuntimeOptionsForBinding(startupBinding, {
-        modelProvider: reviewerPolicyContext.modelProvider,
-        model: reviewerPolicyContext.model,
-      });
-      resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-      appServer = resolvedAppServer.appServer;
+      configuredAppServer = await resolveRuntimeOptionsForBinding(
+        startupBinding,
+        reviewerPolicyContext,
+      );
+      appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
     }
     const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
       appServer,
@@ -524,7 +533,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       resolveFinalAppServer(
         await resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
-      ).appServer;
+      );
     assertCurrent();
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
@@ -578,6 +587,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         return note;
       },
       assertCurrent,
+      authority,
+      withCurrent: authority.withCurrent,
+      assertLegacyCurrent: authority.assertLegacyCurrent,
       assertModelExecutionCurrent,
       bindModelExecution,
       releaseModelExecution,
@@ -603,6 +615,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       agentDir,
       shellEnvironment,
       shellPathPrepend,
+      shellGitConfigParameters,
       disableLoginShell,
       bindingIdentity,
       bindingStore,

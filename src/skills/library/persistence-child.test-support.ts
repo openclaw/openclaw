@@ -28,8 +28,8 @@ async function phase(label: string) {
 }
 
 async function beginOperation() {
-  // Readiness means imports are complete. The parent starts the operation clock
-  // before releasing this gate, so startup cannot spend the publication budget.
+  // Readiness means imports are complete. The parent observes this phase before
+  // releasing the operation gate, independently of the publication reply.
   const start = new Promise<void>((resolve) => {
     process.once("message", () => resolve());
   });
@@ -105,7 +105,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           options,
         );
         if (ownership === "team") {
-          service.mutateSkillLibrary(
+          await service.mutateSkillLibrary(
             authority,
             {
               skillId: result.entry.skillId,
@@ -116,7 +116,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           );
         }
       }
-      const pins = selection.seedSkillLibrarySelection(authority, options);
+      const pins = await selection.seedSkillLibrarySelection(authority, options);
       sessions.replaceSessionEntrySync(scope, {
         sessionId: PERSISTENCE_SESSION_ID,
         updatedAt: Date.now(),
@@ -158,9 +158,9 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           pins.map((pin) => selection.readSelectedSkillLibraryFiles(pin, options)),
         ),
         catalog: catalog.map((entry) => ({ name: entry.skill.name, baseDir: entry.skill.baseDir })),
-        available: service
-          .listSkillLibrary(authority, {}, options)
-          .entries.map((entry) => entry.skillId),
+        available: (await service.listSkillLibrary(authority, {}, options)).entries.map(
+          (entry) => entry.skillId,
+        ),
       };
     }
     if (command.action === "update-remove") {
@@ -175,7 +175,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           },
           options,
         );
-        service.mutateSkillLibrary(
+        await service.mutateSkillLibrary(
           authority,
           { skillId: pin.skillId, expectedRevision: saved.entry.revision, action: "remove" },
           options,
@@ -231,8 +231,8 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     }
     return { kind: "complete" };
   } finally {
-    agent?.closeOpenClawAgentDatabases();
-    state.closeOpenClawStateDatabase();
+    await agent?.closeOpenClawAgentDatabasesAsync();
+    await state.closeOpenClawStateDatabaseAsync();
   }
 }
 

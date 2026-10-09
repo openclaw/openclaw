@@ -19,7 +19,7 @@ import {
   loadPluginCliRegistrationEntriesWithDefaults,
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
-import { registerPluginCliCommands, registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { loadOpenClawPluginCliRegistry } from "./loader.js";
@@ -162,12 +162,11 @@ module.exports = { id: "unrelated-help", register(api) {
           expect(fs.existsSync(unrelatedLoaded)).toBe(false);
           if (complete) {
             const session = createPluginCliLoadSession();
-            const cfg: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
             try {
               for (const mode of ["metadata", "lazy", "metadata"] as const) {
                 const reused = makeProgram();
                 const parent = reused.command("nodes");
-                await registerPluginCliCommands(reused, cfg, process.env, undefined, {
+                await registerPluginCliCommandsFromValidatedConfig(reused, process.env, undefined, {
                   mode,
                   primary: "nodes",
                   session,
@@ -240,7 +239,6 @@ module.exports = { id: "unrelated-help", register(api) {
 
   it.each([
     { first: "beta", owner: "alpha" },
-    { first: "alpha", owner: "alpha" },
     { first: "beta", owner: undefined },
   ])(
     "validates all workspaces with $first first and execution owner $owner",
@@ -365,6 +363,7 @@ module.exports = { id: "unrelated-help", register(api) {
           OPENCLAW_HOME: root,
           OPENCLAW_STATE_DIR: path.join(root, "state"),
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           CLI_INPUTS_TOKEN: undefined,
         },
@@ -374,9 +373,7 @@ module.exports = { id: "unrelated-help", register(api) {
             plugins: { enabled: true },
             auth: { profiles: {} },
           };
-          if (input === "source") {
-            setRuntimeConfigSnapshot(cfg, { ...cfg });
-          }
+          setRuntimeConfigSnapshot(cfg, input === "source" ? { ...cfg } : cfg);
           const gateway = resolvePluginRuntimeLoadContext({ config: cfg });
           setCurrentPluginMetadataSnapshot(gateway.metadataSnapshot, {
             config: cfg,
@@ -408,7 +405,8 @@ module.exports = { id: "unrelated-help", register(api) {
             );
             expect(await resolvePluginCliRootOwnerIds(params)).toEqual(enabled ? [plugin.id] : []);
             const program = new Command();
-            await registerPluginCliCommands(program, cfg, undefined, undefined, {
+            fs.writeFileSync(path.join(root, "openclaw.json"), JSON.stringify(cfg));
+            await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
               primary: "prepared",
               session,
             });
@@ -505,6 +503,7 @@ module.exports = { id: "unrelated-help", register(api) {
       }
       const env = {
         HOME: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       };
@@ -515,6 +514,8 @@ module.exports = { id: "unrelated-help", register(api) {
           entries: { [plugin.id]: { enabled: true, config: { label: "first" } } },
         },
       };
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+      setRuntimeConfigSnapshot(cfg, cfg);
       const session = createPluginCliLoadSession();
       const params = { cfg, env, primaryCommand: "prepared", session };
       const descriptors = await loadPluginCliDescriptors(params);
@@ -522,10 +523,14 @@ module.exports = { id: "unrelated-help", register(api) {
       fs.unlinkSync(manifestPath);
       expect(await resolvePluginCliRootOwnerIds(params)).toEqual([plugin.id]);
       const program = new Command();
-      await registerPluginCliCommands(program, cfg, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(program, env, undefined, {
+          primary: "prepared",
+          // This invocation already validated the manifest before removing it above.
+          skipPluginValidation: true,
+          session,
+        }),
+      );
       expect(program.commands.map((command) => command.name())).toEqual(["prepared"]);
       await program.parseAsync(["prepared"], { from: "user" });
       expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery:first");
@@ -537,10 +542,15 @@ module.exports = { id: "unrelated-help", register(api) {
         },
       };
       const changedProgram = new Command();
-      await registerPluginCliCommands(changedProgram, changedConfig, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(changedConfig));
+      setRuntimeConfigSnapshot(changedConfig, changedConfig);
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(changedProgram, env, undefined, {
+          primary: "prepared",
+          skipPluginValidation: true,
+          session,
+        }),
+      );
       await changedProgram.parseAsync(["prepared"], { from: "user" });
       expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery:second");
       expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
@@ -556,6 +566,7 @@ module.exports = { id: "unrelated-help", register(api) {
       const root = fs.realpathSync(makePluginLoaderTempDir());
       const env = {
         HOME: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       };
@@ -594,19 +605,27 @@ module.exports = { id: "unrelated-help", register(api) {
       expect(await loadPluginCliDescriptors(params)).toMatchObject([{ description: "second" }]);
       expect(await resolvePluginCliRootOwnerIds(params)).toEqual(["workspace-cli"]);
       const program = new Command();
-      await registerPluginCliCommands(program, cfg, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(program, env, undefined, {
+          primary: "prepared",
+          session,
+        }),
+      );
       expect(program.commands.map((command) => command.description())).toEqual(["second"]);
       const disabled = config(secondWorkspace, false);
       expect(await loadPluginCliDescriptors({ ...params, cfg: disabled })).toEqual([]);
       expect(await resolvePluginCliRootOwnerIds({ ...params, cfg: disabled })).toEqual([]);
       const disabledProgram = new Command();
-      await registerPluginCliCommands(disabledProgram, disabled, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(disabled));
+      setRuntimeConfigSnapshot(disabled, disabled);
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(disabledProgram, env, undefined, {
+          primary: "prepared",
+          session,
+        }),
+      );
       expect(disabledProgram.commands).toEqual([]);
       expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
     },

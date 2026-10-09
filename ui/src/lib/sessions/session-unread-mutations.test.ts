@@ -34,6 +34,9 @@ function unreadHarness(options: {
             kind: "direct",
             updatedAt: 1,
             unread: options.serverUnread(),
+            agentStatus: options.serverUnread()
+              ? { note: "Synthetic attention", expiresAt: Number.MAX_SAFE_INTEGER }
+              : undefined,
           },
         ],
         listTs,
@@ -44,7 +47,7 @@ function unreadHarness(options: {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  return createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  return { ...createGatewayHarness({ request } as unknown as GatewayBrowserClient), request };
 }
 
 describe("session unread mutation capability", () => {
@@ -104,10 +107,10 @@ describe("session unread mutation capability", () => {
     sessions.dispose();
   });
 
-  it("keeps the pending read through stale events and canonical refreshes", async () => {
+  it("settles a read receipt without reloading and retains it through stale events and reads", async () => {
     const committed = createDeferred<unknown>();
     let serverUnread = true;
-    const { gateway, emitEvent } = unreadHarness({
+    const { gateway, emitEvent, request } = unreadHarness({
       patchResponse: () => committed.promise,
       serverUnread: () => serverUnread,
     });
@@ -144,11 +147,20 @@ describe("session unread mutation capability", () => {
     });
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(false);
+    expect(sessions.state.result?.sessions[0]?.agentStatus).toBeUndefined();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
     sessions.dispose();
   });
 
   it.each([
-    { name: "newer manual marker", entry: { markedUnreadAt: 99, updatedAt: 99 } },
+    {
+      name: "newer manual marker",
+      entry: {
+        markedUnreadAt: 99,
+        updatedAt: 99,
+        agentStatus: { note: "New attention", expiresAt: Number.MAX_SAFE_INTEGER },
+      },
+    },
     {
       name: "activity after another reader cleared the marker",
       entry: { createdAt: 1, lastReadAt: 50, lastActivityAt: 100, updatedAt: 100 },
@@ -178,6 +190,7 @@ describe("session unread mutation capability", () => {
     });
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(true);
+    expect(sessions.state.result?.sessions[0]?.agentStatus).toEqual(entry.agentStatus);
     sessions.dispose();
   });
 });

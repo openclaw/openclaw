@@ -14,6 +14,7 @@ import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import "./delivery-plan.js";
+import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   commitDirectCronOutboundRoute,
@@ -108,7 +109,11 @@ export async function sendCronAnnouncePayloadStrict(params: {
   target: CronAnnounceTarget;
   payload: ReplyPayload;
   abortSignal: AbortSignal;
-  completion?: { job: CronJob; runStartedAt: number };
+  completion?: {
+    job: CronJob;
+    runStartedAt: number;
+    deliveryAttemptFence: CronCompletionDeliveryFence | null;
+  };
   onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<CronAnnounceDeliveryOutcome> {
   const delivery = await resolveCronAnnounceDelivery(params);
@@ -135,6 +140,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
   // Resolution can settle after its caller's deadline; never start plugin
   // delivery once the Gateway has released ownership of the timed-out work.
   params.abortSignal.throwIfAborted();
+  const deliveryAttemptFence = params.completion?.deliveryAttemptFence;
+  await deliveryAttemptFence?.beforeAttempt();
+  params.abortSignal.throwIfAborted();
+  deliveryAttemptFence?.assertCurrent();
 
   // Cron delivery is durable and non-best-effort for primary announces; partial
   // channel failure must surface as a cron run failure.
@@ -152,6 +161,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
     bestEffort: false,
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
+    assertDirectAdapterHandoff: deliveryAttemptFence?.assertCurrent,
     ...(route ? { onPayload: (payload) => deliveredPayloads.push(payload) } : {}),
     onDeliveryResult: () => {
       if (!recipientReached) {
@@ -169,7 +179,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   if (send.status === "sent" && route && params.completion) {
     await commitDirectCronOutboundRoute({
       cfg: params.cfg,
-      runSessionKey,
+      // Notification fallback keys identify delivery, not a source session with policy.
+      runSessionKey: params.target.sessionKey?.trim() || undefined,
       delivery: delivery.resolvedTarget,
       route,
     });

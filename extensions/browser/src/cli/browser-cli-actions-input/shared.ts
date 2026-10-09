@@ -1,12 +1,10 @@
-/**
- * Shared helpers for Browser CLI action subcommands.
- */
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
-import type { browserAct } from "../../browser/client-actions-core.js";
+import type { browserAct } from "../../browser/client-actions.js";
 import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
 import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
 import {
@@ -72,7 +70,6 @@ export async function runBrowserAction(params: {
   }
 }
 
-/** Requires and trims an element ref, exiting through the CLI runtime on failure. */
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
@@ -83,14 +80,14 @@ export function requireRef(ref: string | undefined) {
   return refValue;
 }
 
-async function readFile(filePath: string, maxBytes?: number): Promise<string> {
-  if (maxBytes === undefined) {
-    return await fs.readFile(filePath, "utf8");
-  }
+async function readActionsFile(filePath: string): Promise<string> {
   try {
     // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
-    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath), maxBytes });
-    return buffer.toString("utf8");
+    const { buffer } = await readRegularFile({
+      filePath: await fs.realpath(filePath),
+      maxBytes: ACTIONS_INPUT_MAX_BYTES,
+    });
+    return decodeJsonInput(buffer, "--actions-file");
   } catch (cause) {
     if (cause instanceof FsSafeError && cause.code === "too-large") {
       throw createActionsInputTooLargeError("--actions-file", cause);
@@ -99,7 +96,13 @@ async function readFile(filePath: string, maxBytes?: number): Promise<string> {
   }
 }
 
-/** Reads and validates JSON form-field descriptors from inline text or a file. */
+function decodeJsonInput(buffer: Buffer, source: string): string {
+  if (!isUtf8(buffer)) {
+    throw new Error(`${source} must be valid UTF-8.`);
+  }
+  return buffer.toString("utf8");
+}
+
 export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
@@ -107,7 +110,9 @@ export async function readFields(opts: {
   if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
     throw new Error("Specify only one of --fields or --fields-file");
   }
-  const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
+  const payload = opts.fieldsFile
+    ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
+    : (opts.fields ?? "");
   if (!payload.trim()) {
     throw new Error("fields are required");
   }
@@ -123,7 +128,6 @@ export async function readFields(opts: {
   return normalizeBrowserFormFields(parsed);
 }
 
-/** Cap on batch action JSON read from files or stdin. */
 const ACTIONS_INPUT_MAX_BYTES = 1_000_000;
 
 function createActionsInputTooLargeError(source: string, cause?: unknown): FsSafeError {
@@ -134,25 +138,20 @@ function createActionsInputTooLargeError(source: string, cause?: unknown): FsSaf
   );
 }
 
-/** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
-async function readStdinText(
-  stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = ACTIONS_INPUT_MAX_BYTES,
-): Promise<string> {
+async function readStdinText(): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of stream) {
+  for await (const chunk of process.stdin) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buf.length;
-    if (total > maxBytes) {
+    if (total > ACTIONS_INPUT_MAX_BYTES) {
       throw createActionsInputTooLargeError("--actions-file - stdin");
     }
     chunks.push(buf);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeJsonInput(Buffer.concat(chunks), "--actions-file - stdin");
 }
 
-/** Reads raw batch actions JSON from inline text, a file path, or stdin (`-`). */
 export async function readActionsPayload(opts: {
   actions?: string;
   actionsFile?: string;
@@ -163,7 +162,7 @@ export async function readActionsPayload(opts: {
   if (opts.actionsFile) {
     return opts.actionsFile === "-"
       ? await readStdinText()
-      : await readFile(opts.actionsFile, ACTIONS_INPUT_MAX_BYTES);
+      : await readActionsFile(opts.actionsFile);
   }
   return opts.actions ?? "";
 }

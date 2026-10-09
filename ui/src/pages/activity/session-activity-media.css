@@ -22,6 +22,9 @@ openclaw-activity-session-media {
 }
 
 .activity-feed__media .chat-image-frame {
+  --chat-image-gutter: 0px;
+
+  padding: 0;
   position: relative;
   display: block;
   flex: 0 0 128px;
@@ -32,6 +35,10 @@ openclaw-activity-session-media {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.activity-feed__media .chat-image-surface {
+  height: 100%;
 }
 
 .activity-feed__media .chat-message-image-button {
@@ -54,7 +61,25 @@ openclaw-activity-session-media {
   display: none;
 }
 
-.activity-feed__media-note {
-  display: block;
-  margin: 4px 0;
+/* Chat's attachment-card stylesheet does not load on this route; fit failed tiles to 128x80. */
+.activity-feed__media .chat-assistant-attachment-card,
+.activity-feed__media .chat-assistant-attachment-card__header,
+.activity-feed__media .chat-assistant-attachment-card__identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+}
+
+.activity-feed__media .chat-assistant-attachment-card__title,
+.activity-feed__media .chat-assistant-attachment-card__status-separator,
+.activity-feed__media .chat-assistant-attachment-card__status-reason {
+  display: none;
+}
+
+.activity-feed__media .activity-feed__note-action {
+  align-self: center;
+  flex: none;
 }

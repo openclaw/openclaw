@@ -15,6 +15,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   root,
   seedActivePlacement,
@@ -54,7 +55,7 @@ describe("cloud transcript write admission", () => {
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
     "checks %s authority after admitting the fallback user write",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn();
       await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
         activeWriterRunId: input.runId,
@@ -80,6 +81,7 @@ describe("cloud transcript write admission", () => {
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
         measureLaunchTurn,
+        readLaunchToolNames,
         launchTurn: launch,
         quiesceWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
@@ -125,7 +127,7 @@ describe("cloud transcript write admission", () => {
           if (!claim) {
             throw new Error("expected current worker claim");
           }
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {
@@ -168,22 +170,21 @@ describe("cloud transcript write admission", () => {
     { change: "missing", cleared: false },
     { change: "writer", cleared: false },
     { change: "current", cleared: true },
-    { change: "claim", cleared: true },
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         ...sessionTarget,
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
         claimId: "report-claim",
         runId: "report-run",
       });
-      placements.markWorkspaceResultPending(turnClaim);
+      await placements.markWorkspaceResultPending(turnClaim);
       if (cleared) {
         placements.recordWorkspaceResultConflict(turnClaim, {
           paths: ["src/local.ts"],
@@ -211,14 +212,16 @@ describe("cloud transcript write admission", () => {
             throw new Error("expected local staged result");
           }
           if (!cleared) {
-            request.source.stagedResult.record(request.source.stagedResult.ref);
+            await request.source.stagedResult.record(request.source.stagedResult.ref);
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },
@@ -248,7 +251,7 @@ describe("cloud transcript write admission", () => {
         expect(publish).not.toHaveBeenCalled();
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
-          placements.startWorkspaceResultDrain(turnClaim);
+          await placements.startWorkspaceResultDrain(turnClaim);
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
@@ -279,7 +282,7 @@ describe("cloud transcript write admission", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
         gate.release.resolve();

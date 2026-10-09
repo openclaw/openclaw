@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 
 vi.mock("../infra/heartbeat-runner.js", () => {
   throw new Error("scheduled services loaded the broad heartbeat facade");
@@ -13,6 +14,5 @@ vi.mock("../infra/heartbeat-runner-config.js", () => {
 });
 
 it("imports the scheduled-service factory without heartbeat execution", async () => {
-  const { activateGatewayScheduledServices } = await import("./server-runtime-services.js");
   expect(activateGatewayScheduledServices).toBeTypeOf("function");
 });

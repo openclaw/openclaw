@@ -18,6 +18,7 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -116,11 +117,8 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
         await rowFor(original.key).waitFor({ state: "visible" });
         if (filter === "All") {
-          await sidebar.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: filter, exact: true })
-            .click();
+          await chooseSidebarMenuOption(page, "Status", filter);
+          await closeSidebarMenu(page);
           await gateway.waitForRequest("sessions.list", {
             match: { agentId: "main", archived: "all" },
           });
@@ -172,7 +170,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Research", exact: true })
+          .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
         await sidebar
@@ -246,7 +244,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Main", exact: true })
+          .getByRole("menuitem", { name: "Main", exact: true })
           .click();
         if (operation === "rename") {
           await expect.poll(() => rowFor(original.key).textContent()).toContain("Renamed original");
@@ -269,7 +267,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Research", exact: true })
+          .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         const returnedList = await gateway.waitForRequest("sessions.list", {
           match: researchMatch,

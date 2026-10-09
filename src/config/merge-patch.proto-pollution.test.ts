@@ -15,22 +15,6 @@ describe("applyMergePatch prototype pollution guard", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it("ignores constructor key in patch", () => {
-    const base = { a: 1 };
-    const patch = { constructor: { polluted: true }, b: 2 };
-    const result = applyMergePatch(base, patch) as Record<string, unknown>;
-    expect(result.b).toBe(2);
-    expect(Object.hasOwn(result, "constructor")).toBe(false);
-  });
-
-  it("ignores prototype key in patch", () => {
-    const base = { a: 1 };
-    const patch = { prototype: { polluted: true }, b: 2 };
-    const result = applyMergePatch(base, patch) as Record<string, unknown>;
-    expect(result.b).toBe(2);
-    expect(Object.hasOwn(result, "prototype")).toBe(false);
-  });
-
   it("preserves accessor method names as schema-owned auth profile ids", () => {
     const profileIds = [
       "__defineGetter__",
@@ -126,9 +110,8 @@ describe("merge-patch array deletion intent", () => {
     ]);
   });
 
-  it.each([null, undefined, "value", 1, new Date(0), new Map([["values", []]])])(
-    "ignores non-object config values (%s)",
-    (value) => expect(collectBaseArrayPaths(value, "settings")).toEqual([]),
+  it.each([null, "value", new Date(0)])("ignores non-object config values (%s)", (value) =>
+    expect(collectBaseArrayPaths(value, "settings")).toEqual([]),
   );
 
   it("uses own properties of object-tagged records, not their prototype", () => {

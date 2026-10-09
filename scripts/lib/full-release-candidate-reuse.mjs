@@ -310,6 +310,9 @@ export function validateCandidateBinding(
 
 export function candidateArtifactJsonFromBinding(value) {
   const binding = validateFullReleaseCandidateBinding(value);
+  if (binding.request.packagePublished === undefined) {
+    fail("retained v1 candidate evidence cannot supply package provenance");
+  }
   return JSON.stringify({
     packagePublished: binding.request.packagePublished,
     packageArtifactName: binding.package.artifact.name,

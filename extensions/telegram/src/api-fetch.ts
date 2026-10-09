@@ -1,8 +1,8 @@
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTelegramApiBase, resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -37,11 +37,7 @@ export async function lookupTelegramChatId(params: {
   const transport = resolveTelegramTransport(proxyFetch, { network: params.network });
   try {
     return await fetchTelegramChatId({
-      token: params.token,
-      chatId: params.chatId,
-      signal: params.signal,
-      apiRoot: params.apiRoot,
-      timeoutSeconds: params.timeoutSeconds,
+      ...params,
       fetchImpl: transport.fetch,
     });
   } finally {
@@ -77,14 +73,9 @@ export async function fetchTelegramChatId(params: {
       void res.body?.cancel().catch(() => undefined);
       return null;
     }
-    let data: TelegramGetChatResponse | null = null;
-    try {
-      data = JSON.parse(
-        (await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
-      ) as TelegramGetChatResponse;
-    } catch {
-      return null;
-    }
+    const data = JSON.parse(
+      (await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+    ) as TelegramGetChatResponse | null;
     const id = data?.ok ? data?.result?.id : undefined;
     if (typeof id === "number" || typeof id === "string") {
       return String(id);

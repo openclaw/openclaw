@@ -12,7 +12,6 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { registerBrowserCliMetadata } from "./cli-metadata.js";
@@ -28,8 +27,10 @@ import {
 } from "./src/browser-node-commands.js";
 import { getOptionalBrowserStateRuntime } from "./src/browser-runtime-state.js";
 import { createBrowserToolDefinition } from "./src/browser-tool-description.js";
+import { getGatewayExtensionRelayModule } from "./src/browser/extension-relay.runtime.js";
 import {
   initializeBrowserSessionTabStore,
+  drainBrowserSessionTabStore,
   readBrowserDashboardSessionOwners,
 } from "./src/browser/session-tab-store.js";
 import {
@@ -60,7 +61,7 @@ const loadBrowserUploadCleanupRuntimeModule = createLazyRuntimeSurface(
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
 ): "direct" | "group" | "channel" | undefined {
-  const tokens = new Set(sessionKey?.toLowerCase().split(":").filter(Boolean) ?? []);
+  const tokens = new Set(sessionKey?.toLowerCase().split(":") ?? []);
   if (tokens.has("group")) {
     return "group";
   }
@@ -86,15 +87,11 @@ function createLazyBrowserTool(
     ...metadata,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(
-        binding
-          ? {
-              ...opts,
-              runToolBinding: binding,
-              toolCapabilities: capabilities,
-            }
-          : { ...opts, toolCapabilities: capabilities },
-      );
+      const tool = createBrowserTool({
+        ...opts,
+        ...(binding ? { runToolBinding: binding } : {}),
+        toolCapabilities: capabilities,
+      });
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
@@ -135,7 +132,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOp
   };
 }
 
-/** Browser plugin reload policy. */
 export const browserPluginReload = {
   restartPrefixes: ["browser"],
   hotPrefixes: [
@@ -153,7 +149,6 @@ export const browserPluginReload = {
   ],
 };
 
-/** Node-host command descriptors exposed by the Browser plugin. */
 function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeHostCommand {
   return {
     command,
@@ -188,7 +183,6 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   createBrowserProxyNodeHostCommand(BROWSER_PROXY_UPLOAD_COMMAND),
 ];
 
-/** Security audit collectors contributed by the Browser plugin. */
 export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollector[] = [
   async (ctx) => {
     const { collectBrowserSecurityAuditFindings } = await loadBrowserRegistrationRuntimeModule();
@@ -196,9 +190,13 @@ export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollecto
   },
 ];
 
-function createLazyBrowserPluginService(): OpenClawPluginService {
+function createLazyBrowserPluginService(
+  runtime: ReturnType<typeof initializeBrowserSessionTabStore>,
+): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   let stopDashboardEvents: (() => Promise<void>) | undefined;
+  let stopTabCleanup: (() => Promise<void>) | undefined;
+  let accepting = false;
   return {
     id: "browser-control",
     // Policy changes drain the service's generation before adopting new values.
@@ -212,36 +210,51 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
       ],
     },
     start: async (ctx) => {
-      await stopDashboardEvents?.();
+      await Promise.all([stopTabCleanup?.(), stopDashboardEvents?.()]);
       stopDashboardEvents = ctx.gatewayEvents
         ? bindBrowserDashboardEvents(ctx.gatewayEvents, (message) => logger.warn(message))
         : undefined;
-      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
-        return;
+      if (isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+        const { createBrowserPluginService, stopBrowserControlService } =
+          await loadBrowserRegistrationRuntimeModule();
+        service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
+        await service.start(ctx);
       }
-      const { createBrowserPluginService, stopBrowserControlService } =
-        await loadBrowserRegistrationRuntimeModule();
-      service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
-      await service.start(ctx);
+      const { startTrackedBrowserTabCleanupTimer } =
+        await import("./src/browser/session-tab-cleanup.js");
+      accepting = true;
+      stopTabCleanup = startTrackedBrowserTabCleanupTimer({
+        isCurrent: () => accepting && getOptionalBrowserStateRuntime() === runtime,
+        getResolvedBrowserConfig: async () => {
+          const { getBrowserControlState } = await import("./src/browser-control-state.js");
+          return getBrowserControlState()?.resolved ?? null;
+        },
+        onWarn: (message) => logger.warn(message),
+      });
     },
     stop: async (ctx) => {
-      await stopDashboardEvents?.();
-      stopDashboardEvents = undefined;
-      if (!service) {
-        const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
-        if (!loadedRuntime) {
+      accepting = false;
+      try {
+        await Promise.all([stopTabCleanup?.(), stopDashboardEvents?.()]);
+        stopTabCleanup = undefined;
+        stopDashboardEvents = undefined;
+        if (!service) {
+          const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
+          if (!loadedRuntime) {
+            return;
+          }
+          const { stopBrowserControlService } = await loadedRuntime;
+          await stopBrowserControlService();
           return;
         }
-        const { stopBrowserControlService } = await loadedRuntime;
-        await stopBrowserControlService();
-        return;
+        await service.stop?.(ctx);
+      } finally {
+        await drainBrowserSessionTabStore(runtime);
       }
-      await service.stop?.(ctx);
     },
   };
 }
 
-/** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   const runtime = initializeBrowserSessionTabStore(api.runtime);
   api.session.controls.registerControlUiDescriptor({
@@ -300,10 +313,13 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       maxEntries: 1,
     }),
   );
-  api.registerTool(((ctx: OpenClawPluginToolContext) => {
-    const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
-    return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
-  }) as OpenClawPluginToolFactory);
+  api.registerTool(
+    (ctx: OpenClawPluginToolContext) => {
+      const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+      return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+    },
+    { name: "browser" },
+  );
   registerBrowserCliMetadata(api);
   api.registerGatewayMethod(
     BROWSER_REQUEST_GATEWAY_METHOD,
@@ -342,8 +358,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       // Direct relay activity prepares the teardown module consumed by lazy service shutdown.
       await loadBrowserRegistrationRuntimeModule();
-      const { handleGatewayExtensionUpgrade } =
-        await import("./src/browser/extension-relay/gateway-relay-route.js");
+      const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
       return await handleGatewayExtensionUpgrade(req, socket, head);
     },
   });
@@ -362,5 +377,5 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       return await handleBrowserScreencastUpgrade(req, socket, head);
     },
   });
-  api.registerService(createLazyBrowserPluginService());
+  api.registerService(createLazyBrowserPluginService(runtime));
 }
