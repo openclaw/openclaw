@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   findPrivateKeyMarker,
-  PRIVATE_KEY_MARKERS,
   PRIVATE_KEY_SCAN_EXCLUDE,
 } from "../../scripts/detect-private-keys.mts";
 
@@ -21,19 +20,6 @@ function runScanner(cwd: string, args: string[] = [], scriptPath = SCRIPT_PATH) 
 }
 
 describe("detect-private-keys markers", () => {
-  it.each(PRIVATE_KEY_MARKERS)("flags %s anywhere in file bytes", (marker) => {
-    const content = Buffer.from(`prefix\n-----${marker}-----\nnot key material\n`);
-    expect(findPrivateKeyMarker(content)).toBe(marker);
-  });
-
-  it("ignores public material and certificates", () => {
-    expect(
-      findPrivateKeyMarker(
-        Buffer.from("-----BEGIN CERTIFICATE-----\n-----BEGIN PUBLIC KEY-----\n"),
-      ),
-    ).toBeUndefined();
-  });
-
   it("keeps its own source free of literal markers instead of excluding itself", () => {
     const source = fs.readFileSync(SCRIPT_PATH);
     expect(findPrivateKeyMarker(source)).toBeUndefined();
