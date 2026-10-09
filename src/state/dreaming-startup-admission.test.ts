@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "../plugin-sdk/plugin-entry.js";
 import {
   createTestPluginApi,
@@ -13,6 +15,10 @@ import {
 } from "../plugin-sdk/session-store-runtime.js";
 import { readSessionTranscriptEvents } from "../plugin-sdk/session-transcript-runtime.js";
 import { appendSqliteSessionTranscriptEventForTest } from "../plugin-sdk/sqlite-runtime-testing.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { createPluginRegistry } from "../plugins/registry.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
@@ -20,7 +26,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { recordAgentDatabaseAdmissions } from "./agent-database-admission.js";
-import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import {
+  getAgentDatabaseStartupAdmission,
+  withAgentDatabaseStartupAdmission,
+} from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -41,9 +50,35 @@ const cleanupParams = {
   archiveRemovedEntryTranscripts: false,
 };
 
+function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginApi["logger"]) {
+  const runtime = createTestPluginApi().runtime;
+  Object.assign(runtime, { config: { current: () => config } });
+  const owner = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
+  const record = createPluginRecord({
+    id: "memory-core",
+    origin: "bundled",
+    kind: "memory",
+    memorySlotSelected: true,
+  });
+  owner.registry.plugins.push(record);
+  const api = owner.createApi(record, { config });
+  memoryCore.register?.(api);
+  return {
+    ...owner,
+    api,
+    bindGateway() {
+      const gateway = createGatewayRequestContext(makeContextParams());
+      const resolveGateway = () => gateway;
+      bindGatewayContextResolver(runtime, resolveGateway);
+    },
+    dispose: () => getPluginInstance(record)!.dispose(),
+  };
+}
+
 async function withPendingPreparation(
   state: OpenClawTestState,
   run: (admission: StartupAdmission, activate: (prepare?: () => void) => void) => Promise<void>,
+  phase: "inspection" | "preparation" = "inspection",
 ) {
   const pathname = openOpenClawAgentDatabase({ agentId: "main" }).path;
   await closeOpenClawAgentDatabasesAsync(state.stateDir);
@@ -58,19 +93,26 @@ async function withPendingPreparation(
       { env: state.env, source: "startup" },
     );
     const owner = admission.adopt();
+    const preparationReady = createDeferredCore();
+    let prepare: (() => void) | undefined;
+    admission.activate({
+      isCurrent: () => true,
+      preparationReady: preparationReady.promise,
+      openAgent: async () => {
+        openOpenClawAgentDatabase({ agentId: "main" });
+        prepare?.();
+      },
+      migrateAgent: async () => {},
+      publishAgent: async () => {},
+    });
+    if (phase === "preparation") {
+      inspection.resolve({ incompatible: [], indeterminate: [] });
+    }
     try {
-      await run(admission, (prepare) => {
-        admission.activate({
-          isCurrent: () => true,
-          preparationReady: Promise.resolve(),
-          openAgent: async () => {
-            openOpenClawAgentDatabase({ agentId: "main" });
-            prepare?.();
-          },
-          migrateAgent: async () => {},
-          publishAgent: async () => {},
-        });
+      await run(admission, (onPrepare) => {
+        prepare = onPrepare;
         inspection.resolve({ incompatible: [], indeterminate: [] });
+        preparationReady.resolve();
       });
     } finally {
       inspection.resolve({ incompatible: [], indeterminate: [] });
@@ -80,96 +122,125 @@ async function withPendingPreparation(
   });
 }
 
-it("scrubs historical dreaming artifacts without warning after pending startup admission", async () => {
-  await withOpenClawTestState(
-    { label: "dreaming-admission", layout: "state-only" },
-    async (state) => {
-      const config: OpenClawConfig = {
-        cron: { enabled: false },
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      };
-      const sessionKey = "agent:main:dreaming-narrative-light-interrupted";
-      const sessionId = "historical-narrative";
-      const updatedAt = Date.now() - 600_000;
-      await upsertSessionEntry({
-        agentId: "main",
-        sessionKey,
-        entry: { sessionId, updatedAt, pluginOwnerId: "memory-core" },
-      });
-      await appendSqliteSessionTranscriptEventForTest({
-        agentId: "main",
-        sessionKey,
-        sessionId,
-        event: { type: "metadata", timestamp: updatedAt, runId: "dreaming-narrative-interrupted" },
-      });
-      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-      const hooks = vi.fn<OpenClawPluginApi["on"]>();
-      const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-      const api = createTestPluginApi({
-        config,
-        logger,
-        on: hooks,
-        registerService: (service) => services.push(service),
-      });
-      Object.assign(api.runtime, { config: { current: () => config } });
-      memoryCore.register?.(api);
-      const service = services.find((entry) => entry.id === "memory-core-dreaming");
-      const hook = hooks.mock.calls.find(([name]) => name === "gateway_start")?.[1];
-      if (!service || !hook) {
-        throw new Error("Memory Core did not register its startup lifecycle");
-      }
-      const scheduler = createTestPluginServiceScheduler();
-      const context = {
-        config,
-        stateDir: state.stateDir,
-        logger,
-        scheduler,
-        getCron: () => ({
-          isEnabled: async () => false,
-          list: async () => [],
-          add: async () => {},
-          update: async () => {},
-          remove: async () => ({ removed: false }),
-          removeStaleJobFamily: async () => 0,
-        }),
-      };
-      try {
-        await withPendingPreparation(state, async (admission, activate) => {
-          const joining = createDeferredCore();
-          const wait = admission.waitForAgentPreparation.bind(admission);
-          vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
-            const preparation = wait(...args);
-            joining.resolve();
-            return preparation;
-          });
-          await service.start(context);
-          const startup = (
-            hook as (event: { port: number }, ctx: { config: OpenClawConfig }) => Promise<void>
-          )({ port: 0 }, { config });
-          // On the regression, the hook settles with a warning instead of joining preparation.
-          await Promise.race([joining.promise, startup]);
-          const prepared = wait("main", { env: state.env });
-          expect(prepared).toBeDefined();
-          activate();
-          await prepared;
-          await startup;
-          expect.soft(logger.warn.mock.calls).toEqual([]);
-          expect.soft(getSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
-          expect
-            .soft(await readSessionTranscriptEvents({ agentId: "main", sessionKey, sessionId }))
-            .toEqual([]);
-          expect(logger.info).toHaveBeenCalledWith(
-            "memory-core: dreaming cleanup scrubbed 1 stale session entry and archived 0 orphan transcripts.",
-          );
+it.each([
+  { managed: false, phase: "inspection" as const },
+  { managed: true, phase: "inspection" as const },
+  { managed: true, phase: "preparation" as const },
+])(
+  "scrubs historical dreaming artifacts after pending $phase (managed: $managed)",
+  async ({ managed, phase }) => {
+    await withOpenClawTestState(
+      { label: "dreaming-admission", layout: "state-only" },
+      async (state) => {
+        const config: OpenClawConfig = {
+          cron: { enabled: false },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
+        };
+        const sessionKey = "agent:main:dreaming-narrative-light-interrupted";
+        const sessionId = "historical-narrative";
+        const updatedAt = Date.now() - 600_000;
+        await upsertSessionEntry({
+          agentId: "main",
+          sessionKey,
+          entry: { sessionId, updatedAt, pluginOwnerId: "memory-core" },
         });
-      } finally {
-        scheduler.beginClose();
-        await service.stop?.(context);
-        await scheduler.stop();
-      }
-    },
-  );
-});
+        await appendSqliteSessionTranscriptEventForTest({
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          event: {
+            type: "metadata",
+            timestamp: updatedAt,
+            runId: "dreaming-narrative-interrupted",
+          },
+        });
+        const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const hooks = vi.fn<OpenClawPluginApi["on"]>();
+        const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+        const owner = managed ? createManagedMemoryCore(config, logger) : undefined;
+        const api =
+          owner?.api ??
+          createTestPluginApi({
+            config,
+            logger,
+            on: hooks,
+            registerService: (service) => services.push(service),
+          });
+        if (!owner) {
+          Object.assign(api.runtime, { config: { current: () => config } });
+          memoryCore.register?.(api);
+        }
+        const service = (owner?.registry.services.map((entry) => entry.service) ?? services).find(
+          (entry) => entry.id === "memory-core-dreaming",
+        );
+        const hook = owner
+          ? owner.registry.typedHooks.find((entry) => entry.hookName === "gateway_start")?.handler
+          : hooks.mock.calls.find(([name]) => name === "gateway_start")?.[1];
+        if (!service || service.apiVersion === 2 || !hook) {
+          throw new Error("Memory Core did not register its startup lifecycle");
+        }
+        const scheduler = createTestPluginServiceScheduler();
+        const context = {
+          config,
+          stateDir: state.stateDir,
+          logger,
+          scheduler,
+          getCron: () => ({
+            isEnabled: async () => false,
+            list: async () => [],
+            add: async () => {},
+            update: async () => {},
+            remove: async () => ({ removed: false }),
+            removeStaleJobFamily: async () => 0,
+          }),
+        };
+        try {
+          await withPendingPreparation(
+            state,
+            async (admission, activate) => {
+              const joining = createDeferredCore();
+              const wait = admission.waitForAgentPreparation.bind(admission);
+              vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+                if (managed) {
+                  expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
+                }
+                const preparation = wait(...args);
+                joining.resolve();
+                return preparation;
+              });
+              owner?.bindGateway();
+              await service.start(context);
+              const startup = (
+                hook as (event: { port: number }, ctx: { config: OpenClawConfig }) => Promise<void>
+              )({ port: 0 }, { config });
+              // On the regression, the hook settles with a warning instead of joining preparation.
+              await Promise.race([joining.promise, startup]);
+              const prepared = wait("main", { env: state.env });
+              expect(prepared).toBeDefined();
+              activate();
+              await prepared;
+              await startup;
+              expect.soft(logger.warn.mock.calls).toEqual([]);
+              expect.soft(getSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+              expect
+                .soft(await readSessionTranscriptEvents({ agentId: "main", sessionKey, sessionId }))
+                .toEqual([]);
+              expect(logger.info).toHaveBeenCalledWith(
+                "memory-core: dreaming cleanup scrubbed 1 stale session entry and archived 0 orphan transcripts.",
+              );
+            },
+            phase,
+          );
+        } finally {
+          scheduler.beginClose();
+          await service.stop?.(context);
+          await scheduler.stop();
+          await owner?.dispose();
+        }
+      },
+    );
+  },
+);
 
 it("captures a store created during preparation only after admission completes", async () => {
   await withOpenClawTestState(
