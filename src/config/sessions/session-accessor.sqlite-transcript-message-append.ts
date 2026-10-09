@@ -29,7 +29,6 @@ import {
 import {
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,
-  type TranscriptAppendPostimage,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
@@ -43,6 +42,10 @@ import {
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
@@ -52,7 +55,6 @@ export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-
 type TranscriptMessageCommit<TMessage> = {
   result: TranscriptMessageAppendResult<TMessage>;
   visibleTailEntryId?: string;
-  postimage?: TranscriptAppendPostimage;
 };
 
 class TranscriptTurnAdmissionConflictError extends Error {
@@ -334,19 +336,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       consumeSessionPendingInput(database, pending);
     }
   }
-  return {
-    result: {
-      appended: true,
-      ...(anchor ? { anchor } : {}),
-      effectiveParentId: parentId ?? null,
-      message: persistedMessage,
-      messageId,
+  return retainTranscriptAppendPostimage(
+    {
+      result: {
+        appended: true,
+        ...(anchor ? { anchor } : {}),
+        effectiveParentId: parentId ?? null,
+        message: persistedMessage,
+        messageId,
+      },
+      ...(metadata.visibleTailEntryId !== undefined &&
+      revision !== undefined &&
+      readSqliteNativeMutationRevision(database.db) === revision
+        ? { visibleTailEntryId: metadata.visibleTailEntryId }
+        : {}),
     },
-    postimage: metadata.postimage,
-    ...(metadata.visibleTailEntryId !== undefined &&
-    revision !== undefined &&
-    readSqliteNativeMutationRevision(database.db) === revision
-      ? { visibleTailEntryId: metadata.visibleTailEntryId }
-      : {}),
-  };
+    readTranscriptAppendPostimage(metadata),
+  );
 }

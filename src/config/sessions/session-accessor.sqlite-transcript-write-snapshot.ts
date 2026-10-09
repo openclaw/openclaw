@@ -21,7 +21,6 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { TranscriptAppendPostimage } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
@@ -31,6 +30,7 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { readTranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -97,7 +97,7 @@ export function runTranscriptWriteSnapshotSync<T>(
   operation: (
     database: OpenClawAgentDatabase,
     resolved: ReturnType<typeof resolveSqliteTranscriptScope>,
-  ) => { value: T; postimage?: TranscriptAppendPostimage },
+  ) => T,
   beforeCommitInTransaction?: () => void,
   expectedMutationAt?: number | null,
   view?: TranscriptWriteViewGuard,
@@ -124,7 +124,8 @@ export function runTranscriptWriteSnapshotSync<T>(
         throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
       }
       const lifecycleRevision = fresh?.entry.lifecycleRevision;
-      const { value, postimage } = operation(database, resolved);
+      const value = operation(database, resolved);
+      const postimage = readTranscriptAppendPostimage(value);
       view?.assertCurrent();
       assertOwnedTranscriptWriteCommit(fencedScope);
       return ok({
@@ -133,7 +134,8 @@ export function runTranscriptWriteSnapshotSync<T>(
         before,
         // Hooks may write after the append. Reuse only within its unchanged native snapshot.
         after:
-          postimage && getSqliteReadScopeRevision(database.db) === postimage.revision
+          postimage?.anchor.sessionId === resolved.sessionId &&
+          getSqliteReadScopeRevision(database.db) === postimage.revision
             ? { ...postimage.version }
             : readTranscriptContextVersionInTransaction(database, resolved.sessionId),
       });

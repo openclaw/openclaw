@@ -5,6 +5,7 @@ import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
@@ -13,9 +14,11 @@ import {
   rememberCommittedTranscriptMessageSequencesInTransaction,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { runTranscriptWriteSnapshotSync } from "./session-accessor.sqlite-transcript-write-snapshot.js";
 import { appendTranscriptMessageSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
+import { readTranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 
 it.each([false, true])(
   "publishes the final append version after a later mutation: %s",
@@ -178,7 +181,7 @@ it.each([false, true])(
             database,
             f.scope.sessionId,
             [appended.result],
-            appended.postimage,
+            readTranscriptAppendPostimage(appended),
           );
           expect(readCommittedTranscriptMessageSequence(appended.result)).toBe(
             replaceBranch ? undefined : 1,
@@ -193,3 +196,39 @@ it.each([false, true])(
     });
   },
 );
+
+it("preserves caller callback results without interpreting postimage-shaped fields", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = createSessionCompoundWorkerFixture();
+    const value = { value: 7, postimage: "caller data" };
+    const result = runTranscriptWriteSnapshotSync(f.scope, () => value);
+    expect(result).toMatchObject({ ok: true, value: { result: value } });
+  });
+});
+
+it("keeps snapshot versions scoped to the requested session when a callback appends elsewhere", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = createSessionCompoundWorkerFixture();
+    const other = { ...f.scope, sessionKey: "agent:main:other", sessionId: "other" };
+    replaceSessionEntrySync(other, { sessionId: other.sessionId, updatedAt: 1 });
+    const result = runTranscriptWriteSnapshotSync(f.scope, (database) =>
+      appendTranscriptMessageInTransaction(database, resolveSqliteTranscriptScope(other), {
+        eventId: "other-message",
+        message: { role: "assistant", content: "other session" },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Snapshot refused");
+    }
+    expect(result.value.result?.result).toMatchObject({
+      appended: true,
+      messageId: "other-message",
+    });
+    expect(readTranscriptContextVersionInTransaction(f.database, other.sessionId).rawSeq).toBe(1);
+    expect(result.value.after).toEqual(result.value.before);
+    expect(result.value.after).toEqual(
+      readTranscriptContextVersionInTransaction(f.database, f.scope.sessionId),
+    );
+  });
+});

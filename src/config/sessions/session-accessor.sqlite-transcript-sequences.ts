@@ -16,8 +16,8 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { TranscriptAppendPostimage } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
+import type { TranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
 // attached to their object lifetime without changing the returned message shape.

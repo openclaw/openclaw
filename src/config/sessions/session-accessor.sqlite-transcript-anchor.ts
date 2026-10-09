@@ -2,7 +2,6 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
   getSqliteReadScopeRevision,
   readSqliteNativeMutationRevision,
-  type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
@@ -16,7 +15,10 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import {
+  retainTranscriptAppendPostimage,
+  type TranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -26,12 +28,6 @@ type TranscriptEntryRead = {
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
-};
-
-export type TranscriptAppendPostimage = {
-  revision: SqliteReadScopeRevision;
-  version: SessionTranscriptContextVersion;
-  anchor: TranscriptEntryAnchor;
 };
 
 /** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
@@ -142,17 +138,19 @@ export function readTranscriptMessageAppendMetadataInTransaction(params: Transcr
           },
         }
       : undefined;
-  return {
-    anchor,
+  return retainTranscriptAppendPostimage(
+    {
+      anchor,
+      visibleTailEntryId:
+        anchor &&
+        row?.seq === row?.latestSeq &&
+        revision !== undefined &&
+        readSqliteNativeMutationRevision(params.database.db) === revision.mutationRevision
+          ? params.entryId
+          : undefined,
+    },
     postimage,
-    visibleTailEntryId:
-      anchor &&
-      row?.seq === row?.latestSeq &&
-      revision !== undefined &&
-      readSqliteNativeMutationRevision(params.database.db) === revision.mutationRevision
-        ? params.entryId
-        : undefined,
-  };
+  );
 }
 
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */

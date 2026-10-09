@@ -78,6 +78,10 @@ import type {
   SessionTranscriptWriteLockAccessorContext,
 } from "./session-accessor.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -347,16 +351,16 @@ export function appendTranscriptEventSnapshotSync(
           eventJson: resolvedEvent === event ? projection?.eventJson : undefined,
         }) === false
       ) {
-        return { value: { appended: false } };
+        return { appended: false };
       }
       if (
         isRecord(resolvedEvent) &&
         "parentId" in resolvedEvent &&
         (resolvedEvent.parentId === null || typeof resolvedEvent.parentId === "string")
       ) {
-        return { value: { appended: true, effectiveParentId: resolvedEvent.parentId } };
+        return { appended: true, effectiveParentId: resolvedEvent.parentId };
       }
-      return { value: { appended: true } };
+      return { appended: true };
     },
     options.beforeCommitInTransaction,
     options.expectedMutationAt,
@@ -416,9 +420,8 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
         workerOptions,
       );
       const result = committed?.result;
-      return {
-        postimage: committed?.postimage,
-        value: {
+      return retainTranscriptAppendPostimage(
+        {
           result,
           visibleTailEntryId:
             committed?.visibleTailEntryId ??
@@ -430,7 +433,8 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
                 )
               : null),
         },
-      };
+        readTranscriptAppendPostimage(committed),
+      );
     },
     undefined,
     options.expectedMutationAt,
@@ -614,7 +618,7 @@ async function runNativeTranscriptWriteLock<T>(
                   writeDatabase,
                   resolved.sessionId,
                   [result],
-                  appended?.postimage,
+                  readTranscriptAppendPostimage(appended),
                 );
                 messageSeq = readCommittedTranscriptMessageSequence(result);
               }

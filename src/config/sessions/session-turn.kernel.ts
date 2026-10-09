@@ -19,13 +19,16 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import type { TranscriptAppendPostimage } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
+import {
+  readTranscriptAppendPostimage,
+  type TranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
@@ -172,7 +175,7 @@ export function createSessionTranscriptTurnKernel(
         );
         if (appended) {
           appendedMessages.push(appended.result);
-          postimage = appended.postimage;
+          postimage = readTranscriptAppendPostimage(appended);
         }
       }
       if (
