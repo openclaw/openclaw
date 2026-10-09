@@ -56,15 +56,18 @@ vi.mock("../../config/config.js", async () => {
   return { ...actual, getRuntimeConfig: mocks.getRuntimeConfig };
 });
 
-vi.mock("../../cli/command-secret-gateway.js", () => ({
+vi.mock("../../cli/command-secret-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/command-secret-gateway.js")>()),
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
-vi.mock("../../cli/command-secret-targets.js", () => ({
+vi.mock("../../cli/command-secret-targets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/command-secret-targets.js")>()),
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
-vi.mock("../../channels/plugins/message-tool-api.js", () => ({
+vi.mock("../../channels/plugins/message-tool-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/message-tool-api.js")>()),
   resolveBundledChannelMessageToolDiscoveryAdapter: () => ({
     describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
   }),

@@ -15,7 +15,8 @@ import {
 // equivalent spellings ("TG:12345" / "12345") through it before the distinct-target bail.
 // Mocking the module here binds both the route's canonicalizeRouteTarget and the ledger key
 // to this one normalizer, matching production where both read the same provider contract.
-vi.mock("../../infra/outbound/target-normalization.js", () => ({
+vi.mock("../../infra/outbound/target-normalization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/target-normalization.js")>()),
   normalizeTargetForProvider: (_channel: string, raw?: string): string | undefined => {
     if (raw === undefined) {
       return undefined;
@@ -31,7 +32,8 @@ vi.mock("../../infra/outbound/target-normalization.js", () => ({
 
 // The route only reads getChannelPlugin to hand the action's alias spec to
 // resolveActionDeliveryTargetAlias, which is mocked below; no real plugin runtime is needed.
-vi.mock("../../channels/plugins/index.js", () => ({
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
   getChannelPlugin: () => undefined,
 }));
 
@@ -41,7 +43,8 @@ const deliveryAlias = vi.hoisted(() => ({
 
 // Drive the plugin-declared delivery-alias candidate directly so the resolver's merge of
 // target/to/channelId + delivery alias is exercised without wiring a real alias spec.
-vi.mock("../../infra/outbound/message-action-spec.js", () => ({
+vi.mock("../../infra/outbound/message-action-spec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/message-action-spec.js")>()),
   resolveActionDeliveryTargetAlias: () => deliveryAlias.resolve(),
 }));
 

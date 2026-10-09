@@ -49,7 +49,7 @@ export function recordTurnSendProofSuccess<T extends TurnSendScenarioOutcome>(
   outcomes[index] = { ...outcome, status: "success", pass: true } as T;
 }
 
-export function aggregateTurnSendProof<T extends TurnSendScenarioOutcome>(raw: readonly T[]) {
+export function aggregateTurnSendProof(raw: readonly TurnSendScenarioOutcome[]) {
   const required = new Set<string>(REQUIRED_TURN_SEND_SCENARIO_IDS);
   const counts = new Map<string, number>();
   for (const outcome of raw) {
@@ -59,7 +59,7 @@ export function aggregateTurnSendProof<T extends TurnSendScenarioOutcome>(raw: r
   const duplicate = [...counts].filter(([, count]) => count !== 1).map(([id]) => id);
   const unknown = [...counts.keys()].filter((id) => !required.has(id));
   const unsuccessful = raw
-    .filter((outcome) => outcome.status !== "success" || outcome.pass !== true)
+    .filter((outcome) => outcome.status !== "success" || !outcome.pass)
     .map((outcome) => outcome.id);
   return {
     pass:
