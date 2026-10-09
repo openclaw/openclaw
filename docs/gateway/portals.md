@@ -112,6 +112,42 @@ machine needs a separately secured path to the loopback backend; that path is
 not created by this setting. Edge login pages or third-party cookie restrictions
 may prevent iframe loading even when a new tab works.
 
+#### Cloudflare Access
+
+Keep Cloudflare Access in front of the complete wildcard portal application. An
+unauthenticated browser cannot reliably complete that login inside an iframe:
+Access first needs to set a `CF_Authorization` cookie on the concrete portal
+hostname. Wildcard applications also cannot pre-issue cookies for portal
+hostnames that do not exist yet.
+
+The Control UI checks the token-free `publicUrl` through the Gateway before it
+mounts a preview. When that check identifies a Cloudflare Access login redirect,
+the UI shows **Sign in to portal** instead of a blank iframe. That action opens
+the authenticated portal URL in a top-level tab. After the operator signs in and
+returns to the Control UI, the preview is mounted again automatically. Only a
+write-capable operator receives that bearer URL; the Gateway-side check never
+sends the portal token to Cloudflare. The preview keeps a **Sign in again** action
+for an incomplete login, and returning to a portal during the same portal
+lifetime preserves the browser-side result instead of repeating the Gateway
+probe.
+
+For the wildcard Access application:
+
+- cover the entire configured `*.preview.example.net` namespace with one
+  private Access policy;
+- preserve the original hostname, path, query, and WebSocket upgrade through the
+  reverse proxy;
+- allow the Access application cookie in the intended embedded context (for a
+  cross-site Control UI, this normally requires `SameSite=None; Secure`); and
+- keep the OpenClaw portal bearer check enabled behind Access. Access identity is
+  an additional boundary, not a replacement for the portal token.
+
+A same-origin path proxy on the Control UI hostname is intentionally not used.
+Portal applications contain arbitrary development code; giving that code the
+Control UI origin would expose the UI's browser authority and remove the portal
+service's origin isolation. The dedicated wildcard ingress keeps each portal on
+its own origin while still allowing one centrally managed Access policy.
+
 Each portal receives a random per-lifetime hostname under the configured suffix.
 Only active portal hostnames route to applications; unknown or closed hostnames
 cannot select local ports or Gateway APIs. Closing a portal removes its mapping
@@ -310,8 +346,10 @@ Check the exact returned portal URL rather than substituting the Gateway host:
 - **Page loads but streaming or live reload fails:** preserve WebSocket upgrades
   and request paths, disable buffering, and check the app's `PUBLIC_URL`.
 - **New tab works but the preview does not:** inspect edge authentication,
-  frame policies, and browser cookie restrictions. A blocked reachability check
-  alone does not prove the iframe is unreachable.
+  frame policies, and browser cookie restrictions. For Cloudflare Access, use
+  **Sign in to portal**, finish the top-level login, and return to the Control UI.
+  The preview reloads automatically. A blocked reachability check alone does not
+  prove the iframe is unreachable.
 
 After correcting ingress, select **Retry**. Reopen a portal if its route was
 withdrawn, and restart the application with the new `PUBLIC_URL` when it changes.

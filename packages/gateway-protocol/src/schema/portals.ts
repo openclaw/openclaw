@@ -31,6 +31,14 @@ export const PortalListResultSchema = closedObject({
   portals: Type.Array(PortalSummarySchema),
 });
 
+export const PortalInspectParamsSchema = closedObject({
+  id: NonEmptyString,
+  ...PortalEnvironmentFields,
+});
+export const PortalInspectResultSchema = closedObject({
+  access: Type.Union([Type.Literal("none"), Type.Literal("cloudflare"), Type.Literal("unknown")]),
+});
+
 export const PortalOpenParamsSchema = closedObject({
   ...PortalEnvironmentFields,
   port: Type.Integer({ minimum: 1, maximum: 65_535 }),
@@ -74,6 +82,8 @@ export const PortalChangedEventSchema = closedObject({
 export type PortalSummary = Static<typeof PortalSummarySchema>;
 export type PortalListParams = Static<typeof PortalListParamsSchema>;
 export type PortalListResult = Static<typeof PortalListResultSchema>;
+export type PortalInspectParams = Static<typeof PortalInspectParamsSchema>;
+export type PortalInspectResult = Static<typeof PortalInspectResultSchema>;
 export type PortalOpenParams = Static<typeof PortalOpenParamsSchema>;
 export type PortalOpenResult = Static<typeof PortalOpenResultSchema>;
 export type PortalCloseParams = Static<typeof PortalCloseParamsSchema>;

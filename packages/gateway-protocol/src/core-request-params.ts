@@ -63,6 +63,7 @@ export type GatewayCoreRequestParams = {
   "mentions.list": HumanMentionsSchema.MentionsListParams;
   "mentions.dismiss": HumanMentionsSchema.MentionsDismissParams;
   "portal.close": PortalSchema.PortalCloseParams;
+  "portal.inspect": PortalSchema.PortalInspectParams;
   "portal.list": PortalSchema.PortalListParams;
   "portal.open": PortalSchema.PortalOpenParams;
   "presence.query": PresenceQueryParams;

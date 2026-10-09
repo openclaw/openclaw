@@ -167,7 +167,8 @@ describe("PortalsPage", () => {
           : { portals: [portal] },
       );
       const page = await mountPage(source.context, undefined, environmentId);
-      await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(1));
+      const expectedReads = environmentId ? 1 : 2;
+      await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(expectedReads));
       source.updateSnapshot({ phase: "reconnecting" });
       await page.updateComplete;
       expect(page.textContent).not.toContain("This action requires operator.read access.");
@@ -178,7 +179,7 @@ describe("PortalsPage", () => {
       await page.updateComplete;
       source.emitPortals([portal]);
       await vi.advanceTimersByTimeAsync(6_000);
-      expect(source.request).toHaveBeenCalledTimes(1);
+      expect(source.request).toHaveBeenCalledTimes(expectedReads);
       expect(page.textContent).toContain("This action requires operator.read access.");
       expect(page.querySelector("iframe")).toBeNull();
       expect(page.textContent).not.toContain("Starting your machine");
@@ -315,13 +316,95 @@ describe("PortalsPage", () => {
       source.emitPortals([{ ...portal, url: "https://event.example.test/untrusted" }]);
 
       await vi.waitFor(() => {
-        expect(source.request).toHaveBeenCalledTimes(2);
+        expect(source.request).toHaveBeenCalledTimes(3);
       });
       expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
       expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
       expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
     },
   );
+
+  it("offers Cloudflare Access sign-in and mounts the preview after focus returns", async () => {
+    const source = createContext(["portal.inspect", "portal.list"], async (method) =>
+      method === "portal.inspect"
+        ? { access: "cloudflare" }
+        : ({ portals: [portal] } satisfies PortalListResult),
+    );
+    const page = await mountPage(source.context);
+
+    await vi.waitFor(() => {
+      expect(page.textContent).toContain("Sign in to this private portal");
+    });
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(probePortalReachable).not.toHaveBeenCalled();
+    const login = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.trim() === "Sign in to portal",
+    );
+    expect(login?.getAttribute("href")).toBe(portal.url);
+    expect(login?.getAttribute("target")).toBe("_blank");
+    login?.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    login?.click();
+
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url),
+    );
+    const firstFrame = page.querySelector("iframe");
+    const retryLogin = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.trim() === "Sign in again",
+    );
+    expect(retryLogin).toBeDefined();
+    retryLogin?.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    retryLogin?.click();
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBe(firstFrame));
+    expect(source.request).toHaveBeenCalledWith("portal.inspect", { id: portal.id });
+  });
+
+  it("keeps an authenticated portal preview when it is reselected", async () => {
+    const otherPortal = {
+      ...portal,
+      id: "other-portal",
+      title: "Other app",
+      url: "https://other.example.test/?openclaw_portal=other-token",
+      publicUrl: "https://other.example.test/",
+    } satisfies PortalSummary;
+    const source = createContext(["portal.inspect", "portal.list"], async (method, params) => {
+      if (method === "portal.inspect") {
+        return { access: params.id === portal.id ? "cloudflare" : "none" };
+      }
+      return { portals: [portal, otherPortal] } satisfies PortalListResult;
+    });
+    const page = await mountPage(source.context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Sign in to this private portal"));
+    const login = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.trim() === "Sign in to portal",
+    );
+    login?.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    login?.click();
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url),
+    );
+
+    [...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item")]
+      .find((button) => button.textContent?.includes("Other app"))
+      ?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(otherPortal.url),
+    );
+    [...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item")]
+      .find((button) => button.textContent?.includes("Seeded app"))
+      ?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url),
+    );
+    expect(
+      source.request.mock.calls.filter(
+        ([method, params]) => method === "portal.inspect" && params.id === portal.id,
+      ),
+    ).toHaveLength(1);
+  });
 
   it("requires write access instead of opening a portal without credentials", async () => {
     const { tokenQuery: _tokenQuery, url: _url, ...redactedPortal } = portal;
