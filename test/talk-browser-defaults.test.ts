@@ -87,8 +87,7 @@ vi.mock("../src/talk/client-voice-session-read.js", async (importOriginal) => ({
   resolveClientVoiceAgentSessionId: () => undefined,
 }));
 vi.mock("../src/talk/client-voice-session-write.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../src/talk/client-voice-session-write.js")>();
+  const actual = await importOriginal<typeof import("../src/talk/client-voice-session-write.js")>();
   return {
     ...actual,
     ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",

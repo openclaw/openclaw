@@ -14,7 +14,6 @@ import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
-import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
@@ -29,6 +28,7 @@ import type {
   SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 
