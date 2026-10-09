@@ -89,6 +89,39 @@ function requireJob(workflow: Workflow, name: string): WorkflowJob {
 }
 
 describe("Docker channel promotion", () => {
+  it("stops channel alias writes when authority is revoked between registries", () => {
+    const docker = createDockerMock({ candidateVersion: "2026.7.1", currentVersion: "2026.7.1" });
+    const writes: string[][] = [];
+    let revoked = false;
+    const execFileSyncImpl = (command: string, args: string[]) => {
+      const result = docker(command, args);
+      if (args[2] === "create") {
+        writes.push(args);
+        if (writes.length === 3) {
+          revoked = true;
+        }
+      }
+      return result;
+    };
+
+    expect(() =>
+      promoteDockerChannel(
+        { version: "2026.7.1", images },
+        {
+          execFileSyncImpl,
+          verifyAttestationsImpl: skipAttestationVerification,
+          revalidateAuthority: () => {
+            if (revoked) {
+              throw new Error("Publication authority revoked");
+            }
+          },
+          log: () => {},
+        },
+      ),
+    ).toThrow("Publication authority revoked");
+    expect(writes).toHaveLength(3);
+  });
+
   it.each(["r20260820"])("rejects malformed rebuild suffix %s", (imageTagSuffix) => {
     expect(() =>
       createDockerChannelPromotionPlan({

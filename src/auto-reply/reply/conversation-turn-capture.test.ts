@@ -713,6 +713,57 @@ describe("conversation turn capture", () => {
     });
   });
 
+  it("does not make an ordinary post-restart reply replayable inline", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "turn-after-restart";
+    await beginConversationDeliveryOperation(setup.scope, {
+      operationId,
+      operationKind: "turn",
+      conversationRef: setup.conversationRef,
+      message: "outbound",
+      preparedMessageId: "reef-outbound-restart",
+    });
+    await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
+
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: {
+          AgentId: "main",
+          SessionKey: setup.sessionKey,
+          ChatType: "direct",
+          Provider: "reef",
+          InboundAccessAuthorized: true,
+          OriginatingChannel: "reef",
+          OriginatingTo: "reef:peer-agent",
+          NativeDirectUserId: "peer-agent",
+          MessageSidFull: "reef-inbound-restart",
+          ReplyToIdFull: "reef-outbound-restart",
+          RawBody: "reply after restart",
+          BodyForAgent: "reply after restart",
+          commandText: "reply after restart",
+          agentText: "reply after restart",
+          rawText: "reply after restart",
+        } as FinalizedRuntimeMsgContext,
+      }),
+    ).resolves.toBe(false);
+
+    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+      status: "sent",
+      platformMessageId: "reef-outbound-restart",
+    });
+    expect(
+      (await getConversationDeliveryOperation(setup.scope, operationId))?.reply,
+    ).toBeUndefined();
+    expect(
+      await sessionAccessor.loadTranscriptEvents({
+        agentId: "main",
+        sessionId: setup.sessionId,
+        storePath: setup.storePath,
+      }),
+    ).toEqual([]);
+  });
+
   it("leaves replies to plain sends for ordinary inbound dispatch", async () => {
     const setup = await setupReefConversation();
     const operationId = "send-before-reply";

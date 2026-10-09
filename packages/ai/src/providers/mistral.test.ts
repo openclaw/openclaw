@@ -479,6 +479,30 @@ describe("Mistral provider", () => {
     expect(responseIds[1]?.[0]).not.toBe(responseIds[0]?.[0]);
   });
 
+  it("keeps explicit streamed tool calls distinct when index is omitted", async () => {
+    const { parsedChunks, toolCalls } = await runMistralToolFixture("response-unindexed", [
+      [
+        { id: "explicitA", function: { name: "first_tool", arguments: '{"value"' } },
+        { id: "explicitB", function: { name: "second_tool", arguments: '{"value"' } },
+      ],
+      [
+        { function: { name: "first_tool", arguments: ":1}" } },
+        { function: { name: "second_tool", arguments: ":2}" } },
+      ],
+    ]);
+    const firstCall = requireMistralFixtureValue(parsedChunks[0]?.[0]);
+    const secondCall = requireMistralFixtureValue(parsedChunks[0]?.[1]);
+    // The SDK defaults an omitted wire index to zero. Explicit provider ids
+    // must still win over that ambiguous compatibility default.
+    expect(firstCall.index).toBe(0);
+    expect(secondCall.index).toBe(0);
+
+    expect(toolCalls).toMatchObject([
+      { id: "explicitA", name: "first_tool", arguments: { value: 1 } },
+      { id: "explicitB", name: "second_tool", arguments: { value: 2 } },
+    ]);
+  });
+
   it("routes an asymmetric omitted-index continuation by its persistent function name", async () => {
     const { parsedChunks, toolCalls } = await runMistralToolFixture(
       "response-asymmetric-unindexed",

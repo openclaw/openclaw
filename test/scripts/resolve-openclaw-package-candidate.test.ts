@@ -1119,9 +1119,23 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     expect(responses.every((response) => response.destroyed)).toBe(true);
   });
 
-  it("destroys HTTP error response bodies without reading", async () => {
+  it.each([
+    ["HTTP error", 500, {}, /failed to download package_url: HTTP 500/u],
+    [
+      "declared oversize",
+      200,
+      { "content-length": String(1024 * 1024 * 100) },
+      /exceeds maximum download size/u,
+    ],
+    [
+      "unsafe decimal content-length",
+      200,
+      { "content-length": "9007199254740993" },
+      /exceeds maximum download size/u,
+    ],
+  ])("destroys %s response bodies without reading", async (_name, status, headers, error) => {
     const target = path.join(autoTempDirs.make("openclaw-package-download-"), "openclaw.tgz");
-    const response = packageResponse(null, 500);
+    const response = packageResponse(null, status, headers);
     const read = vi.spyOn(response, Symbol.asyncIterator);
     mockPackageRequests(() => response);
     await expect(
@@ -1129,7 +1143,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
         lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
         maxBytes: 1024,
       }),
-    ).rejects.toThrow(/failed to download package_url: HTTP 500/u);
+    ).rejects.toThrow(error);
     expect(read).not.toHaveBeenCalled();
     expect(response.destroyed).toBe(true);
     await expect(missing(target)).resolves.toBe(true);

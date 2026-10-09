@@ -59,73 +59,88 @@ describe("GitHub release-note rendering", () => {
     ).toThrow("docs-publication renderer");
   });
 
-  it("renders pinned legacy and split sources through the CLI", () => {
-    const rootDir = tempDirs.make("openclaw-release-render-");
-    const git = (...args: string[]) =>
-      execFileSync("git", args, { cwd: rootDir, encoding: "utf8" }).trim();
-    git("init", "-q");
-    git("config", "user.name", "Release Fixture");
-    git("config", "user.email", "release-fixture@openclaw.invalid");
-    git("config", "commit.gpgsign", "false");
-    const changelog = changelogFor("- **PR #123** fix: example.");
-    writeFileSync(join(rootDir, "CHANGELOG.md"), changelog);
-    git("add", ".");
-    git("commit", "-qm", "legacy release");
-    const legacy = git("rev-parse", "HEAD");
-    splitChangelog({ rootDir });
-    git("add", ".");
-    git("commit", "-qm", "split release");
-    const split = git("rev-parse", "HEAD");
-    writeFileSync(
-      join(rootDir, `CHANGELOG/${version}.md`),
-      `## ${version}\n\nUncommitted drift.\n`,
-    );
-    const render = (ref: string) =>
-      execFileSync(
-        process.execPath,
-        [
-          resolve("scripts/render-github-release-notes.mts"),
-          "--root",
-          rootDir,
-          "--ref",
-          ref,
-          "--tag",
-          tag,
-          "--repository",
-          repository,
-        ],
-        { encoding: "utf8" },
+  it.each([false, true])(
+    "renders pinned legacy and split sources through the CLI (compact=%s)",
+    (compact) => {
+      const rootDir = tempDirs.make("openclaw-release-render-");
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: rootDir, encoding: "utf8" }).trim();
+      git("init", "-q");
+      git("config", "user.name", "Release Fixture");
+      git("config", "user.email", "release-fixture@openclaw.invalid");
+      git("config", "commit.gpgsign", "false");
+      const changelog = changelogFor(
+        `- **PR #123** ${compact ? "record ".repeat(20_000) : "fix: example."}`,
       );
-    const legacyBody = render(legacy);
-    const splitBody = render(split);
-    const bodyPath = join(rootDir, "release-body.md");
-    writeFileSync(bodyPath, splitBody);
-    const verify = () =>
-      execFileSync(
-        process.execPath,
-        [
-          resolve("scripts/render-github-release-notes.mts"),
-          "--root",
-          rootDir,
-          "--ref",
-          split,
-          "--tag",
-          tag,
-          "--repository",
-          repository,
-          "--verify-body",
-          bodyPath,
-        ],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      writeFileSync(join(rootDir, "CHANGELOG.md"), changelog);
+      git("add", ".");
+      git("commit", "-qm", "legacy release");
+      const legacy = git("rev-parse", "HEAD");
+      splitChangelog({ rootDir });
+      git("add", ".");
+      git("commit", "-qm", "split release");
+      const split = git("rev-parse", "HEAD");
+      writeFileSync(
+        join(rootDir, `CHANGELOG/${version}.md`),
+        `## ${version}\n\nUncommitted drift.\n`,
       );
-    expect(verify()).toBe("");
-    writeFileSync(bodyPath, `${splitBody}\nUnapproved appended prose.\n`);
-    expect(verify).toThrow("Release body does not match canonical release notes.");
-    expect(legacyBody).not.toContain("Uncommitted drift");
-    expect(splitBody).not.toContain("Uncommitted drift");
-    expect(splitBody).toBe(legacyBody);
-    expect(splitBody).toBe(extractChangelogSection(changelog, version));
-  });
+      const render = (ref: string) =>
+        execFileSync(
+          process.execPath,
+          [
+            resolve("scripts/render-github-release-notes.mts"),
+            "--root",
+            rootDir,
+            "--ref",
+            ref,
+            "--tag",
+            tag,
+            "--repository",
+            repository,
+          ],
+          { encoding: "utf8" },
+        );
+      const legacyBody = render(legacy);
+      const splitBody = render(split);
+      const bodyPath = join(rootDir, "release-body.md");
+      writeFileSync(bodyPath, splitBody);
+      const verify = () =>
+        execFileSync(
+          process.execPath,
+          [
+            resolve("scripts/render-github-release-notes.mts"),
+            "--root",
+            rootDir,
+            "--ref",
+            split,
+            "--tag",
+            tag,
+            "--repository",
+            repository,
+            "--verify-body",
+            bodyPath,
+          ],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        );
+      expect(verify()).toBe("");
+      writeFileSync(bodyPath, `${splitBody}\nUnapproved appended prose.\n`);
+      expect(verify).toThrow("Release body does not match canonical release notes.");
+      expect(legacyBody).not.toContain("Uncommitted drift");
+      expect(splitBody).not.toContain("Uncommitted drift");
+      if (compact) {
+        expect(legacyBody).toContain(`/blob/${tag}/CHANGELOG.md#complete-contribution-record`);
+        expect(splitBody).toContain(
+          `/blob/${tag}/CHANGELOG/records/${version}.md#complete-contribution-record`,
+        );
+        expect(splitBody).toBe(
+          legacyBody.replace("/CHANGELOG.md#", `/CHANGELOG/records/${version}.md#`),
+        );
+      } else {
+        expect(splitBody).toBe(legacyBody);
+        expect(splitBody).toBe(extractChangelogSection(changelog, version));
+      }
+    },
+  );
 
   it("renders and verifies a pinned beta delta instead of cumulative stable notes", () => {
     const rootDir = tempDirs.make("openclaw-beta-render-");

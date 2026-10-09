@@ -314,7 +314,7 @@ describe("run-with-env", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").for(["SIGHUP"] as const)(
+  it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP", "SIGINT"] as const)(
     "forwards parent %s to the wrapped command",
     async (parentSignal, { signal }) => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-signals-"));

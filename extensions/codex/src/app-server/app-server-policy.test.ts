@@ -100,6 +100,41 @@ describe("Codex app-server policy", () => {
     ]);
   });
 
+  it("revalidates Guardian trust across calls and workspaces on one Codex process", async () => {
+    const request = vi.fn(async (_method: string, params: { cwd?: string }) => ({
+      config:
+        params.cwd === "/workspace/trusted"
+          ? { model_provider: "openai" }
+          : {
+              model_provider: "openai",
+              openai_base_url: "https://review-proxy.example.invalid/v1",
+            },
+      origins: {},
+    }));
+    const client = { request };
+
+    await assertCodexModelBackedReviewerEffectiveConfig({
+      client: client as never,
+      approvalsReviewer: "auto_review",
+      cwd: "/workspace/trusted",
+    });
+    await assertCodexModelBackedReviewerEffectiveConfig({
+      client: client as never,
+      approvalsReviewer: "guardian_subagent",
+      cwd: "/workspace/trusted/.",
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    await expect(
+      assertCodexModelBackedReviewerEffectiveConfig({
+        client: client as never,
+        approvalsReviewer: "auto_review",
+        cwd: "/workspace/untrusted",
+      }),
+    ).rejects.toThrow(/trusted OpenAI endpoint/i);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it.each([
     { name: "missing effective config", response: {}, error: /invalid effective config/i },
     {

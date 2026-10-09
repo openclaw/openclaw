@@ -214,20 +214,27 @@ describe("executeSlashCommand directives", () => {
     expectNoRequestCall(request, "sessions.compact");
   });
 
-  it("allows /model with operator.write", async () => {
+  it.each([
+    { name: "allows /model with operator.write", scopes: ["operator.write"], allowed: true },
+    { name: "rejects /model without operator.write", scopes: ["operator.read"], allowed: false },
+  ])("$name", async ({ scopes, allowed }) => {
     const request = vi.fn(async () => createResolvedModelPatch("gpt-5-mini", "openai"));
     const client = createTestGatewayClient(request);
 
     const result = await executeSlashCommand(client, "main", "model", "gpt-5-mini", {
-      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"], ["operator.write"]),
+      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"], scopes),
       chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
     });
 
-    expect(result.failed).not.toBe(true);
-    expect(requireRequestCall(request, "sessions.patch").payload).toMatchObject({
-      key: "main",
-      model: "gpt-5-mini",
-    });
+    expect(result.failed === true).toBe(!allowed);
+    if (allowed) {
+      expect(requireRequestCall(request, "sessions.patch").payload).toMatchObject({
+        key: "main",
+        model: "gpt-5-mini",
+      });
+    } else {
+      expectNoRequestCall(request, "sessions.patch");
+    }
   });
 
   it("passes the captured chat owner to canonical model patching", async () => {
@@ -1022,7 +1029,6 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 it("reports the last-run prompt budget through /usage", async () => {
   const request = vi.fn(async () => ({

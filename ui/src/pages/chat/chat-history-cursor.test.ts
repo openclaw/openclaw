@@ -106,22 +106,33 @@ describe("chat history cursor revalidation", () => {
     expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "cursor-1" }));
   });
 
-  it("does not reuse a pane cursor after its projection resets", async () => {
-    const handler = vi.fn(async () => ({
-      messages: [message("assistant", "Replacement history", "replacement", 1)],
-      sessionId: "replacement-session",
-    }));
-    const state = createState(handler);
-    state.sessionKey = "global";
-    state.assistantAgentId = "main";
-    seedCachedHistory(state, [message("user", "Previous history", "previous", 1)], "old-cursor");
-    reduceChatSessionProjection(state, { type: "sessionReset" });
-    await loadChatHistory(state);
-    expect(handler).toHaveBeenCalledExactlyOnceWith(
-      expect.not.objectContaining({ cursor: expect.anything() }),
-    );
-    expect(state.chatMessages.map(extractText)).toEqual(["Replacement history"]);
-  });
+  it.each(["session", "agent", "transcript", "reset"] as const)(
+    "does not reuse a pane cursor after its %s changes",
+    async (transition) => {
+      const handler = vi.fn(async () => ({
+        messages: [message("assistant", "Replacement history", "replacement", 1)],
+        sessionId: "replacement-session",
+      }));
+      const state = createState(handler);
+      state.sessionKey = "global";
+      state.assistantAgentId = "main";
+      seedCachedHistory(state, [message("user", "Previous history", "previous", 1)], "old-cursor");
+      if (transition === "session") {
+        state.sessionKey = "agent:main:other";
+      } else if (transition === "agent") {
+        state.assistantAgentId = "other";
+      } else if (transition === "transcript") {
+        state.currentSessionId = "replacement-session";
+      } else {
+        reduceChatSessionProjection(state, { type: "sessionReset" });
+      }
+      await loadChatHistory(state);
+      expect(handler).toHaveBeenCalledExactlyOnceWith(
+        expect.not.objectContaining({ cursor: expect.anything() }),
+      );
+      expect(state.chatMessages.map(extractText)).toEqual(["Replacement history"]);
+    },
+  );
 
   it("retains an attributed pending steer across a leaf advance before history-delta persistence", async () => {
     vi.stubGlobal("sessionStorage", createStorageMock());

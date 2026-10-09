@@ -1151,6 +1151,23 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toStrictEqual([]);
   });
 
+  it("persists streamed text when final event carries no message", () => {
+    const existingMessage = textMessage("user", "Hi", undefined, 1);
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "Here is my reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = chatEvent("final");
+
+    handleChatGatewayEvent(state, payload);
+    expectSettled(state);
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toEqual(existingMessage);
+    expectTextMessage(state.chatMessages[1], "assistant", "Here is my reply");
+  });
+
   type TerminalErrorFixture = {
     stream?: string | null;
     previous?: ReturnType<typeof textMessage>[];
@@ -1339,48 +1356,45 @@ describe("handleChatGatewayEvent", () => {
       role: " Assistant ",
       content: [{ type: "text", text: "⚠️ Error: provider rate limit" }],
     },
-  ])(
-    "keeps resumed deltas in one reply after repeated $name errors",
-    ({ content, role = "assistant" }) => {
-      const state = createState({ chatRunId: "run-retry" });
-      const envelope = { sessionKey: "main", runId: "run-retry" };
-      for (let attempt = 0; attempt < 4; attempt++) {
-        receive(state, "error", {
-          ...envelope,
-          seq: attempt + 1,
-          errorMessage: "provider rate limit",
-          message: { role, content, stopReason: "error" },
-        });
-      }
-      const terminalMessages = [...state.chatMessages];
-      receive(state, "delta", { ...envelope, seq: 3, deltaText: "stale output" });
-      expect(state.chatRunId).toBeNull();
-      expect(state.chatStream).toBeNull();
-      expect(state.chatMessages).toEqual(terminalMessages);
-      expect(state.chatRunError).not.toBeNull();
-      let seq = 5;
-      for (const text of ["I", "I agree", "I agree with that product direction."]) {
-        receive(state, "delta", {
-          ...envelope,
-          seq: seq++,
-          message: textMessage("assistant", text),
-        });
-        expect(state.chatStream).toBe(text);
-        expect(state.chatRunId).toBe(envelope.runId);
-        expect(state.chatMessages).toEqual([]);
-        expect(state.chatRunError).toBeNull();
-      }
-      receive(state, "final", {
+  ])("keeps resumed deltas in one reply after repeated $name errors", ({ content, role }) => {
+    const state = createState({ chatRunId: "run-retry" });
+    const envelope = { sessionKey: "main", runId: "run-retry" };
+    for (let attempt = 0; attempt < 4; attempt++) {
+      receive(state, "error", {
         ...envelope,
-        seq,
-        message: textMessage("assistant", "I agree with that product direction."),
+        seq: attempt + 1,
+        errorMessage: "provider rate limit",
+        message: { role, content, stopReason: "error" },
       });
-      expect(state.chatMessages).toHaveLength(1);
-      expectTextMessage(state.chatMessages[0], "assistant", "I agree with that product direction.");
-      expect(state.chatStreamSegments ?? []).toEqual([]);
-      expect(state.chatRunId).toBeNull();
-    },
-  );
+    }
+    const terminalMessages = [...state.chatMessages];
+    receive(state, "delta", { ...envelope, seq: 3, deltaText: "stale output" });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatMessages).toEqual(terminalMessages);
+    expect(state.chatRunError).not.toBeNull();
+    let seq = 5;
+    for (const text of ["I", "I agree", "I agree with that product direction."]) {
+      receive(state, "delta", {
+        ...envelope,
+        seq: seq++,
+        message: textMessage("assistant", text),
+      });
+      expect(state.chatStream).toBe(text);
+      expect(state.chatRunId).toBe(envelope.runId);
+      expect(state.chatMessages).toEqual([]);
+      expect(state.chatRunError).toBeNull();
+    }
+    receive(state, "final", {
+      ...envelope,
+      seq,
+      message: textMessage("assistant", "I agree with that product direction."),
+    });
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextMessage(state.chatMessages[0], "assistant", "I agree with that product direction.");
+    expect(state.chatStreamSegments ?? []).toEqual([]);
+    expect(state.chatRunId).toBeNull();
+  });
 
   it("retires the same-run history error projection when streaming resumes: [assistant turn failed before producing content]", () => {
     const text = "[assistant turn failed before producing content]";

@@ -142,6 +142,31 @@ describe("Codex app inventory cache", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("limits each metadata request to the app/read 100-app contract", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const apps = Array.from({ length: 205 }, (_, index) => app(`app-${index}`));
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    const snapshot = await cache.refreshNow({ key: "runtime", request });
+
+    expect(snapshot.apps).toEqual(apps);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
+      appIds: apps.slice(0, 100).map((entry) => entry.id),
+      includeTools: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "app/read", {
+      appIds: apps.slice(100, 200).map((entry) => entry.id),
+      includeTools: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "app/read", {
+      appIds: apps.slice(200).map((entry) => entry.id),
+      includeTools: true,
+    });
+  });
+
   it("excludes installed apps whose metadata is missing", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
     const installedApps = [app("available-app"), app("missing-app")];
@@ -206,6 +231,30 @@ describe("Codex app inventory cache", () => {
     });
     expect(read.snapshot?.apps).toEqual([app("app-1")]);
     expect(read.diagnostic?.message).toBe("app inventory failed");
+  });
+
+  it("fails closed when the pinned server does not implement app/installed", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        throw new CodexAppServerRpcError({ code: -32601, message: "Method not found" }, method);
+      }
+      return codexAppInventoryResponse(method, [app("current-app")], params);
+    });
+
+    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Method not found");
+    expect(request).toHaveBeenCalledExactlyOnceWith("app/installed", { forceRefresh: true });
+    expect(cache.read({ key: "runtime", request, suppressRefresh: true }).snapshot).toBeUndefined();
+  });
+
+  it("fails closed when installed app inventory is unauthorized", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (method) => {
+      throw new CodexAppServerRpcError({ code: 403, message: "Forbidden" }, method);
+    });
+
+    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Forbidden");
+    expect(request).toHaveBeenCalledExactlyOnceWith("app/installed", { forceRefresh: true });
   });
 
   it("fails closed when app metadata cannot be read", async () => {
@@ -404,6 +453,33 @@ describe("Codex app inventory cache", () => {
     // Freshness still belongs to the complete fetch at t=0, not the merge at t=900.
     const read = cache.read({ key, request, nowMs: 1_100, suppressRefresh: true });
     expect(read.state).toBe("stale");
+  });
+
+  it("merges targeted refreshes for one runtime instead of alternating narrow snapshots", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+
+    const read = cache.read({ key, request, nowMs: 2, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.targetAppIds).toEqual(["calendar-app", "drive-app"]);
+    expect(read.snapshot?.apps).toEqual(apps);
+    expect(read.snapshot?.installedApps.map((entry) => entry.id)).toEqual([
+      "calendar-app",
+      "drive-app",
+    ]);
   });
 
   it("replaces an expired union entry on the next single-target refresh", async () => {

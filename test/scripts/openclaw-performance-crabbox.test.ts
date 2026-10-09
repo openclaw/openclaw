@@ -853,15 +853,26 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
     expect(result.stderr).toContain("payload hash mismatch");
   });
 
-  it("rejects a schema-valid payload with the wrong trusted workflow", () => {
-    const files = fixture();
-    const evidence = JSON.parse(readFileSync(files.evidence, "utf8"));
-    evidence.workflow.runAttempt = "2";
-    writeFileSync(files.evidence, JSON.stringify(evidence));
-    const result = verify(files);
-    expect(result.status).not.toBe(0);
-    expect(existsSync(files.output)).toBe(false);
-  });
+  it.each(["openclawSha", "testedRef", "kovaSha", "workflow", "crabbox", "command"])(
+    "rejects a schema-valid payload with the wrong trusted %s",
+    (field) => {
+      const files = fixture();
+      const evidence = JSON.parse(readFileSync(files.evidence, "utf8"));
+      if (field === "workflow") {
+        evidence.workflow.runAttempt = "2";
+      } else if (field === "crabbox") {
+        evidence.crabbox.version = "different-client";
+      } else if (field === "command") {
+        evidence.command.finishedAt = "2026-08-21T00:02:00Z";
+      } else {
+        evidence[field] = field === "testedRef" ? "different-ref" : "d".repeat(40);
+      }
+      writeFileSync(files.evidence, JSON.stringify(evidence));
+      const result = verify(files);
+      expect(result.status).not.toBe(0);
+      expect(existsSync(files.output)).toBe(false);
+    },
+  );
 
   it("rejects timing for a different lease", () => {
     const files = fixture();

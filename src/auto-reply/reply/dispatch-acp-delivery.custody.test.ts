@@ -276,6 +276,73 @@ describe("ACP routed delivery custody", () => {
     },
   );
 
+  it.each([true, false])(
+    "retries released TTS only with no-send proof, provenUnsent=%s",
+    async (provenUnsent) => {
+      deliveryMocks.routeReply.mockResolvedValueOnce({
+        ok: false,
+        delivered: false,
+        queueCustody: "released",
+        error: "voice delivery failed",
+        ...(provenUnsent
+          ? {
+              cause: new PlatformMessageNotDispatchedError("voice rejected before dispatch", {
+                cause: undefined,
+              }),
+            }
+          : {}),
+      });
+      const dispatcher = createDispatcher();
+      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);
+      const payload = markReplyPayloadAsTtsSupplement({
+        text: "hello",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      });
+
+      await expect(coordinator.deliver("final", payload, { skipTts: true })).resolves.toBe(true);
+
+      if (!provenUnsent) {
+        expect(deliveryMocks.routeReply).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ payload, replyKind: "final" }),
+        );
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expect(coordinator.hasDeliveredFinalReply()).toBe(false);
+        expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
+        expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+        expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+        expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
+          tool: 0,
+          block: 0,
+          final: 0,
+        });
+        await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+        return;
+      }
+      expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(2);
+      expect(deliveryMocks.routeReply).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ payload }),
+      );
+      expect(deliveryMocks.routeReply).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ payload: { text: "hello" }, replyKind: "final" }),
+      );
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+      expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(true);
+      expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+      expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+      expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+      expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 })).toEqual({
+        tool: 0,
+        block: 0,
+        final: 1,
+      });
+      await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("hello");
+    },
+  );
+
   it.each([{ isReasoning: true }] as const)(
     "keeps pending non-answer custody separate from the answer (%j)",
     async (classification) => {

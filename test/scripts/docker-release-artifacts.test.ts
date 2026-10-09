@@ -410,24 +410,35 @@ describe("prepared Docker publication", () => {
     },
   );
 
-  it("blocks candidate publication when authority is revoked during final tag read", async () => {
-    const { fixture, root, verified, registry } = await createCandidateDockerPublication();
-    const verifyTag = vi.fn(() => {
-      fixture.admission.authority.permission = "read";
-    });
-    await expect(
-      publishDockerRelease({
+  it.each(["acquisition", "async OCI read", "final tag read"])(
+    "blocks candidate publication when authority is revoked during %s",
+    async (boundary) => {
+      const { fixture, root, verified, registry } = await createCandidateDockerPublication();
+      if (boundary === "acquisition") {
+        fixture.admission.authority.permission = "read";
+      }
+      const verifyTag = vi.fn(() => {
+        if (boundary === "final tag read") {
+          fixture.admission.authority.permission = "read";
+        }
+      });
+      const publication = publishDockerRelease({
         manifest: fixture.docker,
         revalidateAuthority: verified.revalidateAuthority,
         payloadDirectory: path.join(root, "payloads"),
         images: ["ghcr.io/openclaw/openclaw"],
         execFileSyncImpl: registry.execute,
         verifyTag,
-      }),
-    ).rejects.toThrow(/permission|authority|operator/i);
-    expect(verifyTag).toHaveBeenCalledOnce();
-    expect(registryWrites(registry.calls)).toEqual([]);
-  });
+      });
+      if (boundary === "async OCI read") {
+        expect(verifyTag).not.toHaveBeenCalled();
+        fixture.admission.authority.permission = "read";
+      }
+      await expect(publication).rejects.toThrow(/permission|authority|operator/i);
+      expect(verifyTag).toHaveBeenCalledOnce();
+      expect(registryWrites(registry.calls)).toEqual([]);
+    },
+  );
 
   it.each([
     ["copy to slim tag", 1],

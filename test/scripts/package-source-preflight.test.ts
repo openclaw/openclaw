@@ -522,6 +522,17 @@ describe("package source preflight", () => {
     ).toThrow("root package.json dependency invalid must declare a string version");
   });
 
+  it("preserves historical sources from before the @openclaw/ai workspace split", () => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: null,
+        allowUnreleasedChangelog: true,
+        changelogContent: changelog,
+        rootManifestContent: rootManifest({ dependencies: {} }),
+      }),
+    ).toBe("2026.8.1");
+  });
+
   it("validates the current source ref without modifying the checkout", () => {
     const committedManifest = JSON.parse(
       execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),

@@ -354,20 +354,27 @@ describe("refreshChatAvatar", () => {
     },
   );
 
-  it("bounds a stalled image response by the shared deadline", async () => {
-    const host = avatarHost();
-    const deadline = new AbortController();
-    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
-    const fetchAvatar = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (_input, init) => pendingUntilAbort<Response>(init?.signal));
-    const pending = refreshChatAvatar(host);
-    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
-    expect(timeout).toHaveBeenCalledWith(30_000);
-    deadline.abort();
-    await pending;
-    expect(host.chatAvatarUrl).toBeNull();
-  });
+  it.each(["response", "body"])(
+    "bounds a stalled image %s by the shared deadline",
+    async (phase) => {
+      const host = avatarHost();
+      const deadline = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const fetchAvatar = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (_input, init) =>
+          phase === "response"
+            ? pendingUntilAbort<Response>(init?.signal)
+            : ({ ok: true, blob: () => pendingUntilAbort<Blob>(init?.signal) } as Response),
+        );
+      const pending = refreshChatAvatar(host);
+      await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+      expect(timeout).toHaveBeenCalledWith(30_000);
+      deadline.abort();
+      await pending;
+      expect(host.chatAvatarUrl).toBeNull();
+    },
+  );
 
   it("keeps missing avatar diagnostics without fetching a remote source", async () => {
     const host = avatarHost();

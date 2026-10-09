@@ -214,6 +214,37 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
+  it("does not replay a successful reply when its provider response cannot be parsed", async () => {
+    const acceptedError = createChannelPartialDeliveryError(
+      new SyntaxError("Unexpected end of JSON input"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    const onReplyError = vi.fn();
+    const replyMessageLine = vi.fn(async () => {
+      throw acceptedError;
+    });
+    const { pushMessagesLine } = createDeps({
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "accepted despite its malformed receipt" },
+        lineData: {},
+        onReplyError,
+      }),
+    ).resolves.toMatchObject({
+      status: "partial",
+      replyTokenUsed: true,
+      visibleReplySent: true,
+      error: acceptedError,
+    });
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(onReplyError).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
   it("preserves a provider-accepted push when local bookkeeping fails", async () => {
     const acceptedError = createChannelPartialDeliveryError(
       new Error("activity store unavailable"),

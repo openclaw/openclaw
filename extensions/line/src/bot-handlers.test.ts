@@ -453,6 +453,38 @@ describe("handleLineWebhookEvents", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
+  it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
+    const processMessage = vi.fn();
+    await expectGroupMessageBlocked({
+      processMessage,
+      event: createTestMessageEvent({
+        message: { id: "m5b", type: "text", text: "hi", quoteToken: "quote-token" },
+        source: { type: "group", groupId: "group-1", userId: "user-5" },
+        webhookEventId: "evt-5b",
+      }),
+      context: {
+        cfg: { channels: { line: { groupPolicy: "allowlist" } } },
+        account: {
+          accountId: "default",
+          enabled: true,
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          tokenSource: "config",
+          config: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+          },
+        },
+        runtime: createRuntime(),
+        mediaMaxBytes: 1,
+        processMessage,
+      },
+    });
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
   it.each([{ name: "not delivered", delivered: false, fallbackPushCount: 1 }])(
     "avoids duplicate delivery when the pairing reply was $name",
     async ({ delivered, fallbackPushCount }) => {

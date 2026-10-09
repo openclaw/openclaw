@@ -48,6 +48,7 @@ function harness(
     update: [] as unknown[],
     comment: [] as unknown[],
     warnings: [] as string[],
+    sequence: [] as string[],
   };
   const github = {
     paginate: async (_method: unknown, args: Record<string, unknown>) =>
@@ -74,10 +75,12 @@ function harness(
         },
         update: async (args: unknown) => {
           calls.update.push(args);
+          calls.sequence.push("update");
           return { data: {} };
         },
         createComment: async (args: unknown) => {
           calls.comment.push(args);
+          calls.sequence.push("comment");
           if (options.commentError) {
             throw options.commentError;
           }
@@ -96,6 +99,35 @@ function harness(
 }
 
 describe("dated TODO issue upsert", () => {
+  it("ignores a public marker spoof and updates only the bot-and-label tracker", async () => {
+    const spoof = issue(99, { trusted: false });
+    const tracker = issue(10, {
+      trusted: true,
+      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
+    });
+    const { calls, core, github } = harness([spoof, tracker]);
+
+    await runDatedTodoUpsert({
+      github,
+      context: { repo: { owner: "openclaw", repo: "openclaw" } },
+      core,
+      report: REPORT,
+    });
+
+    expect(calls.create).toHaveLength(0);
+    expect(calls.update).toEqual([
+      expect.objectContaining({ issue_number: tracker.number, state: "open" }),
+    ]);
+    expect(calls.comment).toEqual([
+      expect.objectContaining({
+        issue_number: tracker.number,
+        body: expect.stringContaining("src/urgent.ts:7"),
+      }),
+    ]);
+    expect(calls.sequence).toEqual(["comment", "update"]);
+    expect(calls.warnings).toEqual([expect.stringContaining("Ignored 1 untrusted")]);
+  });
+
   it("updates the canonical tracker when diagnostics-only search fails", async () => {
     const tracker = issue(10, { trusted: true });
     const { calls, core, github } = harness([tracker], {
