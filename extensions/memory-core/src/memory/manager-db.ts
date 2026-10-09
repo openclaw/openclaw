@@ -33,9 +33,9 @@ function resolveMemoryReindexBaseName(
   databaseBaseName: string,
   entryName: string,
 ): string | undefined {
-  const suffix =
+  const matchedSuffix =
     MEMORY_DATABASE_FILE_SUFFIXES.find((suffix) => suffix && entryName.endsWith(suffix)) ?? "";
-  const baseName = entryName.slice(0, entryName.length - suffix.length);
+  const baseName = entryName.slice(0, entryName.length - matchedSuffix.length);
   const prefix = `${databaseBaseName}.memory-reindex-`;
   return baseName.startsWith(prefix) &&
     MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))

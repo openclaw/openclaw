@@ -30,25 +30,28 @@ export function applyRetrievalRanking<T extends ProjectRankable>(
   results: readonly T[],
   activeProjectKeys?: ReadonlySet<string>,
 ): T[] {
+  const weighted = results.map((entry) => {
+    const importance = entry.importance;
+    const multiplier =
+      importance === null || importance === undefined
+        ? 1
+        : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
+    return { ...entry, score: entry.score * multiplier };
+  });
+  const eligible = weighted.filter(
+    (entry) =>
+      !entry.projectKey
+        ?.split(";")
+        .map((key) => key.trim())
+        .includes(INVALID_PROJECT_ANNOTATION_KEY),
+  );
+  if (!activeProjectKeys || activeProjectKeys.size === 0) {
+    return eligible;
+  }
   // Retrieval owners sort after score adjustment, preserving their exact-match tiers.
-  return results
-    .filter(
-      (entry) =>
-        !entry.projectKey
-          ?.split(";")
-          .map((key) => key.trim())
-          .includes(INVALID_PROJECT_ANNOTATION_KEY),
-    )
-    .map((entry) => {
-      const importance = entry.importance;
-      const multiplier =
-        importance === null || importance === undefined
-          ? 1
-          : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
-      return {
-        ...entry,
-        score:
-          entry.score * multiplier * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
-      };
-    });
+  return eligible.map((entry) =>
+    Object.assign({}, entry, {
+      score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
+    }),
+  );
 }
