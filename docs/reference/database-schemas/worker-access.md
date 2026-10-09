@@ -4026,6 +4026,11 @@ before choosing their lane. The worker retains physical identity, schema,
 quarantine, and caller authority checks; cold reads still serialize with first
 creation.
 
+Worker-owned retirement cleanup borrows its retained executor instead of acquiring
+a native read candidate. The exact cleanup scope rechecks host liveness, while
+worker grants keep the durable journal and lease checks. Ordinary cold reads keep
+the native read-candidate owner and its existing release ordering.
+
 OAuth peer fencing, restoration, and settlement use the existing auth reader and
 agent writer. Discovery retains each candidate's physical database identity,
 including registered custom paths. The writer compares the exact credential

@@ -1,4 +1,5 @@
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
@@ -50,11 +51,17 @@ export async function withSessionHistoryReadAdmission<T>(
   let outcome: { value: T } | { error: unknown };
   try {
     if (!request.knownSource) {
-      native = retainOpenClawAgentDatabaseReadCandidates(
-        [{ path: options.path }],
-        options.env ?? process.env,
-      );
-      if (!native.databases.length) {
+      const cleanup = getAgentDeletionDatabaseCleanup(options);
+      if (cleanup?.worker) {
+        // Worker cleanup retains its executor and checks durable authority in its grants.
+        cleanup.assertCurrentHost();
+      } else {
+        native = retainOpenClawAgentDatabaseReadCandidates(
+          [{ path: options.path }],
+          options.env ?? process.env,
+        );
+      }
+      if (!native?.databases.length) {
         execution = captureExistingOpenClawAgentDatabaseExecution(options);
       }
     }
