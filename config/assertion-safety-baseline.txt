@@ -1753,7 +1753,7 @@ src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	6
 src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	1
-src/commands/channels/add.ts	2
+src/commands/channels/add.ts	1
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8

@@ -20,10 +20,6 @@ type ProxyEnvSource = {
   label: "doctor process" | "installed Gateway service";
 };
 
-function listConfiguredProxyKeys(env: NodeJS.ProcessEnv): string[] {
-  return HTTP_PROXY_ENV_KEYS.filter((key) => Boolean(env[key]?.trim()));
-}
-
 async function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
   return await new Promise((resolve) => {
     let settled = false;
@@ -123,7 +119,7 @@ export async function noteWebFetchProxyDiagnostic(params: {
 
   const directConnectivity = await (params.probeDirectConnectivity ?? probeDirectTlsConnectivity)();
   const sourceLines = sources.map((source) => {
-    const keys = listConfiguredProxyKeys(source.env);
+    const keys = HTTP_PROXY_ENV_KEYS.filter((key) => Boolean(source.env[key]?.trim()));
     return `- HTTP(S) proxy environment detected in the ${source.label}: ${keys.join(", ")}.`;
   });
   const directProbe =

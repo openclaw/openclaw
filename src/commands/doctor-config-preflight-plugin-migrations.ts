@@ -76,9 +76,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       }),
     );
     expectedPending = structuredClone(deferred);
-    for (const entry of deferred) {
-      previousById.set(entry.pluginId, entry);
-    }
+    remember();
     previousLoaded = true;
   };
   let prepared = false;

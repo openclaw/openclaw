@@ -504,7 +504,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // receive the source. Any skipped owner keeps the shared file in place.
     // The revision seen here is also the CAS token for the later write, so a
     // concurrent edit in between surfaces as a conflict, never an overwrite.
-    let keepSource = retainSource;
     const importAgents: [string, CronJob][] = [];
     let scratchWriteNeeded = false;
     const plannedRevisionByJobId = new Map<string, number>();
@@ -514,7 +513,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       plannedRevisionByJobId.set(monitor.id, state.currentRevision);
       if (state.currentRevision > 0 && !current) {
         warnings.push(`Agent "${agentId}" scratch was explicitly unset; it was left unchanged.`);
-        keepSource = true;
       } else if (
         current &&
         current.content !== source.content &&
@@ -523,7 +521,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         warnings.push(
           `Agent "${agentId}" already has different cron scratch; it was left unchanged.`,
         );
-        keepSource = true;
       } else {
         importAgents.push([agentId, monitor]);
         if (current?.sourceSha256 !== source.sha256) {
@@ -531,6 +528,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         }
       }
     }
+    const keepSource = retainSource || importAgents.length !== agents.length;
     if (importAgents.length === 0 || (keepSource && !scratchWriteNeeded)) {
       continue;
     }

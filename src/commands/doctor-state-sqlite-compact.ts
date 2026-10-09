@@ -13,12 +13,8 @@ import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownersh
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
-type DoctorStateSqliteCompactOptions = {
-  env?: NodeJS.ProcessEnv;
-};
-
 /** Compact only the canonical shared state database resolved for this invocation. */
-export async function runDoctorStateSqliteCompact(options: DoctorStateSqliteCompactOptions = {}) {
+export async function runDoctorStateSqliteCompact(options: { env?: NodeJS.ProcessEnv } = {}) {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
   const stat = fs.lstatSync(sqlitePath, { throwIfNoEntry: false });
