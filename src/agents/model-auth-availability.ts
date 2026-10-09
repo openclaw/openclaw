@@ -1124,20 +1124,20 @@ export function createModelAuthAvailabilityResolver(
     ) {
       // The ready account listing did not return this dual-route id, so its subscription route
       // is not entitled. A usable Platform credential keeps today's selection and preference.
-      const [firstPlatformRoute, ...restPlatformRoutes] = routeResolution.routes.filter(
+      const platformRoutes = routeResolution.routes.filter(
         (route) => route.authRequirement !== "subscription",
       );
-      const platform = firstPlatformRoute
+      const platform = platformRoutes.length
         ? selectOpenAIModelRouteAuth({
-            resolution: { ...routeResolution, routes: [firstPlatformRoute, ...restPlatformRoutes] },
+            resolution: { ...routeResolution, routes: platformRoutes },
             sourcePlan,
             configuredAuthMode: automaticRouteAuthMode,
           })
         : undefined;
       if (platform?.kind !== "selected" || platform.selection.kind !== "selected") {
+        // No reason code: the account is signed in, so sign-in or API-key guidance would mislead.
         return {
           availability: false,
-          unavailableReason: "missing-auth",
           routeResolution,
           selectedRoute: routeAuthDecision.selection.route,
         };

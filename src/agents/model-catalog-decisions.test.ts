@@ -743,7 +743,10 @@ describe("captured model decisions", () => {
     const ready = { status: "ready", listedModelIds: ["gpt-6-sol", "gpt-5.5"] } as const;
 
     it("does not offer an unlisted dual-route model to a ChatGPT-only account", () => {
-      expect(evaluate(ready, false, "gpt-5.4-pro")).toMatchObject({ availability: false });
+      const unlisted = evaluate(ready, false, "gpt-5.4-pro");
+      expect(unlisted).toMatchObject({ availability: false });
+      // The account is signed in; a missing-auth reason would render sign-in guidance.
+      expect(unlisted.unavailableReason).toBeUndefined();
       expect(evaluate(ready, false, "gpt-5.5")).toMatchObject({
         availability: true,
         selectedProfileId: "openai:chatgpt",
