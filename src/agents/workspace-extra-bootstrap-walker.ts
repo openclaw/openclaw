@@ -112,28 +112,16 @@ function patternSegmentMatches(segment: string, patternSegment: string): boolean
 type FallbackWalkFrame = { relativeDir: string; symlinkDepths: ReadonlySet<number> };
 
 // Decide whether a directory symlink at the current walk depth should be
-// descended, mirroring Node fs.glob's symlink rule: a directory symlink is
-// followed only when its own path segment is named by a LITERAL pattern segment
-// whose immediately-preceding pattern segment is not `**`. A symlink consumed by a
-// wildcard (`*`/`**`), or one sitting directly after a `**` recursive prefix, is
-// never followed even when a later literal names it. Braces expand to independent
-// literal alternatives in Node's globber, so descent is allowed when ANY brace-
-// free expansion's alignment allows it.
+// descended, mirroring Node fs.glob's symlink rule for one brace-free
+// alternative: a directory symlink is followed only when its own path segment is
+// named by a LITERAL pattern segment whose immediately-preceding pattern segment
+// is not `**`. A symlink consumed by a wildcard (`*`/`**`), or one sitting
+// directly after a `**` recursive prefix, is never followed even when a later
+// literal names it. `ancestorSymlinkDepths` holds the 0-based path indices
+// already reached by following a symlink; a `**` may not consume one of them
+// because globstar never traverses INTO a symlink (see FallbackWalkFrame), which
+// is what bounds a cycle.
 function symlinkDescentAllowed(
-  dirSegments: string[],
-  patternExpansions: string[][],
-  ancestorSymlinkDepths: ReadonlySet<number>,
-): boolean {
-  return patternExpansions.some((patternSegments) =>
-    expansionAllowsSymlinkDescent(dirSegments, patternSegments, ancestorSymlinkDepths),
-  );
-}
-
-// Per-expansion symlink-descent alignment for one brace-free pattern.
-// `ancestorSymlinkDepths` holds the 0-based path indices already reached by
-// following a symlink; a `**` may not consume one of them because globstar never
-// traverses INTO a symlink (see FallbackWalkFrame), which is what bounds a cycle.
-function expansionAllowsSymlinkDescent(
   dirSegments: string[],
   patternSegments: string[],
   ancestorSymlinkDepths: ReadonlySet<number>,
@@ -205,28 +193,40 @@ async function fallbackSymlinkTargetIsDirectory(childAbs: string): Promise<boole
 // symlinked package directory still loads here. Yields the raw separator-joined
 // relative path (backslashes preserved) so the caller's toPortableMatchPath folds
 // only the platform separator, exactly as on the fs.glob path.
+//
+// Node's globber walks each brace alternative with its own traversal state
+// (`pkg/{linked,other}/**` -> `pkg/linked/**` and `pkg/other/**`), so each
+// alternative is walked independently here: one alternative's literal symlink
+// segment must not let another alternative match below that link. A path
+// reached by several alternatives is yielded once per alternative; the resolver
+// collects matches into a set and the loader dedupes failures.
 async function* walkFallbackMatches(
   workspaceDir: string,
   normalizedPattern: string,
 ): AsyncGenerator<string> {
-  const matcher = new Minimatch(normalizedPattern, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS);
+  for (const alternative of braceExpand(
+    normalizedPattern,
+    EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS,
+  )) {
+    yield* walkFallbackAlternative(workspaceDir, alternative);
+  }
+}
+
+async function* walkFallbackAlternative(
+  workspaceDir: string,
+  alternative: string,
+): AsyncGenerator<string> {
+  const matcher = new Minimatch(alternative, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS);
   // fs.glob yields a directory (or descended directory symlink) that fully matches
   // the pattern, not just files, so the fallback must too or it silently drops the
   // match. The trailing-slash form covers directory-only patterns (`pkg/*/`), which
   // Minimatch full-matches only against `dir/`, never `dir`.
   const patternMatchesDirectory = (key: string): boolean =>
     matcher.match(key, false) || matcher.match(`${key}/`, false);
-  // Brace alternations expand to independent literal alternatives in Node's
-  // globber (`pkg/{linked,other}/**` -> `pkg/linked/**` and `pkg/other/**`), and
-  // its symlink rule runs per alternative, so expand once here (off the symlink
-  // hot path) and classify each brace-free expansion's alignment independently.
-  const patternExpansions = braceExpand(
-    normalizedPattern,
-    EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS,
-  ).map((expansion) => expansion.split("/"));
+  const patternSegments = alternative.split("/");
   // Root the local scan where fs.glob would root its walk (`packages/[ab]/*`
   // roots at `packages`) instead of always re-reading from the workspace root.
-  const walkRoot = literalPatternPrefix(normalizedPattern);
+  const walkRoot = literalPatternPrefix(alternative);
   const stack: FallbackWalkFrame[] = [
     { relativeDir: walkRoot === "." ? "" : walkRoot, symlinkDepths: new Set() },
   ];
@@ -273,7 +273,7 @@ async function* walkFallbackMatches(
         // workspace still resolves. The recorded depth stops a deeper `**` from
         // re-crossing this link, which is what terminates a symlink cycle.
         if (
-          symlinkDescentAllowed(childSegments, patternExpansions, frame.symlinkDepths) &&
+          symlinkDescentAllowed(childSegments, patternSegments, frame.symlinkDepths) &&
           matcher.match(matchKey, true) &&
           (await fallbackSymlinkTargetIsDirectory(path.resolve(workspaceDir, childRelativePath)))
         ) {

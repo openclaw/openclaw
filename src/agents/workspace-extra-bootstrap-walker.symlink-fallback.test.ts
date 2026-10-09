@@ -632,4 +632,33 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "(19) keeps symlink descent scoped to the brace alternative that names the link",
+    async () => {
+      // Node walks each brace alternative with its own state. `pkg/linked/SOUL.md`
+      // names the link literally, but `**/AGENTS.md` never follows it (or enters
+      // `.hidden`), so `pkg/linked/AGENTS.md` must not match through the first
+      // alternative's descent.
+      const workspaceDir = await createWorkspaceDir("brace-scoped-descent");
+      await fs.mkdir(path.join(workspaceDir, ".hidden"), { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, ".hidden", "AGENTS.md"), "hidden", "utf-8");
+      if (
+        !(await trySymlink(path.join("..", ".hidden"), path.join(workspaceDir, "pkg", "linked")))
+      ) {
+        return;
+      }
+
+      const pattern = "{pkg/linked/SOUL.md,**/AGENTS.md}";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      expect(oracle).not.toContain("pkg/linked/AGENTS.md");
+      await withoutNativeGlobApis(async () => {
+        const matches = (
+          await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)
+        ).matches.toSorted();
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
 });
