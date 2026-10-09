@@ -41,13 +41,12 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
     // `main` / `global` resolve to the agent main session via
     // `resolveHeartbeatSession`; missing entries fall back to the same key
     // and are repaired elsewhere — don't double-warn here.
-    if (normalizedSession === "main" || normalizedSession === "global") {
-      continue;
-    }
-    if (isSubagentSessionKey(configuredSession)) {
-      continue;
-    }
-    if (sessionScope === "global") {
+    if (
+      normalizedSession === "main" ||
+      normalizedSession === "global" ||
+      isSubagentSessionKey(configuredSession) ||
+      sessionScope === "global"
+    ) {
       continue;
     }
     const target = normalizeOptionalString(heartbeatConfig.target);

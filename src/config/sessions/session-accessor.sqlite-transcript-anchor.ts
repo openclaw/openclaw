@@ -3,10 +3,12 @@ import {
   getSqliteReadScopeRevision,
   readSqliteNativeMutationRevision,
 } from "../../infra/sqlite-schema-facts.js";
+import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptScope,
@@ -24,40 +26,75 @@ type TranscriptEntryRead = {
   message?: unknown;
 };
 
-function readActiveTranscriptEntryFacts(params: TranscriptEntryRead) {
+/** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
+export function readActiveTranscriptEntryAnchorFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string,
+  message?: unknown,
+): TranscriptEntryAnchor | undefined {
+  assertTransactionUsable(projection.database.db);
+  const sessionKey = projection.resolved.sessionKey;
+  if (!projection.database.db.isTransaction || !sessionKey) {
+    throw new Error("Transcript anchor projection requires its selected session snapshot");
+  }
+  const params = {
+    database: projection.database,
+    resolved: { ...projection.resolved, sessionKey },
+    entryId,
+    message,
+  };
+  return createTranscriptEntryAnchor({
+    ...params,
+    row: readActiveTranscriptEntryFacts(params, projection),
+  });
+}
+
+function readActiveTranscriptEntryFacts(
+  params: TranscriptEntryRead,
+  projection?: CurrentTranscriptProjection,
+) {
   const db = getSessionKysely(params.database.db);
-  return executeSqliteQueryTakeFirstSync(
+  const query = db
+    .selectFrom("transcript_event_identities as identity")
+    .innerJoin("session_transcript_active_events as active", (join) =>
+      join
+        .onRef("active.session_id", "=", "identity.session_id")
+        .onRef("active.event_seq", "=", "identity.seq"),
+    )
+    .select([
+      "identity.seq",
+      "identity.parent_id",
+      "identity.message_idempotency_key",
+      "active.message_position",
+    ])
+    .where("identity.session_id", "=", params.resolved.sessionId)
+    .where("identity.event_id", "=", params.entryId)
+    .limit(1);
+  const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-        join.onRef("rewrite.session_id", "=", "identity.session_id"),
-      )
-      .leftJoin(
-        selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
-          "status",
-        ),
-        (join) => join.onTrue(),
-      )
-      .select([
-        "identity.seq",
-        "identity.parent_id",
-        "identity.message_idempotency_key",
-        "active.message_position",
-        "rewrite.generation",
-        "status.latestSeq",
-      ])
-      .where("identity.session_id", "=", params.resolved.sessionId)
-      .where("identity.event_id", "=", params.entryId)
-      // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
-      .where("status.needs_reconcile", "is not", 1)
-      .limit(1),
+    query.$if(!projection, (selected) =>
+      selected
+        .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.onRef("rewrite.session_id", "=", "identity.session_id"),
+        )
+        .leftJoin(
+          selectSessionTranscriptIndexStatus(params.database.db, params.resolved.sessionId).as(
+            "status",
+          ),
+          (join) => join.onTrue(),
+        )
+        .select(["rewrite.generation", "status.latestSeq"])
+        // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
+        .where("status.needs_reconcile", "is not", 1),
+    ),
   );
+  return row
+    ? {
+        ...row,
+        generation: (projection ? projection.generation : row.generation) ?? null,
+        latestSeq: projection ? projection.state.indexedSeq : row.latestSeq,
+      }
+    : undefined;
 }
 
 /** Reads one active message identity from the caller's current SQLite transaction. */

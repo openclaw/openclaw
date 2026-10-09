@@ -858,19 +858,13 @@ async function resolvePnpmIsolatedGlobalPackage(params: {
   return null;
 }
 
-async function isPnpmIsolatedGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
-  const globalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
-  if (!globalRoot) {
-    return false;
-  }
-  return Boolean(await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }));
-}
-
 async function isPnpmGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
-  if (await isPnpmIsolatedGlobalPackageRoot(pkgRoot)) {
-    return true;
-  }
-  if (await hasPnpmIsolatedProjectMetadata(pkgRoot)) {
+  const isolatedRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
+  if (
+    (isolatedRoot &&
+      (await resolvePnpmIsolatedGlobalPackage({ globalRoot: isolatedRoot, pkgRoot }))) ||
+    (await hasPnpmIsolatedProjectMetadata(pkgRoot))
+  ) {
     return true;
   }
   const globalRoot = inferPnpmGlobalRootFromPackageRoot(pkgRoot);
@@ -960,8 +954,7 @@ async function resolveGlobalRoot(
   if (resolved.manager === "bun") {
     return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
   }
-  const argv = [resolved.command, "root", "-g"];
-  const res = await runCommand(argv, { timeoutMs }).catch(() => null);
+  const res = await runCommand([resolved.command, "root", "-g"], { timeoutMs }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }
@@ -1152,10 +1145,12 @@ export async function detectGlobalInstallManagerForRoot(
   }
 
   for (const manager of ["npm", "pnpm"] as const) {
-    const argv = [manager, "root", "-g"];
-    const res = await runCommand(argv, { timeoutMs }).catch(() => null);
-    const globalRoot = res?.code === 0 ? readPackageManagerProbeValue(res.stdout) : "";
-    diagnostics.push(`${argv.join(" ")}: ${globalRoot || "unavailable"}`);
+    const globalRoot = await resolveGlobalRoot(
+      { manager, command: manager },
+      runCommand,
+      timeoutMs,
+    );
+    diagnostics.push(`${manager} root -g: ${globalRoot || "unavailable"}`);
     if (!globalRoot) {
       continue;
     }

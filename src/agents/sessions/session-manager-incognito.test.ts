@@ -131,12 +131,12 @@ it("keeps manager reads and writes on the original actor outside its opening sco
       },
       admission.signal,
     );
-    expect(
-      await bounded[sessionManagerPrepareCurrentTurnReplay](
-        () => false,
-        (entry) => entry?.id === first,
-      ),
-    ).toMatchObject({ anchor: { entryId: first } });
+    const replay = await bounded[sessionManagerPrepareCurrentTurnReplay](
+      () => false,
+      (entry) => entry?.id === first,
+    );
+    expect(replay).toMatchObject({ entryId: first });
+    replay?.assertCurrent();
     const rewrite = await manager.prepareTranscriptRewriteAsync();
     await rewrite.sessionManager.resetLeafAsync();
     const replacement = await rewrite.sessionManager.appendMessageAsync(

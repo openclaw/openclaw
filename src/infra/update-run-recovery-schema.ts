@@ -347,12 +347,7 @@ const recoveryInspectionRecordSchema = z
                 effect.kind === "package-restore" ||
                 effect.kind === "checkpoint-restore"),
           )) ||
-        (record.terminal &&
-          nativeFinal &&
-          (nativeFinal.exists !== native.original.exists ||
-            nativeFinal.enabled !== native.original.enabled ||
-            nativeFinal.loaded !== native.original.loaded ||
-            nativeFinal.stopped !== native.original.stopped)))
+        (record.terminal && nativeFinal && !isDeepStrictEqual(nativeFinal, native.original)))
     ) {
       reportIssue("Native manager evidence must match admitted source and revision");
     }

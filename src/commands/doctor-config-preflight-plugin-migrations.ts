@@ -90,6 +90,17 @@ export function createDoctorPluginMigrationPreparation(params: {
   let replacementPluginIds: Readonly<Record<string, string>> = {};
   let sourceSnapshot: ConfigFileSnapshot | undefined;
   const inspectedStatelessPluginIds = new Set<string>();
+  const requirePlugins = (
+    pluginIds: readonly string[],
+    requirement: "requiresStateMigration" | "requiresDoctorInspection",
+  ) => {
+    for (const pluginId of pluginIds) {
+      const pending = previousById.get(pluginId);
+      if (pending) {
+        previousById.set(pluginId, { ...pending, [requirement]: true });
+      }
+    }
+  };
   const learn = (inspection: PluginMigrationInspection | undefined) => {
     if (!inspection) {
       return;
@@ -98,18 +109,8 @@ export function createDoctorPluginMigrationPreparation(params: {
     runtimePluginAliases = new Set(inspection.runtimePluginAliases);
     unavailablePluginIds = new Set(inspection.unavailablePluginIds);
     replacementPluginIds = inspection.replacementPluginIds ?? {};
-    for (const pluginId of inspection.requiredPluginIds) {
-      const pending = previousById.get(pluginId);
-      if (pending) {
-        previousById.set(pluginId, { ...pending, requiresStateMigration: true });
-      }
-    }
-    for (const pluginId of inspection.inspectionRequiredPluginIds) {
-      const pending = previousById.get(pluginId);
-      if (pending) {
-        previousById.set(pluginId, { ...pending, requiresDoctorInspection: true });
-      }
-    }
+    requirePlugins(inspection.requiredPluginIds, "requiresStateMigration");
+    requirePlugins(inspection.inspectionRequiredPluginIds, "requiresDoctorInspection");
   };
   const retain = (pending: DeferredPluginMigration) =>
     mergeDeferredPluginMigration(previousById.get(pending.pluginId), pending);
@@ -266,12 +267,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       }
     },
     observe(result: MigrationMessages) {
-      for (const pluginId of result.requiredPluginIds ?? []) {
-        const pending = previousById.get(pluginId);
-        if (pending) {
-          previousById.set(pluginId, { ...pending, requiresStateMigration: true });
-        }
-      }
+      requirePlugins(result.requiredPluginIds ?? [], "requiresStateMigration");
       for (const pluginId of result.statelessPluginIds ?? []) {
         inspectedStatelessPluginIds.add(pluginId);
       }

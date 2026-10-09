@@ -151,6 +151,10 @@ export async function runDoctorSessionSqlite(
           targets: candidates.map(createMigrationTargetInput),
         })
       : [];
+  const settlementIssuesForStore = (storePath: string) =>
+    settlements
+      .filter((item) => item.target.storePath === storePath)
+      .flatMap((item) => item.issues);
   let historicalSources = ["import", "dry-run", "validate", "recover"].includes(options.mode)
     ? collectHistoricalArchiveSources({ cfg, env })
     : undefined;
@@ -202,11 +206,7 @@ export async function runDoctorSessionSqlite(
               verifyMissingIndex,
               deferredPluginIds: deferredPluginSessionStoreIds({ target, pending: pendingPlugins }),
             });
-        report.issues.push(
-          ...settlements
-            .filter((item) => item.target.storePath === target.storePath)
-            .flatMap((item) => item.issues),
-        );
+        report.issues.push(...settlementIssuesForStore(target.storePath));
         return report;
       },
     });
@@ -255,11 +255,7 @@ export async function runDoctorSessionSqlite(
     );
   }
   for (const report of reports) {
-    report.issues.push(
-      ...settlements
-        .filter((item) => item.target.storePath === report.storePath)
-        .flatMap((item) => item.issues),
-    );
+    report.issues.push(...settlementIssuesForStore(report.storePath));
   }
   if (activeRun && coverage) {
     for (const owner of archiveTargets) {
@@ -486,7 +482,7 @@ export async function settleRetainedDoctorSessionSources(
   if (!plan) {
     return;
   }
-  const assertCurrent = () => {
+  const assertCurrent = (): undefined => {
     authority.assertCurrent();
     assertCompletionCurrent();
   };
@@ -1045,7 +1041,7 @@ async function archiveLegacyArtifacts(
   owners: readonly LegacyArchiveTarget[],
   coverage: ReturnType<typeof gatherLegacyArchiveCoverage>,
   activeRun: ActiveSessionSqliteMigrationRun,
-  assertCurrent?: () => void,
+  assertCurrent?: () => undefined,
   capturedSources?: ReadonlySet<string>,
   publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
@@ -1365,11 +1361,7 @@ async function archiveLegacyArtifacts(
         move.sourcePath,
         move.archivePath,
         move.artifact!.identity,
-        assertCurrent
-          ? () => {
-              assertCurrent();
-            }
-          : undefined,
+        assertCurrent,
         publishSourceRemoval,
       );
       assertCurrent?.();

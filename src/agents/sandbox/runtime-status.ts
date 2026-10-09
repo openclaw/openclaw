@@ -19,13 +19,13 @@ import {
   resolveSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import {
   sessionCreatorProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { SessionEntryChangedDuringReadError } from "../../config/sessions/session-entry-read-errors.js";
-import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-read-ordered.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,

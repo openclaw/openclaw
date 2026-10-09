@@ -52,7 +52,8 @@ const commandRegistry = createWorkerOperationRegistry<
       | "worktrees.reserveCapacity"
       | "worktrees.recoverPending"
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
-    >
+    >,
+  WorkerWriteOperationContext
 >({
   deviceAuth: async () =>
     (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
@@ -168,6 +169,15 @@ function createSharedStateWorkerBackend(
       },
       transactionOptions,
     );
+  const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (operation, options) => {
+    open();
+    return write((database) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = operation(database);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return result;
+    }, options);
+  };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
@@ -230,6 +240,8 @@ function createSharedStateWorkerBackend(
       if (commandRegistry.has(command)) {
         return commandRegistry.execute(command, {
           open,
+          write,
+          writeAdmitted,
           stateOptions: () => ({
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
@@ -381,6 +393,7 @@ function createSharedStateWorkerBackend(
         context,
         open,
         write,
+        writeAdmitted,
         () =>
           (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
             path: context.databasePath,
