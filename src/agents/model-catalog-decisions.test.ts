@@ -941,8 +941,18 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [
-          { id: "claude-cli", modelProvider: "anthropic", pluginId: "anthropic", config: {} },
-          { id: "google-gemini-cli", modelProvider: "google", pluginId: "google", config: {} },
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+          {
+            id: "google-gemini-cli",
+            modelProvider: "google",
+            pluginId: "google",
+            config: { command: "gemini" },
+          },
         ],
       });
       const owner = createModelCatalogDecisions({
