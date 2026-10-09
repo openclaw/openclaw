@@ -55,6 +55,7 @@ it("serves twenty concurrent HTTP readers through real publication, history, and
         controlUiBasePath: "",
         getRuntimeConfig: () => cfg,
         getGatewayRequestContext: () => context,
+        httpRequestLifetime: context,
       },
     });
     try {

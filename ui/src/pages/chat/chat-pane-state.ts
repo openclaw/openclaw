@@ -57,7 +57,14 @@ export class SessionParticipationTracker {
           : params.session.visibility !== undefined &&
             params.session.visibility !== "shared" &&
             params.session.sharingRole === "viewer";
-      this.remember(params.sessionKey, blocked);
+      this.lastBlocked.delete(params.sessionKey);
+      this.lastBlocked.set(params.sessionKey, blocked);
+      if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {
+        const oldest = this.lastBlocked.keys().next().value;
+        if (oldest) {
+          this.lastBlocked.delete(oldest);
+        }
+      }
       return blocked;
     }
     // The selected session has no row. Absence is NOT a revocation signal:
@@ -69,18 +76,6 @@ export class SessionParticipationTracker {
     // redaction case (a session hidden from a non-owner) is handled once the
     // explicit revocation signal lands (openclaw/openclaw#112760).
     return params.listLoading && this.lastBlocked.get(params.sessionKey) === true;
-  }
-
-  private remember(sessionKey: string, blocked: boolean): void {
-    this.lastBlocked.delete(sessionKey);
-    this.lastBlocked.set(sessionKey, blocked);
-    if (this.lastBlocked.size <= MAX_TRACKED_SESSION_ROWS) {
-      return;
-    }
-    const oldest = this.lastBlocked.keys().next().value;
-    if (oldest) {
-      this.lastBlocked.delete(oldest);
-    }
   }
 }
 

@@ -84,42 +84,27 @@ export function resolveChannelSetupEntries(params: {
     workspaceDir,
     env: params.env,
   });
-  const installedCatalogEntries = installedCatalogEntriesSource
-    .filter(
-      (entry) =>
-        !installedPluginIds.has(entry.id) &&
-        manifestInstalledIds.has(entry.id as ChannelChoice) &&
-        shouldShowChannelInSetup(entry.meta),
-    )
-    .map((entry) =>
-      Object.assign({}, entry, {
-        meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
-      }),
-    );
-  const installableCatalogEntries = installableCatalogEntriesSource
-    .filter(
-      (entry) =>
-        !installedPluginIds.has(entry.id) &&
-        !manifestInstalledIds.has(entry.id as ChannelChoice) &&
-        !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env) &&
-        shouldShowChannelInSetup(entry.meta),
-    )
-    .map((entry) =>
-      Object.assign({}, entry, {
-        meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
-      }),
-    );
+  const catalogEntries = (entries: ChannelPluginCatalogEntry[], installed: boolean) =>
+    entries
+      .filter(
+        (entry) =>
+          !installedPluginIds.has(entry.id) &&
+          manifestInstalledIds.has(entry.id as ChannelChoice) === installed &&
+          (installed ||
+            !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env)) &&
+          shouldShowChannelInSetup(entry.meta),
+      )
+      .map((entry) =>
+        Object.assign({}, entry, {
+          meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
+        }),
+      );
+  const installedCatalogEntries = catalogEntries(installedCatalogEntriesSource, true);
+  const installableCatalogEntries = catalogEntries(installableCatalogEntriesSource, false);
 
-  const metaById = new Map<string, ChannelMeta>();
-  for (const meta of listChatChannels()) {
-    metaById.set(
-      meta.id,
-      normalizeChannelMeta({
-        id: meta.id,
-        meta,
-      }),
-    );
-  }
+  const metaById = new Map<string, ChannelMeta>(
+    listChatChannels().map((meta) => [meta.id, normalizeChannelMeta({ id: meta.id, meta })]),
+  );
   for (const plugin of params.installedPlugins) {
     metaById.set(
       plugin.id,

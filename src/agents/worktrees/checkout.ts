@@ -68,6 +68,7 @@ function gitOptions(options: WorktreeFilesystemOptions) {
 function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitCommandOptions {
   return {
     ...gitOptions(options),
+    refMutationDirectory: options.commonDir,
     startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
       assertOwned(options);
       await options.requireSpace(cloneBytes);

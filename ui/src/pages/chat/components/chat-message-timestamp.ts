@@ -180,8 +180,7 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   }
 
   if (meta.model) {
-    const shortModel = meta.model.includes("/") ? meta.model.split("/").pop()! : meta.model;
-    parts.push(html`<span class="msg-meta__model">${shortModel}</span>`);
+    parts.push(html`<span class="msg-meta__model">${meta.model.split("/").pop()}</span>`);
   }
 
   return renderChatTimestamp(timestamp, parts);

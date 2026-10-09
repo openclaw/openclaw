@@ -1,4 +1,9 @@
-import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
+import {
+  isDefaultInstallIdentity,
+  resolveConfigPath,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
@@ -55,6 +60,10 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
   }
   const port = opts.localPortOverride ?? resolveGatewayPort(probeContext.config);
   const nativeService = resolveGatewayService();
+  // Isolated state cannot belong to the host's native service. Its
+  // inspection failures must not borrow startup grace from that service.
+  const inspectNativeService =
+    opts.serviceMode !== "external" && isDefaultInstallIdentity(process.env);
   let nativeCommand: Promise<GatewayServiceCommandConfig | null> | undefined;
   let nativeServiceAbsent = false;
   const deadline = createGatewayRestartDeadline({
@@ -100,27 +109,26 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
                   Math.min(options?.timeoutMs ?? Infinity, deadline.remainingMs()),
                 ),
               });
-              const command =
-                opts.serviceMode === "external"
-                  ? null
-                  : await (nativeCommand ??= (async () => {
-                      nativeServiceAbsent =
-                        (await deadline.read("diagnostic:service-absence", async () =>
-                          nativeService.isAbsent?.({
-                            env,
-                            timeoutMs: remainingReadOptions().timeoutMs,
+              const command = !inspectNativeService
+                ? null
+                : await (nativeCommand ??= (async () => {
+                    nativeServiceAbsent =
+                      (await deadline.read("diagnostic:service-absence", async () =>
+                        nativeService.isAbsent?.({
+                          env,
+                          timeoutMs: remainingReadOptions().timeoutMs,
+                        }),
+                      )) === true;
+                    deadline.signal.throwIfAborted();
+                    return nativeServiceAbsent
+                      ? null
+                      : deadline.read("diagnostic:service-command", () =>
+                          nativeService.readCommand(env, {
+                            ...remainingReadOptions(),
+                            requireEffective: true,
                           }),
-                        )) === true;
-                      deadline.signal.throwIfAborted();
-                      return nativeServiceAbsent
-                        ? null
-                        : deadline.read("diagnostic:service-command", () =>
-                            nativeService.readCommand(env, {
-                              ...remainingReadOptions(),
-                              requireEffective: true,
-                            }),
-                          );
-                    })());
+                        );
+                  })());
               deadline.signal.throwIfAborted();
               const readNativeRuntime = () =>
                 deadline.read("diagnostic:native-runtime", () =>
@@ -150,7 +158,7 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
                 }
                 // A strict command read can still omit a system-domain owner on macOS.
                 // The native runtime owns its missing-unit verdict.
-                return opts.serviceMode === "external" || nativeServiceAbsent || command !== null
+                return !inspectNativeService || nativeServiceAbsent || command !== null
                   ? { status: "unknown", missingUnit: true }
                   : readNativeRuntime();
               }

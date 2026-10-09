@@ -254,8 +254,7 @@ export class DiscordVoiceSessions {
     let routeInfo: ReturnType<typeof resolveDiscordVoiceAgentRoute>;
     try {
       routeInfo = resolveDiscordVoiceAgentRoute({
-        cfg: this.params.cfg,
-        accountId: this.params.accountId,
+        ...this.params,
         guildId,
         sessionChannelId,
         voiceConfig,
@@ -451,15 +450,14 @@ export class DiscordVoiceSessions {
     options?: { requireLiveEntry?: boolean; isCurrent?: () => boolean },
   ): Promise<{ ok: true } | { ok: false; message: string }> {
     const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeAgentContext({
+      ...this.params,
       entry,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
     });
-    if (
-      entry.sessionLifecycle.status === "stopped" ||
-      options?.isCurrent?.() === false ||
-      (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
-    ) {
+    const isCurrent = () =>
+      !isVoiceSessionStopped(entry) &&
+      options?.isCurrent?.() !== false &&
+      (options?.requireLiveEntry !== true || this.params.sessions.get(entry.guildId) === entry);
+    if (!isCurrent()) {
       return {
         ok: false,
         message: "Discord realtime voice session stopped before startup completed.",
@@ -467,10 +465,8 @@ export class DiscordVoiceSessions {
     }
     const { DiscordRealtimeVoiceSession } = await import("./realtime-session.runtime.js");
     const realtime = new DiscordRealtimeVoiceSession({
-      accountId: this.params.accountId,
+      ...this.params,
       bootstrapContextInstructions,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
       entry,
       getHumanParticipantCount: () =>
         this.params.membership.countHumanParticipants(entry, this.params.botUserId()),
@@ -509,9 +505,7 @@ export class DiscordVoiceSessions {
         entry.realtimeLifecycle.status !== "starting" ||
         entry.realtimeLifecycle.generation !== generation ||
         entry.realtimeLifecycle.instance !== realtime ||
-        isVoiceSessionStopped(entry) ||
-        options?.isCurrent?.() === false ||
-        (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
+        !isCurrent()
       ) {
         await realtime.close();
         return {

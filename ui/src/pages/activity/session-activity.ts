@@ -220,10 +220,6 @@ function dayKey(timestamp: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function dayStart(timestamp: number): number {
-  return new Date(timestamp).setHours(0, 0, 0, 0);
-}
-
 export function projectSessionActivity(result: SessionsListResult | undefined) {
   const visible = result?.sessions ?? [];
   const people = (result?.people ?? []).map((person) => ({
@@ -246,7 +242,10 @@ export function projectSessionActivity(result: SessionsListResult | undefined) {
   }
   const days = [...grouped.entries()].map(([key, sessions]) => ({
     key,
-    timestamp: key === "unknown" ? null : dayStart(sessionActivityTimestamp(sessions[0]!)),
+    timestamp:
+      key === "unknown"
+        ? null
+        : new Date(sessionActivityTimestamp(sessions[0]!)).setHours(0, 0, 0, 0),
     sessions,
   }));
   return {

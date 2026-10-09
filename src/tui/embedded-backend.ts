@@ -71,8 +71,8 @@ import {
   createChatHistoryByteCounter,
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat-history-budget.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
+import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -182,7 +182,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private readonly deps = createDefaultDeps();
   private readonly runs = new Map<string, LocalRunState>();
-  private readonly runPromises = new Map<string, Promise<void>>();
   private unsubscribe?: () => void;
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
@@ -260,11 +259,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribeQuestions?.();
     this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
-    for (const [runId, run] of this.runs) {
+    for (const run of this.runs.values()) {
       if (run.finishing || run.lifecycleEnded) {
-        const promise = this.runPromises.get(runId);
-        if (promise) {
-          maintenancePromises.push(promise);
+        if (run.promise) {
+          maintenancePromises.push(run.promise);
         }
         continue;
       }
@@ -296,7 +294,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.controller.abort();
     }
     this.runs.clear();
-    this.runPromises.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
     this.previousRuntimeLog = undefined;
@@ -321,12 +318,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionKey: opts.sessionKey,
       agentId,
     };
-    const abortableSessionRun = this.hasAbortableSessionRun(runScope);
-    const stopCommand = abortableSessionRun && isAbortRequestText(opts.message);
-    const queuedAfter =
-      question || stopCommand || isQueueCommand
-        ? undefined
-        : this.findQueuedSessionRunPromise(runScope);
+    // Readiness awaits follow synchronous run registration, so the same owned
+    // promise determines both stop admission and the next turn's queue predecessor.
+    const sessionRun = this.findQueuedSessionRunPromise(runScope);
+    const stopCommand = sessionRun !== undefined && isAbortRequestText(opts.message);
+    const queuedAfter = question || stopCommand || isQueueCommand ? undefined : sessionRun;
     if (stopCommand) {
       this.abortSessionRuns(runScope);
       return { runId };
@@ -389,7 +385,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     const controller = new AbortController();
     const queuedRunReadiness = createDeferredCore();
-    this.runs.set(runId, {
+    const run: LocalRunState = {
       sessionKey: opts.sessionKey,
       agentId,
       controller,
@@ -403,9 +399,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...(queuedAfter ? { queuedAfter } : {}),
       queuedRunReady: queuedRunReadiness.promise,
       markQueuedRunReady: queuedRunReadiness.resolve,
-    });
+    };
+    this.runs.set(runId, run);
 
-    const runPromise = this.runTurn({
+    const runPromise = (run.promise = this.runTurn({
       runId,
       sessionKey: opts.sessionKey,
       agentId: opts.agentId,
@@ -415,11 +412,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       timeoutMs: opts.timeoutMs,
       controller,
       queuedAfter,
-    });
-    this.runPromises.set(runId, runPromise);
-    void runPromise.finally(() => {
-      this.runPromises.delete(runId);
-    });
+    }));
 
     if (isQueueCommand) {
       // Queue directives are control-plane mutations. Complete them before
@@ -446,7 +439,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           continue;
         }
       }
-      if (!this.isAbortableRun(runId, run)) {
+      if (!this.isAbortableRun(run)) {
         continue;
       }
       run.controller.abort();
@@ -976,7 +969,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     let queuedAfter: QueuedSessionRun | undefined;
     for (const [runId, run] of this.runs) {
       if (this.isSameRunScope(run, params) && !run.question) {
-        const promise = this.runPromises.get(runId);
+        const promise = run.promise;
         if (promise) {
           queuedAfter = { runId, run, promise };
         }
@@ -986,20 +979,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private abortSessionRuns(params: { sessionKey: string; agentId?: string }) {
-    for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(runId, run)) {
+    for (const run of this.runs.values()) {
+      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(run)) {
         run.controller.abort();
       }
     }
-  }
-
-  private hasAbortableSessionRun(params: { sessionKey: string; agentId?: string }): boolean {
-    for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(runId, run)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private isSameRunScope(run: LocalRunState, params: { sessionKey: string; agentId?: string }) {
@@ -1009,8 +993,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     );
   }
 
-  private isAbortableRun(runId: string, run: LocalRunState): boolean {
-    return !run.lifecycleEnded || this.runPromises.has(runId);
+  private isAbortableRun(run: LocalRunState): boolean {
+    return !run.lifecycleEnded || run.promise !== undefined;
   }
 
   private emit(event: string, payload: unknown) {
@@ -1019,6 +1003,15 @@ export class EmbeddedTuiBackend implements TuiBackend {
       payload,
       seq: ++this.seq,
     });
+  }
+
+  private emitRun(
+    event: "chat" | "agent",
+    runId: string,
+    run: LocalRunState,
+    payload: Record<string, unknown>,
+  ) {
+    this.emit(event, { runId, sessionKey: run.sessionKey, agentId: run.agentId, ...payload });
   }
 
   private clearPendingLifecycleError(runId: string) {
@@ -1048,10 +1041,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = text;
-    this.emit("chat", {
-      runId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
+    this.emitRun("chat", runId, run, {
       state: "delta",
       ...deltaPayload,
       message: assistantChatMessage(text),
@@ -1079,10 +1069,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.lastBroadcastText = undefined;
     const projected = projectLocalRunText(run, true);
     const text = state === "final" && !projected.suppress ? projected.text.trim() : "";
-    this.emit("chat", {
-      runId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
+    this.emitRun("chat", runId, run, {
       state,
       ...(state === "final" && detail ? { stopReason: detail } : {}),
       ...(state === "final" && run.lifecycleYielded ? { yielded: true } : {}),
@@ -1151,10 +1138,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = "";
-    this.emit("chat", {
-      runId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
+    this.emitRun("chat", runId, run, {
       state: "delta",
       deltaText: "",
       message: assistantChatMessage(""),
@@ -1177,10 +1161,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.ensureRunRegistered(evt.runId, run);
     }
 
-    this.emit("agent", {
-      runId: evt.runId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
+    this.emitRun("agent", evt.runId, run, {
       stream: evt.stream,
       data: evt.data,
     });

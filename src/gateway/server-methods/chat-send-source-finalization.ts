@@ -76,6 +76,8 @@ export function createChatSendLateReplyFinalizer(
   }): Promise<ChatSendAgentReplyFinalization> => {
     const { context, session } = params;
     const broadcastParams = {
+      // Recovery uses its new run's lifecycle owner, not the original source admission.
+      terminalEntry: runId === session.clientRunId ? params.terminalEntry : undefined,
       context,
       runId,
       sessionKey: session.sessionKey,
@@ -385,6 +387,7 @@ async function finalizeChatSendAgentReplyPayloads(
       params.publishMessage(message, deliveryAuthorized);
     } else {
       broadcastChatFinal({
+        terminalEntry: params.terminalEntry,
         context,
         runId: clientRunId,
         sessionKey,

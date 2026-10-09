@@ -12,6 +12,7 @@ import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-pro
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -179,6 +180,14 @@ describe("worker Gateway tool runtime", () => {
     expect(execute).not.toHaveBeenCalled();
     await expect(runtime.invoke(identity, invocation, sink)).resolves.toEqual(success);
     expect(execute).toHaveBeenCalledTimes(1);
+    await runtime.close();
+  });
+
+  it("issues sessions_yield with its synchronous flag so worker turns can start", async () => {
+    const { runtime } = fixture([createSessionsYieldTool({ sessionId: "session" })]);
+    const surface = await runtime.getSurface(identity);
+    expect(Value.Check(WorkerToolSurfaceSchema, surface)).toBe(true);
+    expect(surface.tools[0]?.definition).toMatchObject({ name: "sessions_yield", async: false });
     await runtime.close();
   });
 

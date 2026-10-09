@@ -5,7 +5,7 @@ import { resolveAssistantAgentId } from "./assistant-identity.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import {
-  createControlUiPublicSessionRoute,
+  serveControlUiPublicSession,
   isControlUiPublicSessionPath,
 } from "./control-ui-public-session.js";
 import { controlUiSessionEntryPath } from "./control-ui-session-entry-path.js";
@@ -27,7 +27,6 @@ export function createControlUiSessionRoutes(options: {
 }) {
   const basePath = normalizeControlUiBasePath(options.controlUiBasePath);
   let gate: ReturnType<typeof createControlUiPublicSessionRequestGate> | undefined;
-  let legacy: ReturnType<typeof createControlUiPublicSessionRoute> | undefined;
   const publicGate = () => (gate ??= createControlUiPublicSessionRequestGate());
   return {
     matches(pathname: string, rawUrl?: string) {
@@ -90,8 +89,7 @@ export function createControlUiSessionRoutes(options: {
         }
       };
       if (isControlUiPublicSessionPath(pathname, basePath)) {
-        legacy ??= createControlUiPublicSessionRoute(publicGate());
-        return legacy.serve({ ...params, basePath, projection });
+        return serveControlUiPublicSession({ ...params, basePath, projection, gate: publicGate() });
       }
       if (pathname !== controlUiSessionEntryPath(basePath)) {
         return (await import("./control-ui-public-chat.js")).serveControlUiPublicChat({

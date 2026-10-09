@@ -184,5 +184,6 @@ export function publishIncognitoSessionEntryChange(
     database,
     () => commitIncognitoSessionSharingFacts(database.db, update.sessionKey, current),
     () => stageIncognitoSharingPublication(database.db, update.sessionKey, { facts: current }),
+    () => commitIncognitoSessionSharingFacts(database.db, update.sessionKey, null),
   );
 }

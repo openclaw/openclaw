@@ -98,11 +98,7 @@ export class ChatPaneMcpAppController {
       listen(MCP_APP_OPEN_EVENT, (event) => this.receiveOpen(event)),
       listen(WIDGET_PROMPT_EVENT, (event) => this.receiveWidgetPrompt(event)),
     ];
-    return () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
+    return () => cleanups.forEach((cleanup) => cleanup());
   }
 
   syncLaunch(): void {

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { required } from "./placement-record.js";
-import { query } from "./placement-row-codec.js";
+import { query, turnClaimValues } from "./placement-row-codec.js";
 import { publishPlacementTurnClaimCleared } from "./placement-turn-authority.js";
 
 const RETIRABLE_PLACEMENT_STATES = ["local", "requested", "reclaimed", "failed"] as const;
@@ -28,11 +28,7 @@ export function retireWorkerSessionPlacement(
       .where("session_id", "=", sessionId)
       .where("state", "=", input.expectedState)
       .where("transition_generation", "=", input.expectedGeneration)
-      .where("turn_claim_owner", "is", null)
-      .where("turn_claim_id", "is", null)
-      .where("turn_claim_run_id", "is", null)
-      .where("turn_claim_generation", "is", null)
-      .where("turn_claim_owner_epoch", "is", null),
+      .where((eb) => eb.and(turnClaimValues(null))),
   );
   if (result.numAffectedRows !== 1n) {
     if (options.onlyIfCurrent) {
@@ -40,6 +36,6 @@ export function retireWorkerSessionPlacement(
     }
     throw new Error(`Worker session placement ${sessionId} changed before retirement`);
   }
-  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
+  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState, true);
   return true;
 }

@@ -4,14 +4,19 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { PhysicalStore, SessionClaim } from "./legacy-main-session-migration.contract.js";
+import type {
+  PhysicalStore,
+  SessionClaim,
+  SessionComparisonClaim,
+} from "./legacy-main-session-migration.contract.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
   readSqliteSessionGenerationClaim,
+  readSqliteSessionGenerationComparison,
   readSqliteSessionGenerationWindows,
   rehomeSqliteSessionGenerationWindow,
 } from "./session-accessor.sqlite-generation-copy.js";
-import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
+import type { SqliteSessionGenerationComparison } from "./session-accessor.sqlite-generation.types.js";
 import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
@@ -28,7 +33,10 @@ function projectEntryIdentity(entry: SessionEntry): SessionEntry {
   return projected;
 }
 
-function generationWindowIdentity(generation: SqliteSessionGenerationClaim, canonicalKey: string) {
+function generationWindowIdentity(
+  generation: SqliteSessionGenerationComparison,
+  canonicalKey: string,
+) {
   const {
     updated_at: _updatedAt,
     transcript_updated_at: _transcriptUpdatedAt,
@@ -43,8 +51,8 @@ function generationWindowIdentity(generation: SqliteSessionGenerationClaim, cano
 }
 
 export function generationsMatch(
-  left: SqliteSessionGenerationClaim,
-  right: SqliteSessionGenerationClaim,
+  left: SqliteSessionGenerationComparison,
+  right: SqliteSessionGenerationComparison,
   canonicalKey: string,
 ): boolean {
   return (
@@ -56,7 +64,7 @@ export function generationsMatch(
   );
 }
 
-export function claimsMatch(left: SessionClaim, right: SessionClaim): boolean {
+export function claimsMatch(left: SessionComparisonClaim, right: SessionComparisonClaim): boolean {
   const generations = new Map(
     right.generations.map((generation) => [generation.window.session_id, generation]),
   );
@@ -114,6 +122,33 @@ export function readClaim(
       generations: windows.map((window) => readSqliteSessionGenerationClaim(database, window)),
       key,
       nodeArtifactFingerprint: readSessionNodeArtifactFingerprint(database, key),
+      store,
+    };
+  });
+}
+
+/** Detection compares history; only Doctor acquires the artifact custody needed to delete it. */
+export function readComparisonClaim(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  store: PhysicalStore,
+  key: string,
+  canonicalKey: string,
+): SessionComparisonClaim | undefined {
+  return runSqliteDeferredTransactionSync(database.db, () => {
+    const row = readExactSessionEntryRowForCanonicalRepair(database, key);
+    if (!row) {
+      return undefined;
+    }
+    const windows = readSqliteSessionGenerationWindows(
+      database,
+      [key],
+      collectSessionStateIdsForEntry(row.entry),
+    );
+    return {
+      canonicalKey,
+      entry: row.entry,
+      generations: windows.map((window) => readSqliteSessionGenerationComparison(database, window)),
+      key,
       store,
     };
   });

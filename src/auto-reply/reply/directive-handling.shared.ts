@@ -14,6 +14,7 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { ModelDirectiveSelection } from "./model-selection-directive.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 export const DIRECTIVE_ACK_MESSAGES = {
@@ -43,13 +44,15 @@ export const DIRECTIVE_ACK_MESSAGES = {
 export const withOptions = (line: string, options: string) => `${line}\nOptions: ${options}.`;
 
 export function formatModelSelectionScopeAck(params: {
-  isDefault: boolean;
-  label: string;
+  selection: ModelDirectiveSelection;
   configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
 }): string {
-  if (params.isDefault && !params.stickyModelSelectionTarget) {
-    return `Session model reset to configured default (${params.label}).`;
+  const { provider, model, alias, isDefault } = params.selection;
+  const ref = `${provider}/${model}`;
+  const label = alias ? `${alias} (${ref})` : ref;
+  if (isDefault && !params.stickyModelSelectionTarget) {
+    return `Session model reset to configured default (${label}).`;
   }
   const targetLabel =
     params.stickyModelSelectionTarget === "agent"
@@ -58,12 +61,12 @@ export function formatModelSelectionScopeAck(params: {
         ? "Global default"
         : "Configured default";
   if (params.configuredDefaultUpdate === "requested") {
-    return `Model set to ${params.label} for this session. ${targetLabel} update requested.`;
+    return `Model set to ${label} for this session. ${targetLabel} update requested.`;
   }
   if (params.configuredDefaultUpdate === "skipped-immutable") {
-    return `Model set to ${params.label} for this session. ${targetLabel} unchanged because configuration is immutable.`;
+    return `Model set to ${label} for this session. ${targetLabel} unchanged because configuration is immutable.`;
   }
-  return `Model set to ${params.label} for this session only; configured default unchanged.`;
+  return `Model set to ${label} for this session only; configured default unchanged.`;
 }
 
 export function canPersistSessionDirectiveDefaults(params: {
@@ -73,9 +76,8 @@ export function canPersistSessionDirectiveDefaults(params: {
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
 }): boolean {
-  const messageProvider = normalizeOptionalString(params.messageProvider);
-  const surface = normalizeOptionalString(params.surface);
-  const authoritativeChannel = messageProvider ?? surface;
+  const authoritativeChannel =
+    normalizeOptionalString(params.messageProvider) ?? normalizeOptionalString(params.surface);
 
   if (!authoritativeChannel) {
     return true;
@@ -285,6 +287,7 @@ export async function persistSessionDirectiveSnapshot(params: {
   hasModelSelection: boolean;
   reassertLiveModelSwitchPending: boolean;
   validateCommit?: () => string | undefined;
+  commitGuard?: Parameters<typeof persistReplySessionEntry>[0]["commitGuard"];
 }): Promise<
   | { status: "applied" | "conflict" | "model-selection-locked" }
   | { status: "commit-rejected"; error: string }
@@ -299,6 +302,7 @@ export async function persistSessionDirectiveSnapshot(params: {
     requireModelSelectionUnlocked: params.hasModelSelection,
     touchedFields: params.touchedFields,
     validateCommit: params.validateCommit,
+    commitGuard: params.commitGuard,
   });
   if (persistence.status !== "current") {
     if (persistence.entry) {
@@ -315,15 +319,14 @@ export async function persistSessionDirectiveSnapshot(params: {
 
   const persistedEntry = persistence.entry;
   sessionStore[sessionKey] = persistedEntry;
-  const sessionChangesApplied = sessionSnapshotChangesApplied({
-    initial: params.initialEntry,
-    next: sessionEntry,
-    current: persistedEntry,
-    touchedFields: params.touchedFields,
-  });
-  const modelSelectionApplied =
-    !params.hasModelSelection ||
-    (sessionChangesApplied &&
+  const applied =
+    sessionSnapshotChangesApplied({
+      initial: params.initialEntry,
+      next: sessionEntry,
+      current: persistedEntry,
+      touchedFields: params.touchedFields,
+    }) &&
+    (!params.hasModelSelection ||
       sessionModelOverrideChangesApplied({
         initial: params.initialEntry,
         next: sessionEntry,
@@ -331,7 +334,7 @@ export async function persistSessionDirectiveSnapshot(params: {
         reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
       }));
   adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
-  return { status: sessionChangesApplied && modelSelectionApplied ? "applied" : "conflict" };
+  return { status: applied ? "applied" : "conflict" };
 }
 
 export const formatElevatedEvent = (level: SessionEntry["elevatedLevel"]) => {
@@ -359,10 +362,9 @@ export function formatElevatedUnavailableText(params: {
   failures?: Array<{ gate: string; key: string }>;
   sessionKey?: string;
 }): string {
-  const lines: string[] = [];
-  lines.push(
+  const lines = [
     `elevated is not available right now (runtime=${params.runtimeSandboxed ? "sandboxed" : "direct"}).`,
-  );
+  ];
   const failures = params.failures ?? [];
   if (failures.length > 0) {
     lines.push(`Failing gates: ${failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);

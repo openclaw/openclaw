@@ -16,7 +16,6 @@ import {
 import { getSkillsSourceVersion } from "./refresh-state.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
-/** Resolves skill entries embedded into a run payload into runtime-visible entries. */
 export async function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;

@@ -5,13 +5,20 @@ import type {
   SessionEntryPatchCommitted,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export type IncognitoEntryPatchResult = {
   entry: InternalSessionEntry | null;
   wrote: boolean;
+  transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"];
   refusedSource?: SessionEntryPatchCommitted["refusedSource"];
 };
+
+export type IncognitoEntryPatchAuthorizer = (
+  refused?: IncognitoEntryPatchResult["refusedSource"],
+  validation?: SessionSourceValidation,
+) => void;
 
 export type IncognitoEntryPatchOperations = {
   "session.entry.patch.prepare": {

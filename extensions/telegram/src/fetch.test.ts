@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
 import { isSafeToRetrySendError, TelegramRequestNotStartedError } from "./network-errors.js";
@@ -609,6 +610,50 @@ describe("resolveTelegramFetch", () => {
   });
 
   describe("transport lifecycle", () => {
+    it.for([false, true])(
+      "does not retry a queued failure after close (caller dispatcher: %s)",
+      async (callerDispatcher, context) => {
+        const started = createDeferred<void>();
+        const failed = createDeferred<Response>();
+        const failure = buildFetchFallbackError("EHOSTUNREACH");
+        void failed.promise.catch(() => undefined);
+        undiciFetch
+          .mockImplementationOnce(() => {
+            started.resolve();
+            return failed.promise;
+          })
+          .mockResolvedValueOnce({ ok: true } as Response);
+        const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+        const init: RequestInit & { dispatcher?: unknown } = callerDispatcher
+          ? { dispatcher: { name: "caller" } }
+          : {};
+        const pending = transport.fetch("https://api.telegram.org/botx/getMe", init);
+        const outcome = pending.then(
+          () => ({ fulfilled: true }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(started.promise, pending, "Telegram fetch did not start"),
+            context.signal,
+          );
+          // Destruction cannot replace a network failure whose rejection is already queued.
+          failed.reject(failure);
+          await withinTest(transport.close(), context.signal);
+          const settled = await withinTest(outcome, context.signal);
+          expect(settled).toEqual({ error: failure });
+          expect("error" in settled ? settled.error : undefined).toBe(failure);
+          expect(undiciFetch).toHaveBeenCalledTimes(1);
+          expect(AgentCtor).toHaveBeenCalledTimes(1);
+          expect(AgentCtor.mock.instances[0]?.destroy).toHaveBeenCalledTimes(1);
+        } finally {
+          failed.reject(failure);
+          await outcome;
+          await transport.close();
+        }
+      },
+    );
+
     it("close() destroys the default dispatcher and all lazily-created fallback dispatchers", async () => {
       undiciFetch
         .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))

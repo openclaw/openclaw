@@ -55,6 +55,24 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
   );
 }
 
+export async function resolveCdpWebSocketDiscovery(
+  cdpUrl: string,
+  readWebSocketUrl: (discoveryUrl: string) => Promise<string | undefined>,
+): Promise<{ url: string; discovered: boolean } | null> {
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    return { url: cdpUrl, discovered: false };
+  }
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const advertisedUrl = await readWebSocketUrl(discoveryUrl);
+  if (advertisedUrl) {
+    return { url: normalizeCdpWsUrl(advertisedUrl, discoveryUrl), discovered: true };
+  }
+  // Bare WebSocket endpoints can be directly usable without HTTP discovery.
+  return isWebSocketUrl(cdpUrl) ? { url: cdpUrl, discovered: false } : null;
+}
+
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
 export function scopeCdpPolicyToConfiguredEndpoint(
   cdpUrl: string,

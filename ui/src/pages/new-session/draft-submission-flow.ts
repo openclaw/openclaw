@@ -439,6 +439,7 @@ export class DraftSubmissionFlow {
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
     let instant: InstantThreadHandoff | undefined;
+    let worktreeNameCleanup: void | Promise<void> = undefined;
     try {
       const started = this.startedSession.current;
       if (started && this.startedSession.isCurrent(context, this.place.agentId)) {
@@ -542,7 +543,7 @@ export class DraftSubmissionFlow {
       instant = beginInstant?.();
       const result = await createRequest;
       if (result && !placementTarget && result.initialRun.status !== "rejected") {
-        await input.consumeWorktreeName?.();
+        worktreeNameCleanup = input.consumeWorktreeName?.();
       }
       if (requestId !== this.submitRequestToken && !placementTarget) {
         // Leaving the view cancels navigation, not a confirmed send. Retire only
@@ -642,8 +643,9 @@ export class DraftSubmissionFlow {
         }
       }
     } finally {
-      if (instant) {
-        await instant.finish();
+      // Accepted preference writes outlive the draft; they must not hold chat admission.
+      if (worktreeNameCleanup || instant) {
+        await Promise.all([worktreeNameCleanup, instant?.finish()]);
       }
       if (requestId === this.submitRequestToken) {
         this.activeSubmission = null;

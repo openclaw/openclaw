@@ -263,6 +263,13 @@ sidebarTitle: "Advanced"
     Ollama uses the **native API** (`/api/chat`) by default, which supports
     streaming and tool calling together — no special config needed.
 
+    Like Chat Completions, native Ollama withholds durable reply blocks until
+    the text phase is known at message completion, even with
+    `blockStreamingBreak: "text_end"`. Tool narration stays out of replies;
+    ordinary finals and length-limited answers remain deliverable. Independent
+    live previews can still update when enabled.
+    See [Pending text phases](/concepts/streaming#pending-text-phases).
+
     For native requests, thinking control is forwarded directly: `/think off`
     and `openclaw agent --thinking off` send top-level `think: false` unless
     an explicit `params.think`/`params.thinking` is configured; `/think

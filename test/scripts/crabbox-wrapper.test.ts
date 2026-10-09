@@ -28,7 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { getSystemErrorMap } from "node:util";
-import { build, type BuildOptions } from "esbuild";
+import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -1634,17 +1634,47 @@ afterAll(() => {
 describe("scripts/crabbox-wrapper", () => {
   beforeAll(async () => {
     mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
-    const bundleOptions = {
+    const wrapperEntry = path.join(repoRoot, "scripts/crabbox-wrapper.mts");
+    const stubNamespace = "crabbox-wrapper-fixture";
+    // Routing fixtures substitute only the capsule producer; real-Git fixtures retain it.
+    const producerStub = path.join(
+      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
+      "producer.mjs",
+    );
+    writeFileSync(
+      producerStub,
+      String.raw`
+      import fs from "node:fs";
+      import path from "node:path";
+      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
+        fs.mkdirSync(syncRoot, {recursive:true});
+        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
+        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
+        return {directory,bundlePath,staging:{admitted(){},settled(){},preserved(){},hold(){}},sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
+      }
+    `,
+    );
+    const setupEntryName = `crabbox-setup-test-${process.pid}`;
+    const setupOutput = path.join(path.dirname(realBundledWrapperPath), `${setupEntryName}.mjs`);
+    // Share the dependency graph while preserving each fixture's lazy imports.
+    const result = await build({
       bundle: true,
-      // Preserve lazy imports so each fixture loads only the operation's runtime graph.
       splitting: true,
-      entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
+      entryPoints: {
+        [path.basename(realBundledWrapperPath, ".mjs")]: wrapperEntry,
+        [path.basename(bundledWrapperPath, ".mjs")]: stubNamespace,
+        [setupEntryName]: path.join(repoRoot, "scripts/crabbox-setup.mts"),
+      },
+      outdir: path.dirname(bundledWrapperPath),
+      entryNames: "[name]",
+      chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
+      outExtension: { ".js": ".mjs" },
+      metafile: true,
       format: "esm",
       logLevel: "silent",
       platform: "node",
       target: "node22",
-      // Keep the Windows worker and native dependency resolution at their source owner.
-      // Relocating this module into a fixture would relocate its import.meta.url too.
       plugins: [
         {
           name: "canonical-state-schemas",
@@ -1664,10 +1694,29 @@ describe("scripts/crabbox-wrapper", () => {
         {
           name: "managed-child-source-owner",
           setup(builder) {
+            // Keep Windows worker and native dependency resolution at their source owner.
             builder.onResolve({ filter: /lib\/managed-child-process\.mts$/ }, (args) => ({
               path: pathToFileURL(path.resolve(args.resolveDir, args.path)).href,
               external: true,
             }));
+          },
+        },
+        {
+          name: "source-capsule-fixture",
+          setup(builder) {
+            builder.onResolve({ filter: /^crabbox-wrapper-fixture$/ }, () => ({
+              path: wrapperEntry,
+              namespace: stubNamespace,
+            }));
+            builder.onLoad({ filter: /./, namespace: stubNamespace }, () => ({
+              contents: readFileSync(wrapperEntry, "utf8"),
+              loader: "ts",
+              resolveDir: path.dirname(wrapperEntry),
+            }));
+            builder.onResolve(
+              { filter: /crabbox-source-capsule\.mts$/, namespace: stubNamespace },
+              () => ({ path: producerStub }),
+            );
           },
         },
       ],
@@ -1675,44 +1724,21 @@ describe("scripts/crabbox-wrapper", () => {
       banner: {
         js: 'import { createRequire as createBundleRequire } from "node:module"; const require = createBundleRequire(import.meta.url);',
       },
-    } satisfies BuildOptions;
-    const buildFixture = async (outfile: string, options: BuildOptions = {}) => {
-      const result = await build({
-        ...bundleOptions,
-        ...options,
-        outdir: path.dirname(outfile),
-        entryNames: options.entryNames ?? path.basename(outfile, ".mjs"),
-        chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
-        outExtension: { ".js": ".mjs" },
-        metafile: true,
-      });
-      const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
-      for (const output of outputs) {
-        bundledOutputPaths.add(output);
-      }
-      return outputs;
-    };
-    const setupEntryName = `crabbox-setup-test-${process.pid}`;
-    const setupOutput = path.join(path.dirname(realBundledWrapperPath), `${setupEntryName}.mjs`);
-    // Both real entry points share the managed-binary dependency graph.
-    const realOutputs = await buildFixture(realBundledWrapperPath, {
-      entryPoints: {
-        [path.basename(realBundledWrapperPath, ".mjs")]: path.join(
-          repoRoot,
-          "scripts/crabbox-wrapper.mts",
-        ),
-        [setupEntryName]: path.join(repoRoot, "scripts/crabbox-setup.mts"),
-      },
-      entryNames: "[name]",
     });
-    realWrapperOutputPaths = realOutputs.filter((output) => output !== setupOutput);
+    const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
+    for (const output of outputs) {
+      bundledOutputPaths.add(output);
+    }
+    realWrapperOutputPaths = outputs.filter(
+      (output) => output !== setupOutput && output !== bundledWrapperPath,
+    );
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
     mkdirSync(path.dirname(bundledSetupPath), { recursive: true });
-    for (const output of realOutputs) {
-      if (output !== realBundledWrapperPath) {
+    for (const output of outputs) {
+      if (output !== realBundledWrapperPath && output !== bundledWrapperPath) {
         copyFileSync(
           output,
           output === setupOutput
@@ -1721,39 +1747,6 @@ describe("scripts/crabbox-wrapper", () => {
         );
       }
     }
-    // Argument routing tests isolate source preparation; the real-Git fixture below
-    // executes the unmocked producer and generated receiver together.
-    const producerStub = path.join(
-      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
-      "producer.mjs",
-    );
-    writeFileSync(
-      producerStub,
-      String.raw`
-      import fs from "node:fs";
-      import path from "node:path";
-      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
-        fs.mkdirSync(syncRoot, {recursive:true});
-        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
-        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
-        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
-        return {directory,bundlePath,staging:{admitted(){},settled(){},preserved(){},hold(){}},sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
-      }
-    `,
-    );
-    await buildFixture(bundledWrapperPath, {
-      plugins: [
-        ...bundleOptions.plugins,
-        {
-          name: "source-capsule-fixture",
-          setup(builder) {
-            builder.onResolve({ filter: /crabbox-source-capsule\.mts$/ }, () => ({
-              path: producerStub,
-            }));
-          },
-        },
-      ],
-    });
   });
 
   it("prepares the supported executable for later workflow steps", () => {

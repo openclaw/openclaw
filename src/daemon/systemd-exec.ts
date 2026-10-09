@@ -4,11 +4,18 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
 import {
+  assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdBusOwner,
+  type SystemdBusQuery,
+} from "./systemd-bus-query.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -16,10 +23,18 @@ import {
 } from "./systemd-unavailable.js";
 import {
   resolveSystemdUserTransport,
-  SYSTEMD_TRANSPORT_DEADLINE,
+  SystemdTransportInspectionTimeout,
 } from "./systemd-user-transport.js";
 
-type SystemdExecResult = ExecResult & { inspectionReason?: ServiceInspectionReason };
+type SystemdExecResult = ExecResult & {
+  inspectionReason?: ServiceInspectionReason;
+  inspectionError?: ServiceInspectionError;
+};
+
+type SystemdStopInspection = { warn: (message: string) => void };
+// Four possible manager routes share this allowance, including native admission.
+// A single custody database read can already consume the ordinary five-second probe budget.
+const SYSTEMD_STOP_INSPECTION_TIMEOUT_MS = 60_000;
 
 export type SystemdUnitScope = "system" | "user";
 
@@ -69,7 +84,7 @@ export function systemdInspectionError(
   scope: SystemdUnitScope = "user",
 ): Error {
   if (result.inspectionReason) {
-    return new ServiceInspectionError(result.inspectionReason);
+    return result.inspectionError ?? new ServiceInspectionError(result.inspectionReason);
   }
   if (result.termination === "timeout" || result.termination === "no-output-timeout") {
     return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
@@ -164,10 +179,28 @@ async function execSystemdUserCommand(
   args: string[],
   timeoutMs?: number,
   assertCurrent?: () => void,
+  stopInspection?: SystemdStopInspection,
 ): Promise<SystemdExecResult> {
   const deadline = timeoutMs && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
   try {
-    const transport = await resolveSystemdUserTransport(env, deadline, assertCurrent);
+    const inspect = () =>
+      resolveSystemdUserTransport(
+        env,
+        stopInspection ? performance.now() + SYSTEMD_STOP_INSPECTION_TIMEOUT_MS : deadline,
+        // Stop custody is checked once after routing, immediately before dispatch.
+        // Native probe admission retains its inherited update authority checks.
+        stopInspection ? undefined : assertCurrent,
+      );
+    let transport: Awaited<ReturnType<typeof inspect>>;
+    try {
+      transport = await inspect();
+    } catch (error) {
+      if (!stopInspection || !(error instanceof SystemdTransportInspectionTimeout)) {
+        throw error;
+      }
+      stopInspection.warn(`${error.message} Retrying systemd stop inspection once.`);
+      transport = await inspect();
+    }
     if (transport?.kind === "private" && command === "busctl") {
       throw new ServiceInspectionError("systemd-user-bus-unavailable");
     }
@@ -197,16 +230,18 @@ async function execSystemdUserCommand(
       transport?.kind === "machine" ? ["--machine", `${transport.user}@`, "--user"] : ["--user"];
     return await execSystemdCommand(command, [...scope, ...args], childEnv, remaining);
   } catch (error) {
+    assertServiceInspectionFallbackAllowed(error);
     assertCurrent?.();
     if (!(error instanceof ServiceInspectionError)) {
       throw error;
     }
     return {
       code: 1,
-      termination: error === SYSTEMD_TRANSPORT_DEADLINE ? "timeout" : "error",
+      termination: error instanceof SystemdTransportInspectionTimeout ? "timeout" : "error",
       stdout: "",
       stderr: error.message,
       inspectionReason: error.reason,
+      inspectionError: error,
     };
   }
 }
@@ -216,8 +251,16 @@ export async function execSystemctlUser(
   args: string[],
   timeoutMs?: number,
   assertCurrent?: () => void,
+  stopInspection?: SystemdStopInspection,
 ): Promise<SystemdExecResult> {
-  return await execSystemdUserCommand("systemctl", env, args, timeoutMs, assertCurrent);
+  return await execSystemdUserCommand(
+    "systemctl",
+    env,
+    args,
+    timeoutMs,
+    assertCurrent,
+    stopInspection,
+  );
 }
 
 export async function execBusctlUser(
@@ -320,60 +363,23 @@ export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<bool
 /** Authenticate the existing unique manager owner before loading a bound unit.
  * The caller supplies its deadline- and custody-checked D-Bus query. */
 export async function bindSystemdManagerOwner(
-  query: (args: string[], signatures: string[]) => Promise<unknown[] | null>,
+  query: SystemdBusQuery,
   managerUid: number,
   unavailable: () => Error,
 ): Promise<{ destination: string; verify: () => Promise<void> }> {
-  const manager = "org.freedesktop.systemd1";
-  const readOwner = async () => {
-    const [value] =
-      (await query(
-        [
-          "call",
-          "org.freedesktop.DBus",
-          "/org/freedesktop/DBus",
-          "org.freedesktop.DBus",
-          "GetNameOwner",
-          "s",
-          manager,
-        ],
-        ["s"],
-      )) ?? [];
-    if (
-      !Array.isArray(value) ||
-      value.length !== 1 ||
-      typeof value[0] !== "string" ||
-      !/^:[0-9]+\.[0-9]+$/.test(value[0])
-    ) {
-      throw unavailable();
-    }
-    return value[0];
-  };
+  const readOwner = () => readSystemdBusOwner(query, unavailable);
   const destination = await readOwner();
-  const [uid] =
-    (await query(
-      [
-        "call",
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-        "GetConnectionUnixUser",
-        "s",
-        destination,
-      ],
-      ["u"],
-    )) ?? [];
-  if (
-    !Number.isInteger(managerUid) ||
-    managerUid < 0 ||
-    managerUid >= 0xffffffff ||
-    !Array.isArray(uid) ||
-    uid.length !== 1 ||
-    !Number.isInteger(uid[0])
-  ) {
+  const uid = await readSystemdBusCall(
+    query,
+    "GetConnectionUnixUser",
+    ["s", destination],
+    "u",
+    unavailable,
+  );
+  if (!isSystemdManagerUid(managerUid) || !Number.isInteger(uid)) {
     throw unavailable();
   }
-  if (uid[0] !== managerUid) {
+  if (uid !== managerUid) {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {

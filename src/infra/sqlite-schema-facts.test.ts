@@ -46,6 +46,15 @@ describe("admitted SQLite schema facts", () => {
     return database;
   }
 
+  function openDatabasePair(schema?: string, admitted = true) {
+    const filename = path.join(tempDirs.make("openclaw-schema-facts-"), "state.sqlite");
+    const reader = openDatabase(schema, admitted, filename);
+    // Native peers bypass this process's schema publications, as foreign writers do.
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    return { filename, reader, writer };
+  }
+
   afterEach(() => {
     for (const database of databases.splice(0)) {
       if (database.isOpen) {
@@ -87,7 +96,7 @@ describe("admitted SQLite schema facts", () => {
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(database, schemaMutation);
     database.exec(sql);
-    expect(schemaMutation).toHaveBeenCalled();
+    expect(schemaMutation).toHaveBeenCalledWith(undefined);
   });
 
   it("observes reentrant TEMP DDL during a declared tracker installation", () => {
@@ -140,16 +149,11 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
-    const database = openDatabase(
+    const { reader: database, writer: peer } = openDatabasePair(
       `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
-      true,
-      filename,
     );
     database.exec("PRAGMA journal_mode=WAL");
     assertCanonicalSessionValidationSchema(database);
-    const peer = new DatabaseSync(filename);
-    databases.push(peer);
     runSqliteReadOperationSync(database, () => {
       peer.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
       expect(() =>
@@ -201,16 +205,11 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
-  it("retains table and column facts across 100 foreign data commits", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
-    const reader = openDatabase(
+  it("retains table and column facts with one statement per foreign data commit", () => {
+    const { filename, reader, writer } = openDatabasePair(
       "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
-      true,
-      filename,
     );
     reader.exec("PRAGMA journal_mode=WAL");
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(reader, schemaMutation);
     const read = () =>
@@ -230,9 +229,7 @@ describe("admitted SQLite schema facts", () => {
       expect(
         observation.queries.filter((sql) => /sqlite_schema|pragma_table_info/iu.test(sql)),
       ).toHaveLength(0);
-      expect(
-        observation.queries.filter((sql) => /PRAGMA schema_version/iu.test(sql)).length,
-      ).toBeLessThanOrEqual(100);
+      expect(observation.queries).toHaveLength(100);
       expect(schemaMutation).not.toHaveBeenCalled();
     } finally {
       observation.restore();
@@ -251,11 +248,10 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("invalidates derived column facts when adopting a foreign schema publication", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
-    const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
+    const { filename, reader, writer } = openDatabasePair(
+      "CREATE TABLE session_nodes (id INTEGER)",
+    );
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
     writer.exec(`
       ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
       ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
@@ -269,16 +265,24 @@ describe("admitted SQLite schema facts", () => {
     expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
   });
+  it.each(["data_version", "schema_version", "user_version"])(
+    "refuses a table shadowing the native %s observation",
+    (name) => {
+      const database = openDatabase(
+        `CREATE TABLE original (id); CREATE TABLE pragma_${name} (${name} INTEGER);
+         INSERT INTO pragma_${name} VALUES (999); PRAGMA user_version = 1;`,
+      );
+      expect(() =>
+        runSqliteReadOperationSync(database, () => tableExists(database, "original")),
+      ).toThrow(/not a function/iu);
+    },
+  );
 
   it.each(["transaction", "implicit snapshot"])(
     "observes foreign commits on the next read while preserving an active %s",
     (pin) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-foreign-"), "state.sqlite");
-      const reader = openDatabase(undefined, true, filename);
+      const { filename, reader, writer } = openDatabasePair();
       reader.exec("PRAGMA journal_mode=WAL");
-      // Bypass local schema publications, as a worker or another process does.
-      const writer = new DatabaseSync(filename);
-      databases.push(writer);
       const schemaMutation = vi.fn();
       registerSqliteSchemaMutationListener(reader, schemaMutation);
       const hasTable = (name: string) =>
@@ -291,6 +295,10 @@ describe("admitted SQLite schema facts", () => {
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
       expect(schemaMutation).toHaveBeenCalledTimes(1);
+      expect(schemaMutation).toHaveBeenLastCalledWith({
+        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
+        userVersion: 2,
+      });
 
       const readSnapshot = () => {
         expect(hasTable("later")).toBe(false);
@@ -317,6 +325,10 @@ describe("admitted SQLite schema facts", () => {
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(false);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
       expect(schemaMutation).toHaveBeenCalledTimes(2);
+      expect(schemaMutation).toHaveBeenLastCalledWith({
+        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
+        userVersion: 3,
+      });
       writer.exec("PRAGMA user_version = 2147483647");
       expect(() =>
         runSqliteReadOperationSync(reader, () =>
@@ -327,10 +339,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
-    const reader = openDatabase(undefined, false, filename);
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
+    const { reader, writer } = openDatabasePair(undefined, false);
     const hasTable = (name: string) =>
       runSqliteReadOperationSync(reader, () => tableExists(reader, name));
     const admission = observeSqliteReadSql(StatementSync.prototype);
@@ -355,12 +364,11 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("executes fresh version probes inside a read scope without preparing warm statements", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-fresh-"), "state.sqlite");
-    const reader = openDatabase(undefined, true, filename);
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
+    const { reader, writer } = openDatabasePair();
     readSqliteDataVersion(reader);
     readSqliteDataVersion(reader);
+    readSqliteCacheDataVersion(reader);
+    readSqliteCacheDataVersion(reader);
     const prepare = vi.spyOn(reader, "prepare");
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
@@ -375,12 +383,10 @@ describe("admitted SQLite schema facts", () => {
         expect(readSqliteDataVersion(reader)).toBe(committedVersion);
       });
       expect(readSqliteCacheDataVersion(reader)).toBe(committedVersion);
-      expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
-        4,
-      );
-      expect(
-        prepare.mock.calls.filter(([sql]) => /^PRAGMA data_version$/iu.test(sql)),
-      ).toHaveLength(0);
+      const isVersionProbe = (sql: string) =>
+        /^PRAGMA data_version$|\bpragma_data_version\(\)/iu.test(sql);
+      expect(observation.queries.filter(isVersionProbe)).toHaveLength(4);
+      expect(prepare.mock.calls.filter(([sql]) => isVersionProbe(sql))).toHaveLength(0);
     } finally {
       observation.restore();
       prepare.mockRestore();

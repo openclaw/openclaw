@@ -247,6 +247,8 @@ node() {
   elif [ "$#" -eq 2 ] && [ "$2" = assert-state ]; then
     [ "\${OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE:-survival}" = post-inference ] || return 96
     printf 'volume-state\\n' >>"$PROBE_EVENTS"
+  elif [ "$#" -ge 2 ] && [ "$2" = volume-doctor-budget ]; then
+    printf '60'
   else
     command node "$@"
   fi

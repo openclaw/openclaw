@@ -15,6 +15,7 @@ import { withSystemdServiceReadBinding } from "./service-operation-lock.js";
 import { createServiceRuntimeInspectionFailure } from "./service-runtime.js";
 import type {
   GatewayService,
+  GatewayServiceCommandConfig,
   GatewayServiceCommandInspection,
   GatewayServiceLoadState,
   ReadGatewayServiceStateArgs,
@@ -186,39 +187,33 @@ async function readGatewayServiceStateWithBinding(
   const managerAbsent = absent && service.readCommand === readSystemdServiceExecStart;
   systemdReadBinding?.verify();
   let commandInspection: GatewayServiceCommandInspection | undefined;
-  const command = absent
-    ? null
-    : args.requireEffective
+  let command: GatewayServiceCommandConfig | null = null;
+  if (!absent) {
+    const scheduledTask = service.readCommand === readScheduledTaskCommand;
+    const readOptions = {
+      timeoutMs: remainingTimeoutMs(),
+      ...(scheduledTask ? { requireLoaded: true } : {}),
+      ...(systemdReadTarget ? { systemdReadTarget } : {}),
+    };
+    const onCommandInspection = (inspection: GatewayServiceCommandInspection) => {
+      commandInspection = inspection;
+    };
+    command = args.requireEffective
       ? await service.readCommand(baseEnv, {
-          timeoutMs: remainingTimeoutMs(),
+          ...readOptions,
           requireEffective: true,
-          ...(!args.requireLoadedCommand || service.readCommand === readScheduledTaskCommand
-            ? {
-                onCommandInspection: (inspection: GatewayServiceCommandInspection) => {
-                  commandInspection = inspection;
-                },
-              }
-            : {}),
+          ...(!args.requireLoadedCommand || scheduledTask ? { onCommandInspection } : {}),
           ...(systemdReadBinding ? { systemdReadBinding } : {}),
-          ...(systemdReadTarget ? { systemdReadTarget } : {}),
-          ...(args.requireLoadedCommand || service.readCommand === readScheduledTaskCommand
-            ? { requireLoaded: true }
-            : {}),
+          ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
           ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
         })
       : await service
-          .readCommand(baseEnv, {
-            timeoutMs: remainingTimeoutMs(),
-            ...(service.readCommand === readScheduledTaskCommand ? { requireLoaded: true } : {}),
-            ...(systemdReadTarget ? { systemdReadTarget } : {}),
-            onCommandInspection: (inspection) => {
-              commandInspection = inspection;
-            },
-          })
+          .readCommand(baseEnv, { ...readOptions, onCommandInspection })
           .catch((error: unknown) => {
             assertServiceInspectionFallbackAllowed(error);
             return null;
           });
+  }
   const mergedEnv = mergeGatewayServiceEnv(
     systemdReadTarget?.scope === "system" && !resolveGatewayProfileSuffix(baseEnv.OPENCLAW_PROFILE)
       ? { ...baseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }

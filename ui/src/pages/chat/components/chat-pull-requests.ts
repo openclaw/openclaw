@@ -119,7 +119,6 @@ function renderChecks(
     gateway?: ApplicationGateway;
     sessionKey?: string;
     sessionId?: string;
-    basePath?: string;
     presented?: PresentationValue;
   },
 ) {
@@ -183,7 +182,6 @@ function renderChecks(
             .gateway=${props.gateway}
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
-            .basePath=${props.basePath ?? ""}
             .presented=${livePresentation(presented)}
           ></openclaw-chat-ci-automation>
           ${
@@ -324,7 +322,6 @@ export function renderChatPullRequests(props: {
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
-  basePath?: string;
   presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
   /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
@@ -337,7 +334,11 @@ export function renderChatPullRequests(props: {
 }) {
   const { publication } = props;
   const published = publication?.result?.status === "published" ? publication.result : undefined;
-  const retainedPublication = publication?.result || publication?.locked || publication?.error;
+  // A failed account discovery has no outcome to retain; only the branch row offers its retry.
+  const retainedPublication =
+    publication?.result ||
+    publication?.locked ||
+    (publication?.error && !publication.optionsUnavailable);
   // Session-only publishers cannot read the broader PR subscription's branch facts.
   const sharedAction =
     !props.branchDismissed &&

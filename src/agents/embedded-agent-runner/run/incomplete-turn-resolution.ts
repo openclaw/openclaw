@@ -91,6 +91,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
+    params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
@@ -104,12 +105,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.hasIntentionalTerminalCompletion
-  ) {
-    return null;
-  }
-
-  if (
+    params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
     resolveSourceReplyDelivery(params.attempt) !== "missing" ||
     // A tool-authored final reply awaits host delivery, so its delivery state is still missing.

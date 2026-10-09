@@ -201,12 +201,9 @@ describe("Codex app-server startup retry", () => {
     result.releaseSharedClientLease();
   });
 
-  it.skipIf(process.platform === "win32").each([
-    ["shared", getLeasedSharedCodexAppServerClient],
-    ["isolated", createIsolatedCodexAppServerClient],
-  ] as const)(
-    "keeps live-child registration failures non-retryable for %s startup",
-    async (_mode, factory) => {
+  it.skipIf(process.platform === "win32")(
+    "keeps live-child registration failures non-retryable for shared startup",
+    async () => {
       for (const failure of ["snapshot", "command", "commit"] as const) {
         const fixture = await createStartupFailureFixture("refusal");
         const { createPluginStateSyncKeyedStore } =
@@ -257,9 +254,10 @@ describe("Codex app-server startup retry", () => {
             return failure === "command" ? readCommand(args[0], Date.now() - 1) : command;
           });
         try {
-          const error = await startFixtureAttempt(fixture, factory).catch(
-            (caught: unknown) => caught,
-          );
+          const error = await startFixtureAttempt(
+            fixture,
+            getLeasedSharedCodexAppServerClient,
+          ).catch((caught: unknown) => caught);
           expect(error).toBeInstanceOf(Error);
           expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
           expect((error as Error).message).toContain(

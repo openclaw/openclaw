@@ -47,7 +47,7 @@ it.each([
         expiresAt: Date.now() + 60_000,
       },
     } satisfies GatewaySessionRow;
-    Reflect.set(pane, "swarmHydrator", { rows: [child], hydrated: true });
+    Reflect.set(pane, "swarmHydrator", { rows: [child], hydrated: true, childrenRead: true });
     Reflect.set(pane, "swarmEnabled", false);
     const container = document.body.appendChild(document.createElement("div"));
     try {
@@ -56,6 +56,7 @@ it.each([
         subagentParentKey: parentKey,
         subagentSessions: [child],
         subagentSessionsHydrated: true,
+        subagentSessionsRead: true,
         swarm: undefined,
       });
       render(
@@ -72,6 +73,7 @@ it.each([
         subagentParentKey: undefined,
         subagentSessions: undefined,
         subagentSessionsHydrated: false,
+        subagentSessionsRead: false,
       });
     } finally {
       render(html``, container);

@@ -250,16 +250,23 @@ function blockContextEngineTurnIntent(
   });
 }
 
-function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardIntent">): void {
+function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardIntent">): boolean {
   const db = outboxDb(params.database);
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     params.database.db,
     db
       .deleteFrom("context_engine_turn_outbox")
       .where("advancement_key", "=", params.admission.logicalTurnId)
       .where("engine_id", "=", params.engineId)
+      // Accepted work remains recoverable when publication or acknowledgment fails.
+      .where(
+        /* kysely-allow-raw: Closed outbox payload state. */ sql`json_extract(payload_json, '$.state')`,
+        "=",
+        "admitted",
+      )
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null),
   );
+  return result.numAffectedRows !== undefined && result.numAffectedRows > 0n;
 }
 
 /**
@@ -367,6 +374,9 @@ export function recoverContextEngineTurnOutbox(params: {
         engineId: params.engineId,
         ownerPluginId: params.ownerPluginId,
       });
+      params.warn(
+        `[context-engine] discarded unaccepted turn advancement: ${row.advancement_key}: recovery found no host acceptance`,
+      );
       continue;
     }
     advanceAcceptedContextEngineTurn(
@@ -411,19 +421,11 @@ function listPendingContextEngineTurnSessions(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
 ): string[] {
-  const db = outboxDb(database);
-  let query = db
-    .selectFrom("context_engine_turn_outbox")
+  const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined)
     .select("session_id")
     // SQLite rowid preserves enqueue order among surviving pending rows.
     // Use it instead of wall-clock timestamps, which can collide.
-    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"))
-    .where("engine_id", "=", filter.engineId)
-    .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
-    .where(outboxPayloadRequiresAdvancement());
-  if (filter.sessionId) {
-    query = query.where("session_id", "=", filter.sessionId);
-  }
+    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"));
   return executeSqliteQuerySync(
     database.db,
     query.groupBy("session_id").orderBy("oldest_enqueue_sequence", "asc").limit(filter.limit),
@@ -436,13 +438,8 @@ function readNextPendingContextEngineTurn(
 ): PendingContextEngineTurn | undefined {
   return executeSqliteQueryTakeFirstSync(
     database.db,
-    outboxDb(database)
-      .selectFrom("context_engine_turn_outbox")
+    pendingContextEngineTurns(database, filter, filter.sessionId)
       .select(["advancement_key", "payload_json", "session_id"])
-      .where("engine_id", "=", filter.engineId)
-      .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
-      .where("session_id", "=", filter.sessionId)
-      .where(outboxPayloadRequiresAdvancement())
       .orderBy(outboxEnqueueSequence(), "asc")
       .limit(1),
   );
@@ -479,19 +476,26 @@ function recordContextEngineTurnFailure(
   );
 }
 
+function pendingContextEngineTurns(
+  database: ContextEngineTurnOutboxConnection,
+  filter: ContextEngineTurnOutboxFilter,
+  sessionId: string | undefined,
+) {
+  const query = outboxDb(database)
+    .selectFrom("context_engine_turn_outbox")
+    .where("engine_id", "=", filter.engineId)
+    .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
+    .where(outboxPayloadRequiresAdvancement());
+  return sessionId === undefined ? query : query.where("session_id", "=", sessionId);
+}
+
 function hasPendingContextEngineTurn(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string },
 ): boolean {
-  let query = outboxDb(database)
-    .selectFrom("context_engine_turn_outbox")
-    .select("advancement_key")
-    .where("engine_id", "=", filter.engineId)
-    .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
-    .where(outboxPayloadRequiresAdvancement());
-  if (filter.sessionId) {
-    query = query.where("session_id", "=", filter.sessionId);
-  }
+  const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined).select(
+    "advancement_key",
+  );
   return executeSqliteQueryTakeFirstSync(database.db, query.limit(1)) !== undefined;
 }
 
@@ -674,7 +678,7 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   };
   discardIntent: {
     input: ContextEngineTurnOutboxFilter & { admission: TranscriptTurnAdmission };
-    output: undefined;
+    output: boolean;
   };
 };
 
@@ -717,8 +721,7 @@ export function executeContextEngineTurnOutboxCommand(
     case "publishClosedTurn":
       return publishClosedContextEngineTurn({ ...command.input, database });
     case "discardIntent":
-      discardContextEngineTurnIntent({ ...command.input, database });
-      return undefined;
+      return discardContextEngineTurnIntent({ ...command.input, database });
   }
   throw new Error("Unknown context-engine turn outbox command");
 }

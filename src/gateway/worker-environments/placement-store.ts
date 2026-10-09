@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -12,6 +12,7 @@ import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
+import { readPublishedPlacementProjection } from "./placement-read-publication.js";
 import { createPlacementReadStore } from "./placement-read-store.js";
 import {
   normalizeEpoch,
@@ -29,13 +30,14 @@ import {
   fromRow,
   query,
   readWorkerPlacementsForReconcileInDatabase,
+  readWorkerPlacementsInDatabase,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
-  observePlacementAuthority,
   preparePlacementAuthorityRead,
   preparePlacementTurnClaimAuthority,
+  prepareSessionPlacementRead,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
 import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
@@ -158,23 +160,28 @@ export function createWorkerSessionPlacementStore(
       };
     },
 
+    prepareSessionPlacement(sessionIdInput: string) {
+      const sessionId = required(sessionIdInput, "session id");
+      return prepareSessionPlacementRead(path, sessionId, () => store.getAsync(sessionId));
+    },
+
     async prepareMaintenancePlacements() {
-      const observation = observePlacementAuthority(path);
-      try {
-        const result = await executeExistingOpenClawStateRead(
-          { path },
-          { type: "workers.placementPreservation" },
-          { current: true },
-        );
-        observation.assertCurrent();
-        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
-          throw new Error("Worker placement preservation source is unavailable");
-        }
-        return { placements: result.placements, ...observation };
-      } catch (error) {
-        observation.release();
-        throw error;
-      }
+      const { value: placements, ...observation } = await preparePlacementAuthorityRead(
+        path,
+        undefined,
+        async () => {
+          const result = await executeExistingOpenClawStateRead(
+            { path },
+            { type: "workers.placementPreservation" },
+            { current: true },
+          );
+          if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+            throw new Error("Worker placement preservation source is unavailable");
+          }
+          return result.placements;
+        },
+      );
+      return { placements, ...observation };
     },
 
     async readProjection(
@@ -246,6 +253,20 @@ export function createWorkerSessionPlacementStore(
           projection.workspaceRecoveryPendingSessionIds,
         ),
       };
+    },
+
+    readPublishedProjection(change: SessionRowChange) {
+      const projection = readPublishedPlacementProjection(context.admission.identity, change);
+      if (!projection) {
+        return undefined;
+      }
+      try {
+        context.admission.assertCurrent();
+        return projection;
+      } catch {
+        // A replaced reader must use ordinary preparation, never the old receipt.
+        return undefined;
+      }
     },
 
     async readEnvironmentOwner(environmentId: string) {
@@ -368,11 +389,9 @@ export function createWorkerSessionPlacementStore(
     },
 
     list(): WorkerSessionPlacementRecord[] {
-      const db = read();
-      return executeSqliteQuerySync(
-        db,
-        query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
-      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+      return readWorkerPlacementsInDatabase(read()).map((record) =>
+        withWorkspaceResultConflict(record)!,
+      );
     },
 
     async readChangeSnapshot(profileIds?: readonly string[]) {

@@ -17,6 +17,7 @@ import {
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
@@ -48,7 +49,14 @@ const commandQueueMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../../process/command-queue.js", () => commandQueueMocks);
+vi.mock(import("../../process/command-queue.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...commandQueueMocks,
+  prepareCommandLaneClear:
+    (...params: Parameters<typeof commandQueueMocks.clearCommandLane>) =>
+    () =>
+      commandQueueMocks.clearCommandLane(...params),
+}));
 
 const acpManagerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn<
@@ -75,6 +83,19 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive: runtimeAbortMocks.isEmbeddedAgentRunActive,
 }));
+vi.mock(
+  import("../../agents/embedded-agent-runner/runs.abort-target.js"),
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    prepareEmbeddedAgentRunAbort: (sessionId: string) => () => ({
+      active:
+        runtimeAbortMocks.isEmbeddedAgentRunActive() ||
+        runtimeAbortMocks.resolveActiveEmbeddedRunSessionId() === sessionId,
+      aborted: runtimeAbortMocks.abortEmbeddedAgentRun(sessionId),
+      sessionId,
+    }),
+  }),
+);
 vi.mock("../../agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
 }));
@@ -397,7 +418,7 @@ describe("abort detection", () => {
     expect(getAbortMemory(canonicalKey)).toBeUndefined();
   });
 
-  it("fast-abort uses abort memory when no persisted target entry exists", async () => {
+  it("fast-abort leaves future prompts untouched when no persisted target entry exists", async () => {
     const sessionKey = "telegram:missing-persistence-target";
     const { cfg } = await createAbortConfig();
     vi.mocked(markSessionAbortTarget).mockResolvedValueOnce(null);
@@ -411,7 +432,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    expect(getAbortMemory(sessionKey)).toBe(true);
+    expect(getAbortMemory(sessionKey)).toBeUndefined();
   });
 
   it("fast-abort does not wait for abort metadata persistence before stopping runs", async () => {
@@ -747,33 +768,19 @@ describe("abort detection", () => {
       await addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        execute(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (isSubagentRegistryWriteCommand(command) && !failedTombstone) {
-                  const firstRow = command.input.values.find(
-                    (row) => row.run_id === "run-persistence-failure-first",
-                  );
-                  const first = firstRow && rowToSubagentRunRecord(firstRow);
-                  if (
-                    first?.execution.status === "terminal" &&
-                    first.endedReason === "subagent-killed"
-                  ) {
-                    failedTombstone = true;
-                    throw new Error("sqlite busy");
-                  }
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (isSubagentRegistryWriteCommand(command) && !failedTombstone) {
+        const firstRow = command.input.values.find(
+          (row) => row.run_id === "run-persistence-failure-first",
+        );
+        const first = firstRow && rowToSubagentRunRecord(firstRow);
+        if (first?.execution.status === "terminal" && first.endedReason === "subagent-killed") {
+          failedTombstone = true;
+          throw new Error("sqlite busy");
+        }
+      }
+      return scope.execute(command, executeOptions);
+    });
 
     await expect(
       stopSubagentsForRequester({

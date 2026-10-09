@@ -178,7 +178,6 @@ export function createSessionRowRefresh(
         rows: owner.rows,
         dirty: owner.dirty,
         selected,
-        cfg: owner.state().cfg,
         revision,
         prepareRegistryFacts: owner.prepareRegistryFacts,
         env: owner.env,

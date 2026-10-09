@@ -19,6 +19,7 @@ import {
   MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
+  retireUnservedModels,
   serializeModelCatalogBundle,
   summarizeModelCatalogBundle,
 } from "../../scripts/publish-model-catalog.mts";
@@ -709,6 +710,92 @@ describe("publish model catalog", () => {
       "hydrated-claude",
     );
     expect(warnings.join("")).toContain("renamed-upstream");
+  });
+
+  function inventoryManifests() {
+    return [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai", "nvidia", "novita"],
+          modelCatalog: {
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+              nvidia: {
+                models: [
+                  { id: "z-ai/glm-5.3" },
+                  { id: "z-ai/glm-5.2" },
+                  { id: "Z-AI/GLM-5.3-FLASH" },
+                  { id: "z-ai/glm5", status: "deprecated", statusReason: "authored" },
+                ],
+              },
+              novita: { models: [{ id: "sao10K/l3-70b-euryale-v2.1" }, { id: "qwen/qwen3-max" }] },
+            },
+          },
+        },
+      },
+    ];
+  }
+
+  it("deprecates rows a provider's public inventory no longer lists", async () => {
+    const bundle = await assembleFixtureBundle(inventoryManifests());
+    const inventories: Record<string, string[]> = {
+      "https://integrate.api.nvidia.com/v1/models": ["z-ai/glm-5.3", "z-ai/glm-5.3-flash"],
+      "https://api.novita.ai/openai/v1/models": ["Sao10K/L3-70B-Euryale-v2.1"],
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async (input) =>
+      Response.json({ data: (inventories[requestUrl(input)] ?? []).map((id) => ({ id })) }),
+    );
+
+    await expect(retireUnservedModels({ bundle, fetchImpl })).resolves.toEqual({
+      // NVIDIA ids match exactly, so a case-only difference is not served.
+      nvidia: ["z-ai/glm-5.2", "Z-AI/GLM-5.3-FLASH"],
+      // Novita's inventory mixes case, so only a case-insensitive miss retires a row.
+      novita: ["qwen/qwen3-max"],
+    });
+    expect(bundle.providers.nvidia?.models).toEqual([
+      { id: "z-ai/glm-5.3" },
+      {
+        id: "z-ai/glm-5.2",
+        status: "deprecated",
+        statusReason: "nvidia no longer lists this model in its public model inventory.",
+      },
+      {
+        id: "Z-AI/GLM-5.3-FLASH",
+        status: "deprecated",
+        statusReason: "nvidia no longer lists this model in its public model inventory.",
+      },
+      { id: "z-ai/glm5", status: "deprecated", statusReason: "authored" },
+    ]);
+    expect(bundle.providers.novita?.models[0]).toEqual({ id: "sao10K/l3-70b-euryale-v2.1" });
+    expect(fetchImpl.mock.calls.map(([input]) => requestUrl(input)).toSorted()).toEqual(
+      Object.keys(inventories).toSorted(),
+    );
+  });
+
+  it.each([
+    ["unavailable", () => new Response("Gone.", { status: 404 })],
+    ["malformed", () => Response.json({ data: [{ id: "z-ai/glm-5.3" }, { name: "no id" }] })],
+    ["empty", () => Response.json({ data: [] })],
+  ])("publishes rows as authored when the inventory is %s", async (_scenario, respond) => {
+    const bundle = await assembleFixtureBundle(inventoryManifests());
+    const before = JSON.stringify(bundle);
+    const warnings: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+      warnings.push(String(value));
+      return true;
+    });
+
+    const result = await retireUnservedModels({ bundle, fetchImpl: async () => respond() }).finally(
+      () => stderr.mockRestore(),
+    );
+
+    expect(result).toEqual({});
+    expect(JSON.stringify(bundle)).toBe(before);
+    expect(warnings.join("")).toContain("publishing nvidia without inventory retirement");
+    expect(warnings.join("")).toContain("publishing novita without inventory retirement");
   });
 
   it.each(["absent", "unowned", "without provider catalog"])(

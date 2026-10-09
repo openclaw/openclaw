@@ -1,4 +1,4 @@
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -13,6 +13,7 @@ import {
   type DiscordComponentMessageSpec,
 } from "./components.js";
 import {
+  createChannelMessage,
   editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
@@ -248,11 +249,7 @@ async function writeDiscordComponentMessage(
         }
         await opts.onPlatformSendDispatch?.();
         opts.assertPlatformSendAuthorized?.();
-        // SAFETY: Discord's Create Message response includes its message and channel IDs.
-        return (await rest.post(Routes.channelMessages(channelId), { body })) as {
-          id: string;
-          channel_id: string;
-        };
+        return createChannelMessage(rest, channelId, { body });
       },
       "components",
       creating ? { safety: "nonce-protected-create" } : undefined,

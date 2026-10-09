@@ -76,7 +76,7 @@ describe("gateway harness questions", () => {
     const host = await createAdmittedHostCapabilityTestFixture(attempt);
     const controller = new AbortController();
     const source = new AbortController();
-    const promptDelivered = createDeferred();
+    let promptDelivered = createDeferred();
     const releasePersistence = createDeferred();
     const target = createTestUserTurnTranscriptTarget({
       sessionId: attempt.sessionId,
@@ -184,8 +184,10 @@ describe("gateway harness questions", () => {
       } else if (change === "question-replaced") {
         controller.abort();
         await expect(question).resolves.toEqual({ status: "cancelled" });
+        promptDelivered = createDeferred();
         replacementController = new AbortController();
         replacement = ask(replacementController.signal);
+        await promptDelivered.promise;
       }
       releasePersistence.resolve();
       if (change === "committed") {
