@@ -17,6 +17,15 @@ import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
+const BUNDLED_PLUGIN_METADATA = {
+  status: "active",
+  owner: "config",
+  introduced: "2026-04-24",
+  docsPath: "/plugins/architecture",
+  diagnostics: ["plugin status report"],
+  tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
+} as const;
+
 const ACTIVATION_HINT_METADATA = {
   status: "active",
   owner: "plugin-execution",
@@ -569,25 +578,15 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "bundled-plugin-allowlist",
-    status: "active",
-    owner: "config",
-    introduced: "2026-04-24",
+    ...BUNDLED_PLUGIN_METADATA,
     replacement: "manifest-owned plugin enablement and scoped load plans",
-    docsPath: "/plugins/architecture",
     surfaces: ["plugins.allow", "bundled provider startup", "plugins status"],
-    diagnostics: ["plugin status report"],
-    tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
   {
     code: "bundled-plugin-enablement",
-    status: "active",
-    owner: "config",
-    introduced: "2026-04-24",
+    ...BUNDLED_PLUGIN_METADATA,
     replacement: "manifest-owned plugin defaults and scoped load plans",
-    docsPath: "/plugins/architecture",
     surfaces: ["plugins.entries", "bundled provider startup", "plugins status"],
-    diagnostics: ["plugin status report"],
-    tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
   {
     code: "activation-agent-harness-hint",

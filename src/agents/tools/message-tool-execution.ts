@@ -463,13 +463,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         if (Date.now() - recentPollVote.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
           recentPollVoteBySession.delete(pollEchoSessionKey);
         } else if (pollVoteEchoRoute === recentPollVote.route) {
-          const vote = recentPollVote;
           recentPollVoteBySession.delete(pollEchoSessionKey);
           const outboundText =
             readToolStringParam(params, "text") ??
             readToolStringParam(params, "message") ??
             readToolStringParam(params, "content");
-          if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
+          if (outboundText && isPollVoteEchoText(recentPollVote.option, outboundText)) {
             decisions.recordPollVoteEchoSuppressed();
             return jsonResult({
               status: "suppressed",

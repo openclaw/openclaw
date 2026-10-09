@@ -6,8 +6,10 @@ import {
 } from "./kysely-sync-cache-state.js";
 import {
   getSqlitePinnedReadSnapshot,
+  readChangedSqliteSchemaMarkers,
   readSqliteVersionObservation,
   runSqlitePinnedReadSnapshotSync,
+  type SqliteSchemaMarkers,
 } from "./sqlite-pinned-read-snapshot.js";
 import { findSqlCharacter } from "./sqlite-schema-sql.js";
 import {
@@ -28,7 +30,6 @@ export type SqliteSchemaFacts = {
   readonly triggers: ReadonlyMap<string, { table: string; sql: string | null }>;
 };
 
-type SqliteSchemaMarkers = Pick<SqliteSchemaFacts, "schemaVersion" | "userVersion">;
 type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;
 
 type SchemaOwner = {
@@ -553,32 +554,6 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
     owner.observedDataVersion = row.data_version;
   }
   return row.data_version;
-}
-
-function readChangedSqliteSchemaMarkers(
-  database: DatabaseSync,
-  facts: SqliteSchemaFacts,
-  observation?: ReturnType<typeof readSqliteVersionObservation>,
-): SqliteSchemaMarkers | undefined {
-  if (observation) {
-    const matches =
-      facts.schemaVersion === observation.schemaVersion &&
-      facts.userVersion === observation.userVersion;
-    return matches
-      ? undefined
-      : {
-          schemaVersion: Number(observation.schemaVersion),
-          userVersion: Number(observation.userVersion),
-        };
-  }
-  return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
-    const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
-      s.get(),
-    );
-    const matches =
-      facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
-    return matches ? undefined : { schemaVersion, userVersion: Number(userVersion?.user_version) };
-  });
 }
 
 /** Admission observes foreign commits; explicit fresh reads never reuse an operation's probe. */

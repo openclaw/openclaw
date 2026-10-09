@@ -76,23 +76,16 @@ const transcriptBroadcastMocks = vi.hoisted(() => ({
   readMessageById: vi.fn(),
 }));
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
-const observeActivitySummary = vi.hoisted(() =>
-  vi.fn<
-    (
-      options: Parameters<
-        typeof import("./session-activity-summaries.js").createSessionActivitySummaries
-      >[0],
-    ) => void
-  >(),
-);
+type ActivitySummaryOptions = Parameters<
+  typeof import("./session-activity-summaries.js").createSessionActivitySummaries
+>[0];
+const observeActivitySummary = vi.hoisted(() => vi.fn<(options: ActivitySummaryOptions) => void>());
 
 vi.mock("./session-activity-summaries.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-activity-summaries.js")>();
   return {
     ...actual,
-    createSessionActivitySummaries: (
-      options: Parameters<typeof actual.createSessionActivitySummaries>[0],
-    ) => {
+    createSessionActivitySummaries: (options: ActivitySummaryOptions) => {
       observeActivitySummary(options);
       return actual.createSessionActivitySummaries(options);
     },

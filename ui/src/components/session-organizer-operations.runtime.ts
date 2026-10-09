@@ -18,7 +18,6 @@ import type {
   SidebarSessionMutationScope,
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
-import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
@@ -48,6 +47,7 @@ export {
 } from "./session-organizer-catalog.ts";
 
 export { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
+export { stopCloudWorker } from "./session-organizer-cloud-worker.runtime.ts";
 
 export async function patchSession(
   host: SessionActionHost,
@@ -636,57 +636,6 @@ export async function forkSession(
         scope,
         scope.sessions.state.error ?? t("newSession.createFailed"),
       );
-    }
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-  }
-}
-
-export async function stopCloudWorker(
-  host: SessionOrganizerControllerHost,
-  session: SidebarRecentSession,
-  scope: SidebarSessionMutationScope,
-) {
-  const stopAction = session.cloudWorkerStopAction;
-  // The Gateway revalidates placement and run state after confirmation.
-  if (!stopAction || (stopAction.blocksActiveRun && session.hasActiveRun)) {
-    return;
-  }
-  const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
-    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
-    danger: true,
-    signal: scope.signal,
-  });
-  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
-  // too, so without this order the operator's lost intent would look like an
-  // ordinary cancel instead of the reconnect that actually dropped it.
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
-    return;
-  }
-  if (!confirmed) {
-    return;
-  }
-  if (!requireSessionMutationAccess(host, scope, stopAction)) {
-    return;
-  }
-  try {
-    const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
-    await requestCloudWorkerStop(
-      scope.client,
-      {
-        key: session.key,
-        agentId,
-      },
-      scope.context.placementStartup,
-    );
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
-    }
-    const outcome = await scope.sessions.reconcileMutation(agentId);
-    if (outcome.status === "failed" && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      host.sessionData.publishSessionMutationError(scope, outcome.error);
     }
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);

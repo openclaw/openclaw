@@ -70,14 +70,13 @@ import {
   hasLiveWorktreeRunLease,
 } from "./run-lease.js";
 import { reconcileListedWorktrees } from "./service-list.js";
+import { canResetFailedWorktreeAdd, resetFailedWorktreeAdd } from "./service-preparation-retry.js";
 import {
-  canResetFailedWorktreeAdd,
   removeFailedWorktree,
   createWithWorktreeAllocation,
   createOwnedWorktree,
   prepareWorktreeDestination,
   findWorktreeByName,
-  resetFailedWorktreeAdd,
   resolveRepository,
   rebindLiveWorktreeRepository,
   resolveRepositoryIdentity,

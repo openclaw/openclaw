@@ -19,6 +19,7 @@ import {
   type PluginInstanceOwner,
 } from "./plugin-instance-scope.js";
 import { waitForPluginInstanceSettlement } from "./plugin-instance-settlement.js";
+import { adoptPluginInstanceValue } from "./plugin-instance-value-adoption.js";
 import type {
   PluginInstanceCallLease,
   PluginInstanceConsumer,
@@ -186,25 +187,7 @@ export class PluginInstance {
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
   adopt<T>(value: T): T {
-    const seen = new Set<object>();
-    const visit = (candidate: unknown) => {
-      if (
-        !candidate ||
-        (typeof candidate !== "object" && typeof candidate !== "function") ||
-        seen.has(candidate)
-      ) {
-        return;
-      }
-      seen.add(candidate);
-      valueInstances.set(candidate, this);
-      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
-        if ("value" in descriptor) {
-          visit(descriptor.value);
-        }
-      }
-    };
-    visit(value);
-    return value;
+    return adoptPluginInstanceValue(this, value);
   }
 
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {
