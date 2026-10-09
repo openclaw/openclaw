@@ -522,6 +522,27 @@ describe("swarm scheduler", () => {
     expect(releaseSwarmRun("reused")).toBe(true);
   });
 
+  it("fills increased capacity from the existing FIFO queue", async () => {
+    const started: string[] = [];
+    const enqueue = (runId: string, maxConcurrent: number) =>
+      enqueueSwarmRun({
+        groupId: "group",
+        runId,
+        maxConcurrent,
+        activeRunIds: [],
+        start: async () => {
+          started.push(runId);
+        },
+        onStartFailure: vi.fn(() => true),
+      });
+
+    enqueue("one", 1);
+    enqueue("two", 1);
+    enqueue("three", 3);
+
+    await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
+  });
+
   it.each(["before", "during"])(
     "holds FIFO across activation %s the hold and overlapping cancellations",
     async (activation) => {
