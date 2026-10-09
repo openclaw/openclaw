@@ -19,10 +19,10 @@ import {
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
-  readSessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionHistoryBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -139,12 +139,17 @@ export async function sessionTranscriptHasContent(
   if (!target) {
     return false;
   }
+  const incognito = captureIncognitoSessionHistoryBinding(target);
+  target = { ...target, ...(incognito ? { storePath: incognito.actor.path } : {}) };
   await waitForSessionTranscriptProjection(target, abortSignal);
-  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
-    maxBytes: 5 * 1024 * 1024,
-    maxMessages: 500,
-    offset: 0,
-  });
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../../gateway/session-transcript-readers.js");
+  const { events } = await readSessionTranscriptBoundedMessageTailPageAsync(
+    target,
+    { maxBytes: 5 * 1024 * 1024, maxMessages: 500, offset: 0 },
+    abortSignal,
+    incognito,
+  );
   return events.some(
     ({ event }) =>
       isRecord(event) &&
