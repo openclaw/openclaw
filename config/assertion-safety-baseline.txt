@@ -35,8 +35,7 @@ extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
-extensions/browser/src/browser-tool.actions.ts	9
-extensions/browser/src/browser-tool.snapshot.ts	1
+extensions/browser/src/browser-tool.actions.ts	6
 extensions/browser/src/browser-tool.ts	5
 extensions/browser/src/browser/bridge-server.ts	2
 extensions/browser/src/browser/cdp-page-session.ts	3
@@ -70,7 +69,6 @@ extensions/browser/src/browser/routes/agent.act.shared.ts	1
 extensions/browser/src/browser/routes/tabs.ts	6
 extensions/browser/src/browser/server-context.remote-tab-ops.harness.ts	2
 extensions/browser/src/browser/server-context.tab-ops.ts	2
-extensions/browser/src/browser/server-middleware.ts	2
 extensions/browser/src/browser/system-chrome-cookies.ts	1
 extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
@@ -530,7 +528,7 @@ extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	2
 extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
-extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	8
+extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
 extensions/memory-core/src/migration/doctor-memory-sidecar.ts	1
 extensions/memory-core/src/migration/doctor-workspaces.ts	1
 extensions/memory-core/src/session-backfill-gateway.ts	2
@@ -1279,7 +1277,7 @@ src/agents/embedded-agent-runner/run/attempt-client-tools.ts	1
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-history.ts	9
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	6
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	5
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -1318,7 +1316,7 @@ src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
 src/agents/embedded-agent-runner/thinking.ts	19
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
-src/agents/embedded-agent-runner/tool-result-context-guard.ts	8
+src/agents/embedded-agent-runner/tool-result-context-guard.ts	7
 src/agents/embedded-agent-runner/tool-result-truncation.ts	12
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1

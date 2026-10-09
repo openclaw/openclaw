@@ -119,9 +119,18 @@ describe("anthropic live model discovery auth", () => {
     ];
     const provider = buildAnthropicProvider();
     const result = await provider.catalog?.run?.(buildCatalogContext("sk-ant-oat01-test-token"));
+    // Keyed results are not republished under the `claude-cli` hook alias: Claude CLI
+    // rows come from their own curated catalog, not from the Anthropic API listing.
+    expect(result && "providers" in result ? Object.keys(result.providers) : []).toEqual([
+      "anthropic",
+    ]);
+    // Inventory retention after a later transient failure keys on this successful outcome.
+    expect(result && "providers" in result ? result.outcomes : undefined).toContainEqual(
+      expect.objectContaining({ provider: "anthropic", status: "ready" }),
+    );
     const models = new Map(
-      result && "provider" in result
-        ? (result.provider.models ?? []).map((model) => [model.id, model])
+      result && "providers" in result
+        ? (result.providers.anthropic?.models ?? []).map((model) => [model.id, model])
         : [],
     );
 
@@ -170,8 +179,8 @@ describe("anthropic live model discovery auth", () => {
       buildCatalogContext("sk-ant-api03-test-key"),
     );
     const model =
-      result && "provider" in result
-        ? result.provider.models?.find((entry) => entry.id === "claude-sonnet-4-6")
+      result && "providers" in result
+        ? result.providers.anthropic?.models?.find((entry) => entry.id === "claude-sonnet-4-6")
         : undefined;
 
     // Tool surface (Code Mode) comes from the shipped Sonnet row; effort comes from the listing.

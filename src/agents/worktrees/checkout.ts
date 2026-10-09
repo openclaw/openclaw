@@ -68,6 +68,7 @@ function gitOptions(options: WorktreeFilesystemOptions) {
 function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitCommandOptions {
   return {
     ...gitOptions(options),
+    env: { GIT_NO_LAZY_FETCH: "1" },
     refMutationDirectory: options.commonDir,
     startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
       assertOwned(options);
@@ -648,7 +649,7 @@ export async function materializeManagedWorktree(
       const result = await git.run(
         params.destination,
         ["read-tree", "--reset", "--no-recurse-submodules", "-u", params.commit],
-        options,
+        { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1" } },
       );
       if (result.code === 0 && params.resetIndexTo) {
         await git.require(

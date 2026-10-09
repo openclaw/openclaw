@@ -122,6 +122,33 @@ Payload version 1 records the recap text, generation time, session ID and lifecy
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
 
+### User-turn model prompt projections
+
+Canonical user messages may include the optional private field
+`__openclaw.modelPromptProjection: { version: 1, text: string }`. The user-turn
+transcript recorder stores the first model-facing text, including prompt-hook
+prepend/append context or a model-prompt replacement, before provider dispatch.
+The ordinary `content` remains the original user transcript. Projection text is
+stored after transcript redaction and before deterministic timestamp and sender
+normalization. Both the first dispatch and replay use that recorded text, then
+apply the same normalization.
+
+The existing transcript writer binds capture to the exact active user message
+and rechecks live authority before committing. Capture is immutable: repeats
+can only confirm identical text. Later media cannot change a sent projection
+or copy it onto the media's new user message. Compaction retires the projection
+with its source message, and reset or replacement cannot transfer it to another
+turn. No separate table, cache, sidecar, or configuration option is added.
+
+Messages without the field retain legacy replay behavior. The version-1 reader
+rejects malformed or unsupported projection formats before provider dispatch
+and asks for a compatible OpenClaw version or a new session. This stored-shape
+addition leaves the numeric database schema version unchanged. Older builds
+that do not understand the optional field can still read the original user
+content, but cannot reproduce the recorded model prompt and may lose prompt
+cache reuse. Downgrading therefore does not preserve this replay guarantee;
+resume affected sessions with a compatible build or start a new session.
+
 ### Transcript search row ownership
 
 In agent schema 23, `session_transcript_fts_rows` maps each FTS `rowid` to its

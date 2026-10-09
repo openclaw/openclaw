@@ -647,6 +647,9 @@ export function writeSessionEntry(
               clearMembers:
                 canonicalPreviousEntry !== undefined &&
                 canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,
+              lifecycleChanged:
+                canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+                canonicalPreviousEntry?.lifecycleRevision !== normalizedEntry.lifecycleRevision,
             },
           }
         : {}),

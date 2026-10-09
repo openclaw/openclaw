@@ -315,6 +315,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
 }): Promise<{
+  getUserTranscriptContexts?: () => LlmBoundaryOptions["userTranscriptContexts"];
   boundaryTimezone: string | undefined;
   includeBoundaryTimestamp: boolean;
   orphanRepair: ReturnType<typeof resolveOrphanRepairPlan>;
@@ -476,6 +477,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   };
 
   return {
+    getUserTranscriptContexts: input.getUserTranscriptContexts,
     boundaryTimezone,
     includeBoundaryTimestamp: !preserveExactPrompt,
     orphanRepair,
