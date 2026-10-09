@@ -17,7 +17,6 @@ import {
   recordCompletedLegacyAgentDirMigration,
 } from "./state-migrations.agent-dir-receipt.js";
 import { migrationFileExists, readSessionStoreJson5 } from "./state-migrations.fs.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   aliasedSessionStoreMigrationWarning,
   canonicalizeSessionStore,
@@ -32,7 +31,7 @@ import {
   isLegacyDefaultMainAliasKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
-import type { LegacyStateDetection } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
 

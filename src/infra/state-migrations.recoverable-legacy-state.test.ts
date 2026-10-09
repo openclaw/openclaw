@@ -28,9 +28,9 @@ import {
   createLegacyStateMigrationStepReceipt,
   throwIfDoctorStateMigrationRefused,
 } from "./state-migrations.messages.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { runLegacyMigrationPlans } from "./state-migrations.plugin-state.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 function migrationReceipt(id: string, result: MigrationMessages) {
   return createLegacyStateMigrationStepReceipt(

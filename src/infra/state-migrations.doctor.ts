@@ -119,7 +119,6 @@ import {
   logStateMigrationResult,
   mergeNotices,
 } from "./state-migrations.messages.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
@@ -198,6 +197,7 @@ import type {
   LegacyStateMigrationPlan,
   LegacyStateMigrationStepReceipt,
   MigrationLogger,
+  MigrationMessages,
   LegacyStateMigrationStep,
   PreparedPostSessionPluginMigration,
 } from "./state-migrations.types.js";

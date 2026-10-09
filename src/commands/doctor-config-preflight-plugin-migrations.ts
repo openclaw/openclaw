@@ -22,9 +22,9 @@ import {
   type DeferredPluginMigration,
   type DeferredPluginMigrationRecordInput,
 } from "../infra/deferred-plugin-migrations.js";
-import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
 import type {
   LegacyStateMigrationStepReceipt,
+  MigrationMessages,
   MigrationLogger,
 } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";

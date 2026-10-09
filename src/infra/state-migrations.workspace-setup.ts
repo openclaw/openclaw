@@ -17,13 +17,13 @@ import { formatErrorMessage } from "./errors.js";
 import { resolveUserPath } from "./home-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import { markLegacyMigrationSourceRemoved } from "./state-migrations.receipts.js";
 import {
   type LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
 } from "./state-migrations.source-snapshot.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 import {
   archiveWorkspaceSetupSource,
   createLegacySourceClaim,

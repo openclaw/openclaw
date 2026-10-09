@@ -6,8 +6,8 @@ import {
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
   return scopeKey ? `${scopeKey}:${key}` : key;

@@ -5,11 +5,11 @@ import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
-import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import type {
   LegacyStateMigrationStepReceipt,
+  MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";

@@ -19,7 +19,7 @@ import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 export type AgentDatabaseMigrationTarget = {
   agentId: string;

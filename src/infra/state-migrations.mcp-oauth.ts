@@ -17,7 +17,6 @@ import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock
 import { importLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-store.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMcpOAuthImportResult } from "./state-migrations.mcp-oauth.worker-contract.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
@@ -26,6 +25,7 @@ import {
   resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_MCP_OAUTH_DIR = "mcp-oauth";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";

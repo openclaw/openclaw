@@ -1,8 +1,7 @@
 // Doctor-only cleanup for retired system-agent rescue approval directories.
 import fs from "node:fs";
 import path from "node:path";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
-import type { LegacyRescuePendingDetection } from "./state-migrations.types.js";
+import type { LegacyRescuePendingDetection, MigrationMessages } from "./state-migrations.types.js";
 
 function resolveLegacyRescuePendingPaths(stateDir: string): string[] {
   return ["crestodian", "openclaw"].map((owner) => path.join(stateDir, owner, "rescue-pending"));

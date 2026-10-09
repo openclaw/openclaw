@@ -14,7 +14,6 @@ import { updateChannelPairingStateSnapshot } from "../pairing/pairing-store-sqli
 import type { PairingRequest } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 
 const PAIRING_SUFFIX = "-pairing.json";
@@ -306,7 +305,7 @@ function removeImportedSource(filePath: string, warnings: string[]): void {
 export function migrateLegacyChannelPairingState(params: {
   detected: LegacyChannelPairingStateDetection;
   env: NodeJS.ProcessEnv;
-}): MigrationMessages {
+}): { changes: string[]; warnings: string[]; warningDisposition?: "recoverable" } {
   const changes: string[] = [];
   const warnings: string[] = [];
   const recoverableWarnings: string[] = [];

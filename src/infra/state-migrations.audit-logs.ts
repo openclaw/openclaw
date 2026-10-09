@@ -48,12 +48,12 @@ import {
   type LegacyAuditSourceSnapshot,
 } from "./state-migrations.audit-recovery.js";
 import { writeRecoveredSanitizedAuditArchive } from "./state-migrations.audit-sanitized.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   moveLegacyMigrationFileNoReplace,
   recoverLegacyMigrationLinkedMove,
   LegacyMigrationMoveUnavailableError,
 } from "./state-migrations.no-replace-move.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 export { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
 

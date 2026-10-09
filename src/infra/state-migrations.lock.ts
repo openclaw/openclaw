@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "./errors.js";
 import { formatGatewayLockFailure } from "./gateway-lock-diagnostics.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 type LegacyMigrationStateLockOptions = {
   stateDir: string;

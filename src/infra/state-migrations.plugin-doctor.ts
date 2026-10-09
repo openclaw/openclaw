@@ -17,13 +17,13 @@ import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.j
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
-import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
   MigrationLogger,
+  MigrationMessages,
   PlannedPluginDoctorAction,
   PluginDoctorRepairAuthority,
 } from "./state-migrations.types.js";

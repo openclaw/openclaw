@@ -6,8 +6,10 @@ import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
-import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
-import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  MigrationMessages,
+} from "../infra/state-migrations.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   canIsolateAgentDatabase,
