@@ -277,9 +277,10 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves the default branch while a checkout is rebasing (linked: %s)",
-    async (linked) => {
+  it.each(["primary", "main", "unrelated", "update-refs", "attached-update-refs"])(
+    "only retains the default branch reserved by a rebase (%s)",
+    async (kind) => {
+      const linked = kind !== "primary";
       await git(repo, "switch", "-c", "onto");
       await fs.writeFile(path.join(repo, "README.md"), "onto change\n");
       await git(repo, "add", "README.md");
@@ -305,17 +306,83 @@ describe("ManagedWorktreeService branch discovery", () => {
       const rebasing = linked ? path.join(root, "rebasing") : repo;
       if (linked) {
         await git(repo, "worktree", "add", "--force", rebasing, "main");
+        if (kind !== "main") {
+          await git(rebasing, "switch", "-c", "topic");
+        }
       }
-      await expect(git(rebasing, "rebase", "onto")).rejects.toMatchObject({ code: 1 });
+      const updateRefs = kind.endsWith("update-refs");
+      if (updateRefs) {
+        // Git excludes checked-out branches when preparing its update-refs list.
+        await git(repo, "switch", "onto");
+        await fs.writeFile(path.join(rebasing, "topic.txt"), "topic\n");
+        await git(rebasing, "add", "topic.txt");
+        await git(rebasing, "commit", "-m", "topic tip");
+      }
+      await expect(
+        git(rebasing, "rebase", ...(updateRefs ? ["--update-refs"] : []), "onto"),
+      ).rejects.toMatchObject({ code: 1 });
+      if (updateRefs) {
+        const gitDir = await git(rebasing, "rev-parse", "--absolute-git-dir");
+        expect(
+          await fs.readFile(path.join(gitDir, "rebase-merge", "update-refs"), "utf8"),
+        ).toContain("refs/heads/main\n");
+        await git(repo, "switch", "--ignore-other-worktrees", "main");
+        if (kind === "attached-update-refs") {
+          // A rebase exec or an operator can reattach HEAD while the rebase remains paused.
+          await git(rebasing, "symbolic-ref", "HEAD", "refs/heads/topic");
+        }
+      }
       const pausedHead = await git(rebasing, "rev-parse", "HEAD");
       const pausedStatus = await git(rebasing, "status", "--porcelain");
       expect(pausedStatus).toContain("UU README.md");
 
       const created = await service.create({ repoRoot: repo, name: "during-rebase" });
       expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
-      expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(
+        kind === "unrelated" ? remoteHead : localHead,
+      );
       expect(await git(rebasing, "rev-parse", "HEAD")).toBe(pausedHead);
       expect(await git(rebasing, "status", "--porcelain")).toBe(pausedStatus);
+    },
+  );
+
+  it.each(["main", "topic"])(
+    "only retains the branch reserved by a linked bisect (%s)",
+    async (branch) => {
+      const good = await git(repo, "rev-parse", "HEAD");
+      await git(repo, "commit", "--allow-empty", "-m", "middle");
+      await git(repo, "commit", "--allow-empty", "-m", "bad");
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await git(
+        repo,
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "remote update",
+      );
+      const remote = path.join(root, "remote.git");
+      await git(root, "clone", "--bare", repo, remote);
+      await git(remote, "update-ref", "refs/heads/main", remoteHead);
+      await git(repo, "remote", "add", "origin", remote);
+      const linked = path.join(root, "bisecting");
+      if (branch === "topic") {
+        await git(repo, "branch", "topic");
+      }
+      await git(repo, "worktree", "add", "--force", linked, branch);
+      await git(linked, "bisect", "start", localHead, good);
+      const pausedHead = await git(linked, "rev-parse", "HEAD");
+      const selected = await resolveWorktreeBase(
+        repo,
+        undefined,
+        undefined,
+        undefined,
+        "fast-forward",
+      );
+      expect(selected.commit).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(branch === "main" ? localHead : remoteHead);
+      expect(await git(linked, "rev-parse", "HEAD")).toBe(pausedHead);
     },
   );
 
