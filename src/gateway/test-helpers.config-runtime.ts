@@ -11,6 +11,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { finalizeRuntimeSnapshotWrite } from "../config/runtime-snapshot.js";
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
@@ -248,10 +249,20 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     async (cfg: Record<string, unknown>, options?: ConfigWriteOptions) => {
       const configPath = resolveConfigPath();
       await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
-      actual.setRuntimeConfigSnapshot(loadGatewayTestConfig());
-      if (options) {
-        getRuntimeConfigWriteApplication(options)?.claim()?.settle("applied");
-      }
+      const config = loadGatewayTestConfig();
+      await finalizeRuntimeSnapshotWrite({
+        nextSourceConfig: config,
+        freshConfig: config,
+        hadBothSnapshots: true,
+        refreshOptions: options?.runtimeRefresh,
+        createRefreshError: (detail, cause) => new Error(detail, { cause }),
+        formatRefreshError: String,
+        notifyCommittedWrite: () => {
+          if (options) {
+            getRuntimeConfigWriteApplication(options)?.claim()?.settle("applied");
+          }
+        },
+      });
       return {
         persistedHash: "test-config-hash",
         persistedConfig: composeTestConfig(cfg),

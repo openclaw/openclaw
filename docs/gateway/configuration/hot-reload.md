@@ -30,10 +30,12 @@ method returns `UNAVAILABLE` with recovery guidance instead of reporting the
 agent change as ready. Inspect `config.get` before retrying a saved mutation.
 
 If a busy state store temporarily refuses the reload's lifecycle lease, the
-Gateway keeps the change pending and retries automatically with a capped backoff.
-No additional config edit is needed. The previous runtime stays active until the
-change applies, and shutdown cancels pending retries. Other reload failures remain
-visible in the Gateway log.
+Gateway keeps the change pending and retries automatically with increasing backoff,
+up to one final attempt after the five-second backoff. The previous runtime stays
+active until the change applies. Exhausted retries or a non-retryable admission
+failure return `UNAVAILABLE` to waiting config mutations; a later config observation
+can retry the saved change. Shutdown cancels retries and settles waiting mutations.
+Reload failures remain visible in the Gateway log.
 
 If an automatic plugin reload cannot drain active work, the Gateway records the
 failure and keeps the last-good runtime. When the drain timed out on that

@@ -2,10 +2,21 @@
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  registerConfigWriteListener,
+} from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import * as configReload from "./config-reload.js";
@@ -21,11 +32,13 @@ it("publishes agent mutations before acknowledging immediate session and roster 
   const releasePublication = createDeferred();
   const creationBookkeepingCompleted = createDeferred();
   let publicationHeld = false;
+  let reloadScheduler: GatewayScheduler | undefined;
   const startReloader = configReload.startGatewayConfigReloader;
   const reloaderSpy = vi
     .spyOn(configReload, "startGatewayConfigReloader")
-    .mockImplementation((options) =>
-      startReloader({
+    .mockImplementation((options) => {
+      reloadScheduler = options.scheduler;
+      return startReloader({
         ...options,
         onHotReload: async (...args) => {
           if (!publicationHeld && args[1].agents?.entries?.[agentId]) {
@@ -35,8 +48,8 @@ it("publishes agent mutations before acknowledging immediate session and roster 
           }
           return options.onHotReload(...args);
         },
-      }),
-    );
+      });
+    });
   const reviveDatabases = agentDatabases.reviveAgentDatabasesAfterConfigCommit;
   const revivalSpy = vi
     .spyOn(agentDatabases, "reviveAgentDatabasesAfterConfigCommit")
@@ -182,6 +195,70 @@ it("publishes agent mutations before acknowledging immediate session and roster 
             ).rejects.toThrow(`Unknown agent id "${agentId}"`);
           }
           expect(getRuntimeConfig().agents?.entries?.[agentId]).toBeUndefined();
+
+          assert.isDefined(reloadScheduler);
+          const clock = createGatewaySchedulerClock();
+          const scheduler = createTestGatewayScheduler(clock.clock);
+          const schedule = reloadScheduler.schedule.bind(reloadScheduler);
+          let written = createDeferred();
+          let awaitingAgent = "";
+          const unsubscribe = registerConfigWriteListener((event) => {
+            if (event.sourceConfig.agents?.entries?.[awaitingAgent]) {
+              written.resolve();
+            }
+          });
+          const scheduleSpy = vi.spyOn(reloadScheduler, "schedule").mockImplementation((job) => {
+            if (job.id !== "config:reload") {
+              return schedule(job);
+            }
+            return scheduler.schedule(job);
+          });
+          try {
+            for (const reason of ["storage-error", "lifecycle-busy"] as const) {
+              written = createDeferred();
+              const unavailableAgent = `unavailable-${reason}`;
+              awaitingAgent = unavailableAgent;
+              const failedCreation = client
+                .request("agents.create", {
+                  name: unavailableAgent,
+                  workspace: path.join(state.home, unavailableAgent),
+                })
+                .then(
+                  (value) => ({ value }),
+                  (error: unknown) => ({ error }),
+                );
+              await withinTest(written.promise, signal);
+              const acquire = vi
+                .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+                .mockRejectedValue(
+                  new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
+                    kind: "store-unavailable",
+                    reason,
+                  }),
+                );
+              try {
+                for (const delay of reason === "storage-error"
+                  ? [0]
+                  : [0, 250, 500, 1000, 2000, 4000, 5000]) {
+                  await clock.advanceBy(delay);
+                }
+                expect(acquire).toHaveBeenCalledTimes(reason === "storage-error" ? 1 : 7);
+                expect(await withinTest(failedCreation, signal)).toMatchObject({
+                  error: { code: "UNAVAILABLE", message: expect.stringContaining("(failed)") },
+                });
+                expect(
+                  (await readConfigFileSnapshot()).sourceConfig.agents?.entries?.[unavailableAgent],
+                ).toBeDefined();
+                expect(getRuntimeConfig().agents?.entries?.[unavailableAgent]).toBeUndefined();
+              } finally {
+                acquire.mockRestore();
+              }
+            }
+          } finally {
+            unsubscribe();
+            scheduleSpy.mockRestore();
+            await scheduler.stop();
+          }
 
           const saved = (await readConfigFileSnapshot()).sourceConfig;
           await state.writeConfig({
