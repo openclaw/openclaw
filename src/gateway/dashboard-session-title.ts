@@ -190,7 +190,7 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
       if (/^[\p{L}\p{M}\p{N}]/u.test(after)) {
         continue;
       }
-      if (/^\s/u.test(after) || (/s$/iu.test(before) && /^["'`„“”«»‘’]*$/u.test(after))) {
+      if (after || /s$/iu.test(before)) {
         // Look past contractions before treating a possessive as a wrapper's closer.
         const nextDelimiter = /‘|(?<![\p{L}\p{M}\p{N}])['’]|['’](?![\p{L}\p{M}\p{N}])/u.exec(after);
         if (
