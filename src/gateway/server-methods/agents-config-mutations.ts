@@ -146,8 +146,9 @@ export async function updateAgentConfigEntry(
 export async function deleteAgentConfigEntry(params: {
   agentId: string;
   validate?: (agent: AgentConfig) => void;
-  validateConfig?: (config: OpenClawConfig) => void;
+  validateConfig?: (config: OpenClawConfig) => void | Promise<void>;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   allowMissing?: boolean;
   allowConfigSizeDrop?: boolean;
   fallbackWorkspace?: string;
@@ -160,10 +161,12 @@ export async function deleteAgentConfigEntry(params: {
     writeOptions: {
       allowedAgentRosterRemovals: [params.agentId],
       assertConfigPathForWrite: params.assertCurrent,
+      beforeCommit: params.assertCurrentAsync,
       ...(params.allowConfigSizeDrop ? { allowConfigSizeDrop: true } : {}),
     },
-    mutate: (draft) => {
-      params.validateConfig?.(draft);
+    mutate: async (draft) => {
+      await params.validateConfig?.(draft);
+      params.assertCurrent?.();
       const configured = isConfiguredAgent(draft, params.agentId);
       if (!configured && !params.allowMissing) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);

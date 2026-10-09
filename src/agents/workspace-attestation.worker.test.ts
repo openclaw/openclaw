@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -64,15 +65,11 @@ it.each(["transaction", "commit"] as const)(
     };
     await replaceWorkspaceAttestation(input);
     const before = await readWorkspaceStateSnapshot(state.workspaceDir);
-    const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let retired = false;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        originalAdmission((request, grant) => {
-          retired ||= request.stage === stage;
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      retired ||= request.stage === stage;
+      admit(request, grant);
+    });
     const error = new Error("workspace owner retired");
     await expect(
       replaceWorkspaceAttestation({

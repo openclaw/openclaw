@@ -236,6 +236,10 @@ class AgentDatabaseStartupAdmission {
     return this.work.size > 0 ? Promise.allSettled(this.work) : undefined;
   }
 
+  get hasPendingAgents(): boolean {
+    return this.pending.size > 0;
+  }
+
   /** Join only the current agent preparation, without holding channel startup or healthy agents. */
   waitForAgentPreparation(
     agentId: string,

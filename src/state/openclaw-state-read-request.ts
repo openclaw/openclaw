@@ -31,6 +31,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "operatorApprovals.validateCronGrant" ||
     command.type === "acpSessions.metadata" ||
     command.type === "sessionRows.sharedFacts" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
     command.type === "workers.placementProjection"
@@ -235,6 +236,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "sessionUpstream.read" ||
     command.type === "workers.placementProjection" ||
     command.type === "workers.placementPendingResults" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
     isWorkspaceJournalReadCommand(command)
   ) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
@@ -306,10 +308,16 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return bytes + Buffer.byteLength(command.purpose, "utf8");
   }
-  if (
-    command.type === "agentDeletionJournal.status" ||
-    command.type === "agentDeletionJournal.authority"
-  ) {
+  if (command.type === "agentLifecycle.read") {
+    return bytes + Buffer.byteLength(command.input, "utf8");
+  }
+  if (command.type === "agentRecovery.creationJournal") {
+    return bytes + Buffer.byteLength(command.input.agentId, "utf8");
+  }
+  if (command.type === "agentRecovery.holds") {
+    return bytes + Buffer.byteLength(command.input.statePath, "utf8");
+  }
+  if (command.type === "agentDeletionJournal.status") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {

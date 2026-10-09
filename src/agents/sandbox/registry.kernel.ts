@@ -128,7 +128,7 @@ function insertSandboxRegistryRowInDatabase(db: DatabaseSync, row: SandboxRegist
   );
 }
 
-export function assertSandboxRegistryReservationCurrent(
+function assertSandboxRegistryReservationCurrent(
   current: SandboxRegistryEntry | null,
   expected: Pick<SandboxRegistryEntry, "backendId" | "sessionKey">,
 ): asserts current is SandboxRegistryEntry {
@@ -142,6 +142,21 @@ export function assertSandboxRegistryReservationCurrent(
     throw new Error(
       "Sandbox runtime was removed or is being removed; retry after sandbox recreate completes.",
     );
+  }
+}
+
+export function assertSandboxRegistryGenerationCurrent(
+  current: SandboxRegistryEntry | null,
+  expected: SandboxRegistryEntry,
+): asserts current is SandboxRegistryEntry {
+  assertSandboxRegistryReservationCurrent(current, expected);
+  if (
+    current.createdAtMs !== expected.createdAtMs ||
+    current.workspaceDir !== expected.workspaceDir ||
+    current.configHash !== expected.configHash ||
+    !isDeepStrictEqual(current.backendTarget, expected.backendTarget)
+  ) {
+    throw new Error("Sandbox runtime generation changed");
   }
 }
 
@@ -207,7 +222,7 @@ export function writeSandboxRegistryInDatabase(
     insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry, existing));
     return;
   }
-  assertSandboxRegistryReservationCurrent(existing, entry);
+  assertSandboxRegistryGenerationCurrent(existing, entry);
   if (write.retired) {
     removeRegistryRowInDatabase(db, "container", entry.containerName);
   } else {

@@ -18,6 +18,7 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import {
   onSessionIdentityMutation,
@@ -152,34 +153,29 @@ it("rechecks prepared durable maintenance facts after the final replacement gran
       execution: { status: "running", startedAt: 1 },
     };
     let finalGrant = false;
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.publication) &&
-            request.facts.publication.kind === "session-entry-replacements"
-          ) {
-            finalGrant = true;
-            // Bypass host publication to model a foreign commit before the worker resumes.
-            shared.db
-              .prepare(
-                "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
-              )
-              .run(
-                child.runId,
-                child.childSessionKey,
-                child.requesterSessionKey,
-                child.createdAt,
-                JSON.stringify(child),
-              );
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const admitted = probe.admission(admission, (request, grant, callback) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.publication) &&
+        request.facts.publication.kind === "session-entry-replacements"
+      ) {
+        finalGrant = true;
+        // Bypass host publication to model a foreign commit before the worker resumes.
+        shared.db
+          .prepare(
+            "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            child.runId,
+            child.childSessionKey,
+            child.requesterSessionKey,
+            child.createdAt,
+            JSON.stringify(child),
+          );
+      }
+      callback(request, grant);
+    });
     try {
       const error = await applySessionEntryExactReplacements({
         storePath: database.path,
@@ -393,18 +389,13 @@ it("publishes committed sharing and reader invalidation before observers, and ro
           predicateCurrent: false,
         },
       ]);
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let current = true;
-      const admitted = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              current = false;
-            }
-            return callback(request, grant);
-          }, attachment),
-        );
+      const admitted = probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          current = false;
+        }
+        return callback(request, grant);
+      });
       const followup = vi.fn();
       const move = () =>
         applySessionEntryCanonicalReplacements({
@@ -572,18 +563,13 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
       update: () => ({ result: undefined }),
       afterCommitted: followup,
     });
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const hook = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            current = false;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const hook = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "transaction") {
+        current = false;
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         applySessionEntryCanonicalReplacements({

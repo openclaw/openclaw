@@ -15,6 +15,7 @@ import {
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -129,25 +130,20 @@ it.each(["cancelled", "consumed", "failed"] as const)(
         await recorder.persistApproved();
         expect(recorder.isPendingInputConsumed?.()).toBe(true);
       }
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              result === "failed" &&
-              request.stage === "commit" &&
-              isRecord(facts) &&
-              isRecord(facts.publication) &&
-              isRecord(facts.publication.receipt) &&
-              facts.publication.receipt.operation === "finish"
-            ) {
-              throw new Error("Synthetic cancellation commit refused");
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(admission, (request, grant, callback) => {
+        const facts = request.facts;
+        if (
+          result === "failed" &&
+          request.stage === "commit" &&
+          isRecord(facts) &&
+          isRecord(facts.publication) &&
+          isRecord(facts.publication.receipt) &&
+          facts.publication.receipt.operation === "finish"
+        ) {
+          throw new Error("Synthetic cancellation commit refused");
+        }
+        callback(request, grant);
+      });
       try {
         recorder.finishPendingInput?.("cancelled");
         expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
@@ -258,24 +254,19 @@ it.each(["transaction", "commit"] as const)(
       const fixture = createFixture();
       let current = true;
       let revoked = false;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              request.stage === phase &&
-              isRecord(facts) &&
-              isRecord(facts.publication) &&
-              facts.publication.kind === "pending-input-settlement-custody"
-            ) {
-              current = false;
-              revoked = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(admission, (request, grant, callback) => {
+        const facts = request.facts;
+        if (
+          request.stage === phase &&
+          isRecord(facts) &&
+          isRecord(facts.publication) &&
+          facts.publication.kind === "pending-input-settlement-custody"
+        ) {
+          current = false;
+          revoked = true;
+        }
+        callback(request, grant);
+      });
       try {
         await expect(
           fixture.stage("ended", () => {
@@ -324,26 +315,21 @@ it("refuses processing completion when the admitted lifecycle changes during the
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = createFixture();
     const receipt = await fixture.stage("stale-lifecycle", () => {}, true);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let rotated = false;
-    const spy = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          const facts = request.facts;
-          if (
-            request.stage === "transaction" &&
-            isRecord(facts) &&
-            isRecord(facts.publication) &&
-            isRecord(facts.publication.receipt) &&
-            facts.publication.receipt.operation === "complete"
-          ) {
-            rotateAgentEventLifecycleGeneration();
-            rotated = true;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const spy = probe.admission(admission, (request, grant, callback) => {
+      const facts = request.facts;
+      if (
+        request.stage === "transaction" &&
+        isRecord(facts) &&
+        isRecord(facts.publication) &&
+        isRecord(facts.publication.receipt) &&
+        facts.publication.receipt.operation === "complete"
+      ) {
+        rotateAgentEventLifecycleGeneration();
+        rotated = true;
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         receipt.completeAsync?.(buildAgentRunTerminalOutcome({ status: "ok" })),

@@ -1,6 +1,7 @@
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureExistingOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -45,15 +46,27 @@ export async function withSessionHistoryReadAdmission<T>(
     return remaining;
   };
   let execution: OpenClawAgentDatabaseExecution | undefined;
+  let native: ReturnType<typeof retainOpenClawAgentDatabaseReadCandidates> | undefined;
   let additionalLane: SessionHistoryWorkerLane | undefined;
   let outcome: { value: T } | { error: unknown };
   try {
-    const admittedNative = getOpenClawAgentDatabaseIfOpen(options);
-    if (!request.knownSource && !admittedNative) {
-      execution = captureExistingOpenClawAgentDatabaseExecution(options);
+    if (!request.knownSource) {
+      const cleanup = getAgentDeletionDatabaseCleanup(options);
+      if (cleanup?.worker) {
+        // Worker cleanup retains its executor and checks durable authority in its grants.
+        cleanup.assertCurrentHost();
+      } else {
+        native = retainOpenClawAgentDatabaseReadCandidates(
+          [{ path: options.path }],
+          options.env ?? process.env,
+        );
+      }
+      if (!native?.databases.length) {
+        execution = captureExistingOpenClawAgentDatabaseExecution(options);
+      }
     }
     const prepared = execution?.capturePreparedGenerationClaim();
-    const cold = !request.knownSource && !admittedNative && !prepared;
+    const cold = !request.knownSource && !native?.databases.length && !prepared;
     const lane = cold ? targetDiscoveryLane : requestedLane;
     if (lane !== requestedLane) {
       historyClearTimeout(lane.idleTimer);
@@ -112,6 +125,7 @@ export async function withSessionHistoryReadAdmission<T>(
   }
   let cleanupFailure: { error: unknown } | undefined;
   try {
+    native?.release();
     await execution?.release();
   } catch (error) {
     cleanupFailure = { error };

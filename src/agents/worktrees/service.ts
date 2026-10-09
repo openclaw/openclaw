@@ -1160,7 +1160,7 @@ export class ManagedWorktreeService {
           }
           retiredOwner =
             record.ownerId !== undefined &&
-            classification.shouldRemoveOwner?.(record.ownerKind, record.ownerId) === true;
+            classification.readOwnerState?.(record.ownerKind, record.ownerId) === "retired";
           if (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS) {
             // Capacity eviction and idle cleanup share one decision per record per pass.
             if (!progress.start(record.id)) {

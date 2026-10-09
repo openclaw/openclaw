@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -57,17 +58,13 @@ it("rolls back transcript and accounting when host authority closes at commit", 
     const before = f.read();
     let live = true;
     let commitRequested = false;
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          if (request.stage === "commit") {
-            commitRequested = true;
-            live = false;
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        commitRequested = true;
+        live = false;
+      }
+      callback(request, grant);
+    });
     await expect(
       trimSessionTranscriptForManualCompact(f.scope, {
         maxLines: 3,
@@ -129,18 +126,14 @@ it("rechecks a foreign source changed during the commit grant", async () => {
     replaceSessionEntrySync(foreignScope, before);
     const foreign = openOpenClawAgentDatabase({ agentId: "main", path: foreignScope.storePath });
     const identity = readOpenClawAgentDatabaseIdentity(foreign);
-    const create = admission.createSqliteWorkerOperationAdmission;
     let changed = false;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          if (request.stage === "commit") {
-            replaceSessionEntrySync(foreignScope, { ...before, label: "revoked" });
-            changed = true;
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        replaceSessionEntrySync(foreignScope, { ...before, label: "revoked" });
+        changed = true;
+      }
+      callback(request, grant);
+    });
     const source = Object.assign(() => {}, {
       async prepareSessionSource() {
         return {

@@ -164,6 +164,14 @@ The same publication decision covers agent frames, chat finals, progress snapsho
 and session lifecycle notifications. Execution settlement and cleanup continue
 independently of event publication.
 
+For completed `chat.send` turns, clients may request compaction, fork, or rewind
+as soon as they receive chat `final`. These requests join the published turn's
+remaining transcript and admission cleanup before mutating the session. A
+competing live turn still returns an active-run error.
+Lifecycle delivery captures registrations before listeners run, and later chat
+terminal publication keeps the producer's original registration. Reusing a run ID
+during a listener callback cannot make its replacement terminal.
+
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and
 result codes without copying prompts, messages, tool arguments, tool results,
@@ -189,6 +197,15 @@ finality is published only after execution settles. A new attempt clears the
 prior outcome before preparation. Later workflow errors or aborts cannot
 reclassify completed execution; cron persistence, delivery, and yielded-parent
 continuation retain their separate outcomes.
+
+A yielded end while the parent task is waiting does not commit a terminal outcome.
+If dispatch then fails, the Gateway still publishes and retains that failure for
+chat replay and conversation history.
+
+Chat errors wait for terminal session persistence, including any failure notice,
+so an immediate history reload includes the recorded failure. Successful and
+aborted chat terminals do not wait for this write. If persistence fails, the
+Gateway logs the write failure and still delivers the live chat error.
 
 History keeps a run active while its terminal session write is pending. Once
 that write succeeds, history and session activity show the recorded end time
