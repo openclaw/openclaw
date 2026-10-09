@@ -26,6 +26,7 @@ import {
 } from "./state-migrations.device-identity-repair.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   markLegacyMigrationSourceRemoved,
   readLegacyMigrationReceipt,
@@ -41,7 +42,6 @@ import {
   resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
 
 const IDENTITY_KEY = "primary";
 const MIGRATION_KIND = "legacy-device-identity-json";

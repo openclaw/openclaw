@@ -43,7 +43,7 @@ import {
 import { insertMeetingTranscriptSnapshots } from "./state-migrations.meeting-transcripts-insert.js";
 import { verifyImportedMeetingTranscriptSnapshots } from "./state-migrations.meeting-transcripts-verify.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 
 export { detectLegacyMeetingTranscripts } from "./state-migrations.meeting-transcripts-detection.js";
 

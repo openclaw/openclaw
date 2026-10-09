@@ -17,6 +17,7 @@ import {
   type WebPushSubscription,
 } from "./push-web-store.records.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   claimLegacyMigrationSourceClaims,
   LegacyMigrationSourceClaim,
@@ -26,7 +27,7 @@ import {
   restoreLegacyMigrationSourceClaims,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import type { LegacyStateDetection } from "./state-migrations.types.js";
 import {
   parseLegacySubscriptions,
   parseLegacyVapidKeys,

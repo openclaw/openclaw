@@ -19,6 +19,7 @@ import {
 } from "./kysely-sync.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
@@ -26,7 +27,7 @@ import {
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import type { LegacyStateDetection } from "./state-migrations.types.js";
 
 const LEGACY_NODE_HOST_MAX_BYTES = 64 * 1024;
 const CONFIG_KEYS = new Set(["version", "nodeId", "token", "displayName", "gateway"]);

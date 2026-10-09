@@ -10,7 +10,7 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { pathMayExistSync } from "./path-existence.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 
 const LEGACY_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";

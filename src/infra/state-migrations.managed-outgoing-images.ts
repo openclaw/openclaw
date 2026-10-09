@@ -24,12 +24,13 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshotSync,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import type { LegacyStateDetection } from "./state-migrations.types.js";
 
 const LEGACY_RECORD_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TRANSIENT_TTL_MS = 15 * 60 * 1000;

@@ -33,6 +33,7 @@ import {
   type AgentDatabaseMigrationTarget,
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   migrateTranscriptDirectiveArchives,
   recoverPendingTranscriptArchivePublication,
@@ -44,7 +45,6 @@ import {
   parseDirectiveMigrationTranscriptEvent,
   transformHistoricalTranscriptEvent,
 } from "./state-migrations.transcript-directives-transform.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
 
 const MIGRATION_META_KEY = "historical-transcript-directives-v1";
 

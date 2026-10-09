@@ -53,6 +53,7 @@ import {
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   resolveSessionStoreAliasPlan,
   sessionStorePathsMatch,
@@ -62,7 +63,7 @@ import {
   resolveCanonicalAgentSessionOwner,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
-import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
+import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
 
 type SessionKeyCanonicalizationOptions = {
   agentId: string;

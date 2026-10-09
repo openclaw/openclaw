@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   markLegacyMigrationSourceRemoved,
   readLegacyMigrationReceipt,
@@ -19,7 +20,7 @@ import {
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import type { LegacyStateDetection } from "./state-migrations.types.js";
 
 const LEGACY_COMMITMENTS_PATH = "commitments/commitments.json";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-discarding";

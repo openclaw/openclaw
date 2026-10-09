@@ -7,9 +7,9 @@ import {
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
 } from "../infra/outbound/delivery-queue-namespaces.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
+import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
 import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
-import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 

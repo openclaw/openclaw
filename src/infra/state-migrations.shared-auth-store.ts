@@ -43,12 +43,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   recordLegacyMigrationRun,
   recordLegacyMigrationSource,
 } from "./state-migrations.receipts.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
 
 const MIGRATION_KIND = "shared-auth-store-state-db";
 const AUTH_JSON_MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";

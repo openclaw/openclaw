@@ -17,10 +17,10 @@ import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.j
 import { formatErrorMessage } from "../infra/errors.js";
 import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
+import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import type {
   LegacyStateMigrationStepReceipt,
-  MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";

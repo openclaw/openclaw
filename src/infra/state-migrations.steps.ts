@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "./path-guards.js";
 import { createLegacyStateMigrationStepReceipt } from "./state-migrations.messages.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   createBlockedLegacyStateMigrationStepReceipts,
   migrationStepPlan,
@@ -8,7 +9,6 @@ import {
 import type {
   LegacyStateMigrationStep,
   LegacyStateMigrationStepReceipt,
-  MigrationMessages,
 } from "./state-migrations.types.js";
 
 export async function runLegacyStateMigrationSteps(

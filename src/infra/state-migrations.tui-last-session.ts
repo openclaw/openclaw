@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import {
   assertLegacyMigrationSourceUnchanged,
   claimAndRemoveLegacyMigrationSource,
@@ -22,7 +23,6 @@ import {
 import type {
   LegacyStateDetection,
   LegacyStateMigrationStepPlan,
-  MigrationMessages,
 } from "./state-migrations.types.js";
 
 type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;

@@ -1,5 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
 
 export function noteDoctorMigrationResult(
   result: Partial<Pick<MigrationMessages, "changes" | "notices" | "warnings">>,

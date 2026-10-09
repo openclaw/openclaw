@@ -13,7 +13,8 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
+import type { LegacyStateDetection } from "./state-migrations.types.js";
 
 const LEGACY_PATH = "identity/device-auth.json";
 type DeviceAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;

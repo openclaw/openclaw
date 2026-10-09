@@ -1,6 +1,6 @@
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import type { MigrationMessages } from "../infra/state-migrations.messages.types.js";
 
 /** Preserve a retired partition selector even when other config cannot drive core migrations. */
 export async function migrateRetainedStore(params: {

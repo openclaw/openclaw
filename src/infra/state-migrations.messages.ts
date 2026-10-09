@@ -2,11 +2,11 @@ import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 import type {
   LegacyStateMigrationStepPlan,
   LegacyStateMigrationStepReceipt,
   MigrationLogger,
-  MigrationMessages,
 } from "./state-migrations.types.js";
 import { formatUpdateFailureFact } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";

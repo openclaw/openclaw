@@ -13,7 +13,7 @@ import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
+import type { MigrationMessages } from "./state-migrations.messages.types.js";
 
 function readRow(db: DatabaseSync) {
   return executeSqliteQueryTakeFirstSync(
