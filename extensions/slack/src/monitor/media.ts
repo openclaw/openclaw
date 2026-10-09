@@ -11,6 +11,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
@@ -45,10 +46,8 @@ function isSlackHostname(hostname: string, govSlack: boolean): boolean {
 }
 
 function assertSlackFileUrl(rawUrl: string, govSlack: boolean): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     throw new Error(`Invalid Slack file URL: ${rawUrl}`);
   }
   if (parsed.protocol !== "https:") {
@@ -130,7 +129,6 @@ async function saveSlackMedia(
   );
   const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
   let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
   const savePromise = saveRemoteMedia({
     url,
@@ -159,24 +157,19 @@ async function saveSlackMedia(
     throw error;
   });
 
-  try {
-    if (!totalTimeoutMs) {
-      return await savePromise;
-    }
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        timeoutAbortController?.abort();
-        reject(new Error(`slack media download timed out after ${totalTimeoutMs}ms`));
-      }, totalTimeoutMs);
-      timeoutHandle.unref?.();
-    });
-    return await Promise.race([savePromise, timeoutPromise]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
+  if (!totalTimeoutMs) {
+    return await savePromise;
   }
+  return await raceWithTimeout(
+    savePromise,
+    totalTimeoutMs,
+    () => {
+      timedOut = true;
+      timeoutAbortController?.abort();
+      throw new Error(`slack media download timed out after ${totalTimeoutMs}ms`);
+    },
+    { ref: false },
+  );
 }
 
 /**
@@ -309,10 +302,6 @@ function resolveForwardedAttachmentImageUrl(
   }
 }
 
-/**
- * Downloads all files attached to a Slack message and returns them as an array.
- * Returns `null` when no files could be downloaded.
- */
 export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   client?: SlackWebClient;
@@ -381,7 +370,6 @@ export async function resolveSlackMedia(params: {
   return resolved.length > 0 ? resolved : null;
 }
 
-/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
 export async function resolveSlackAttachmentContent(params: {
   files?: SlackFile[];
   attachments?: SlackAttachment[];

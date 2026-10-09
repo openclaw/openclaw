@@ -2,9 +2,12 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
+  buildGatewayBenchChildArgs,
+  buildGatewayBenchCommand,
   createGatewayBenchEnv,
   formatMb,
   formatStats,
+  parseGatewayBenchRuntimeOptions,
   writeGatewayBenchConfig,
 } from "../../scripts/lib/gateway-bench-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -27,6 +30,57 @@ vi.mock("../../src/infra/widearea-dns.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("gateway benchmark runtime selection", () => {
+  it("defaults only the Gateway command to the controller executable", () => {
+    const options = parseGatewayBenchRuntimeOptions(new Map());
+    expect(options).toEqual({ gatewayRuntime: process.execPath, gatewayCpus: undefined });
+    expect(buildGatewayBenchCommand(["entry.js"], options)).toEqual({
+      command: process.execPath,
+      args: ["entry.js"],
+    });
+  });
+
+  it.each([undefined, "0,1,2,3"])(
+    "keeps the selected executable and Gateway arguments together with affinity %s",
+    (gatewayCpus) => {
+      const gatewayRuntime = "/tmp/runtime with spaces/bun";
+      const flags = new Map([["--gateway-runtime", [gatewayRuntime]]]);
+      if (gatewayCpus) {
+        flags.set("--gateway-cpus", [gatewayCpus]);
+      }
+      const args = buildGatewayBenchChildArgs("dist/entry.js", 18789, ["--import", "probe.ts"]);
+      const options = parseGatewayBenchRuntimeOptions(flags);
+      expect(buildGatewayBenchCommand(args, options, "linux")).toEqual({
+        command: gatewayCpus ? "taskset" : gatewayRuntime,
+        args: gatewayCpus ? ["--cpu-list", gatewayCpus, gatewayRuntime, ...args] : args,
+      });
+      expect(args.slice(0, 3)).toEqual(["--import", "probe.ts", "dist/entry.js"]);
+    },
+  );
+
+  it.each(["", " ", " --inspect", "bun\0other"])("rejects invalid executable %j", (value) => {
+    expect(() =>
+      parseGatewayBenchRuntimeOptions(new Map([["--gateway-runtime", [value]]])),
+    ).toThrow("--gateway-runtime");
+  });
+
+  it.each(["", "0-3", "0,,1", "0,1 "])("rejects invalid CPU list %j", (value) => {
+    expect(() => parseGatewayBenchRuntimeOptions(new Map([["--gateway-cpus", [value]]]))).toThrow(
+      "--gateway-cpus requires comma-separated CPU numbers",
+    );
+  });
+
+  it.each(["darwin", "win32"] as const)("rejects affinity on %s before spawn", (platform) => {
+    expect(() =>
+      buildGatewayBenchCommand(
+        ["entry.js"],
+        { gatewayRuntime: "bun", gatewayCpus: "0,1" },
+        platform,
+      ),
+    ).toThrow("--gateway-cpus requires Linux taskset");
+  });
+});
 
 describe("benchmark statistic units", () => {
   const stats = { p50: 1.5, avg: 1.5, min: 1, max: 2, p95: 2 };

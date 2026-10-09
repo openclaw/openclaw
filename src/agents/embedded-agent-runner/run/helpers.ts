@@ -92,13 +92,9 @@ export function resolveLatestCallUsage(params: {
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
-  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
-  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
-    ? params.transcriptFallback
-    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
+    latest: [currentAttempt, params.carriedUsage, params.transcriptFallback].find(hasNonzeroUsage),
   };
 }
 
@@ -124,11 +120,7 @@ export function buildUsageAgentMetaFields(params: {
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
   const latestUsage = normalizeUsage(params.latestUsage);
-  const lastCallUsage = hasNonzeroUsage(latestUsage)
-    ? latestUsage
-    : hasNonzeroUsage(params.lastRunPromptUsage)
-      ? params.lastRunPromptUsage
-      : undefined;
+  const lastCallUsage = [latestUsage, params.lastRunPromptUsage].find(hasNonzeroUsage);
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage,
   });

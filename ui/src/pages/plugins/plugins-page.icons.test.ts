@@ -6,7 +6,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { ModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
+import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
 import {
   createClient,
@@ -68,7 +68,7 @@ function mountIcons(
 }
 
 const iconUrl = "https://cdn.example.com/lifecycle.png";
-let activeLoader: ModelSetupIconLoader | undefined;
+let activeLoader: ReturnType<typeof createModelSetupIconLoader> | undefined;
 afterEach(() => {
   activeLoader?.reset();
   activeLoader = undefined;
@@ -259,7 +259,7 @@ function setupIcons() {
   vi.stubGlobal("fetch", fetchMock);
   let sequence = 0;
   const { revoke } = stubUrls(() => `blob:icon-${++sequence}`);
-  const loader = new ModelSetupIconLoader(
+  const loader = createModelSetupIconLoader(
     () => context,
     () => pageState,
     published,

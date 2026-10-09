@@ -64,13 +64,7 @@ function readUnitDirectives(content: string): UnitDirective[] {
   return directives;
 }
 
-function parseSystemdUnit(directives: UnitDirective[]): {
-  after: Set<string>;
-  wants: Set<string>;
-  restartSec?: string;
-  killMode?: string;
-  stopTimeoutMs: number;
-} {
+function parseSystemdUnit(directives: UnitDirective[]) {
   const after = new Set<string>();
   const wants = new Set<string>();
   let restartSec: string | undefined;
@@ -311,7 +305,13 @@ async function auditSystemdDefinition(
       }
       if (
         preserved.has(key) ||
-        (key === "Service.EnvironmentFile" && current?.every((value) => value === environmentFile))
+        (key === "Service.EnvironmentFile" &&
+          (current?.every((value) => value === environmentFile) ||
+            (sourcePath !== unitPath &&
+              command?.managedDefinition &&
+              command.managedOverrides &&
+              command.managedOverrides.environment !== true &&
+              !command.reloadPending)))
       ) {
         continue;
       }

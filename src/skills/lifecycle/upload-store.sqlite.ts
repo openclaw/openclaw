@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-// SQLite ownership helpers for Gateway skill-upload staging.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -47,16 +46,6 @@ export function selectSkillUploadMetadata(kysely: Kysely<SkillUploadDatabase>) {
 export type SkillUploadMetadataRow = InferResult<
   ReturnType<typeof selectSkillUploadMetadata>
 >[number];
-
-export function resolveSkillUploadDatabaseOptions(options: {
-  env?: NodeJS.ProcessEnv;
-  path?: string;
-}): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
 
 function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
   const database = openOpenClawStateDatabase(options);

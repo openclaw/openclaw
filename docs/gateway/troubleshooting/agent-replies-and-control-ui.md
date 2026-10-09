@@ -23,6 +23,20 @@ A transcript writer ownership error means the run lost its session write claim. 
 
 Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
+## Provider rejected the request
+
+A reply beginning with `LLM request rejected:` includes the provider's request-validation message. OpenClaw redacts credentials, bounds the diagnostic, and displays it as literal text rather than exposing the full response body. Known context, token-limit, and storage failures retain their specific recovery guidance.
+
+For `Invalid service_tier argument`, check the selected model and speed setting. A provider or account supporting Fast or Ultrafast does not mean every model supports that tier. Retry with Standard (`/fast off`) or select a model that supports the requested tier. This error alone does not mean the conversation is corrupt. See [OpenAI Fast mode](/providers/openai/advanced#fast-mode).
+
+## Unreadable conversation history
+
+If a reply says OpenClaw could not read the conversation's history, ask the Gateway operator to try `openclaw doctor --fix` on the host and profile that own the session. This notice also appears for unmentioned group turns when silent replies are allowed.
+
+Doctor can restore a missing header when the stored transcript entries are already canonical. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
+
+See [Doctor's session repairs](/gateway/doctor/state-and-sessions) and [running Doctor](/gateway/doctor/running).
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.
@@ -67,7 +81,7 @@ openclaw gateway status --json
 
 Look for:
 
-- Correct probe URL and dashboard URL.
+- Correct check URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
 - Clients that connect without the required device identity. The current Control UI can create and sign identity over plain HTTP; see [Insecure HTTP](/web/control-ui#insecure-http).
 

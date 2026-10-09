@@ -1,6 +1,7 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { readExistingAgentSchemaMeta } from "../../state/openclaw-agent-db-metadata.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -11,6 +12,7 @@ import {
   readSessionProviderReview,
 } from "./provider-review-store.js";
 import type { SessionProviderReview } from "./provider-review.types.js";
+import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,
@@ -97,7 +99,7 @@ it("reopens an existing session and preserves its provider pause without a schem
 });
 
 it.each(["default", "shared"] as const)(
-  "keeps %s review reads and exact compare-set off the caller's SQLite thread",
+  "publishes %s review admission facts without caller-thread SQLite",
   async (store) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const database = openOpenClawAgentDatabase({
@@ -106,6 +108,16 @@ it.each(["default", "shared"] as const)(
       });
       const selectedTarget = { ...target, storePath: database.path };
       writeSessionEntry(database, target.sessionKey, original);
+      const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
+      if (typeof databaseIdentity !== "string") {
+        throw new Error("Expected a durable provider-review store");
+      }
+      const sharing = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${databaseIdentity}`,
+        sessionKey: target.sessionKey,
+        entry: original,
+        membership: new Set(),
+      });
       const statementPrototype: StatementSync = Object.getPrototypeOf(
         database.db.prepare("SELECT 1"),
       );
@@ -128,12 +140,19 @@ it.each(["default", "shared"] as const)(
             assertCurrent,
           }),
         ).toMatchObject({ ...original, providerReview: review });
+        expect(sharing.readCurrent()?.entry?.providerReview).toEqual(review);
+        expect(
+          resolveSessionWorkStartError(target.sessionKey, sharing.readCurrent()?.entry, {
+            expectedSessionId: target.sessionId,
+          }),
+        ).toContain("paused as a precaution");
         const newer = { ...review, id: "review-2" };
         await compareSessionProviderReview(selectedTarget, {
           expectedReview: review,
           nextReview: newer,
           assertCurrent,
         });
+        expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
         for (const stale of [review, { ...newer, runId: "changed-run" }]) {
           await expect(
             compareSessionProviderReview(selectedTarget, {
@@ -142,6 +161,7 @@ it.each(["default", "shared"] as const)(
               assertCurrent,
             }),
           ).rejects.toThrow("Provider review changed");
+          expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
         }
         for (const staleTarget of [
           { ...selectedTarget, sessionId: "old-session" },
@@ -156,6 +176,7 @@ it.each(["default", "shared"] as const)(
               assertCurrent,
             }),
           ).rejects.toThrow("Provider review changed");
+          expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
         }
         expect(
           (await readSessionProviderReview(selectedTarget, assertCurrent))?.providerReview,
@@ -169,10 +190,18 @@ it.each(["default", "shared"] as const)(
             })
           ).providerReview,
         ).toBeUndefined();
+        expect(sharing.readCurrent()?.entry).toMatchObject(original);
+        expect(sharing.readCurrent()?.entry?.providerReview).toBeUndefined();
+        expect(
+          resolveSessionWorkStartError(target.sessionKey, sharing.readCurrent()?.entry, {
+            expectedSessionId: target.sessionId,
+          }),
+        ).toBeUndefined();
         for (const method of methods) {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
+        sharing.release();
         for (const method of methods) {
           method.mockRestore();
         }

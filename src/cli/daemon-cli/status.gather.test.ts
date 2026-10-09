@@ -39,6 +39,7 @@ import { VERSION } from "../../version.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
 import { registerDaemonCli } from "./register.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
+import { registerStatusConfigReadTests } from "./status.gather.config.test-support.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import {
   callGatewayStatusProbe,
@@ -80,7 +81,6 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
 >(async (_params?) => ({}));
 const fetchNpmPackageTargetStatus = vi.fn(
   async (params: { packageName?: string; target: string }) => ({
-    target: params.target,
     version: params.target,
     nodeEngine: null,
   }),
@@ -160,6 +160,7 @@ const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
 let cliConfigWarnings: Array<{ path: string; message: string }> = [];
+let configIssues: Array<{ path: string; message: string }> = [];
 let daemonLoadedConfig: Record<string, unknown> = {
   gateway: {
     bind: "lan",
@@ -211,8 +212,8 @@ vi.mock("../../config/io.runtime.js", () => ({
         return {
           path: configPath,
           exists: true,
-          valid: true,
-          issues: [],
+          valid: configIssues.length === 0,
+          issues: configIssues,
           warnings: pluginValidation === "full" ? warnings : [],
           runtimeConfig,
           config: runtimeConfig,
@@ -220,6 +221,9 @@ vi.mock("../../config/io.runtime.js", () => ({
       },
       loadConfig: () => {
         loadConfigCalls(configPath);
+        if (configIssues.length > 0) {
+          throw new Error("Invalid config");
+        }
         return runtimeConfig;
       },
     };
@@ -466,7 +470,6 @@ describe("gatherDaemonStatus", () => {
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     fetchNpmPackageTargetStatus.mockClear();
     fetchNpmPackageTargetStatus.mockImplementation(async (params) => ({
-      target: params.target,
       version: params.target,
       nodeEngine: null,
     }));
@@ -518,6 +521,7 @@ describe("gatherDaemonStatus", () => {
     loadConfigCalls.mockClear();
     daemonConfigWarnings = [];
     cliConfigWarnings = [];
+    configIssues = [];
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -1517,86 +1521,17 @@ describe("gatherDaemonStatus", () => {
     expect(readGatewayLastShutdown).not.toHaveBeenCalled();
   });
 
-  it("uses the fast config path for plain same-file status reads", async () => {
-    await withStatusConfig(
-      JSON.stringify({
-        gateway: {
-          bind: "custom",
-          customBindHost: "10.0.0.5",
-          controlUi: { enabled: true },
-        },
-      }),
-      async (configPath) => {
-        const status = await gatherStatus({ probe: false });
-
-        expect(createConfigIOCalls).not.toHaveBeenCalled();
-        expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
-        expect(loadConfigCalls).not.toHaveBeenCalled();
-        expect(status.config?.cli.path).toBe(configPath);
-        expect(status.config?.cli.exists).toBe(true);
-        expect(status.config?.cli.valid).toBe(true);
-        expect(status.config?.cli.controlUi).toEqual({ enabled: true });
-        expect(status.config?.daemon).toBe(status.config?.cli);
-        expect(status.gateway?.bindMode).toBe("custom");
-        expect(status.gateway?.customBindHost).toBe("10.0.0.5");
-      },
-      true,
-    );
-  });
-
-  it("uses the fast config path when the config file is missing", async () => {
-    await withStatusConfig(
-      undefined,
-      async (configPath) => {
-        const status = await gatherStatus({ probe: false });
-
-        expect(createConfigIOCalls).not.toHaveBeenCalled();
-        expect(status.config?.cli).toEqual({
-          path: configPath,
-          exists: false,
-          valid: true,
-        });
-        expect(status.config?.daemon).toBe(status.config?.cli);
-        expect(status.gateway).toMatchObject({
-          bindMode: "loopback",
-          port: 19001,
-        });
-      },
-      true,
-    );
-  });
-
-  it("keeps malformed JSON5 on the fast invalid-summary path", async () => {
-    await withStatusConfig(
-      "{ gateway:",
-      async (configPath) => {
-        const status = await gatherStatus({ probe: false });
-
-        expect(createConfigIOCalls).not.toHaveBeenCalled();
-        expect(status.config?.cli).toMatchObject({
-          path: configPath,
-          exists: true,
-          valid: false,
-        });
-        expect(status.config?.cli.issues?.[0]?.message).toContain("JSON5 parse failed");
-        expect(status.config?.daemon).toBe(status.config?.cli);
-      },
-      true,
-    );
-  });
-
-  it.each([
-    ["include", JSON.stringify({ $include: "./base.json" })],
-    ["substitution", JSON.stringify({ gateway: { auth: { token: "${STATUS_TOKEN}" } } })],
-    ["root env", JSON.stringify({ env: { STATUS_TOKEN: "value" } })],
-  ])("uses full config IO for %s config", async (_name, rawConfig) => {
-    await withStatusConfig(rawConfig, async (configPath) => {
-      await gatherStatus({ probe: false });
-
-      expect(createConfigIOCalls).toHaveBeenCalledOnce();
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "skip", false);
-      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
-    });
+  registerStatusConfigReadTests({
+    gatherStatus,
+    withStatusConfig,
+    createConfigIOCalls,
+    readConfigFileSnapshotCalls,
+    loadConfigCalls,
+    probeInput,
+    setInvalidConfig: (config) => {
+      cliLoadedConfig = config;
+      configIssues = [{ path: "agents.defaults", message: 'Unrecognized key: "retiredSetting"' }];
+    },
   });
 
   it("uses full plugin-aware config validation for deep status", async () => {
@@ -1751,7 +1686,7 @@ describe("gatherDaemonStatus", () => {
           expect(status.rpc?.authWarning).toContain(
             "gateway.auth.token SecretRef is unresolved in this command path",
           );
-          expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
+          expect(status.rpc?.authWarning).toContain("checking without configured auth credentials");
         }
         return;
       }
@@ -1834,7 +1769,7 @@ describe("gatherDaemonStatus", () => {
       "parse/handle error: Error: ENOSPC: no space left on device, write",
     );
     const output = capturePrintedDaemonStatus(status, { json: false }).errors;
-    expect(output).toContain("Connectivity probe: failed");
+    expect(output).toContain("Connectivity check: failed");
     expect(output).toContain("gateway closed (1000):");
     expect(output).toContain(
       "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",

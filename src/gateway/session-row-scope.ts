@@ -3,23 +3,144 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
 import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
-type SessionRowScopeTarget = {
-  agentId: string;
-  storeTarget: { agentId: string; storePath: string };
-};
+type SessionRowScopeTarget = Pick<records.Row, "agentId" | "storeTarget">;
 type SessionRowScopeQuery = { agentId?: string; storePath?: string };
 type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
   | undefined;
 
+/** Keyed publications select resident identities and admit only their named destination. */
+export function visitSessionRowPublicationTargets(
+  change: Extract<SessionRowChange, { sessionKey: string }>,
+  owner: {
+    matching: (query: records.Query, kind?: string) => records.Row[];
+    scope: SessionRowScope;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
+    publish: (row: records.Row) => void;
+  },
+) {
+  const query = { ...change, key: change.sessionKey };
+  const exact = owner.matching(query);
+  for (const previous of new Set(
+    change.factsInvalidated === "category" ? exact : [...exact, ...owner.matching(query, "id")],
+  )) {
+    owner.publish(previous);
+  }
+  if (
+    exact.length ||
+    isInternalSessionEffectsKey(change.sessionKey) ||
+    isIncognitoSessionKey(change.sessionKey)
+  ) {
+    return;
+  }
+  const matches = createSessionRowScopeMatcher(change, owner.scope);
+  for (const source of owner.stores.values()) {
+    const agentId = parseAgentSessionKey(change.sessionKey)?.agentId ?? source.agentId;
+    const row = records.create({
+      key: change.sessionKey,
+      agentId,
+      storeTarget: source.target,
+    });
+    if (matches(row) && (change.storePath || agentId === source.agentId)) {
+      owner.publish(row);
+    }
+  }
+}
+
+/** Witness repeated registrations without replacing the topology owner's discovery snapshot. */
+export function createSessionRowRegistryRead(owner: {
+  env: NodeJS.ProcessEnv;
+  stores: () => ReadonlyMap<string, records.SessionRowStore>;
+  isActive: () => boolean;
+  runAsOwner: <T>(run: () => T) => T;
+}) {
+  let ready: { stores: ReturnType<typeof owner.stores>; assertCurrent: () => void } | undefined;
+  let pending: Promise<void> | undefined;
+  return {
+    prepare(): Promise<void> | undefined {
+      if (!owner.isActive() || ready?.stores === owner.stores()) {
+        return undefined;
+      }
+      pending ??= owner
+        .runAsOwner(async () => {
+          const stores = owner.stores();
+          const captured = [...stores.values()];
+          const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+            { env: owner.env, includeIncompatibleSchemaVersions: true },
+            (mutation, entries) =>
+              mutation.kind === "upsert" &&
+              mutation.sources.every(
+                (source) =>
+                  entries?.some(
+                    (entry) =>
+                      entry.agentId === source.agentId &&
+                      entry.schemaVersion === source.schemaVersion &&
+                      (entry.path === source.path || entry.path === source.physicalPath),
+                  ) &&
+                  captured.some((store) => {
+                    if (
+                      typeof store.identity !== "string" ||
+                      `file:${store.identity}` !== source.identity ||
+                      store.target.agentId !== source.agentId
+                    ) {
+                      return false;
+                    }
+                    try {
+                      return [...new Set([store.filename, source.path, source.physicalPath])].every(
+                        (filename) => {
+                          const file = readDatabasePathIdentitySync(filename);
+                          return file.key === source.identity && file.birthtime === store.birthtime;
+                        },
+                      );
+                    } catch {
+                      return false;
+                    }
+                  }),
+              ),
+          );
+          const { assertCurrent } = await registry.read();
+          if (owner.isActive() && owner.stores() === stores) {
+            ready = { stores, assertCurrent };
+          }
+        })
+        .finally(() => {
+          pending = undefined;
+        });
+      return pending;
+    },
+    isCurrent() {
+      if (!owner.isActive() || !ready || ready.stores !== owner.stores()) {
+        return false;
+      }
+      try {
+        ready.assertCurrent();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    dispose() {
+      ready = undefined;
+    },
+  };
+}
+
 /** Early publications retain literal paths until topology has prepared their aliases. */
-export function createSessionRowScopeMatcher(
+function createSessionRowScopeMatcher(
   query: SessionRowScopeQuery,
   scope: SessionRowScope,
   logicalOwnerOnly = false,
@@ -254,7 +375,7 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
     : matching(query);
   const pending: records.Lookup[] = [];
   for (const row of candidates) {
-    if (row?.unresolvedDatabaseFacts === "category" && matches(row)) {
+    if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
       pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
       if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
         break;
@@ -269,7 +390,7 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates
-      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+      : candidates.map((row) => (dirty.has(records.identity(row)) ? acquire(row) : row));
   // Each candidate path returns an owned array. Finish all acquisitions before
   // compacting it, since acquiring one dirty row can update another row's facts.
   let selectedCount = 0;

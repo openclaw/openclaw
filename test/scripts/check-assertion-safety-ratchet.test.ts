@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectCurrentAssertionSafetyCounts,
   countUnsafeAssertions,
   isGovernedAssertionSourcePath,
   main,
@@ -39,7 +40,7 @@ const nestedGitEnvKeys = [
   "GIT_WORK_TREE",
 ] as const;
 
-function git(cwd: string, args: string[]) {
+function git(cwd: string, args: string[], input?: string) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_CONFIG_NOSYSTEM: "1",
@@ -48,11 +49,17 @@ function git(cwd: string, args: string[]) {
   for (const key of nestedGitEnvKeys) {
     delete env[key];
   }
-  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
-    cwd,
-    env,
-    stdio: "ignore",
-  });
+  return execFileSync(
+    "git",
+    ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args],
+    {
+      cwd,
+      env,
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+    },
+  );
 }
 
 afterEach(() => {
@@ -60,6 +67,73 @@ afterEach(() => {
 });
 
 describe("check-assertion-safety-ratchet", () => {
+  it("counts mixed source files and reports the first malformed source in path order", () => {
+    const root = tempDirs.make("openclaw-assertion-safety-files-");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const extensions = ["ts", "tsx", "mts", "cts"];
+    const sources = Array.from({ length: 36 }, (_, index) => ({
+      file: `src/source-${String(index).padStart(2, "0")}.${extensions[index % extensions.length]!}`,
+      source:
+        index === 17 ? "export const value = 17;\n" : "export const value = input as Shape;\n",
+    }));
+    for (const { file, source } of sources) {
+      fs.writeFileSync(path.join(root, file), source);
+    }
+    git(root, ["init"]);
+
+    expect(collectCurrentAssertionSafetyCounts(root)).toEqual(
+      new Map(sources.filter((_, index) => index !== 17).map(({ file }) => [file, 1])),
+    );
+
+    const malformed = [sources[5]!, sources[17]!, sources[35]!];
+    for (const { file } of malformed) {
+      fs.writeFileSync(path.join(root, file), "const broken = ;\n");
+    }
+    for (const { file, source } of malformed) {
+      expect(() => collectCurrentAssertionSafetyCounts(root)).toThrow(
+        `${file}:1: Expression expected.`,
+      );
+      fs.writeFileSync(path.join(root, file), source);
+    }
+  });
+
+  it("keeps worktree counts and staged read failures with unmerged index entries", () => {
+    const root = tempDirs.make("openclaw-assertion-safety-unmerged-");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const files = Array.from(
+      { length: 36 },
+      (_, index) => `src/source-${String(index).padStart(2, "0")}.ts`,
+    );
+    for (const file of files) {
+      fs.writeFileSync(path.join(root, file), "export const value = input as Shape;\n");
+    }
+    git(root, ["init"]);
+    git(root, ["add", "."]);
+    const oid = git(
+      root,
+      ["hash-object", "-w", "--stdin"],
+      "export const conflicted = value as unknown;\n",
+    ).trim();
+    const conflictedFiles = [files[1]!, files[32]!];
+    git(
+      root,
+      ["update-index", "-z", "--index-info"],
+      conflictedFiles
+        .flatMap((file) => [
+          `0 ${"0".repeat(oid.length)}\t${file}\0`,
+          ...[1, 2, 3].map((stage) => `100644 ${oid} ${stage}\t${file}\0`),
+        ])
+        .join(""),
+    );
+
+    expect(collectCurrentAssertionSafetyCounts(root)).toEqual(
+      new Map(files.map((file) => [file, 1])),
+    );
+    expect(() => collectCurrentAssertionSafetyCounts(root, { staged: true })).toThrow(
+      `Could not read staged source ${conflictedFiles[0]}`,
+    );
+  });
+
   it("counts only governed assertions without a SAFETY invariant", () => {
     const source = [
       "const frozen = value as const;",

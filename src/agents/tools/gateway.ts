@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -21,7 +22,7 @@ import {
   type AgentRuntimeIdentity,
   type AgentRuntimeIdentityTokenParams,
 } from "../../gateway/agent-runtime-identity-token.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, type CallGatewayOptions } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -39,6 +40,7 @@ import {
 } from "../../infra/device-identity-async.js";
 import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -67,7 +69,6 @@ export function readGatewayToolOperatorScopes(): readonly string[] | undefined {
 
 type GatewayOverrideTarget = "local" | "remote";
 
-/** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
     gatewayUrl: readToolStringParam(params, "gatewayUrl", { trim: false }),
@@ -101,7 +102,6 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   }
 
   const origin = url.origin;
-  // Key: protocol + host only, lowercased. (host includes IPv6 brackets + port when present)
   const key = `${url.protocol}//${normalizeLowercaseStringOrEmpty(url.host)}`;
   return { origin, key };
 }
@@ -432,6 +432,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     }
     throw new Error("trusted operational run instance required for this gateway call");
   }
+  let lineageHandoff: ReturnType<typeof createAgentRuntimeExecutionLineageHandoff>;
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
@@ -442,7 +443,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     if (executionLineage && !activeAuthority) {
       throw new Error("execution lineage handoff requires active parent authority");
     }
-    const lineageHandoff =
+    lineageHandoff =
       sessionSpawnContext && executionLineage && activeAuthority
         ? createAgentRuntimeExecutionLineageHandoff({
             agentId: identity.agentId,
@@ -458,40 +459,36 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     if (executionLineage && !lineageHandoff) {
       throw new Error("execution lineage handoff could not bind the parent admission");
     }
-    try {
-      // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
-      const approvalSignals =
-        params.method === "exec.approval.request" || params.method === "plugin.approval.request"
-          ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
-          : undefined;
-      const approvalAuthority =
-        activeAuthority && approvalSignals?.length
-          ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
-          : activeAuthority;
-      const prepared: AgentRuntimeIdentityTokenParams = {
-        ...identity,
-        operationalRunInstance: identity.operationalRunInstance,
-        approvalAuthority,
-        ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
-        ...(lineageHandoff
-          ? { executionLineageHandoffId: lineageHandoff.id }
-          : sessionSpawnContext
-            ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
-            : {}),
-      };
-      if (!params.inProcess) {
-        return await mintAgentRuntimeIdentityToken(prepared);
-      }
-      const runtimeIdentity = await createAgentRuntimeIdentity(prepared);
-      if (!runtimeIdentity) {
-        throw new Error("invalid agent runtime identity");
-      }
-      return runtimeIdentity;
-    } catch (error) {
-      lineageHandoff?.revoke();
-      throw error;
+    // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
+    const approvalSignals =
+      params.method === "exec.approval.request" || params.method === "plugin.approval.request"
+        ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
+        : undefined;
+    const approvalAuthority =
+      activeAuthority && approvalSignals?.length
+        ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
+        : activeAuthority;
+    const prepared: AgentRuntimeIdentityTokenParams = {
+      ...identity,
+      operationalRunInstance: identity.operationalRunInstance,
+      approvalAuthority,
+      ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
+      ...(lineageHandoff
+        ? { executionLineageHandoffId: lineageHandoff.id }
+        : sessionSpawnContext
+          ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
+          : {}),
+    };
+    if (!params.inProcess) {
+      return await mintAgentRuntimeIdentityToken(prepared);
     }
+    const runtimeIdentity = await createAgentRuntimeIdentity(prepared);
+    if (!runtimeIdentity) {
+      throw new Error("invalid agent runtime identity");
+    }
+    return runtimeIdentity;
   } catch (error) {
+    lineageHandoff?.revoke();
     if (optionalLocalIdentity && !params.required) {
       return undefined;
     }
@@ -569,19 +566,16 @@ async function resolveMessageActionIdentity<T>(
     }
     return undefined;
   }
-  const resolvedMessageActionContext = terminalSourceReply
-    ? {
-        ...messageActionContext,
-        turnCapability: params.turnCapability,
-        sourceReplyFinal: true as const,
-        sourceReplyToolCallId: sourceReplyToolCallId!,
-      }
-    : {
-        ...messageActionContext,
-        turnCapability: params.turnCapability,
-        ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
-        ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
-      };
+  const resolvedMessageActionContext = {
+    ...messageActionContext,
+    turnCapability: params.turnCapability,
+    ...(terminalSourceReply
+      ? { sourceReplyFinal: true as const, sourceReplyToolCallId: sourceReplyToolCallId! }
+      : {
+          ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+          ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
+        }),
+  };
   return await createIdentity({
     ...identity,
     sessionKey: turnCapabilitySessionKey,
@@ -619,9 +613,6 @@ export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean
   );
 }
 
-/**
- * Calls a gateway method as the agent-tool backend client with least-privilege scopes.
- */
 export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
@@ -631,7 +622,8 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
-    dispatchAuthority?: { version: 2; kind: "run" | "source-bound"; assertCurrent: () => void };
+    onHelloOk?: CallGatewayOptions["onHelloOk"];
+    dispatchAuthority?: Parameters<typeof prepareQuestionGatewayDispatch>[0];
   },
 ) {
   const dispatchAuthority = extra?.dispatchAuthority;
@@ -645,6 +637,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   const gateway = resolveGatewayOptions(opts);
   const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
+  const nodeInvoke = method === "node.invoke" ? asNullableRecord(callParams) : null;
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
     : resolveLeastPrivilegeOperatorScopesForMethod(method, callParams);
@@ -670,7 +663,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
           timeoutMs: gateway.timeoutMs,
           signal: extra?.signal,
           expectFinal: extra?.expectFinal,
-          assertDispatchCurrent: dispatchAuthority?.assertCurrent,
+          ...prepareQuestionGatewayDispatch(dispatchAuthority, true),
           ...(Array.isArray(extra?.scopes) ? { scopes } : {}),
         },
         runtimeIdentity,
@@ -706,7 +699,13 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
     expectFinal: extra?.expectFinal,
-    assertDispatchCurrent: extra?.dispatchAuthority?.assertCurrent,
+    onHelloOk: extra?.onHelloOk,
+    requiredCapabilities:
+      (nodeInvoke?.command === "system.run" || nodeInvoke?.command === "system.run.prepare") &&
+      asNullableRecord(nodeInvoke.params)?.executionContext !== undefined
+        ? [SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY]
+        : undefined,
+    ...prepareQuestionGatewayDispatch(dispatchAuthority),
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,

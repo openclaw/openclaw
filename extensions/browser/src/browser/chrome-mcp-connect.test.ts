@@ -99,13 +99,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     const pid = Number(await fs.readFile(state.statePath("pid"), "utf8"));
     expect(pid).toBeGreaterThan(0);
     expect(pid).not.toBe(process.pid);
-    await vi.waitFor(async () => {
-      // Windows terminates the process tree before the transport can close stdin.
-      if (process.platform !== "win32") {
-        expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
-      }
-      expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
-    });
+    // The awaited session owner joins transport close and verifies its tracked tree is absent.
+    // Windows terminates the process tree before the transport can close stdin.
+    if (process.platform !== "win32") {
+      expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+    }
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     expect(getChromeMcpPid(profileName)).toBeNull();
   }
 

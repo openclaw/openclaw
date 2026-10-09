@@ -16,7 +16,6 @@ export async function load(
     return restored;
   }
   const requestedLocation = newSessionModelLocationFromSearch(search);
-  const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
   let groupStatus: NewSessionRouteData["groupStatus"];
@@ -38,7 +37,7 @@ export async function load(
   }
   const route: NewSessionRouteData = {
     ...requestedLocation,
-    requestedAgentId,
+    requestedAgentId: requestedLocation.agentId,
     groupStatus,
     groupCwd,
     groupWorktree,
@@ -76,10 +75,9 @@ export async function load(
   ) {
     return unresolved();
   }
-  const agentsList = loadedAgentsList;
-  const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
-  const fallbackAgentId = availableAgents.some((agent) => agent.id === agentsList.defaultId)
-    ? agentsList.defaultId
+  const availableAgents = listSelectableAgents(loadedAgentsList.agents);
+  const fallbackAgentId = availableAgents.some((agent) => agent.id === loadedAgentsList.defaultId)
+    ? loadedAgentsList.defaultId
     : availableAgents[0]?.id;
   const agentId = fallbackAgentId
     ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)

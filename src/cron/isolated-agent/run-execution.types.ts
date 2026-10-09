@@ -19,7 +19,6 @@ export type CronRunExecutionParams = Pick<
   | "usesDetachedRunSession"
   | "workspaceDir"
   | "cwd"
-  | "executionRoot"
   | "timeoutMs"
   | "runTimeoutOverrideMs"
   | "suppressExecNotifyOnExit"

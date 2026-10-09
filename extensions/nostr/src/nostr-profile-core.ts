@@ -1,16 +1,9 @@
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 
 /** NIP-01 profile content (JSON inside kind:0 event). */
-export interface ProfileContent {
-  name?: string;
-  display_name?: string;
-  about?: string;
-  picture?: string;
-  banner?: string;
-  website?: string;
-  nip05?: string;
-  lud16?: string;
-}
+export type ProfileContent = Omit<NostrProfile, "displayName"> & {
+  display_name?: NostrProfile["displayName"];
+};
 
 const PROFILE_FIELDS = [
   ["name", "name"],
@@ -23,10 +16,7 @@ const PROFILE_FIELDS = [
   ["lud16", "lud16"],
 ] as const;
 
-/**
- * Convert our config profile schema to NIP-01 content format.
- * Strips undefined fields and validates URLs.
- */
+/** Validates URLs and omits undefined fields for NIP-01 content. */
 export function profileToContent(profile: NostrProfile): ProfileContent {
   const validated = NostrProfileSchema.parse(profile);
 
@@ -42,10 +32,6 @@ export function profileToContent(profile: NostrProfile): ProfileContent {
   return content;
 }
 
-/**
- * Convert NIP-01 content format back to our config profile schema.
- * Useful for importing existing profiles from relays.
- */
 export function contentToProfile(content: ProfileContent): NostrProfile {
   const profile: NostrProfile = {};
 

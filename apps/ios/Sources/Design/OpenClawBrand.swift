@@ -249,33 +249,24 @@ extension View {
             }
     }
 
-    func openClawCraftSurface(cornerRadius: CGFloat = 24, shadow: Bool = true) -> some View {
-        self.modifier(OpenClawCraftSurfaceModifier(cornerRadius: cornerRadius, shadow: shadow))
-    }
-}
-
-private struct OpenClawCraftSurfaceModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    let shadow: Bool
-
-    func body(content: Content) -> some View {
-        content
+    func openClawCraftSurface(cornerRadius: CGFloat = 24) -> some View {
+        self
             .background {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(OpenClawBrand.activationSurface)
                     .shadow(
-                        color: self.shadow ? Color.black.opacity(0.07) : .clear,
+                        color: Color.black.opacity(0.07),
                         radius: 16,
                         x: 0,
                         y: 8)
             }
             .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(0.36), lineWidth: 0.5)
                     .blendMode(.plusLighter)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(OpenClawBrand.activationHairline, lineWidth: 0.5)
             }
     }
@@ -299,42 +290,21 @@ struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
             .background {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
                     .fill(self.isEnabled ? Self.primaryFill : OpenClawBrand.activationDisabledGradient)
-                    .shadow(
-                        color: self.isEnabled ? OpenClawBrand.activationPrimaryAction.opacity(0.08) : .clear,
-                        radius: 1,
-                        x: 0,
-                        y: 1)
-                    .shadow(
-                        color: self.isEnabled ? OpenClawBrand.activationPrimaryAction.opacity(0.08) : .clear,
-                        radius: 2,
-                        x: 0,
-                        y: 2)
+                    .actionButtonShadow(self.isEnabled ? OpenClawBrand.activationPrimaryAction.opacity(0.08) : .clear)
             }
             .overlay(alignment: .top) {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(self.isEnabled ? 0.14 : 0.06),
-                                Color.white.opacity(0),
-                            ],
-                            startPoint: .top,
-                            endPoint: .center))
-                    .frame(height: self.height * 0.48)
-                    .allowsHitTesting(false)
+                    .actionButtonHighlight(
+                        colors: [.white.opacity(self.isEnabled ? 0.14 : 0.06), .white.opacity(0)],
+                        endPoint: .center,
+                        height: self.height * 0.48)
             }
             .overlay(alignment: .bottom) {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0),
-                                Color.white.opacity(self.isEnabled ? 0.08 : 0.03),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom))
-                    .frame(height: self.height * 0.34)
-                    .allowsHitTesting(false)
+                    .actionButtonHighlight(
+                        colors: [.white.opacity(0), .white.opacity(self.isEnabled ? 0.08 : 0.03)],
+                        endPoint: .bottom,
+                        height: self.height * 0.34)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
@@ -377,29 +347,14 @@ struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
             .background {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
                     .fill(Self.secondaryFill)
-                    .shadow(
-                        color: self.isEnabled ? Color.black.opacity(self.shadowOpacity) : .clear,
-                        radius: 1,
-                        x: 0,
-                        y: 1)
-                    .shadow(
-                        color: self.isEnabled ? Color.black.opacity(self.shadowOpacity) : .clear,
-                        radius: 2,
-                        x: 0,
-                        y: 2)
+                    .actionButtonShadow(self.isEnabled ? Color.black.opacity(self.shadowOpacity) : .clear)
             }
             .overlay(alignment: .top) {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.42),
-                                Color.white.opacity(0),
-                            ],
-                            startPoint: .top,
-                            endPoint: .center))
-                    .frame(height: self.height * 0.48)
-                    .allowsHitTesting(false)
+                    .actionButtonHighlight(
+                        colors: [.white.opacity(0.42), .white.opacity(0)],
+                        endPoint: .center,
+                        height: self.height * 0.48)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
@@ -422,8 +377,6 @@ struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
 
 struct OpenClawCloseButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    var minWidth: CGFloat = 36
-    var height: CGFloat = 36
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -433,8 +386,8 @@ struct OpenClawCloseButtonStyle: ButtonStyle {
                     ? OpenClawBrand.activationPrimaryAction
                     : Color.secondary)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: self.minWidth)
-            .frame(height: self.height)
+            .frame(minWidth: 36)
+            .frame(height: 36)
             .padding(.horizontal, 7)
             .background {
                 Capsule(style: .continuous)
@@ -463,5 +416,21 @@ struct OpenClawCloseButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed && self.isEnabled ? 0.66 : 1)
             .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
             .animation(.smooth(duration: 0.14), value: configuration.isPressed)
+    }
+}
+
+extension RoundedRectangle {
+    fileprivate func actionButtonHighlight(colors: [Color], endPoint: UnitPoint, height: CGFloat) -> some View {
+        self.fill(LinearGradient(colors: colors, startPoint: .top, endPoint: endPoint))
+            .frame(height: height)
+            .allowsHitTesting(false)
+    }
+}
+
+extension View {
+    fileprivate func actionButtonShadow(_ color: Color) -> some View {
+        self
+            .shadow(color: color, radius: 1, x: 0, y: 1)
+            .shadow(color: color, radius: 2, x: 0, y: 2)
     }
 }

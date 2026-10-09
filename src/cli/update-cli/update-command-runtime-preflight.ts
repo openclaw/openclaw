@@ -1,9 +1,10 @@
 // Target runtime admission, executable identity, and compatible-runtime recovery guidance.
 import path from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { minVersion, validRange, valid } from "semver";
+import { validRange, valid } from "semver";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { SUPPORTED_NODE_VERSION_RANGE } from "../../../node-version.mjs";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
@@ -15,11 +16,11 @@ import {
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
-  createUpdateFailureFact,
+  createUpdatePreflightDiagnostics,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -101,13 +102,16 @@ export async function resolvePackageRuntimePreflight(params: {
       return ok(unchanged());
     }
     const selected = nodeRunner ?? process.execPath;
-    let activationRuntime: PackageActivationRuntime | undefined;
     let captureError: unknown;
-    try {
-      activationRuntime = capturePackageActivationRuntime("node", selected);
-    } catch (error) {
-      captureError = error;
-    }
+    const captureRuntime = (executable: string) => {
+      try {
+        return capturePackageActivationRuntime("node", executable);
+      } catch (error) {
+        captureError = error;
+        return undefined;
+      }
+    };
+    let activationRuntime = captureRuntime(selected);
     // The running Bun can have any executable name; a separate service still owns its selection.
     const currentBun =
       process.versions.bun &&
@@ -139,7 +143,7 @@ export async function resolvePackageRuntimePreflight(params: {
           ? ok({ ...unchanged(), activationRuntime, targetVersion: target.version })
           : updater;
       } catch (error) {
-        return resultError(error instanceof Error ? error.message : String(error));
+        return resultError(coerceErrorMessage(error));
       }
     }
     const runtime = await resolvePackageRuntimeForPreflight({
@@ -150,14 +154,21 @@ export async function resolvePackageRuntimePreflight(params: {
       ? false
       : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
     const targetVersion = target.version;
-    const unchangedRuntime = { ...unchanged(), activationRuntime, targetVersion };
+    const runtimeResult = (
+      capturedRuntime: PackageActivationRuntime | undefined,
+      selectedRunner = nodeRunner,
+      replacedNodeRunner?: string,
+    ): Result<PackageRuntimePreflight, string> =>
+      capturedRuntime
+        ? ok({
+            ...(selectedRunner ? { nodeRunner: selectedRunner } : {}),
+            activationRuntime: capturedRuntime,
+            ...(replacedNodeRunner ? { replacedNodeRunner } : {}),
+            targetVersion,
+          })
+        : resultError(coerceErrorMessage(captureError));
     if (satisfies === true) {
-      if (!activationRuntime) {
-        return resultError(
-          captureError instanceof Error ? captureError.message : String(captureError),
-        );
-      }
-      return ok(unchangedRuntime);
+      return runtimeResult(activationRuntime);
     }
     const canRefreshCurrentService =
       params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
@@ -172,12 +183,7 @@ export async function resolvePackageRuntimePreflight(params: {
         ? resolveNodeRunner()
         : undefined);
     if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
-      let fallbackActivationRuntime: PackageActivationRuntime | undefined;
-      try {
-        fallbackActivationRuntime = capturePackageActivationRuntime("node", fallbackNodeRunner);
-      } catch (error) {
-        captureError = error;
-      }
+      const fallbackActivationRuntime = captureRuntime(fallbackNodeRunner);
       const fallbackRuntime = await resolvePackageRuntimeForPreflight({
         nodeRunner: fallbackActivationRuntime?.path ?? fallbackNodeRunner,
         timeoutMs: params.timeoutMs,
@@ -186,26 +192,11 @@ export async function resolvePackageRuntimePreflight(params: {
         ? false
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
       if (fallbackSatisfies === true) {
-        if (!fallbackActivationRuntime) {
-          return resultError(
-            captureError instanceof Error ? captureError.message : String(captureError),
-          );
-        }
-        return ok({
-          nodeRunner: fallbackNodeRunner,
-          activationRuntime: fallbackActivationRuntime,
-          replacedNodeRunner: nodeRunner,
-          targetVersion,
-        });
+        return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
       }
     }
     if (satisfies !== false) {
-      if (!activationRuntime) {
-        return resultError(
-          captureError instanceof Error ? captureError.message : String(captureError),
-        );
-      }
-      return ok(unchangedRuntime);
+      return runtimeResult(activationRuntime);
     }
     if (params.runtimeRecovery && target.nodeEngine) {
       const { resolveTargetNodeRuntime } =
@@ -216,27 +207,16 @@ export async function resolvePackageRuntimePreflight(params: {
         timeoutMs: params.timeoutMs,
       });
       if (recovered) {
-        let recoveredRuntime: PackageActivationRuntime;
-        try {
-          recoveredRuntime = capturePackageActivationRuntime("node", recovered);
-        } catch (error) {
-          return resultError(error instanceof Error ? error.message : String(error));
+        const recoveredRuntime = captureRuntime(recovered);
+        if (!recoveredRuntime) {
+          return runtimeResult(recoveredRuntime);
         }
-        return ok({
-          nodeRunner: recovered,
-          activationRuntime: recoveredRuntime,
-          replacedNodeRunner: nodeRunner ?? resolveNodeRunner(),
-          targetVersion,
-        });
+        return runtimeResult(recoveredRuntime, recovered, nodeRunner ?? resolveNodeRunner());
       }
     }
-    const runtimeLabel = runtime.nodeRunner
-      ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
-      : `Node ${runtime.version ?? "unknown"}`;
+    const runtimePath = runtime.nodeRunner ?? process.execPath;
+    const runtimeLabel = `Node ${runtime.version ?? "unknown"} at ${runtimePath}`;
     const engineRange = target.nodeEngine ? validRange(target.nodeEngine) : null;
-    const minimum = engineRange
-      ? (minVersion(engineRange)?.version ?? "unspecified")
-      : "unspecified";
     const recommendation = minimumSupportedNodeVersion(engineRange ?? "*");
     const requirement = target.nodeEngine ? `Node ${target.nodeEngine}` : "a working Node runtime";
     const context =
@@ -299,23 +279,25 @@ export async function resolvePackageRuntimePreflight(params: {
       : recommendation
         ? "Select a published OpenClaw version before installing it under a supported Node runtime."
         : `No Node version satisfies both this range and this updater's supported range (${SUPPORTED_NODE_VERSION_RANGE}). This candidate version cannot be run by this updater with a supported Node release; install a supported Node and select a compatible OpenClaw target.`;
+    const diagnostics = createUpdatePreflightDiagnostics({
+      check: "node-runtime",
+      code: "node-runtime-preflight",
+      affectedKey: "engines.node",
+      required: `openclaw@${targetVersion} ${requirement}`,
+      detected: runtimeLabel,
+      installRoot: retainedRoot ? await tryRealpathOrResolve(retainedRoot) : undefined,
+      binaryPath: retainedEntry,
+      gatewayInstall:
+        verdict?.kind === "owned" || verdict?.kind === "unresolved"
+          ? await tryRealpathOrResolve(verdict.root)
+          : undefined,
+      remedy: [runtime.failure, upgrade].filter(Boolean).join("\n"),
+    });
     return {
       ...(recoverySteps ? { recoverySteps } : {}),
-      ...resultError<PackageRuntimePreflight, string>(
-        [
-          `openclaw@${targetVersion} requires ${requirement}; selected runtime is ${runtimeLabel}.`,
-          ...(runtime.failure ? [runtime.failure] : []),
-          upgrade,
-        ].join("\n"),
-      ),
-      failureFacts: [
-        createUpdateFailureFact({
-          check: "node-runtime",
-          code: "node-runtime-preflight",
-          affectedKey: "engines.node",
-          message: `Target package: openclaw@${valid(targetVersion) ?? "unknown"}; Minimum Node engine: ${minimum}; Running Node: ${valid(runtime.version ?? "") ?? "unknown"}`,
-        }),
-      ],
+      ...resultError<PackageRuntimePreflight, string>(diagnostics.message),
+      // Preserve the single Node refusal fact; the error retains the full diagnostic.
+      failureFacts: diagnostics.failureFacts.slice(0, 1),
     };
   });
 }

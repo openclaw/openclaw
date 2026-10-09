@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -70,6 +72,73 @@ afterEach(async () => {
 });
 
 describe("signalRpcRequest", () => {
+  it.each([false, true])(
+    "prepares the HTTP handoff and rechecks its caller after waiting (revoked=%s)",
+    async (revoked) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const response = createDeferred<void>();
+      const authority = fetchRuntime.captureEffectAuthority();
+      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          return authority.initiate(effect);
+        },
+      });
+      const baseUrl = await withSignalServer(async (_req, res) => {
+        arrived.resolve();
+        await response.promise;
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: "test-id", result: { sent: true } }));
+      });
+      const request = vi.spyOn(http, "request");
+      const caller = new AbortController();
+      const failure = new Error("Signal caller ended during preparation");
+      let settled = false;
+      const sending = signalRpcRequest(
+        "send",
+        { message: "prepared" },
+        {
+          baseUrl,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      )
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("HTTP request bypassed preparation");
+          }),
+        ]);
+        expect(request).not.toHaveBeenCalled();
+        if (revoked) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!revoked) {
+          await arrived.promise;
+          expect(settled).toBe(false);
+          response.resolve();
+        }
+        expect(await sending).toEqual(revoked ? { error: failure } : { value: { sent: true } });
+        expect(request).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve();
+        await sending;
+      }
+    },
+  );
+
   it.each([{ bytes: [0xff] }, { bytes: [0xc3] }])(
     "rejects malformed UTF-8 bytes $bytes before JSON parsing",
     async ({ bytes }) => {

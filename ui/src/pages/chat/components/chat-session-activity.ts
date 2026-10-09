@@ -21,7 +21,11 @@ export function renderInterSessionActivity(
     Boolean(opts.searchResult) || (opts.isToolMessageExpanded?.(disclosureId) ?? false);
   const count = group.messages.reduce((total, message) => total + (message.duplicateCount ?? 1), 0);
   return html`
-    <div class="chat-group tool chat-group--turn-block" data-chat-row-key=${group.key}>
+    <div
+      class="chat-group tool chat-group--turn-block"
+      data-chat-row-key=${group.key}
+      data-file-session-key=${group.senderSession?.sessionKey ?? nothing}
+    >
       <div class="chat-group-messages">
         <details
           class="chat-session-activity"
@@ -41,16 +45,22 @@ export function renderInterSessionActivity(
             aria-disabled=${opts.searchResult ? "true" : nothing}
             tabindex=${opts.searchResult ? "-1" : nothing}
             @click=${(event: MouseEvent) => {
-              if (opts.searchResult) {
+              const target = event.target;
+              if (
+                opts.searchResult &&
+                !(target instanceof Element && target.closest("a.markdown-session-link"))
+              ) {
                 event.preventDefault();
               }
             }}
           >
-            ${renderForwardedAttribution(group, { ...opts, updateCount: count, linkSource: false })}
+            ${renderForwardedAttribution(group, {
+              ...opts,
+              ...(expanded ? { showAvatar: false } : { updateCount: count, linkSource: false }),
+            })}
             ${opts.searchResult ? nothing : html`<span class="chat-session-activity__chevron" aria-hidden="true">${icons.chevronRight}</span>`}
           </summary>
           <div class="chat-session-activity__body">
-            ${expanded ? renderForwardedAttribution(group, { ...opts, showAvatar: false }) : nothing}
             ${
               expanded || !opts.onToggleToolMessageExpanded
                 ? repeat(

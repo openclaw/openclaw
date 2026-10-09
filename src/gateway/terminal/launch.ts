@@ -8,7 +8,9 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { buildRemoteCommand } from "../../agents/sandbox/remote-shell-command.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isTerminalConfigEnabled } from "./enabled.js";
 
@@ -41,32 +43,12 @@ type TerminalLaunchPolicy = {
   acceptConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
-function resolveTerminalShell(params: {
-  configuredShell?: string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-}): { shell: string; args: string[] } {
-  const configured = params.configuredShell?.trim();
-  if (configured) {
-    return { shell: configured, args: [] };
-  }
-  const platform = params.platform ?? process.platform;
-  const env = params.env ?? process.env;
-  if (platform === "win32") {
-    return { shell: env.ComSpec?.trim() || "cmd.exe", args: [] };
-  }
-  // Load the operator's login profile, including its PATH and prompt.
-  return { shell: env.SHELL?.trim() || "/bin/bash", args: ["-l"] };
-}
-
 function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
   agentId?: string;
   configuredShell?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
 }): TerminalLaunchResolution {
-  const env = params.env ?? process.env;
+  const env = process.env;
   const requested = params.agentId?.trim();
   let agentId: string;
   try {
@@ -88,11 +70,13 @@ function resolveTerminalLaunch(params: {
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, env);
   const cwd = existingDirOrHome(workspaceDir, env);
-  const { shell, args } = resolveTerminalShell({
-    configuredShell: params.configuredShell,
-    platform: params.platform,
-    env,
-  });
+  const configuredShell = params.configuredShell?.trim();
+  const windows = process.platform === "win32";
+  const shell =
+    configuredShell ||
+    (windows ? env.ComSpec?.trim() || "cmd.exe" : env.SHELL?.trim() || "/bin/bash");
+  // Load the operator's login profile, including its PATH and prompt.
+  const args = configuredShell || windows ? [] : ["-l"];
   return { ok: true, plan: { agentId, cwd, shell, args } };
 }
 
@@ -125,8 +109,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       // later hot commit can enable. Agent restrictions remain independent.
       restrictions.disabled ||= isTerminalConfigEnabled(committedTerminalConfig());
     }
-    const activeAgentIds = new Set(listAgentIds(activeConfig));
-    for (const agentId of activeAgentIds) {
+    for (const agentId of listAgentIds(activeConfig)) {
       const candidate = resolveForConfig(config, agentId);
       if (!candidate.ok) {
         restrictions.blockedAgents.set(agentId, candidate.block);
@@ -154,13 +137,11 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       if (!active.ok) {
         return active;
       }
-      const pendingBlock = restartRestrictions.blockedAgents.get(active.plan.agentId);
-      if (pendingBlock) {
-        return { ok: false, block: pendingBlock };
-      }
-      const preparedBlock = commitRestrictions.blockedAgents.get(active.plan.agentId);
-      if (preparedBlock) {
-        return { ok: false, block: preparedBlock };
+      const block =
+        restartRestrictions.blockedAgents.get(active.plan.agentId) ??
+        commitRestrictions.blockedAgents.get(active.plan.agentId);
+      if (block) {
+        return { ok: false, block };
       }
       const candidateConfig = preparedConfig ?? appliedConfigWhileRestartPending;
       if (candidateConfig) {
@@ -191,18 +172,14 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
         if (preparedConfig) {
           appliedConfigWhileRestartPending = preparedConfig;
         }
-        preparedConfig = null;
-        clearRestrictions(commitRestrictions);
-        if (appliedConfigWhileRestartPending) {
-          accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
-        }
-        return;
-      }
-      if (preparedConfig) {
+      } else if (preparedConfig) {
         activeConfig = preparedConfig;
       }
       preparedConfig = null;
       clearRestrictions(commitRestrictions);
+      if (hasPendingRestart && appliedConfigWhileRestartPending) {
+        accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
+      }
     },
     acceptConfig: (options) => {
       // Baseline acceptance retires an un-published candidate, including config
@@ -226,7 +203,10 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   };
 }
 
-export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, string> {
+export function buildTerminalEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     if (typeof value === "string") {
@@ -234,13 +214,13 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
     }
   }
   env.TERM = env.TERM ?? "xterm-256color";
+  // The browser renderer supports RGB regardless of the Gateway host terminal.
+  if (resolveEnvironmentValue(env, "COLORTERM", platform) === undefined) {
+    env.COLORTERM = "truecolor";
+  }
   // Lets shells and prompts detect that they are inside an OpenClaw terminal.
   env.OPENCLAW_TERMINAL = "1";
   return env;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /** Converts a policy-approved plan into the exact local PTY spawn. */
@@ -251,23 +231,16 @@ export function resolveTerminalSpawnPlan(
   const env = options.env ?? process.env;
   const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, env);
   const command = plan.initialCommand;
-  if (!command || command.length === 0) {
-    return { agentId: plan.agentId, shell: plan.shell, args: plan.args, cwd };
+  let { shell, args } = plan;
+  if (command?.length) {
+    if ((options.platform ?? process.platform) === "win32") {
+      shell = command[0] ?? shell;
+      args = command.slice(1);
+    } else {
+      args = ["-il", "-c", buildRemoteCommand(command)];
+    }
   }
-  if ((options.platform ?? process.platform) === "win32") {
-    return {
-      agentId: plan.agentId,
-      shell: command[0] ?? plan.shell,
-      args: command.slice(1),
-      cwd,
-    };
-  }
-  return {
-    agentId: plan.agentId,
-    shell: plan.shell,
-    args: ["-il", "-c", command.map(shellQuote).join(" ")],
-    cwd,
-  };
+  return { agentId: plan.agentId, shell, args, cwd };
 }
 
 // A workspace dir that has not been created yet would make the PTY spawn fail;

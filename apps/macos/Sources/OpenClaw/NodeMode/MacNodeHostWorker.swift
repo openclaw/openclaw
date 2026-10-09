@@ -337,10 +337,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
         await withCheckedContinuation { continuation in
             self.queue.async {
-                guard Self.routeUpdateIsCurrent(
-                    candidateGeneration: authorityGeneration,
-                    currentGeneration: self.routeAuthorityGeneration)
-                else {
+                guard authorityGeneration >= self.routeAuthorityGeneration else {
                     continuation.resume(returning: false)
                     return
                 }
@@ -352,27 +349,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 try? self.enqueueWriteLocked([
                     "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": NSNull(),
                 ])
-                let pending = self.pendingInvokes
-                self.pendingInvokes.removeAll()
-                self.pendingInvokeControls.removeAll()
-                self.pendingInvokeControlOrder.removeAll()
-                for (id, waiter) in pending {
-                    waiter.continuation.resume(returning: Self.unavailableResponse(
-                        id,
-                        "UNAVAILABLE: Gateway route changed"))
-                }
+                self.failPendingInvokesLocked("UNAVAILABLE: Gateway route changed")
                 self.eventDeliveryTask?.cancel()
                 self.eventDeliveryTask = nil
                 continuation.resume(returning: true)
             }
         }
-    }
-
-    nonisolated static func routeUpdateIsCurrent(
-        candidateGeneration: UInt64,
-        currentGeneration: UInt64) -> Bool
-    {
-        candidateGeneration >= currentGeneration
     }
 
     func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async {
@@ -677,11 +659,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             guard let id = message["id"] as? String,
                   let method = message["method"] as? String
             else { return }
-            guard let route = self.route else {
-                self.writeGatewayUnavailableLocked(id: id)
-                return
-            }
-            guard let paramsData = Self.jsonData(message["params"] ?? [:]),
+            let params = message["params"] ?? [:]
+            guard let route = self.route,
+                  JSONSerialization.isValidJSONObject(params),
+                  let paramsData = try? JSONSerialization.data(withJSONObject: params),
                   let processGeneration = self.processGeneration
             else {
                 self.writeGatewayUnavailableLocked(id: id)
@@ -727,9 +708,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         gatewayGeneration: UInt64) async
     {
         do {
-            guard let paramsJSON = String(bytes: paramsData, encoding: .utf8) else {
-                throw WorkerError.unavailable(reason: "node-host worker gateway request was not UTF-8")
-            }
+            let paramsJSON = String(bytes: paramsData, encoding: .utf8)!
             let data = try await self.session.request(
                 method: method,
                 paramsJSON: paramsJSON,
@@ -839,15 +818,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let readers = self.readers
         self.readers.removeAll()
-        let pending = self.pendingInvokes
-        self.pendingInvokes.removeAll()
-        self.pendingInvokeControls.removeAll()
-        self.pendingInvokeControlOrder.removeAll()
-        for (id, invocation) in pending {
-            invocation.continuation.resume(returning: Self.unavailableResponse(
-                id,
-                "UNAVAILABLE: node-host worker stopped"))
-        }
+        self.failPendingInvokesLocked("UNAVAILABLE: node-host worker stopped")
         // Startup-time exits count too: without this, a worker that dies before
         // its ready manifest never consumes retry budget and the coordinator
         // respawns a broken CLI forever instead of latching retry exhaustion.
@@ -903,8 +874,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             error: OpenClawNodeError(code: .unavailable, message: message))
     }
 
-    private static func jsonData(_ object: Any) -> Data? {
-        guard JSONSerialization.isValidJSONObject(object) else { return nil }
-        return try? JSONSerialization.data(withJSONObject: object)
+    private func failPendingInvokesLocked(_ message: String) {
+        let pending = self.pendingInvokes
+        self.pendingInvokes.removeAll()
+        self.pendingInvokeControls.removeAll()
+        self.pendingInvokeControlOrder.removeAll()
+        for (id, invocation) in pending {
+            invocation.continuation.resume(returning: Self.unavailableResponse(id, message))
+        }
     }
 }

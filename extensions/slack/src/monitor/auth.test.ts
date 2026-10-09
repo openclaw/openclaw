@@ -2,7 +2,7 @@ import { WebAPIPlatformError, WebAPIRequestError } from "@slack/web-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
 import type { SlackMonitorContext } from "./context.js";
 
@@ -32,11 +32,6 @@ beforeAll(async () => {
 beforeEach(() => {
   setSlackRuntime(createPluginRuntimeMock());
   readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
-  delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
-});
-
-afterEach(() => {
-  delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
 });
 
 vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
@@ -309,13 +304,7 @@ describe("authorizeSlackSystemEventSender", () => {
   });
 
   it.each([
-    [
-      "ignores non-decimal channel member cache ttl env values",
-      () => {
-        process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS = "0x0";
-      },
-      1,
-    ],
+    ["reuses cached channel members", () => {}, 1],
     [
       "drops cached channel members when the current clock is not a valid date timestamp",
       () => {

@@ -13,10 +13,14 @@ import {
 } from "../../daemon/managed-gateway-bindings.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { gatewayServiceCommandOverlapsPhysicalInstallation } from "../../daemon/service-layout.js";
+import {
+  gatewayServiceCommandOverlapsPhysicalInstallation,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
 import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { formatCliCommand } from "../command-format.js";
@@ -28,8 +32,10 @@ import type {
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
+  GATEWAY_SERVICE_INSPECTION_WARNING,
   inspectManagedGatewayServiceBeforeUpdate,
   observedSystemdManagerUid,
+  tryRealpathOrResolve,
 } from "./update-command-service-plan.js";
 
 function matchesStoppedService(
@@ -290,15 +296,23 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     (inspection.kind !== verdict.kind ||
       !matchesStoppedService(before, params.state, inspection, params.allowIncompleteInspection))
   ) {
+    const unavailable = inspection.kind === "unavailable";
     throw new GatewayServiceUpdateOwnershipError(
-      inspection.kind === "unavailable"
-        ? params.state.runtime?.inspectionFailure?.timeoutMs !== undefined
-          ? inspection.message
-          : "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
-        : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
+      createUpdatePreflightDiagnostics({
+        check: unavailable ? "managed-service-runtime" : "managed-service-ownership",
+        code:
+          inspection.kind === "unavailable"
+            ? (inspection.inspectionReason ?? "service-ownership-unverified")
+            : "service-ownership-changed",
+        required: `admitted service ownership ${verdict.kind}; manager UID ${before.serviceManagerUid ?? "unavailable"}`,
+        detected: `${inspection.kind}; runtime ${params.state.runtime?.status ?? "unavailable"}; manager UID ${managerUid ?? "unavailable"}`,
+        installRoot: await tryRealpathOrResolve(params.root),
+        binaryPath: path.join(params.root, "openclaw.mjs"),
+        gatewayInstall: (await summarizeGatewayServiceLayout(params.state.command))
+          ?.packageRootReal,
+        remedy: `${unavailable ? (inspection.inspectionReason || params.state.runtime?.inspectionFailure?.timeoutMs !== undefined ? inspection.message : GATEWAY_SERVICE_INSPECTION_WARNING) : "Gateway service ownership or manager identity changed."} Run openclaw gateway status --deep and retry through the owning installation.`,
+      }),
       undefined,
-      inspection.kind === "unavailable" ? inspection.inspectionReason : undefined,
-      inspection.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   return inspection.kind === "owned" && verdict?.kind === "owned" && !verdict.refreshDefinition

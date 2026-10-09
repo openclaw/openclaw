@@ -234,6 +234,7 @@ describe("mattermost target resolution", () => {
       enabled: true,
       baseUrl: "https://mm.example.com",
       botToken: "token",
+      config: {},
     });
     fetchMattermostUser.mockResolvedValue({ id: "cdef1234abcd1234abcd1234ab" });
     const input = "cdef1234abcd1234abcd1234ab";
@@ -256,6 +257,7 @@ describe("mattermost target resolution", () => {
       enabled: false,
       baseUrl: "https://mm.example.com",
       botToken: "token",
+      config: {},
     });
 
     await expect(

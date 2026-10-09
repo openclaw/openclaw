@@ -1,4 +1,3 @@
-// Control UI tool icon set, split from icons.ts to keep both under the max-lines cap.
 import { html, nothing, svg, type SVGTemplateResult, type TemplateResult } from "lit";
 import { neutralMark } from "./neutral-mark.ts";
 

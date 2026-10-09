@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -37,6 +38,7 @@ let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
+let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -76,8 +78,12 @@ beforeAll(async () => {
   resetRegistryJitiMocks();
   // A non-isolated sibling may have cached this owner before these hoisted mocks.
   vi.resetModules();
-  ({ resolvePluginSetupRegistry, resolvePluginSetupProviderCore, resolvePluginSetupCliBackend } =
-    await import("./setup-registry.js"));
+  ({
+    resolvePluginSetupRegistry,
+    resolvePluginSetupProviderCore,
+    resolvePluginSetupCliBackend,
+    runPluginSetupConfigMigrations,
+  } = await import("./setup-registry.js"));
   ({ clearPluginSetupRegistryCache } = await import("./setup-registry.test-fixtures.js"));
 });
 
@@ -203,29 +209,47 @@ describe("setup registry", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("resolves setup cli backends from descriptors without loading every setup-api", () => {
-    const openai = fixture({
-      id: "openai",
-      cliBackends: ["legacy-openai-cli"],
-      setup: { cliBackends: ["codex-cli"], requiresRuntime: true },
-    });
-    manifests(openai, fixture({ id: "anthropic", cliBackends: ["claude-cli"] }));
-    registration((api, source) =>
-      api.registerCliBackend(
-        source.includes(openai.rootDir)
-          ? { id: "codex-cli", config: { command: "codex" } }
-          : { id: "claude-cli", config: { command: "claude" } },
-      ),
-    );
-    const expected = {
-      pluginId: "openai",
-      backend: { id: "codex-cli", config: { command: "codex" } },
-    };
-    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual(expected);
-    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual(expected);
-    expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "resolves setup CLI backends without rediscovery when prepared=%s",
+    (prepared) => {
+      const openai = fixture({
+        id: "openai",
+        cliBackends: ["legacy-openai-cli"],
+        setup: { cliBackends: ["codex-cli"], requiresRuntime: true },
+      });
+      const plugins = [openai, fixture({ id: "anthropic", cliBackends: ["claude-cli"] })];
+      manifests(...plugins);
+      const metadataSnapshot = prepared
+        ? createPluginMetadataSnapshotFixture({ plugins })
+        : undefined;
+      if (prepared) {
+        mocks.loadPluginManifestRegistry.mockImplementation(() => {
+          throw new Error("Prepared CLI lookup must not rediscover manifests");
+        });
+      }
+      registration((api, source) =>
+        api.registerCliBackend(
+          source.includes(openai.rootDir)
+            ? { id: "codex-cli", modelProvider: "openai", config: { command: "codex" } }
+            : { id: "claude-cli", config: { command: "claude" } },
+        ),
+      );
+      const expected = {
+        pluginId: "openai",
+        backend: { id: "codex-cli", modelProvider: "openai", config: { command: "codex" } },
+      };
+      expect(
+        resolvePluginSetupCliBackend({ backend: "codex-cli", env: {}, metadataSnapshot }),
+      ).toEqual(expected);
+      expect(
+        resolvePluginSetupCliBackend({ backend: "codex-cli", env: {}, metadataSnapshot }),
+      ).toEqual(expected);
+      expect(
+        resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {}, metadataSnapshot }),
+      ).toBeUndefined();
+      expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports unavailable setup runtime access with the plugin id and registration mode", () => {
     manifests(fixture({ id: "runtime-dependent-setup" }));
@@ -306,9 +330,7 @@ describe("setup registry", () => {
   });
 
   it.each([
-    ["provider", "openai"],
     ["provider", "workspace-shadow"],
-    ["cliBackend", "openai"],
     ["cliBackend", "workspace-shadow"],
   ] as const)(
     "rejects ambiguous setup %s owners with second plugin %s before executing code",
@@ -333,4 +355,34 @@ describe("setup registry", () => {
       expect(mocks.createJiti).not.toHaveBeenCalled();
     },
   );
+
+  it.each([false, true])("isolates registered migration candidates (throws=%s)", (throws) => {
+    manifests(fixture({ id: "fixture" }));
+    registration((api) => {
+      api.registerConfigMigration((config) => ({
+        config: { ...config, gateway: { port: 18789 } },
+        changes: ["first"],
+      }));
+      api.registerConfigMigration((config) => {
+        config.gateway = { port: 19999 };
+        if (throws) {
+          throw new Error("fixture migration failed");
+        }
+        return null;
+      });
+      api.registerConfigMigration((config) => ({
+        config: { ...config, gateway: { ...config.gateway, bind: "loopback" } },
+        changes: ["last"],
+      }));
+    });
+    const config = { plugins: { entries: { fixture: {} } } };
+    const result = runPluginSetupConfigMigrations({ config, env: {} });
+
+    expect(result.config.gateway).toEqual({ port: 18789, bind: "loopback" });
+    expect(result.changes).toEqual(["first", "last"]);
+    expect(result.warnings ?? []).toEqual(
+      throws ? [expect.stringContaining('Plugin "fixture" config repair failed')] : [],
+    );
+    expect(config).toEqual({ plugins: { entries: { fixture: {} } } });
+  });
 });

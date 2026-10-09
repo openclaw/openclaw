@@ -50,12 +50,10 @@ enum ChatSessionBatchMutationRunner {
         var succeeded: [(Int, String)] = []
         var failures: [String: String] = [:]
         await withTaskGroup(of: (Int, String, String?).self) { group in
-            var nextIndex = 0
-            while nextIndex < limit {
-                let index = nextIndex
+            for index in 0..<limit {
                 group.addTask { await run(index) }
-                nextIndex += 1
             }
+            var nextIndex = limit
             while let (index, key, error) = await group.next() {
                 if let error {
                     failures[key] = error
@@ -185,7 +183,10 @@ struct ChatSessionInspectorSheet: View {
                         .help("Copy session key")
                     }
                     self.optionalRow("Kind", self.details.kind)
-                    self.optionalRow("Agent", self.details.agentID)
+                    self.optionalRow(
+                        "Agent",
+                        self.details
+                            .agentID ?? (self.viewModel.sidebarData == nil ? nil : self.displayedSession.agentId))
                 }
 
                 Section("Organization") {

@@ -9,18 +9,29 @@ export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
 export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
 
-export type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
+export type UserProfile = Omit<
+  UserProfileListItem,
+  "emails" | "githubIdentity" | "hasAvatar" | "effectiveRole" | "roleSource"
+>;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 
-export type UserProfileDisplay = {
-  id: string;
-  displayName: string | null;
+export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" | "hasAvatar"> & {
   avatarRevision: string;
-  hasAvatar: boolean;
+};
+
+export type UserProfileAuthority = {
+  profileId: string;
+  role: string | null;
+  githubLogin?: string | null;
+  aliases: string[];
+  display: UserProfileDisplay;
 };
 
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
+
+/** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */
+export type CachedGitHubIdentityBinding = { accountId: number; email: string } | { login: string };
 
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
@@ -54,6 +65,7 @@ export type UserChannelIdentityAuthorityFacts = {
   role: string | null;
   emails: string[];
   githubAccountIds?: readonly number[];
+  githubLogin?: string;
   loginIdentities: string[];
 };
 
@@ -94,14 +106,19 @@ export type UserProfileAccessFacts = Readonly<{
   emails: readonly string[];
   githubAccountIds?: readonly number[];
   assignedRole: string | null;
+  githubLogin?: string | null;
 }>;
+
+export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "display"> & {
+  aliases: ReadonlySet<string>;
+};
 
 export type PreparedUserProfileIdentity = {
   readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],
     requiredGithubAccountIds?: readonly number[],
-  ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole">;
+  ): Pick<UserProfileAccessFacts, "profileId" | "assignedRole" | "githubLogin">;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,
@@ -141,4 +158,4 @@ export type UserProfilesDatabase = {
 export type ProfileDisplayRow = Pick<
   UserProfilesDatabase["user_profiles"],
   "id" | "display_name" | "avatar_mime" | "avatar_sha256" | "merged_into" | "updated_at" | "role"
-> & { has_avatar: SqlBool; githubAccountIds?: readonly number[] };
+> & { has_avatar: SqlBool; githubAccountIds?: readonly number[]; githubLogin?: string | null };

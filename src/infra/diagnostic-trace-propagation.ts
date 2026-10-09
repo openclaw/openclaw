@@ -26,13 +26,6 @@ const DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY = Symbol.for(
   "openclaw.diagnosticTracePropagation.state.v1",
 );
 
-function createDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
-  return {
-    marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
-    bridges: new Set(),
-  };
-}
-
 function isDiagnosticTracePropagationState(
   value: unknown,
 ): value is DiagnosticTracePropagationState {
@@ -51,7 +44,10 @@ function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
   if (isDiagnosticTracePropagationState(existing)) {
     return existing;
   }
-  const state = createDiagnosticTracePropagationState();
+  const state: DiagnosticTracePropagationState = {
+    marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
+    bridges: new Set(),
+  };
   Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY, {
     configurable: true,
     enumerable: false,

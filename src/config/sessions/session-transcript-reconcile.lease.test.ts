@@ -8,6 +8,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { readOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
@@ -99,6 +100,8 @@ it.each([
           touchSessionEntry: false,
         });
         await waitForSessionTranscriptIndexReconcile(options);
+        // Exercise cold publication admission independently of the seed writer.
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
         const state = openOpenClawStateDatabase();

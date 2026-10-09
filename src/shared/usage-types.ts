@@ -23,23 +23,18 @@ export type SessionUsageCreator = {
   actor?: SessionCreatedActor;
 };
 
-/** One session or session-family row returned by the gateway usage endpoint. */
 export type SessionUsageEntry = {
   /** Stable row key for UI diffing; may be a session id or family key. */
   key: string;
-  /** Human-readable session label when available. */
   label?: string;
   /** Concrete session id for instance-scoped rows. */
   sessionId?: string;
-  /** Whether this row represents one session instance or a grouped family. */
   scope?: "instance" | "family";
   /** Grouping key shared by related historical session instances. */
   sessionFamilyKey?: string;
   /** Latest/current session id for a grouped family row. */
   currentSessionId?: string;
-  /** Session ids included in a family aggregate row. */
   includedSessionIds?: string[];
-  /** Count of historical instances included in the family row. */
   historicalInstanceCount?: number;
   updatedAt?: number;
   agentId?: string;
@@ -69,7 +64,6 @@ export type SessionUsageEntry = {
   contextWeight?: SessionSystemPromptReport | null;
 };
 
-/** Cross-session aggregate buckets returned alongside usage rows. */
 export type SessionsUsageAggregates = {
   /** Sessions with activity in the requested range, before the row `limit` cap. */
   sessionCount?: number;
@@ -105,7 +99,6 @@ export type SessionsUsageAggregates = {
   }>;
 };
 
-/** Full gateway response for the sessions usage view. */
 export type SessionsUsageResult = {
   /** Unix epoch milliseconds for when this report was generated. */
   updatedAt: number;

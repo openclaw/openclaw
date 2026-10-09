@@ -1,13 +1,12 @@
 import path from "node:path";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
-import {
-  runGlobalPackageUpdateSteps,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-steps.js";
-import type { PackageActivationOptions } from "../../infra/package-update-swap-contract.js";
+import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import type {
+  PackageActivationOptions,
+  PackageUpdateTransaction,
+} from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
   failedPackageVerificationStep,
@@ -72,14 +71,8 @@ import {
 } from "./update-command-config-snapshot.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
-export async function readPackageUpdateIdentity(root: string) {
-  const [version, buildId] = await Promise.all([
-    readPackageVersion(root),
-    readBuiltGatewayBuildId(root),
-  ]);
-  return { version, ...(buildId ? { buildId } : {}) };
-}
 
 type PackageDoctorContext = {
   runId: string;
@@ -109,36 +102,13 @@ type PackageDoctorOptions = {
   getDoctorContext?: () => PackageDoctorContext | undefined;
 };
 
-export function preparePackageDoctorContext({
-  capable,
-  runId,
-  executorFence,
-  inputHash,
-  ...context
-}: Omit<PackageDoctorContext, "runId" | "executorFence" | "inputHash"> & {
-  capable: boolean;
-  runId?: string;
-  executorFence?: UpdateRecoveryFence;
-  inputHash?: string | null;
-}) {
-  context.assertCurrent();
-  if (!capable) {
-    return undefined;
-  }
-  if (!runId || !executorFence || inputHash === undefined) {
-    throw new Error("Validated Doctor requires its live update executor and captured config hash.");
-  }
-  return {
-    ...context,
-    runId,
-    executorFence,
-    inputHash: inputHash ?? hashConfigRaw(null),
-  };
-}
-
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
-  const assertCurrent = params.assertCurrent;
+  const assertRequesterCurrent = params.assertCurrent;
   const context = params.getDoctorContext?.();
+  const assertCurrent = () => {
+    assertRequesterCurrent?.();
+    context?.assertCurrent();
+  };
   context?.assertCurrent();
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -178,8 +148,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     total: 0,
   };
   await params.progress?.onStepStart?.(doctorProgressInfo);
-  assertCurrent?.();
-  context?.assertCurrent();
+  assertCurrent();
   const configSnapshot = params.onConfigSnapshot
     ? await captureUpdateConfigSnapshot(resolveConfigPath(doctorEnv), doctorEnv)
     : undefined;
@@ -189,14 +158,9 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     failure?: { error: unknown },
   ) => {
     let completionFailure = failure;
-    let databaseReceipt: UpdateStepResult | undefined;
-    if (context?.databaseBackup) {
-      databaseReceipt = recordUpdateDatabaseWrites(
-        context.databaseBackup,
-        doctorResult?.databaseWrites,
-        doctorStep,
-      );
-    }
+    const databaseReceipt = context?.databaseBackup
+      ? recordUpdateDatabaseWrites(context.databaseBackup, doctorResult?.databaseWrites, doctorStep)
+      : undefined;
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal
@@ -334,8 +298,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         index: 0,
         total: 0,
       });
-      assertCurrent?.();
-      context?.assertCurrent();
+      assertCurrent();
     }
     await reportCompletion({
       ...doctorProgressInfo,
@@ -355,14 +318,14 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       configChanges: doctorStep.configChanges,
       configWriteRefusal: doctorStep.configWriteRefusal,
     });
-    assertCurrent?.();
-    context?.assertCurrent();
+    assertCurrent();
     if (completionFailure) {
       throw completionFailure.error;
     }
     return doctorStep;
   };
   const completedSteps: UpdateStepResult[] = [];
+  let processSettlement: UpdateStepResult | undefined;
   const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
     runUpdateStep({
       name: `${CLI_NAME} doctor`,
@@ -390,7 +353,13 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         ? await withUpdateDoctorChild(
             {
               root: params.root,
-              context: { ...context, assertRequesterCurrent: context.assertBoundChildCurrent },
+              context: {
+                ...context,
+                assertRequesterCurrent: context.assertBoundChildCurrent,
+                onProcessSettlement: (step) => {
+                  processSettlement = step;
+                },
+              },
               input: {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
@@ -417,12 +386,31 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       if (!recorded) {
         throw outcome.error;
       }
-      return await completeDoctorStep(recorded, doctorResult, outcome);
+      outcome = { step: await completeDoctorStep(recorded, doctorResult, outcome) };
+    } else {
+      outcome = { step: await completeDoctorStep(outcome.step, doctorResult) };
     }
-    return await completeDoctorStep(outcome.step, doctorResult);
-  } finally {
-    params.results?.push(...completedSteps);
+  } catch (error) {
+    outcome = { error };
   }
+  try {
+    params.results?.push(...(processSettlement ? [processSettlement] : []), ...completedSteps);
+    if (processSettlement) {
+      await params.progress?.onStepComplete?.({ ...processSettlement, index: 0, total: 0 });
+      assertCurrent();
+    }
+  } catch (error) {
+    if ("error" in outcome) {
+      throw new AggregateError([outcome.error, error], "Doctor settlement recording failed", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.step;
 }
 
 /** Keep package staging open until its source owner publishes the validated checkout. */
@@ -649,6 +637,7 @@ export async function runPackageInstallUpdate(
     });
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
+  const doctorSettlements: UpdateStepResult[] = [];
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -684,8 +673,15 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: (root, results) =>
-      runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results }),
+    postVerifyStep: async (root, results) => {
+      try {
+        return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
+      } finally {
+        doctorSettlements.push(
+          ...(results?.filter((result) => result.name === "doctor process settlement") ?? []),
+        );
+      }
+    },
   });
 
   const afterBuildId = packageUpdate.activePackageRoot
@@ -711,7 +707,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: packageUpdate.steps,
+    steps: [...packageUpdate.steps, ...doctorSettlements],
     failedStep: packageUpdate.failedStep ?? undefined,
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,

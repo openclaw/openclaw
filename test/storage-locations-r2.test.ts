@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { r2StorageProvider } from "../extensions/cloudflare/api.js";
 import { openStorageLocation } from "../src/storage/locations.js";
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 
 const { s3ModulePath, send } = await vi.hoisted(async () => {
   const { createRequire } = await import("node:module");

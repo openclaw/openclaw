@@ -54,20 +54,15 @@ export function createProviderAuthAvailability(
   /**
    * Checks whether a provider has usable config/env auth or matching local auth profiles.
    */
-  function isProviderApiKeyConfigured(params: {
-    /** Provider id to check for config/env auth or local auth profiles. */
-    provider: string;
-    /** Optional runtime config used to resolve provider-owned API-key credentials. */
-    cfg?: OpenClawConfig;
-    /** Agent directory containing auth profiles. */
-    agentDir?: string;
-    /** Optional allowed profile credential types. */
-    profileTypes?: readonly AuthProfileCredential["type"][];
-    /** Provider capability the credential must authorize. */
-    capability?: string;
-    /** Optional provider-owned acceptance predicate for a known selected credential. */
-    acceptsApiKey?: (apiKey: string) => boolean;
-  }): boolean {
+  function isProviderApiKeyConfigured(
+    params: Pick<
+      ProviderAuthProfileLookup,
+      "provider" | "cfg" | "agentDir" | "profileTypes" | "capability"
+    > & {
+      /** Optional provider-owned acceptance predicate for a known selected credential. */
+      acceptsApiKey?: (apiKey: string) => boolean;
+    },
+  ): boolean {
     const agentDir = params.agentDir?.trim();
     if (params.acceptsApiKey) {
       const { acceptsApiKey, ...availability } = params;
@@ -255,14 +250,11 @@ export function createProviderAuthAvailability(
     return undefined;
   }
 
-  function resolveUsableProviderAuthProfiles(params: {
-    provider: string;
-    cfg?: OpenClawConfig;
-    agentDir?: string;
-    allowKeychainPrompt?: boolean;
-    includeExternalCliAuth?: boolean;
-    includePendingOAuthRefresh?: boolean;
-  }): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
+  function resolveUsableProviderAuthProfiles(
+    params: Omit<ProviderAuthProfileLookup, "profileTypes" | "capability"> & {
+      includePendingOAuthRefresh?: boolean;
+    },
+  ): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
     const externalCli = params.includeExternalCliAuth
       ? externalCliDiscoveryForProviderAuth({

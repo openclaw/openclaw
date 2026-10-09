@@ -80,7 +80,9 @@ describe("renderApps", () => {
     const card = launch?.closest(".apps-card");
     expect(card?.querySelector("h3")?.textContent).toBe("macOS");
     expect(
-      card?.querySelector("a[href='https://github.com/openclaw/openclaw/releases']")?.textContent?.trim(),
+      card
+        ?.querySelector("a[href='https://github.com/openclaw/openclaw/releases']")
+        ?.textContent?.trim(),
     ).toBe("Download");
   });
 

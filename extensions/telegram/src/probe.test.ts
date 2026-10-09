@@ -6,10 +6,9 @@ import { probeTelegram } from "./probe.js";
 const resolveTelegramTransport = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
 
-vi.mock("./fetch.js", () => ({
+vi.mock("./fetch.js", async () => ({
   resolveTelegramTransport,
-  resolveTelegramApiBase: (apiRoot?: string) =>
-    apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
+  resolveTelegramApiBase: (await import("./api-root.js")).normalizeTelegramApiRoot,
 }));
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
@@ -95,6 +94,23 @@ describe("probeTelegram retry logic", () => {
     } else {
       delete (globalThis as { fetch?: typeof fetch }).fetch;
     }
+  });
+
+  it.each([
+    "https://api.telegram.org/bot123456:ABC_def/",
+    "https://proxy.example.test/custom/bot123456:ABC_def",
+    "https://proxy.example.test/custom/%62ot123456%3AABC_def/?query=ignored#fragment",
+  ])("refuses an unrepaired bot endpoint before fetching: %s", async (apiRoot) => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+
+    expect(await probeTelegram(token, timeoutMs, { apiRoot })).toMatchObject({
+      ok: false,
+      error:
+        "Telegram apiRoot must be the Bot API root without /bot<TOKEN>. Run openclaw doctor --fix to repair stored config.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("should fail after 3 unsuccessful attempts", async () => {
@@ -265,7 +281,7 @@ describe("probeTelegram retry logic", () => {
 
       const result = await probePromise;
       expect(result.ok).toBe(true);
-      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error", timeoutError);
+      expect(localForceFallback).toHaveBeenCalledWith("check timeout/network error", timeoutError);
       expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
     } finally {
       vi.useRealTimers();

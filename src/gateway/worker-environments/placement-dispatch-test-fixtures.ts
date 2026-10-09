@@ -60,7 +60,7 @@ export async function seedSyncingPlacement(
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): Promise<WorkerSessionPlacementRecord> {
   let current = await seedProvisioningPlacement(store, environmentId, executionMode);
-  current = store.transition({
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "provisioning",
     to: "syncing",
@@ -76,7 +76,7 @@ export async function seedStartingPlacement(
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): Promise<WorkerSessionPlacementRecord> {
   let current = await seedSyncingPlacement(store, environmentId, executionMode);
-  current = store.transition({
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
     to: "starting",

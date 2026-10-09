@@ -1,4 +1,5 @@
 import os from "node:os";
+import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
@@ -50,9 +51,12 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
   }
-  const remote = parseGitHubRemoteUrl(repository.url);
+  const githubHost = resolveConfiguredGitHubHost(params.cfg);
+  const remote = parseGitHubRemoteUrl(repository.url, githubHost);
   if (!remote) {
-    throw new Error("Repository workspace has no GitHub source");
+    throw new Error(
+      `Repository workspace does not match the configured GitHub host (${githubHost}); restore its GitHub configuration before retrying the Gateway move`,
+    );
   }
   const branch = () =>
     readRepositoryGitHubPublicationBranch({
@@ -104,7 +108,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       gitUrl: repository.url,
       requiredCommit: published?.pushed_head_commit ?? repository.baseCommit,
     },
-    { signal: params.signal, token: github?.token },
+    { signal: params.signal, token: github?.token, assertCurrent },
   ).catch((error: unknown) => {
     if (error instanceof ProjectCloneError && error.failure === "auth_required") {
       throw new ProjectCloneError(
@@ -115,8 +119,12 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     throw error;
   });
   assertCurrent();
-  const { step, require: command, run } = createGitHubPublicationCommandRunner(assertCurrent);
-  const cloneOptions = { signal: params.signal, token: github?.token };
+  const {
+    step,
+    require: command,
+    run,
+  } = createGitHubPublicationCommandRunner(assertCurrent, "session.materialize");
+  const cloneOptions = { signal: params.signal, token: github?.token, assertCurrent };
   const source = { url: repository.url, target: project.repoRoot };
   const remoteHead = await step(() =>
     readProjectCheckoutRemoteHead({ ...source, branch: repository.branch }, cloneOptions),

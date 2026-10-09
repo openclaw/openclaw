@@ -108,11 +108,14 @@ describe("run-android-gradle", () => {
 const { spawn } = require("node:child_process");
 const descendant = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);",
-], { stdio: "ignore" });
-process.stdout.write(
-  JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }) + "\\n",
-);
+  "setInterval(() => {}, 1_000); process.stdout.write('ready');",
+], { stdio: ["ignore", "pipe", "ignore"] });
+// Resistance/escalation is covered by managed-child-process.test.ts.
+descendant.stdout.once("data", () => {
+  process.stdout.write(
+    JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }) + "\\n",
+  );
+});
 setInterval(() => {}, 1_000);
 `;
       const runnerSource = `

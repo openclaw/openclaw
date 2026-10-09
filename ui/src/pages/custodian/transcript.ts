@@ -23,9 +23,10 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
-import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
+import "../../components/option-card.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
@@ -166,6 +167,14 @@ export class CustodianTranscriptLoader {
 
   get refreshing(): boolean {
     return this.inFlight !== null;
+  }
+
+  get available(): boolean {
+    const snapshot = this.getGatewaySnapshot();
+    return (
+      snapshot !== undefined &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.chat.history") === true
+    );
   }
 
   deferRecovery(): void {
@@ -339,12 +348,23 @@ export function renderCustodianTranscriptEntry(params: {
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
     ${
       params.showQuestion && question
-        ? renderCustodianQuestionCard({
-            question,
-            disabled: params.questionDisabled,
-            onSelect: params.onSelect,
-            onSkip: params.onSkip,
-          })
+        ? html`<div class="custodian__option-card">
+            <openclaw-option-card
+              .props=${{
+                header: question.header,
+                question: question.question,
+                options: question.options.map((option) => ({
+                  value: option.label,
+                  label: option.label,
+                  description: option.description,
+                  recommended: option.recommended,
+                })),
+                disabled: params.questionDisabled,
+                onSelect: params.onSelect,
+                onSkip: params.onSkip,
+              }}
+            ></openclaw-option-card>
+          </div>`
         : nothing
     }
     ${

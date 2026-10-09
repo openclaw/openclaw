@@ -8,16 +8,23 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
+import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  configureMockSubagentRegistryPersistence,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDiskOrThrow,
-  persistSubagentRunsToDisk,
   prepareSubagentMaintenanceRunsSnapshotForRead,
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentRunsSnapshotForSessions,
@@ -26,8 +33,6 @@ import {
   loadSubagentRunsForSessionsInDatabase,
   subagentRunsDurableBasisMatches,
 } from "./subagent-registry.store.sqlite.js";
-import * as registryStore from "./subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 
 function retainedRun() {
   return createSubagentRunRecord({
@@ -70,7 +75,7 @@ it.each(["reopening", "replacing"] as const)(
   async (change) => {
     await withPersistedReads(async () => {
       const entry = retainedRun();
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]), [entry.runId]);
+      persistRegistryFixture(new Map([[entry.runId, entry]]));
       const context = captureOpenClawStateWorkerContext();
       const original = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
       const release = createDeferredCore();
@@ -84,7 +89,7 @@ it.each(["reopening", "replacing"] as const)(
           ...entry,
           completion: { required: false, resultText: "retired publication" },
         };
-        persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, retired]]), [entry.runId]);
+        persistRegistryFixture(new Map([[entry.runId, retired]]), [entry.runId]);
         release.resolve();
         await closing;
         if (change === "replacing") {
@@ -131,7 +136,7 @@ it.each(["delete", "replace", "move alias", "update"] as const)(
         completion: { required: false, resultText: "current result" },
       };
       const current = new Map(publication === "delete" ? [] : [[replacement.runId, replacement]]);
-      persistSubagentRunsToDiskOrThrow(current, [entry.runId, replacement.runId]);
+      persistRegistryFixture(current, [entry.runId, replacement.runId]);
       expect(prepared.consume((runs) => [...runs.values()])).toEqual({
         ready: true,
         value: publication === "delete" || publication === "move alias" ? [] : [replacement],
@@ -267,7 +272,7 @@ it.each(["unrelated", "relevant"] as const)(
                 requesterSessionKey: "agent:other:main",
                 childSessionKey: "agent:other:subagent:child",
               };
-        persistSubagentRunsToDiskOrThrow(new Map([[update.runId, update]]), [update.runId]);
+        persistRegistryFixture(new Map([[update.runId, update]]), [update.runId]);
         expect(prepared.consume((runs) => runs.get(entry.runId)?.task)).toEqual(
           kind === "relevant" ? { ready: false } : { ready: true, value: entry.task },
         );
@@ -279,11 +284,11 @@ it.each(["unrelated", "relevant"] as const)(
 );
 
 it.each(["update", "delete"] as const)(
-  "preserves an unpublished named %s over fresh durable descendants",
+  "preserves fresh durable descendants after a refused named %s",
   async (kind) => {
     await withPersistedReads(async () => {
       const entry = retainedRun();
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]), [entry.runId]);
+      persistRegistryFixture(new Map([[entry.runId, entry]]));
       // A foreign committed value must beat the old resident committed snapshot.
       const foreign = { ...entry, task: "foreign committed task" };
       saveSubagentRegistryToSqlite(new Map([[foreign.runId, foreign]]));
@@ -298,24 +303,30 @@ it.each(["update", "delete"] as const)(
       } finally {
         fresh.dispose();
       }
-      const write = vi
-        .spyOn(registryStore, "saveSubagentRegistryChangesToSqlite")
-        .mockImplementation(() => {
+      const write = await configureMockSubagentRegistryPersistence({
+        persistRegistryRows: () => {
           throw new Error("synthetic persistence refusal");
-        });
+        },
+      });
       try {
-        const update = { ...entry, task: "unpublished local task" };
-        persistSubagentRunsToDisk(
-          kind === "update" ? new Map([[entry.runId, update]]) : new Map(),
-          [entry.runId],
-        );
+        const update = { ...entry, task: "refused local task" };
+        await expect(
+          mutateSubagentRuns(
+            [entry.runId],
+            () => ({
+              value: undefined,
+              postimages: new Map([[entry.runId, kind === "update" ? update : null]]),
+            }),
+            { runs: new Map([[foreign.runId, foreign]]) },
+          ),
+        ).rejects.toThrow("synthetic persistence refusal");
         const prepared = await prepareSubagentRunsSnapshotForSessions(new Map(), [
           entry.requesterSessionKey,
         ]);
         try {
           expect(prepared.consume((runs) => runs.get(entry.runId)?.task)).toEqual({
             ready: true,
-            value: kind === "update" ? update.task : undefined,
+            value: foreign.task,
           });
         } finally {
           prepared.dispose();
@@ -389,27 +400,63 @@ it.each(["malformed payload", "duplicate identity", "topology", "unrelated row"]
   },
 );
 
-it("keeps prepared maintenance facts across payload-only publication and refuses changed protection", async () => {
+it("returns revoked maintenance facts without rereading during publication churn", async () => {
   await withPersistedReads(async () => {
     const entry = retainedRun();
     saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
-    const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
+    const read = stateReads.executeExistingOpenClawStateRead;
+    let publications = 0;
+    const reads = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockImplementation(async (...args) => {
+        const reply = await read(...args);
+        if (publications < 3) {
+          publications += 1;
+          persistRegistryFixture(
+            new Map([[entry.runId, { ...entry, cleanupCompletedAt: publications }]]),
+            [entry.runId],
+          );
+        }
+        return reply;
+      });
     try {
-      const original = prepared.capture();
-      const payloadOnly = {
-        ...entry,
-        task: "new retained prompt",
-        completion: { required: false, resultText: "new retained result" },
-      };
-      const changedRunIds = [entry.runId];
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, payloadOnly]]), changedRunIds);
-      expect(prepared.capture()).toEqual(original);
-
-      const completed = { ...payloadOnly, cleanupCompletedAt: Date.now() };
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, completed]]), changedRunIds);
-      expect(() => prepared.capture()).toThrow("maintenance facts changed");
+      const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
+      try {
+        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+        expect(reads).toHaveBeenCalledTimes(1);
+      } finally {
+        prepared.dispose();
+      }
     } finally {
-      prepared.dispose();
+      reads.mockRestore();
     }
   });
 });
+
+it.each(["named", "full"] as const)(
+  "keeps prepared maintenance facts across payload-only %s publication and refuses changed protection",
+  async (publication) => {
+    await withPersistedReads(async () => {
+      const entry = retainedRun();
+      saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+      const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
+      try {
+        const original = prepared.capture();
+        const payloadOnly = {
+          ...entry,
+          task: "new retained prompt",
+          completion: { required: false, resultText: "new retained result" },
+        };
+        const changedRunIds = publication === "named" ? [entry.runId] : undefined;
+        persistRegistryFixture(new Map([[entry.runId, payloadOnly]]), changedRunIds);
+        expect(prepared.capture()).toEqual(original);
+
+        const completed = { ...payloadOnly, cleanupCompletedAt: Date.now() };
+        persistRegistryFixture(new Map([[entry.runId, completed]]), changedRunIds);
+        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+      } finally {
+        prepared.dispose();
+      }
+    });
+  },
+);

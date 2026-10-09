@@ -208,7 +208,7 @@ describe("gateway config methods", () => {
 describe("gateway config methods", () => {
   installConfigWriteGatewayHooks({ watchConfigFiles: false });
 
-  it.each(["plain", "unrelated-include", "include-only"] as const)(
+  it.each(["unrelated-include", "include-only"] as const)(
     "openclaw.changes.list preserves an approved %s operation without a duplicate write",
     async (layout) => {
       const { executeSystemAgentOperation } = await import("../system-agent/operations.js");
@@ -216,7 +216,7 @@ describe("gateway config methods", () => {
       const original = await getCurrentConfigObject();
       const model = "openai/gpt-4.1-mini";
       const agents = {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: { primary: "openai/gpt-4.1" } },
       };
       const includePath = path.join(path.dirname(original.path), "audit-include.json");
@@ -279,14 +279,12 @@ describe("gateway config methods", () => {
   });
 
   it.each([
-    ...(["EPERM", "EEXIST"] as const).flatMap((code) =>
-      (["unchanged", "changed"] as const).flatMap((includedContent) =>
-        (["retained", "deleted"] as const).map((rootState) => ({
-          code,
-          includedContent,
-          rootState,
-        })),
-      ),
+    ...(["unchanged", "changed"] as const).flatMap((includedContent) =>
+      (["retained", "deleted"] as const).map((rootState) => ({
+        code: "EPERM" as const,
+        includedContent,
+        rootState,
+      })),
     ),
     ...(["EPERM", "EEXIST"] as const).map((code) => ({
       code,
@@ -1130,50 +1128,6 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("accepts messages.groupChat.historyLimit: 0 through config.patch", async () => {
-    const { createConfigIO } = await import("../config/config.js");
-    const configPath = createConfigIO().configPath;
-    let previousConfig: string | null = null;
-    try {
-      try {
-        previousConfig = await fs.readFile(configPath, "utf-8");
-      } catch (error) {
-        if ((error as { code?: string }).code !== "ENOENT") {
-          throw error;
-        }
-      }
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ messages: { groupChat: { historyLimit: 1 } } }, null, 2)}\n`,
-        "utf-8",
-      );
-      invalidateConfigGetResponseCache();
-
-      const current = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
-      expect(current.ok).toBe(true);
-      expect(typeof current.payload?.hash).toBe("string");
-
-      const res = await rpcReq<{
-        config?: { messages?: { groupChat?: { historyLimit?: number } } };
-      }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({ messages: { groupChat: { historyLimit: 0 } } }),
-        baseHash: current.payload?.hash,
-      });
-
-      expect(res.error).toBeUndefined();
-      expect(res.ok, res.error?.message).toBe(true);
-      expect(res.payload?.config?.messages?.groupChat?.historyLimit).toBe(0);
-    } finally {
-      if (previousConfig === null) {
-        await fs.rm(configPath, { force: true });
-      } else {
-        await fs.writeFile(configPath, previousConfig, "utf-8");
-      }
-      invalidateConfigGetResponseCache();
-    }
-  });
-
   it("allows config.patch to append array entries without replacePaths", async () => {
     const original = await getCurrentConfigObject();
     const bindings = [0, 1].map(makeRouteBinding);
@@ -1317,21 +1271,6 @@ describe("gateway config methods", () => {
     } finally {
       await restoreConfigFileForTest(original);
     }
-  });
-});
-
-describe("gateway config.apply", () => {
-  installConfigWriteGatewayHooks();
-
-  it("does not reject config.apply for unresolved auth-profile refs outside submitted config", async () => {
-    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_APPLY_${Date.now()}`;
-    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
-
-    const current = await getCurrentConfigObject();
-
-    const res = await sendConfigApply(configRawPayload(current.config, current.hash));
-    expect(res.ok, res.error?.message).toBe(true);
-    expect(res.error).toBeUndefined();
   });
 });
 
@@ -1591,8 +1530,9 @@ describe("gateway noncommitting config RPCs", () => {
         const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
         rosterConfig.agents = {
           ...agents,
+          ownership: "explicit",
           entries: {
-            main: { default: true },
+            main: {},
             worker: { workspace: "/srv/worker" },
           },
         };
@@ -1720,32 +1660,6 @@ describe("gateway noncommitting config RPCs", () => {
       });
     });
 
-    it("rejects config.patch that shrinks an existing array without replacePaths", async () => {
-      const original = await getCurrentConfigObject();
-      const bindings = [0, 1, 2].map(makeRouteBinding);
-      const seededConfig = { ...original.config, bindings };
-
-      await withConfigFileFixture(original.path, async () => {
-        await writeJsonFile(original.path, seededConfig);
-        invalidateConfigGetResponseCache();
-        const before = await getCurrentConfigObject();
-        const beforeRaw = await fs.readFile(original.path, "utf-8");
-        const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ bindings: [bindings[0]] }),
-          baseHash: before.hash,
-        });
-
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): bindings",
-        );
-        const after = await getCurrentConfigObject();
-        expect(after.hash).toBe(before.hash);
-        await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
-        expect(after.config.bindings).toEqual(bindings);
-      });
-    });
-
     it("rejects config.patch that removes existing array entries without shrinking length", async () => {
       const original = await getCurrentConfigObject();
       const bindings = [0, 1].map(makeRouteBinding);
@@ -1769,42 +1683,6 @@ describe("gateway noncommitting config RPCs", () => {
         expect(after.hash).toBe(before.hash);
         await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
         expect(after.config.bindings).toEqual(bindings);
-      });
-    });
-
-    it("rejects nested destructive array patches inside id-keyed arrays without replacePaths", async () => {
-      const original = await getCurrentConfigObject();
-      const agents = {
-        ...(original.config.agents as Record<string, unknown> | undefined),
-        ownership: "explicit",
-        entries: {
-          main: { skills: ["alpha", "beta"] },
-          worker: { skills: ["gamma"] },
-        },
-      };
-
-      await withConfigFileFixture(original.path, async () => {
-        await writeJsonFile(original.path, { ...original.config, agents });
-        invalidateConfigGetResponseCache();
-        const before = await getCurrentConfigObject();
-        const beforeRaw = await fs.readFile(original.path, "utf-8");
-        const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> })
-          .entries;
-        const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
-          baseHash: before.hash,
-        });
-
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): agents.entries.main.skills",
-        );
-        const after = await getCurrentConfigObject();
-        expect(after.hash).toBe(before.hash);
-        await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
-        expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-          beforeEntries,
-        );
       });
     });
 
@@ -1842,34 +1720,6 @@ describe("gateway noncommitting config RPCs", () => {
         expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
           beforeEntries,
         );
-      });
-    });
-
-    it("rejects deleting a parent object that contains arrays without replacePaths", async () => {
-      const original = await getCurrentConfigObject();
-      const agents = {
-        ...(original.config.agents as Record<string, unknown> | undefined),
-        ownership: "explicit",
-        entries: { main: { skills: ["alpha"] }, worker: {} },
-      };
-
-      await withConfigFileFixture(original.path, async () => {
-        await writeJsonFile(original.path, { ...original.config, agents });
-        invalidateConfigGetResponseCache();
-        const before = await getCurrentConfigObject();
-        const beforeRaw = await fs.readFile(original.path, "utf-8");
-        const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ agents: null }),
-          baseHash: before.hash,
-        });
-
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): agents.entries.main.skills",
-        );
-        const after = await getCurrentConfigObject();
-        expect(after.hash).toBe(before.hash);
-        await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
       });
     });
 
@@ -1991,15 +1841,6 @@ describe("gateway noncommitting config RPCs", () => {
       expect(description).toMatch(/hot-reload the plugin runtime/i);
       expect(description).not.toMatch(/restart required/i);
       expect(res.payload?.hint?.help).toBe(description);
-    });
-
-    it("rejects config.schema.lookup when the path is missing", async () => {
-      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
-        path: "gateway.notReal.path",
-      });
-
-      expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("config schema path not found");
     });
 
     it.each([

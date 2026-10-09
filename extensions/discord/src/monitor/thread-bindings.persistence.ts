@@ -5,34 +5,21 @@ import {
   BINDINGS_BY_THREAD_ID,
   PERSIST_BY_ACCOUNT_ID,
   THREAD_BINDINGS_STATE,
-  THREAD_BINDINGS_NAMESPACE,
-  THREAD_BINDINGS_MAX_ENTRIES,
   normalizePersistedBinding,
   openThreadBindingsStore,
+  openThreadBindingsStoreAsync,
   removeBindingRecord,
   setBindingRecord,
   type ThreadBindingPersistence,
 } from "./thread-bindings.state.js";
-import type {
-  PersistedThreadBindingRecord,
-  ThreadBindingManager,
-  ThreadBindingRecord,
-} from "./thread-bindings.types.js";
+import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
 export function shouldPersistAnyBindingState(): boolean {
-  for (const value of PERSIST_BY_ACCOUNT_ID.values()) {
-    if (value) {
-      return true;
-    }
-  }
-  return false;
+  return [...PERSIST_BY_ACCOUNT_ID.values()].some(Boolean);
 }
 
 export function shouldPersistBindingMutations(): boolean {
-  if (shouldPersistAnyBindingState()) {
-    return true;
-  }
-  return THREAD_BINDINGS_STATE.loadedPersistentBindings;
+  return shouldPersistAnyBindingState() || THREAD_BINDINGS_STATE.loadedPersistentBindings;
 }
 
 export function snapshotThreadBindingJson(value: unknown): unknown {
@@ -40,7 +27,7 @@ export function snapshotThreadBindingJson(value: unknown): unknown {
   return serialized ? JSON.parse(serialized) : undefined;
 }
 
-function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadBindingRecord {
+function toPersistedBindingRecord(record: ThreadBindingRecord): ThreadBindingRecord {
   return (
     normalizePersistedBinding(record.threadId, snapshotThreadBindingJson(record)) ?? { ...record }
   );
@@ -103,7 +90,6 @@ export async function commitBindingRecord(params: {
   const revision = THREAD_BINDINGS_STATE.revision;
   let authorityRefused = false;
   let targetCommitted = false;
-  let committedWrites = 0;
   const assertCurrent = () => {
     try {
       params.assertCurrent?.();
@@ -144,10 +130,7 @@ export async function commitBindingRecord(params: {
     };
     THREAD_BINDINGS_STATE.activePersistence = active;
     try {
-      const store = getDiscordRuntime().state.openKeyedStore<PersistedThreadBindingRecord>({
-        namespace: THREAD_BINDINGS_NAMESPACE,
-        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-      });
+      const store = openThreadBindingsStoreAsync();
       // Preserve the namespace's registration order and bounded eviction recency.
       for (const [key, record] of records) {
         assertCurrent();
@@ -159,7 +142,6 @@ export async function commitBindingRecord(params: {
         await store.register(key, persisted, { assertCurrent });
         active.writingKey = undefined;
         active.committedKeys.add(key);
-        committedWrites += 1;
         targetCommitted ||= key === params.bindingKey;
       }
       assertCurrent();
@@ -171,7 +153,6 @@ export async function commitBindingRecord(params: {
           await store.delete(entry.key, { assertCurrent });
           active.writingKey = undefined;
           active.committedKeys.add(entry.key);
-          committedWrites += 1;
           targetCommitted ||= entry.key === params.bindingKey;
         }
       }
@@ -182,6 +163,7 @@ export async function commitBindingRecord(params: {
       THREAD_BINDINGS_STATE.loadedPersistentBindings = records.size > 0;
       THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
     } catch (error) {
+      const committedWrites = active.committedKeys.size;
       let failure = error;
       if (!authorityRefused) {
         try {

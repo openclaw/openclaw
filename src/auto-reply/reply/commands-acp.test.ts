@@ -13,6 +13,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
+  createAcpCommandSessionBindingService,
   createAcpTestSessionBinding as createSessionBinding,
   type AcpTestSessionBinding as FakeBinding,
 } from "./test-fixtures/acp-runtime.js";
@@ -78,27 +79,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-function createAcpCommandSessionBindingService() {
-  return {
-    bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-    getCapabilities: (params: unknown) => hoisted.sessionBindingCapabilitiesMock(params),
-    inspectByConversationAsync: async (
-      ref: unknown,
-    ): Promise<{ status: "available"; binding: SessionBindingRecord | null }> => ({
-      status: "available",
-      binding: hoisted.sessionBindingResolveByConversationMock(ref),
-    }),
-    listBySession: (targetSessionKey: string) =>
-      hoisted.sessionBindingListBySessionMock(targetSessionKey),
-    resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
-    resolveByConversationAsync: async (ref: unknown) =>
-      hoisted.sessionBindingResolveByConversationMock(ref),
-    touch: vi.fn(),
-    touchAsync: vi.fn(async () => {}),
-    unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
-  };
-}
-
 vi.mock("../../acp/control-plane/spawn.js", () => ({
   cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
 }));
@@ -147,7 +127,16 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   >("../../infra/outbound/session-binding-service.js");
   return {
     ...actual,
-    getSessionBindingService: createAcpCommandSessionBindingService,
+    getSessionBindingService: () =>
+      createAcpCommandSessionBindingService({
+        bind: hoisted.sessionBindingBindMock,
+        getCapabilities: hoisted.sessionBindingCapabilitiesMock,
+        listBySession: hoisted.sessionBindingListBySessionMock,
+        resolveByConversation: hoisted.sessionBindingResolveByConversationMock,
+        unbind: hoisted.sessionBindingUnbindMock,
+      }),
+    listSessionBindingsBySessionsAsync: async (keys: readonly string[]) =>
+      new Map(keys.map((key) => [key, hoisted.sessionBindingListBySessionMock(key)])),
   } satisfies typeof actual;
 });
 
@@ -848,12 +837,11 @@ describe("/acp command", () => {
       const cfg = {
         ...baseCfg,
         agents: {
-          list: [
-            {
-              id: "codex",
+          entries: {
+            codex: {
               workspace,
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig;
 
@@ -882,12 +870,11 @@ describe("/acp command", () => {
     const cfg = {
       ...baseCfg,
       agents: {
-        list: [
-          {
-            id: "codex",
+        entries: {
+          codex: {
             workspace: "/home/bob/codex-workspace-missing",
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
@@ -1377,53 +1364,51 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
-  it("resolves ACP reset targets through the configured default account when AccountId is omitted", async () => {
-    const cfg = {
-      ...baseCfg,
-      channels: {
-        discord: {
-          defaultAccount: "work",
+  it.each([
+    {
+      name: "configured default account",
+      cfg: {
+        ...baseCfg,
+        channels: {
+          discord: { defaultAccount: "work" },
         },
-      },
-    } satisfies OpenClawConfig;
-    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
-      (ref: {
-        channel?: string;
-        accountId?: string;
-        conversationId?: string;
-        parentConversationId?: string;
-      }) =>
-        ref.channel === "discord" &&
-        ref.accountId === "work" &&
-        ref.conversationId === defaultThreadId &&
-        ref.parentConversationId === "parent-1"
-          ? createSessionBinding({
-              targetSessionKey: defaultAcpSessionKey,
-              conversation: {
-                channel: "discord",
-                accountId: "work",
-                conversationId: defaultThreadId,
-                parentConversationId: "parent-1",
-              },
-            })
-          : null,
-    );
-
-    const result = await resolveEffectiveResetTargetSessionKey({
-      cfg,
-      channel: "discord",
-      conversationId: defaultThreadId,
-      parentConversationId: "parent-1",
-    });
-
-    expectMockCallFields(hoisted.sessionBindingResolveByConversationMock, {
-      channel: "discord",
+      } satisfies OpenClawConfig,
       accountId: "work",
-      conversationId: defaultThreadId,
-      parentConversationId: "parent-1",
-    });
-    expect(result).toBe(defaultAcpSessionKey);
-  });
+    },
+    { name: "default account without channel config", cfg: {}, accountId: "default" },
+  ])(
+    "resolves ACP reset targets through $name when AccountId is omitted",
+    async ({ cfg, accountId }) => {
+      const conversation = {
+        channel: "discord",
+        accountId,
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      };
+      hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+        (ref: Partial<SessionBindingRecord["conversation"]>) =>
+          ref.channel === "discord" &&
+          ref.accountId === accountId &&
+          ref.conversationId === defaultThreadId &&
+          ref.parentConversationId === "parent-1"
+            ? createSessionBinding({
+                targetSessionKey: defaultAcpSessionKey,
+                conversation,
+              })
+            : null,
+      );
+
+      const result = await resolveEffectiveResetTargetSessionKey({
+        cfg,
+        channel: "discord",
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      });
+
+      expectMockCallFields(hoisted.sessionBindingResolveByConversationMock, conversation);
+      expect(result).toBe(defaultAcpSessionKey);
+    },
+  );
 
   it("blocks /acp steer when ACP dispatch is disabled by policy", async () => {
     const cfg = {

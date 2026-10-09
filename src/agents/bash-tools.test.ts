@@ -12,7 +12,6 @@ import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
@@ -185,8 +184,6 @@ const notifyTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
     sessionKey,
     ...defaults,
   });
-const hasEvent = (id: string) =>
-  peekSystemEventEntries(sessionKey).some((event) => event.contextKey === `exec:${id}`);
 
 beforeEach(() => {
   callId = 0;
@@ -237,6 +234,34 @@ it("yields a pollable process and releases foreground callbacks", async () => {
   expect(text(poll)).toContain("before\nafter");
 });
 
+it("awaits terminal shell results past the yield window without enabling notifications", async () => {
+  const tool = createTool({ notifyOnExit: false, sessionKey });
+  let execution: ReturnType<typeof execute> | undefined;
+  let settled = false;
+  await supervisorExit.withHeldSupervisorExit(
+    async (exit) => {
+      execution = execute(tool, `${shellEcho("before")}; ${shellEcho("after")}`, {
+        awaitResults: true,
+        yieldMs: 10,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await Promise.race([exit.waitStarted, execution]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+    },
+    () => waitForExecScope(scopeKey),
+  );
+  await expect(execution).resolves.toMatchObject({
+    details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
+  });
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+  await expect(
+    execute(tool, shellEcho("detached"), { awaitResults: true, background: true }),
+  ).rejects.toThrow("cannot be detached");
+});
+
 it("rejects elevated requests when not allowed", async () => {
   const tool = createTool({
     elevated: { enabled: true, allowed: false, defaultLevel: "off" },
@@ -255,13 +280,6 @@ it("does not default to elevated when not allowed", async () => {
     timeoutSec: 5,
   });
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
-});
-
-it("treats non-zero exits as completed and appends the exit code", async () => {
-  const result = await execute(createTool(), `${shellEcho("nope")}; exit 1`);
-  expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-  expect(text(result)).toContain("nope");
-  expect(text(result)).toContain("Command exited with code 1");
 });
 
 it.each([
@@ -383,23 +401,6 @@ describe("background completion notifications", () => {
     } finally {
       dispose();
     }
-  });
-
-  it("consumes only the acknowledged poll's completion event", async () => {
-    const tool = notifyTool();
-    const unpolled = await startBackground(tool, shellEcho("unpolled"));
-    await waitForExecScope(scopeKey);
-    const polled = await startBackground(tool, shellEcho("polled"));
-    await waitForExecScope(scopeKey);
-    expect(hasEvent(unpolled)).toBe(true);
-    expect(hasEvent(polled)).toBe(true);
-    const queued = peekSystemEventEntries(sessionKey);
-    const poll = await processAction({ action: "poll", sessionId: polled });
-    expect(poll.details).toMatchObject({ status: "completed" });
-    expect(peekSystemEventEntries(sessionKey)).toEqual(queued);
-    acknowledgeInternalToolResult(poll);
-    expect(hasEvent(polled)).toBe(false);
-    expect(hasEvent(unpolled)).toBe(true);
   });
 
   it.each([

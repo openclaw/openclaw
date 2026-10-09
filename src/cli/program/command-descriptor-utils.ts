@@ -1,6 +1,7 @@
 // Utilities for defining safe Commander placeholder descriptors.
 import type { Command } from "commander";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Minimal descriptor shape used before a command is fully registered. */
@@ -31,18 +32,7 @@ export function sanitizeCommandDescriptorDescription(description: string): strin
 export function collectUniqueCommandDescriptors<TDescriptor extends CommandDescriptorLike>(
   descriptorGroups: readonly (readonly TDescriptor[])[],
 ): TDescriptor[] {
-  const seen = new Set<string>();
-  const descriptors: TDescriptor[] = [];
-  for (const group of descriptorGroups) {
-    for (const descriptor of group) {
-      if (seen.has(descriptor.name)) {
-        continue;
-      }
-      seen.add(descriptor.name);
-      descriptors.push(descriptor);
-    }
-  }
-  return descriptors;
+  return dedupeByKey(descriptorGroups.flat(), (descriptor) => descriptor.name);
 }
 
 /** Add safe placeholder commands to Commander without duplicating existing command names. */

@@ -103,11 +103,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     },
     withTranscriptWrite,
   };
-  const withOwnedTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
-    withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-      withTranscriptWrite(operation),
-    );
-
   externalAbortController.arm();
   try {
     await externalAbortController.throwIfFiredAfterPrepCleanup();
@@ -121,6 +116,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     assertCronRootCurrent: generation ? ownedTranscriptWriteContext.assertCommitAllowed : undefined,
     ownedTranscriptWriteContext,
     transcriptLifecycle,
-    withOwnedTranscriptWrite,
+    withOwnedTranscriptWrite: (operation) =>
+      withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+        withTranscriptWrite(operation),
+      ),
   };
 }

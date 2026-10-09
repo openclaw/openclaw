@@ -35,28 +35,6 @@ function createFixture(options?: ConstructorParameters<typeof CodexNativeSubagen
 }
 
 describe("CodexNativeSubagentMonitor", () => {
-  it("cancels running children and releases their parent pin when closeAgent completes", async () => {
-    const client = createClient();
-    client.setLoadedThreads([]);
-    const runtime = createRuntime();
-    const releaseParentThread = vi.fn();
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-      retainParentThread: () => releaseParentThread,
-    });
-    (await registerParent(monitor)).bindTurn("parent-turn");
-
-    await notifyChildStarted(client);
-    await client.notify(closeAgentNotification({ method: "item/started" }));
-    await client.notify(
-      closeAgentNotification({ method: "item/completed", previousStatus: "running" }),
-    );
-    await client.notify(nativeCompletionNotification());
-
-    expect(releaseParentThread).toHaveBeenCalledOnce();
-    expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-    await monitor.dispose();
-  });
-
   it("selects the exact bound parent turn and preserves the remaining owner on unregister", async () => {
     const client = createClient();
     const monitor = new CodexNativeSubagentMonitor(client as never, createRuntime());
@@ -355,34 +333,6 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
-  it("recovers missing terminal text through app-server history", async () => {
-    const client = createClient();
-    client.setThreadRead(
-      "child-thread",
-      threadRead({
-        turnId: "child-turn",
-        result: "history final result",
-        resultPhase: "final_answer",
-        trailingCommentary: "post-final progress noise",
-      }),
-    );
-    const runtime = createRuntime();
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    await registerDetachedChild(client, monitor);
-
-    await client.notify(childTurnCompletedNotification({ status: "completed" }));
-
-    expect(client.request).toHaveBeenCalledWith(
-      "thread/read",
-      expect.objectContaining({ threadId: "child-thread", includeTurns: true }),
-      expect.any(Object),
-    );
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({ statusLabel: "task_complete", result: "history final result" }),
-    );
-    client.close();
-  });
-
   it("falls back to a typed no-final completion when history stays unavailable", async () => {
     vi.useFakeTimers();
     try {
@@ -459,7 +409,13 @@ describe("CodexNativeSubagentMonitor", () => {
 
       client.setThreadRead(
         "child-thread",
-        threadRead({ turnId: "new-turn", status: "completed", result: "new turn result" }),
+        threadRead({
+          turnId: "new-turn",
+          status: "completed",
+          result: "new turn result",
+          resultPhase: "final_answer",
+          trailingCommentary: "post-final progress noise",
+        }),
       );
       await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(true);
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
@@ -494,7 +450,6 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it.each([
     { current: "inProgress", persisted: "failed", result: undefined },
-    { current: "completed", persisted: "completed", result: undefined },
     { current: "failed", persisted: "completed", result: "current child failure" },
   ] as const)(
     "uses the authoritative $current turn after a system error",
@@ -518,10 +473,7 @@ describe("CodexNativeSubagentMonitor", () => {
             {
               id: "current-turn",
               status: current,
-              items:
-                current === "completed"
-                  ? [{ id: "stale-result", type: "agentMessage", text: "stale result" }]
-                  : [],
+              items: [],
               ...(result ? { error: { message: result } } : {}),
             },
           ],

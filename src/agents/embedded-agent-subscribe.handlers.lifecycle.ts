@@ -42,6 +42,21 @@ export {
   handleCompactionStart,
 } from "./embedded-agent-subscribe.handlers.compaction.js";
 
+function runTerminalHook<T>(callback: () => T | Promise<T>, failed: (error: unknown) => void) {
+  let result: T | Promise<T>;
+  try {
+    result = callback();
+  } catch (error) {
+    failed(error);
+    return undefined;
+  }
+  return isPromiseLike<T>(result)
+    ? Promise.resolve(result).catch((error: unknown) => {
+        failed(error);
+      })
+    : result;
+}
+
 function emitLifecycleAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
   data: Record<string, unknown>,
@@ -282,11 +297,13 @@ export function handleAgentEnd(
   const runBeforeTerminalDelivery = ():
     | BeforeTerminalDeliveryDecision
     | Promise<BeforeTerminalDeliveryDecision> => {
+    // The acceptance hook inspects the answer this turn delivers, including a kept answer.
+    const answerAssistant = ctx.state.keptAnswer?.assistant ?? lastAssistant;
     return ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
       ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
-      ...(lastAssistant ? { lastAssistant } : {}),
+      ...(answerAssistant ? { lastAssistant: answerAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,
       isError,
@@ -356,18 +373,12 @@ export function handleAgentEnd(
       return;
     }
     lifecycleTerminalEmitted = true;
-    let beforeLifecycleTerminal: void | Promise<void> = undefined;
-    try {
-      beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
-    } catch (err) {
-      ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
-    }
+    const beforeLifecycleTerminal = runTerminalHook(
+      () => ctx.params.onBeforeLifecycleTerminal?.(),
+      (err) => ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`),
+    );
     if (isPromiseLike<void>(beforeLifecycleTerminal)) {
-      return Promise.resolve(beforeLifecycleTerminal)
-        .catch((err: unknown) => {
-          ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
-        })
-        .then(emitLifecycleTerminal);
+      return Promise.resolve(beforeLifecycleTerminal).then(emitLifecycleTerminal);
     }
     emitLifecycleTerminal();
   };
@@ -383,23 +394,12 @@ export function handleAgentEnd(
     return deliverTerminalWithLifecycleErrorFallback();
   };
 
-  let beforeTerminalDelivery:
-    | BeforeTerminalDeliveryDecision
-    | Promise<BeforeTerminalDeliveryDecision>;
-  try {
-    beforeTerminalDelivery = runBeforeTerminalDelivery();
-  } catch (error) {
-    ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
-    return deliverTerminalWithLifecycleErrorFallback();
-  }
+  const beforeTerminalDelivery = runTerminalHook(runBeforeTerminalDelivery, (error) =>
+    ctx.log.warn(`before terminal delivery failed: ${String(error)}`),
+  );
 
   if (isPromiseLike<BeforeTerminalDeliveryDecision>(beforeTerminalDelivery)) {
-    return Promise.resolve(beforeTerminalDelivery)
-      .catch((error: unknown) => {
-        ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
-        return undefined;
-      })
-      .then(applyBeforeTerminalDecision);
+    return Promise.resolve(beforeTerminalDelivery).then(applyBeforeTerminalDecision);
   }
   return applyBeforeTerminalDecision(beforeTerminalDelivery);
 }

@@ -39,26 +39,7 @@ const QA_CONFIDENCE_LANE_KINDS = [
 ] as const;
 type QaConfidenceLaneKind = (typeof QA_CONFIDENCE_LANE_KINDS)[number];
 
-type QaConfidenceLane = {
-  id: string;
-  title: string;
-  kind: QaConfidenceLaneKind;
-  artifact: string;
-  required: boolean;
-  skipBackfillLane?: string;
-  productImpact?: string;
-  qaImpact?: string;
-  issue?: string;
-  ownerAction?: string;
-  labels?: string[];
-};
-
-type QaConfidenceManifestLane = QaConfidenceLane & {
-  failureVerdict?: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
-  missingVerdict?: "environment-blocked" | "optional-gap";
-  missingReason?: string;
-  expectedTokenUsageSource?: "mock-estimate" | "live-usage";
-};
+type QaConfidenceManifestLane = ReturnType<typeof normalizeManifestLane>;
 
 type QaConfidenceManifest = {
   version: 1;
@@ -68,7 +49,7 @@ type QaConfidenceManifest = {
 
 type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
 
-type QaConfidenceLaneResult = QaConfidenceLane & {
+type QaConfidenceLaneResult = ReturnType<typeof baseLaneResult> & {
   artifactPath: string;
   status: QaConfidenceLaneStatus;
   verdict?: QaConfidenceVerdict;
@@ -77,25 +58,7 @@ type QaConfidenceLaneResult = QaConfidenceLane & {
   skipBackfilled?: boolean;
 };
 
-type QaConfidenceReport = {
-  generatedAt: string;
-  profile: string;
-  strictZeroUnknowns: boolean;
-  strictGlobalPass: boolean;
-  pass: boolean;
-  zeroUnknowns: boolean;
-  globalPass: boolean;
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-    blocked: number;
-    missing: number;
-    unknown: number;
-  };
-  failures: string[];
-  lanes: QaConfidenceLaneResult[];
-};
+type QaConfidenceReport = Awaited<ReturnType<typeof buildQaConfidenceReport>>;
 
 const QA_CONFIDENCE_SELF_TEST_CANARY_IDS = [
   "prompt-drift",
@@ -191,7 +154,7 @@ function readLaneKind(value: unknown): QaConfidenceLaneKind {
   return kind;
 }
 
-function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
+function normalizeManifestLane(value: unknown) {
   if (!isRecord(value)) {
     throw new Error("confidence manifest lanes must be objects");
   }
@@ -575,10 +538,7 @@ function evaluateLaneArtifact(
   }
 }
 
-function baseLaneResult(
-  lane: QaConfidenceManifestLane,
-  artifactPath: string,
-): Omit<QaConfidenceLaneResult, "status" | "details"> {
+function baseLaneResult(lane: QaConfidenceManifestLane, artifactPath: string) {
   const reportArtifactPath = path.isAbsolute(lane.artifact)
     ? path.basename(artifactPath)
     : lane.artifact;
@@ -673,7 +633,7 @@ function applySkipBackfillState(
   });
 }
 
-function countLaneResults(lanes: readonly QaConfidenceLaneResult[]): QaConfidenceReport["counts"] {
+function countLaneResults(lanes: readonly QaConfidenceLaneResult[]) {
   return {
     total: lanes.length,
     passed: lanes.filter((lane) => lane.status === "pass").length,
@@ -713,7 +673,7 @@ export async function buildQaConfidenceReport(params: {
   strictZeroUnknowns?: boolean;
   strictGlobalPass?: boolean;
   generatedAt?: string;
-}): Promise<QaConfidenceReport> {
+}) {
   const evaluatedLanes = [];
   for (const lane of params.manifest.lanes) {
     evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
@@ -773,5 +733,3 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   }
   return `${lines.join("\n")}\n`;
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

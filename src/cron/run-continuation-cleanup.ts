@@ -75,7 +75,7 @@ export async function removeCronRunContinuationSessionIfIdle(
   if (!original || !canRemoveCronRunContinuation(original.cronRunContinuation)) {
     return;
   }
-  await runExclusiveSessionLifecycleMutation({
+  await runExclusiveSessionLifecycleMutation("cron-cleanup", {
     scope: storePath,
     identities: [sessionKey, original.sessionId],
     run: async () => {

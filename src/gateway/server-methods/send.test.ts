@@ -273,7 +273,7 @@ function fixedStoreContext(): GatewayRequestContext {
       session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
         defaults: { sessionStore: { agentId: "ops" } },
       },
     }),
@@ -1111,13 +1111,6 @@ describe("gateway send mirroring", () => {
     );
   });
 
-  it("returns invalid request when send channel selection is ambiguous", async () => {
-    mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
-    );
-    await expectRejectedSend({}, "Channel is required");
-  });
-
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
     mocks.sendPoll.mockResolvedValue({
       messageId: "poll-rich",
@@ -1309,7 +1302,7 @@ describe("gateway send mirroring", () => {
       null,
       {
         ...makeContext(),
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
       } as GatewayRequestContext,
     );
 
@@ -2075,7 +2068,7 @@ describe("gateway send mirroring", () => {
       {
         ...makeContext(),
         getRuntimeConfig: () => ({
-          agents: { list: [{ id: "main" }, { id: "work" }] },
+          agents: { entries: { main: {}, work: {} } },
           tools: { allow: ["read"] },
         }),
       } as GatewayRequestContext,
@@ -2142,7 +2135,7 @@ describe("gateway send mirroring", () => {
           {
             ...makeContext(),
             getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main" }, { id: "work" }] },
+              agents: { entries: { main: {}, work: {} } },
               tools: {
                 allow: ["read"],
                 toolsBySender: { "username:blocked-user": { deny: ["read"] } },

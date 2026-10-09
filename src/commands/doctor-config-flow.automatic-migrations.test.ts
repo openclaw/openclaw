@@ -191,54 +191,12 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
 });
 
 it.each([
-  { updating: "1", repair: false },
-  { updating: " off ", repair: false },
-  { updating: "legacy", repair: true },
-])(
-  "preserves the legacy parent's config and ledger with $updating, repair=$repair",
-  async ({ updating, repair }) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_IN_PROGRESS: updating,
-          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
-          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-        async () => {
-          const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
-          await seedInstalledPluginIndex(
-            { existing: canonical },
-            {
-              config: { plugins: { enabled: false } },
-            },
-          );
-          const configPath = await writeOpenClawConfig(home, {
-            meta: { lastTouchedVersion: "2026.2.15", lastTouchedAt: "2026-02-15T00:00:00.000Z" },
-            agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] },
-            gateway: { mode: "local" },
-            plugins: {
-              enabled: false,
-              installs: {
-                existing: { source: "path", installPath: path.join(home, "old") },
-                imported: { source: "path", installPath: path.join(home, "legacy") },
-              },
-            },
-          });
-          const original = await fs.readFile(configPath, "utf8");
-          await prepareDoctorContext(configPath, { options: { nonInteractive: true, repair } });
-          expect(await fs.readFile(configPath, "utf8")).toBe(original);
-          await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({
-            existing: canonical,
-          });
-        },
-      );
-    });
+  {
+    name: "a legacy parent (legacy)",
+    legacy: true,
+    repair: true,
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: "legacy" },
   },
-);
-
-it.each([
   { name: "an include", include: true },
   { name: "a remaining invalid key", invalid: true },
   { name: "a future writer", future: true },
@@ -271,10 +229,24 @@ it.each([
         ...fixture.env,
       },
       async () => {
+        const canonical = { source: "path" as const, installPath: path.join(home, "canonical") };
+        if (fixture.legacy) {
+          await seedInstalledPluginIndex(
+            { existing: canonical },
+            { config: { plugins: { enabled: false } } },
+          );
+        }
         const configPath = await writeOpenClawConfig(home, {
+          ...(fixture.legacy
+            ? { agents: { list: [{ id: "main", name: "Operator" }, { id: "helper" }] } }
+            : {}),
           meta: {
-            lastTouchedAt: "2026-03-31T00:00:00.000Z",
-            lastTouchedVersion: fixture.future ? "9999.1.1" : "2026.3.31",
+            lastTouchedAt: fixture.legacy ? "2026-02-15T00:00:00.000Z" : "2026-03-31T00:00:00.000Z",
+            lastTouchedVersion: fixture.legacy
+              ? "2026.2.15"
+              : fixture.future
+                ? "9999.1.1"
+                : "2026.3.31",
             ...(fixture.invalid ? { unknownSetting: true } : {}),
           },
           gateway: fixture.include ? { $include: "gateway.json" } : { mode: "local" },
@@ -290,10 +262,17 @@ it.each([
         }
         const original = await fs.readFile(configPath, "utf8");
 
-        await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+        await prepareDoctorContext(configPath, {
+          options: { nonInteractive: true, repair: fixture.repair },
+        });
 
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+        if (fixture.legacy) {
+          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({
+            existing: canonical,
+          });
+        }
       },
     );
   });

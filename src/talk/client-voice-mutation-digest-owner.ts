@@ -5,7 +5,6 @@ import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   type ClientVoiceSessionRecord,
-  type ClientVoiceToolEffect,
   readVoiceSessionRecordInTransaction,
   writeVoiceSessionRecordInTransaction,
 } from "./client-voice-session-store.js";
@@ -19,21 +18,6 @@ export const CLIENT_VOICE_MUTATION_DIGEST_POLICY = {
   failureRetentionMs: 5 * 60_000,
 } as const;
 
-function formatMutationDigest(effects: ClientVoiceToolEffect[]): string | undefined {
-  if (effects.length === 0) {
-    return undefined;
-  }
-  return [
-    "Voice call changes",
-    ...effects
-      .slice(0, 12)
-      .map(
-        (effect) =>
-          `- ${effect.toolName}: ${effect.status === "started" ? "outcome not confirmed" : effect.status}`,
-      ),
-  ].join("\n");
-}
-
 /** Deliver one point-in-time summary and mark the durable voice record after success. */
 export async function deliverClientVoiceMutationDigest(
   record: ClientVoiceSessionRecord,
@@ -43,10 +27,19 @@ export async function deliverClientVoiceMutationDigest(
   if (record.digestDeliveredAt) {
     return;
   }
-  const text = formatMutationDigest(record.effects);
-  if (!text) {
+  const effects = record.effects;
+  if (effects.length === 0) {
     return;
   }
+  const text = [
+    "Voice call changes",
+    ...effects
+      .slice(0, 12)
+      .map(
+        (effect) =>
+          `- ${effect.toolName}: ${effect.status === "started" ? "outcome not confirmed" : effect.status}`,
+      ),
+  ].join("\n");
   const entry = loadSessionEntryReadOnly({
     agentId: record.agentId,
     sessionKey: record.sessionKey,
@@ -108,15 +101,6 @@ type MutationDigestAttempt<TContext> = {
   generation: number;
 };
 
-type MutationDigestPolicy = {
-  maxRetainedIntents: number;
-  maxRetainedIdentityBytes: number;
-  maxConcurrentAttempts: number;
-  maxAttemptFailures: number;
-  attemptAbortAfterMs: number;
-  failureRetentionMs: number;
-};
-
 export class ClientVoiceMutationDigestOwner<TContext> {
   private readonly intents = new Map<string, MutationDigestIntent<TContext>>();
   private readonly pendingKeys = new Set<string>();
@@ -124,6 +108,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
   private readonly activeAttempts = new Map<string, MutationDigestAttempt<TContext>>();
   private retainedIdentityBytes = 0;
   private generation = 0;
+  private readonly policy = CLIENT_VOICE_MUTATION_DIGEST_POLICY;
 
   constructor(
     private readonly options: {
@@ -134,25 +119,15 @@ export class ClientVoiceMutationDigestOwner<TContext> {
         signal: AbortSignal;
       }) => Promise<boolean>;
       warn: (message: string) => void;
-      policy?: MutationDigestPolicy;
     },
   ) {}
-
-  private get policy(): MutationDigestPolicy {
-    return this.options.policy ?? CLIENT_VOICE_MUTATION_DIGEST_POLICY;
-  }
 
   record(params: { agentId: string; voiceSessionId: string; context: TContext }): void {
     const key = this.key(params);
     const existing = this.intents.get(key);
     if (existing) {
       existing.context = params.context;
-      if (this.activeAttempts.has(key)) {
-        this.retryAfterActiveKeys.add(key);
-      } else {
-        this.pendingKeys.add(key);
-      }
-      this.pump();
+      this.retry(params);
       return;
     }
     const identityBytes =

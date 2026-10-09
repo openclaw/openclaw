@@ -169,7 +169,7 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
           ...(params.extraPaths ? { extraPaths: params.extraPaths } : {}),
         },
       },
-      agents: { defaults: { workspace }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace }, entries: { main: {} } },
     } as OpenClawConfig);
   }
 

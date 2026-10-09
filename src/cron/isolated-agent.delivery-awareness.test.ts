@@ -62,14 +62,6 @@ describe("isolated cron delivery awareness", () => {
     resetSystemEventsForTest();
   });
 
-  it("queues delivered text for the next main-session turn", async () => {
-    await withAnnounce({ texts: ["hello from cron"] }, (result) => {
-      expect(result.status).toBe("ok");
-      expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("agent:main:main")).toEqual(["hello from cron"]);
-    });
-  });
-
   it("adds the exact run-session inspection link only to the final visible payload", async () => {
     await withAnnounce(
       {

@@ -1,5 +1,7 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { assertConversationAuthority } from "./conversation-authority.js";
 import type { SessionEntryPatchOptions } from "./session-accessor.sqlite-contract.js";
+import { resolveConversationInDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
@@ -10,6 +12,8 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { assertSessionEntryPatchCliHistory } from "./session-entry-patch-guard.js";
+import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -45,7 +49,7 @@ export function applySessionEntryPatchInDatabase(
     options: Pick<
       SessionEntryPatchOptions,
       "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    >;
+    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory" | "conversation"> };
   },
 ): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
   // Canonical validation belongs to the current connection, not the captured rows.
@@ -59,7 +63,31 @@ export function applySessionEntryPatchInDatabase(
     fresh = params.readSnapshot(database);
     assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   }
+  return writeSessionEntryPatchInDatabase(database, { ...params, fresh });
+}
+
+/** Apply a patch evaluated against rows read in this same synchronous transaction. */
+export function writeSessionEntryPatchInDatabase(
+  database: OpenClawAgentDatabase,
+  params: Pick<
+    Parameters<typeof applySessionEntryPatchInDatabase>[1],
+    "sessionKey" | "writeBase" | "next" | "options"
+  > & { fresh: SqliteLifecycleTargetSnapshot },
+): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
+  const { fresh } = params;
   params.options.assertCommitAllowed?.();
+  const conversation = params.options.workerGuard?.conversation;
+  if (conversation) {
+    assertConversationAuthority(
+      resolveConversationInDatabase(database, conversation.conversationRef),
+      conversation,
+    );
+  }
+  assertSessionEntryPatchCliHistory(
+    database,
+    params.sessionKey,
+    params.options.workerGuard?.cliHistory,
+  );
   if (!params.next) {
     return { entry: structuredClone(params.writeBase) };
   }

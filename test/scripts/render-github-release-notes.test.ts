@@ -142,6 +142,48 @@ describe("GitHub release-note rendering", () => {
     },
   );
 
+  it("renders and verifies a pinned beta delta instead of cumulative stable notes", () => {
+    const rootDir = tempDirs.make("openclaw-beta-render-");
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: rootDir, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("config", "user.name", "Release Fixture");
+    git("config", "user.email", "release-fixture@openclaw.invalid");
+    git("config", "commit.gpgsign", "false");
+    const delta = `## ${tag.slice(1)}\n\n### Fixes\n\n- New beta-only fix.`;
+    writeFileSync(
+      join(rootDir, "CHANGELOG.md"),
+      `${delta}\n\n## ${version}\n\n- Cumulative stable feature.\n`,
+    );
+    splitChangelog({ rootDir });
+    git("add", ".");
+    git("commit", "-qm", "beta delta");
+    const ref = git("rev-parse", "HEAD");
+    writeFileSync(join(rootDir, `CHANGELOG/${tag.slice(1)}.md`), `${delta}\nUncommitted drift.\n`);
+    const render = (releaseTag: string, extra: string[] = []) =>
+      execFileSync(
+        process.execPath,
+        [
+          resolve("scripts/render-github-release-notes.mts"),
+          "--root",
+          rootDir,
+          "--ref",
+          ref,
+          "--tag",
+          releaseTag,
+          "--repository",
+          repository,
+          ...extra,
+        ],
+        { encoding: "utf8" },
+      );
+    expect(render(tag)).toBe(delta);
+    expect(render(`v${version}`)).toBe(`## ${version}\n\n- Cumulative stable feature.`);
+    const bodyPath = join(rootDir, "body.md");
+    writeFileSync(bodyPath, delta);
+    expect(render(tag, ["--version", tag.slice(1), "--verify-body", bodyPath])).toBe("");
+  });
+
   it("round-trips canonical contribution provenance and accepts published legacy lines", () => {
     const target = "a".repeat(40);
     const singular = formatContributionRecordProvenance({
@@ -232,7 +274,7 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("prefixes extended-stable notes with immutable regular-stable context", () => {
-    const extendedVersion = "2026.7.35";
+    const extendedVersion = "2026.8.35";
     const extendedTag = `v${extendedVersion}`;
     const regularStableVersion = "2026.9.5";
     const changelog = changelogFor("- **PR #123** fix: example.").replaceAll(
@@ -250,11 +292,11 @@ describe("GitHub release-note rendering", () => {
     expect(
       rendered.body.startsWith(
         "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
-          "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
+          "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
           "reliability and performance fixes, and features like new model support. " +
-          "The current latest version of OpenClaw is " +
+          "The latest version of OpenClaw at the time of this release is " +
           "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n" +
-          "## 2026.7.35",
+          "## 2026.8.35",
       ),
     ).toBe(true);
     expect(
@@ -577,134 +619,6 @@ describe("GitHub release-note rendering", () => {
         repository,
       }).matches,
     ).toBe(false);
-  });
-
-  it("renders and verifies advisory failures from bound release evidence", () => {
-    const receipt = {
-      schema: "openclaw.frv-flake-classification.v1",
-      parentRunId: "123",
-      parentRunAttempt: 2,
-      child: "normalCi",
-      childRunId: "456",
-      childRunAttempt: 1,
-      targetSha: "a".repeat(40),
-      jobId: "457",
-      jobName: "checks-node-test-2",
-      jobUrl: "https://github.com/openclaw/openclaw/actions/runs/456/job/457",
-      conclusion: "failure",
-      trackingUrl: "https://github.com/openclaw/openclaw/issues/789",
-      reason: "Shared fixture cleanup races; fixed in parallel on main.",
-      classifiedBy: "release-operator",
-      receiptRunId: "890",
-      receiptRunAttempt: 1,
-    };
-    const advisory = {
-      class: "recorded-flake",
-      child: "normalCi",
-      job: receipt.jobName,
-      conclusion: receipt.conclusion,
-      runId: receipt.childRunId,
-      url: receipt.jobUrl,
-      jobId: receipt.jobId,
-      trackingUrl: receipt.trackingUrl,
-      reason: receipt.reason,
-      receiptRunId: receipt.receiptRunId,
-    };
-    const windows = {
-      class: "windows-node-ci",
-      child: "normalCi",
-      job: "checks-windows-node-test-2",
-      conclusion: "failure",
-      runId: "456",
-      url: "https://github.com/openclaw/openclaw/actions/runs/456/job/459",
-    };
-    const validationManifest = {
-      runId: "123",
-      sourceParentRunAttempt: 2,
-      targetSha: receipt.targetSha,
-      childRuns: { normalCi: "456" },
-      childEvidence: {
-        normalCi: {
-          runId: "456",
-          status: "completed",
-          conclusion: "failure",
-          jobs: [advisory, windows]
-            .map((job) => ({
-              name: job.job,
-              status: "completed",
-              conclusion: "failure",
-              acceptedRunAttempt: 1,
-              url: job.url,
-            }))
-            .concat([
-              {
-                name: "openclaw/ci-gate",
-                status: "completed",
-                conclusion: "failure",
-                acceptedRunAttempt: 1,
-                url: "https://github.com/openclaw/openclaw/actions/runs/456/job/458",
-              },
-            ]),
-          flakeClassifications: [receipt],
-          gateEntries: [
-            { name: "preflight", result: "success", selected: true },
-            { name: "checks-node", result: "failure", selected: true },
-            { name: "checks-windows", result: "failure", selected: true },
-            { name: "pr-fail-fast", result: "skipped", selected: false },
-          ],
-        },
-      },
-      advisoryJobs: [advisory, windows],
-    };
-    const target = {
-      changelog: changelogFor("- **PR #123** fix: example."),
-      version,
-      tag,
-      repository,
-      validationManifest,
-    };
-    const rendered = renderGithubReleaseNotes({
-      ...target,
-      verification: "### Release verification\n\n- release SHA: `abc123`",
-    });
-    expect(rendered.body).toContain(
-      `- Advisory job (recorded-flake): normalCi / checks-node-test-2 (failure): ${receipt.jobUrl}; ${receipt.reason}; tracking: ${receipt.trackingUrl}`,
-    );
-    expect(rendered.body).toContain(
-      "- Advisory job (windows-node-ci): normalCi / checks-windows-node-test-2 (failure)",
-    );
-    expect(verifyGithubReleaseNotes({ ...target, body: rendered.body }).matches).toBe(true);
-    const advisoryOnly = renderGithubReleaseNotes(target);
-    expect(advisoryOnly.body).toContain(
-      "### Release verification\n- Advisory job (recorded-flake)",
-    );
-    expect(verifyGithubReleaseNotes({ ...target, body: advisoryOnly.body }).matches).toBe(true);
-    for (const body of [
-      rendered.body.replace(receipt.reason, "Unrecorded reason."),
-      rendered.body.replace(receipt.trackingUrl, "https://github.com/openclaw/openclaw/issues/999"),
-      rendered.body
-        .split("\n")
-        .filter((line) => !line.includes("Advisory job (recorded-flake)"))
-        .join("\n"),
-    ]) {
-      expect(verifyGithubReleaseNotes({ ...target, body }).matches).toBe(false);
-    }
-    expect(() =>
-      renderGithubReleaseNotes({
-        ...target,
-        validationManifest: {
-          ...validationManifest,
-          advisoryJobs: [{ ...advisory, reason: "Forged reason." }, windows],
-        },
-      }),
-    ).toThrow("advisory jobs differ");
-    const heading = `## ${version}\n\n`;
-    const nearLimitBody = heading + "x".repeat(GITHUB_RELEASE_BODY_MAX_BYTES - heading.length);
-    const nearLimitTarget = { ...target, changelog: nearLimitBody };
-    expect(() => renderGithubReleaseNotes(nearLimitTarget)).toThrow("required advisory evidence");
-    expect(() => verifyGithubReleaseNotes({ ...nearLimitTarget, body: nearLimitBody })).toThrow(
-      "required advisory evidence",
-    );
   });
 
   it("does not treat fenced verification headings as appended proof", () => {

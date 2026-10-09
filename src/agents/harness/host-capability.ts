@@ -28,7 +28,10 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import {
+  createOpenClawCodingToolsInternal,
+  createOpenClawCodingToolsInternalAsync,
+} from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -64,6 +67,7 @@ import {
 import { bindHostSkillCatalog } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
+  bindHarnessHostSourceAuthority,
   bindHarnessModelExecution,
   bindHarnessNativeSpawnAuthority,
   retainHarnessSource,
@@ -122,23 +126,16 @@ export function createAgentHarnessHostCapabilities(params: {
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
+  const bindAbortSignal = (signal: AbortSignal | undefined) =>
+    signal
+      ? AbortSignal.any([signal, capabilityAbortController.signal])
+      : capabilityAbortController.signal;
   const inheritedCaller = getGatewayToolCallerIdentity();
   const sourceCaller =
     inheritedCaller?.operationalRunInstance === operationalRunInstance
       ? inheritedCaller
       : undefined;
   let personalToolParticipants = sourceCaller?.personalToolParticipants;
-  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: attempt.admittedRunContext,
-    receiptAuthority: assertActive,
-    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
-    agentId: attempt.agentId,
-    sessionKey: attempt.sessionKey,
-    turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
-    turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
-    turnSourceAccountId: attempt.agentAccountId,
-    turnSourceThreadId: attempt.currentThreadTs,
-  });
   const inactiveError = (message: string) => {
     // Gateway closure can precede the run's abort marker. Keep its captured
     // reason without replacing an earlier user cancellation or deadline.
@@ -151,30 +148,26 @@ export function createAgentHarnessHostCapabilities(params: {
   // A supplied resolver that currently returns no context is a retired binding;
   // only a genuinely absent resolver is exempt from the Gateway liveness fence.
   const boundGatewayContext = getGatewayContextResolver(attempt.admittedRunContext);
-  function assertActive() {
-    if (
-      !active ||
-      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
-      (boundGatewayContext && callerIdentity?.gatewayContextResolver?.() === undefined)
-    ) {
-      throw inactiveError("agent harness host capability is no longer active");
-    }
-    // The captured worker/source claim owns every host capability use, including
-    // native configuration writes that do not pass through prompt annotation.
-    if (
-      (sourceCaller &&
-        (sourceCaller.agentId !== attempt.agentId ||
-          sourceCaller.sessionKey !== attempt.sessionKey)) ||
-      (sourceCaller?.workerTurnClaim &&
-        (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
-          sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
-      (sourceCaller?.workerTurnClaim && !sourceCaller.receiptAuthority) ||
-      sourceCaller?.receiptAuthority?.() === false
-    ) {
-      throw new Error("agent harness host capability lost its source execution claim");
-    }
-  }
+  const assertActive = bindHarnessHostSourceAuthority({
+    attempt,
+    delegatedAuthority,
+    sourceCaller,
+    isActive: () => active,
+    isGatewayCurrent: () =>
+      !boundGatewayContext || callerIdentity?.gatewayContextResolver?.() !== undefined,
+    inactiveError,
+  });
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attempt.admittedRunContext,
+    receiptAuthority: assertActive,
+    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
+    turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
+    turnSourceAccountId: attempt.agentAccountId,
+    turnSourceThreadId: attempt.currentThreadTs,
+  });
   const observeCoreTtsToolResult = (result: unknown) => {
     if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
       coreTtsToolResults.add(result);
@@ -223,9 +216,7 @@ export function createAgentHarnessHostCapabilities(params: {
           },
           runId: attempt.runId,
           config,
-          abortSignal: attempt.abortSignal
-            ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-            : capabilityAbortController.signal,
+          abortSignal: bindAbortSignal(attempt.abortSignal),
           assertCurrent: () => {
             assertActive();
             if (
@@ -318,6 +309,13 @@ export function createAgentHarnessHostCapabilities(params: {
         : callerIdentity,
       run,
     );
+  const hookContextForOperation = (operation?: Readonly<{ cwd?: string }>) => {
+    const cwd =
+      operation?.cwd !== undefined
+        ? normalizeNativeOperationCwd(operation.cwd, hookContext.cwd)
+        : undefined;
+    return cwd ? Object.freeze({ ...hookContext, cwd }) : hookContext;
+  };
   const runBeforeToolCallWithAssertion = async (
     assertCurrent: () => void,
     {
@@ -328,13 +326,7 @@ export function createAgentHarnessHostCapabilities(params: {
   ) => {
     assertCurrent();
     const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
-    const actionCwd =
-      nativeOperation?.cwd !== undefined
-        ? normalizeNativeOperationCwd(nativeOperation.cwd, hookContext.cwd)
-        : undefined;
-    const actionHookContext = actionCwd
-      ? Object.freeze({ ...hookContext, cwd: actionCwd })
-      : hookContext;
+    const actionHookContext = hookContextForOperation(nativeOperation);
     const result = await runBeforeToolCallHook({
       ...request,
       approvalMode: hostApprovalMode,
@@ -382,16 +374,8 @@ export function createAgentHarnessHostCapabilities(params: {
     observeResult: (result: unknown) => void,
   ) => {
     assertActive();
-    const boundAbortSignal = attempt.abortSignal
-      ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-      : capabilityAbortController.signal;
-    const bindingCwd =
-      options?.cwd !== undefined
-        ? normalizeNativeOperationCwd(options.cwd, hookContext.cwd)
-        : undefined;
-    const bindingHookContext = bindingCwd
-      ? Object.freeze({ ...hookContext, cwd: bindingCwd })
-      : hookContext;
+    const boundAbortSignal = bindAbortSignal(attempt.abortSignal);
+    const bindingHookContext = hookContextForOperation(options);
     return tools
       .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
       .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
@@ -407,6 +391,57 @@ export function createAgentHarnessHostCapabilities(params: {
     nativeModelPolicySupported
       ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
       : undefined;
+  const toolConstructionInputs = (
+    options: Parameters<NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>>[0],
+  ) => {
+    assertActive();
+    const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
+    return {
+      options: {
+        ...effectiveOptions,
+        // Availability belongs to this prepared host, not mutable plugin inputs.
+        githubPublicationAvailable,
+        runtimePluginToolGrant,
+        skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
+        installedSkills: getInstalledSkills(
+          effectiveOptions.sandbox,
+          effectiveOptions.sessionPermissionPolicy?.root,
+        ),
+        skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
+        operationalRunInstance,
+      },
+      // Sandboxes use their materialized snapshot paths, never host library pins.
+      skillReadResources:
+        !requiredWorkspace &&
+        !hostSandboxEnabled &&
+        !options?.sandbox?.enabled &&
+        options?.includeCoreTools !== false &&
+        options?.toolConstructionPlan?.includeBaseCodingTools !== false
+          ? resolveSkillResourceCandidates(skillsSnapshot)
+          : undefined,
+    };
+  };
+  const bindCreatedTools = (
+    sourceTools: AnyAgentTool[],
+    bindingOptions?: Readonly<{ cwd?: string }>,
+  ) => {
+    // Only host-created core tools can seed TTS provenance. Plugin-bound tools
+    // must not replay a retained core result into this attempt's authority set.
+    const tools = bindTools(sourceTools, bindingOptions, observeCoreTtsToolResult);
+    for (const tool of tools) {
+      if (tool.name === "exec" || tool.name === "process") {
+        scheduledToolSources.set(
+          tool,
+          Object.freeze({ targetTool: tool.name, execute: tool.execute }),
+        );
+      }
+    }
+    return tools;
+  };
+  const withToolConstructionScope = <T>(run: () => T): T =>
+    withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
+      withInstallationTarget(installationTarget, run),
+    );
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -450,50 +485,29 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
-      assertActive();
-      const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
-      // Only host-created core tools can seed TTS provenance. Plugin-bound tools
-      // must not replay a retained core result into this attempt's authority set.
-      const tools = bindTools(
-        withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
-          withInstallationTarget(installationTarget, () =>
-            createOpenClawCodingToolsInternal(
-              {
-                ...effectiveOptions,
-                // Availability belongs to this prepared host, not mutable plugin inputs.
-                githubPublicationAvailable,
-                runtimePluginToolGrant,
-                skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
-                installedSkills: getInstalledSkills(
-                  effectiveOptions.sandbox,
-                  effectiveOptions.sessionPermissionPolicy?.root,
-                ),
-                skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
-                operationalRunInstance,
-              },
-              // Sandboxes use their materialized snapshot paths, never host library pins.
-              !requiredWorkspace &&
-                !hostSandboxEnabled &&
-                !options?.sandbox?.enabled &&
-                options?.includeCoreTools !== false &&
-                options?.toolConstructionPlan?.includeBaseCodingTools !== false
-                ? resolveSkillResourceCandidates(skillsSnapshot)
-                : undefined,
-            ),
-          ),
+      const inputs = toolConstructionInputs(options);
+      return bindCreatedTools(
+        withToolConstructionScope(() =>
+          createOpenClawCodingToolsInternal(inputs.options, inputs.skillReadResources),
         ),
         bindingOptions,
-        observeCoreTtsToolResult,
       );
-      for (const tool of tools) {
-        if (tool.name === "exec" || tool.name === "process") {
-          scheduledToolSources.set(
-            tool,
-            Object.freeze({ targetTool: tool.name, execute: tool.execute }),
-          );
-        }
-      }
-      return tools;
+    },
+    createToolSurfaceAsync: async (options, bindingOptions) => {
+      const inputs = toolConstructionInputs(options);
+      const sourceTools = await withToolConstructionScope(() =>
+        createOpenClawCodingToolsInternalAsync(
+          inputs.options,
+          inputs.skillReadResources,
+          undefined,
+          undefined,
+          {
+            assertCurrent: assertActive,
+            signal: bindAbortSignal(attemptSignal),
+          },
+        ),
+      );
+      return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {
       assertActive();
@@ -647,9 +661,7 @@ export function createAgentHarnessHostCapabilities(params: {
         params.pluginId,
         requiredNodeCommands,
         assertActive,
-        attempt.abortSignal
-          ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-          : capabilityAbortController.signal,
+        bindAbortSignal(attempt.abortSignal),
       );
       return withPluginRuntimeGatewayRequestScope(
         {

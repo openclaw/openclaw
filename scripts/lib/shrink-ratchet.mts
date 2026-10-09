@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Owns file-backed baselines and the per-file count ratchet lifecycle, including
@@ -35,11 +36,21 @@ export function parseRatchetArgs(argv: string[]) {
 }
 
 function readGitText(root: string, args: string[]) {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ratchet-git-"));
+  const output = path.join(temporary, "stdout");
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(output, "wx", 0o600);
+    // Baseline blobs can exceed execFileSync's pipe limit. Git writes directly
+    // to a file; only a successful command may supply the complete snapshot.
+    execFileSync("git", args, { cwd: root, stdio: ["ignore", descriptor, "ignore"] });
+    return fs.readFileSync(output, "utf8");
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function resolvesCommit(root: string, ref: string) {
@@ -255,10 +266,6 @@ export function reportRatchetFailures(
   return active.length > 0;
 }
 
-export function reportRatchetSuccess(message: string) {
-  console.log(message);
-}
-
 type PerFileCountRatchetOptions = {
   baselinePath: string;
   baselineHeader: string;
@@ -366,7 +373,7 @@ export function runPerFileCountRatchet(
     } catch {
       if (args.prune && !args.staged && baseBaseline === null) {
         writeBaseline(current);
-        reportRatchetSuccess(
+        console.log(
           `Initialized ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
         );
         return 0;
@@ -376,7 +383,7 @@ export function runPerFileCountRatchet(
 
     if (args.prune && !args.staged && baseBaseline === null) {
       writeBaseline(current);
-      reportRatchetSuccess(
+      console.log(
         `Refreshed initial ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
       );
       return 0;
@@ -427,7 +434,7 @@ export function runPerFileCountRatchet(
       const oldFiles = baseline.size;
       const oldCount = totalCount(baseline);
       writeBaseline(current);
-      reportRatchetSuccess(
+      console.log(
         `Pruned ${baselinePath}: ${oldFiles} -> ${current.size} files; ${oldCount} -> ${totalCount(current)} ${messages.countNoun}.`,
       );
       return 0;
@@ -445,7 +452,7 @@ export function runPerFileCountRatchet(
       return 1;
     }
 
-    reportRatchetSuccess(
+    console.log(
       `${messages.successTitle}: ${current.size} files, ${totalCount(current)} grandfathered ${messages.countNoun}.`,
     );
     return 0;

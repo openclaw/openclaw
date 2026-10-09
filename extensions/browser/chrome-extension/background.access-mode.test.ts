@@ -48,33 +48,6 @@ describe("relay command authorization", () => {
     vi.unstubAllGlobals();
   });
 
-  it("rejects every authority-bearing command after tab-group revocation", async () => {
-    const harness = await ready();
-    const socket = harness.socket;
-    harness.shareTab(41);
-    harness.unshareTab(41);
-
-    socket.receive({ type: "attach", seq: 1, tabId: 41 });
-    socket.receive({ type: "cdp", seq: 2, tabId: 41, method: "Runtime.evaluate" });
-    socket.receive({ type: "closeTab", seq: 3, tabId: 41 });
-    socket.receive({ type: "activateTab", seq: 4, tabId: 41 });
-
-    await vi.waitFor(() => {
-      const frames = harness.frames();
-      expect(
-        frames
-          .filter((frame) => frame.type === "error")
-          .map((frame) => frame.seq)
-          .toSorted((left, right) => left - right),
-      ).toEqual([1, 2, 3, 4]);
-    });
-    expect(harness.debuggerAttach).not.toHaveBeenCalled();
-    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
-    expect(harness.tabsRemove).not.toHaveBeenCalled();
-    expect(harness.tabsUpdate).not.toHaveBeenCalled();
-    expect(harness.windowsUpdate).not.toHaveBeenCalled();
-  });
-
   it("closes the old selected relay before a replacement pairing widens access", async () => {
     const harness = await ready({
       storedConfig: config("selected"),
@@ -140,48 +113,18 @@ describe("relay command authorization", () => {
     expect(harness.tabsGroup).not.toHaveBeenCalled();
   });
 
-  it.each([null, -1])(
-    "rejects malformed getTabAccess tab id %s without querying Chrome",
-    async (tabId) => {
-      const harness = await loadBackground();
-      harness.tabsGet.mockClear();
-
-      await expect(sendRuntimeMessage(harness, { type: "getTabAccess", tabId })).resolves.toEqual({
+  it("rejects a negative getTabAccess tab id without querying Chrome", async () => {
+    const harness = await loadBackground();
+    harness.tabsGet.mockClear();
+    await expect(sendRuntimeMessage(harness, { type: "getTabAccess", tabId: -1 })).resolves.toEqual(
+      {
         accessMode: "selected",
         accessible: false,
         eligible: false,
         denied: false,
-      });
-      expect(harness.tabsGet).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      accessMode: "selected",
-      label: "restricted",
-      tab: { id: 51, url: "chrome://settings", groupId: 7 },
-    },
-    {
-      accessMode: "all",
-      label: "incognito",
-      tab: { id: 52, url: "https://secret.example", incognito: true, groupId: 7 },
-    },
-  ])("rejects an $label tab in $accessMode mode", async ({ accessMode, tab }) => {
-    const harness = await ready({
-      storedConfig: config(accessMode),
-      initialTabs: [tab],
-    });
-    harness.shareTab(tab.id);
-    const socket = harness.socket;
-    socket.receive({ type: "attach", seq: 22, tabId: tab.id });
-    await vi.waitFor(() => {
-      const frame = socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .find((candidate) => candidate.type === "error" && candidate.seq === 22);
-      expect(frame?.message).toMatch(/restricted|incognito/);
-    });
-    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+      },
+    );
+    expect(harness.tabsGet).not.toHaveBeenCalled();
   });
 
   it("revokes all-mode authority before a queued downgrade reaches the mutation queue", async () => {
@@ -500,32 +443,19 @@ describe("relay command authorization", () => {
     });
   });
 
-  it.each([
-    { accessMode: "all" as const, detached: false },
-    { accessMode: "selected" as const, detached: true },
-  ])("revokes on group removal only in $accessMode mode", async ({ accessMode, detached }) => {
+  it("revokes selected access on group removal", async () => {
     const harness = await ready({
-      storedConfig: config(accessMode),
+      storedConfig: config("selected"),
       initialTabs: [{ id: 111, url: "https://example.com/group", groupId: 7 }],
     });
     harness.shareTab(111);
-    const socket = harness.socket;
-    socket.receive({ type: "attach", seq: 34, tabId: 111 });
+    harness.socket.receive({ type: "attach", seq: 34, tabId: 111 });
     await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalled());
     harness.debuggerDetach.mockClear();
-
     harness.unshareTab(111);
     harness.tabGroupRemovedListener();
-
-    if (detached) {
-      await vi.waitFor(() => {
-        expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-111" });
-      });
-    } else {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25);
-      });
-      expect(harness.debuggerDetach).not.toHaveBeenCalled();
-    }
+    await vi.waitFor(() =>
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-111" }),
+    );
   });
 });

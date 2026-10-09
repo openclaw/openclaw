@@ -260,7 +260,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("configures native approval forwarding and the guardian runtime", () => {
     const cfg = buildSlackConfigFixture(
-      { agents: { defaults: {}, list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }] } },
+      { agents: { defaults: {}, entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } } } },
       {
         overrides: {
           approvals: { exec: true, plugin: true, target: "channel" },
@@ -340,7 +340,7 @@ describe("Slack live QA runtime helpers", () => {
         {
           agents: {
             defaults: { verboseDefault: "off" },
-            list: [{ id: "qa", identity: { name: "C-3PO QA" } }],
+            entries: { qa: { identity: { name: "C-3PO QA" } } },
           },
         },
         { overrides: findScenario([id])[0]?.configOverrides },
@@ -367,7 +367,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(config("slack-progress-commentary-verbose-full").agents?.defaults?.verboseDefault).toBe(
       "full",
     );
-    expect(enabled.agents?.list?.[0]?.identity).toBeUndefined();
+    expect(enabled.agents?.entries?.qa?.identity).toBeUndefined();
     expect(config("slack-mpim-app-mention-dedupe").channels?.slack?.accounts?.sut).toMatchObject({
       dm: { enabled: true, groupEnabled: true },
       replyToMode: "all",
@@ -395,13 +395,13 @@ describe("Slack live QA runtime helpers", () => {
           : slackMessage(commentary, "1"),
       ];
       if (suffix === "omitted") {
-        messages.push(slackMessage(commentary, "1", ["🛠️ *Exec* — sleep 5"]));
+        messages.push(slackMessage(commentary, "1", ["• *Exec* — sleep 5"]));
       }
       if (suffix === "verbose-dedupe") {
-        messages.push(slackMessage(":hammer_and_wrench: Exec", "1.5"));
+        messages.push(slackMessage("Exec", "1.5"));
       }
       if (suffix === "verbose-full") {
-        messages.push(slackMessage(`🛠️ Exec\n\`\`\`\n${output}\n\`\`\``, "1.5"));
+        messages.push(slackMessage(`Exec\n\`\`\`\n${output}\n\`\`\``, "1.5"));
       }
       const verify = () => verifyObserved({ finalMessage: { text: final, ts: "2" }, messages });
       expect(verify()).toContain("verified");
@@ -450,7 +450,7 @@ describe("Slack live QA runtime helpers", () => {
       headline.verify([slackMessage(`💬 ${headline.commentary}`, "commentary")]),
     ).toThrow("status headline");
     const lane = progress("true");
-    for (const text of [lane.tool, lane.output, "🛠️ Exec"]) {
+    for (const text of [lane.tool, lane.output, "Exec", "run sleep → print text"]) {
       expect(() =>
         lane.verify([
           slackMessage(`💬 ${lane.commentary}`, "commentary"),
@@ -482,7 +482,7 @@ describe("Slack live QA runtime helpers", () => {
         p.verify([
           slackMessage(`💬 ${p.commentary}`, "commentary"),
           slackMessage(
-            finalEdit ? `${marker} ${p.final}` : `🛠️ Exec ${marker}`,
+            finalEdit ? `${marker} ${p.final}` : `Exec ${marker}`,
             finalEdit ? "final" : "tool",
           ),
         ]),
@@ -498,42 +498,45 @@ describe("Slack live QA runtime helpers", () => {
         ...messages.map((m) => slackMessage(m.text, m.ts)),
       ]);
     const tool = (text: string, ts = "tool") => ({ text, ts });
-    expect(() => verify(tool(`🛠️ Exec: printf '${p.output}'`))).toThrow(
-      "expected exact tool output",
-    );
-    expect(() => verify(tool(`🛠️ ${p.output}`))).toThrow("expected exact tool output");
-    const summary = `🛠️ \`sleep 5; printf '%s\\\\n' '${p.output}' # ${p.tool}\``;
+    expect(() => verify(tool(`Exec: printf '${p.output}'`))).toThrow("expected exact tool output");
+    expect(() => verify(tool(`Exec: ${p.output}`))).toThrow("expected exact tool output");
+    const summary = `\`sleep 5; printf '%s\\\\n' '${p.output}' # ${p.tool}\``;
     const delivered = sanitizeAssistantVisibleText(`${summary}\n\`\`\`txt\n${p.output}\n\`\`\``);
-    expect(sanitizeAssistantVisibleText(summary)).toBe("");
-    expect(delivered).toBe(`\`\`\`txt\n${p.output}\n\`\`\``);
+    expect(sanitizeAssistantVisibleText(summary)).toBe(summary);
+    expect(delivered).toBe(`${summary}\n\`\`\`txt\n${p.output}\n\`\`\``);
     expect(() => verify(tool(delivered))).not.toThrow();
     expect(() => verify(tool(p.output))).not.toThrow();
-    expect(() => verify(tool(`🛠️ Run command: # ${p.tool}\n${p.output}`))).not.toThrow();
+    expect(() => verify(tool(`Run command: # ${p.tool}\n${p.output}`))).not.toThrow();
     expect(() =>
-      verify(tool(`🛠️ Exec\n${p.output}`, "tool-1"), tool(`🛠️ Exec\n${p.output}`, "tool-2")),
+      verify(tool(`Exec\n${p.output}`, "tool-1"), tool(`Exec\n${p.output}`, "tool-2")),
     ).toThrow("expected exact tool output in one standalone verbose message");
-    const start = "🛠️ run sleep → print text";
+    const start = "run sleep → print text";
     expect(() => verify(tool(start, "summary"), tool(`${start}\n${p.output}`))).not.toThrow();
     expect(() =>
       verify(tool(start, "summary-1"), tool(start, "summary-2"), tool(`${start}\n${p.output}`)),
     ).toThrow(
       "expected exact tool output in one standalone verbose message and at most one summary",
     );
-    expect(() =>
-      verify(tool("🛠️ Exec"), tool(`🛠️ Exec\n\`\`\`\n${p.output}\n\`\`\``)),
-    ).not.toThrow();
+    expect(() => verify(tool("Exec"), tool(`Exec\n\`\`\`\n${p.output}\n\`\`\``))).not.toThrow();
   });
 
-  it("rejects verbose-on output updates without protocol markers", () => {
-    const p = progress("verbose-dedupe");
-    expect(() =>
-      p.verify([
-        slackMessage(`💬 ${p.commentary}`, "commentary"),
-        slackMessage("🛠️ Exec", "tool"),
-        slackMessage("🛠️ Exec\nunmarked output", "tool"),
-      ]),
-    ).toThrow("command details and output must stay hidden in verbose-on progress");
-  });
+  it.each([
+    { text: "Exec\nunmarked output", finalEdit: false },
+    { text: "run sleep → print text", finalEdit: false },
+    { text: "Exec: unmarked command", finalEdit: true },
+  ])(
+    "rejects verbose-on tool details without protocol markers: $text (final edit: $finalEdit)",
+    ({ text, finalEdit }) => {
+      const p = progress("verbose-dedupe");
+      expect(() =>
+        p.verify([
+          slackMessage(`💬 ${p.commentary}`, "commentary"),
+          slackMessage("Exec", "tool"),
+          slackMessage(finalEdit ? `${text}\n${p.final}` : text, finalEdit ? "final" : "tool"),
+        ]),
+      ).toThrow("command details and output must stay hidden in verbose-on progress");
+    },
+  );
 
   it("requires a standalone identity for the safe verbose summary", () => {
     const p = progress("verbose-dedupe");
@@ -541,7 +544,7 @@ describe("Slack live QA runtime helpers", () => {
       expect(() =>
         p.verify([
           slackMessage(`💬 ${p.commentary}`, "commentary"),
-          ...(ts ? [slackMessage("🛠️ Exec", ts)] : []),
+          ...(ts ? [slackMessage("Exec", ts)] : []),
         ]),
       ).toThrow("standalone verbose message");
     }
@@ -576,7 +579,7 @@ describe("Slack live QA runtime helpers", () => {
               [`• *Commentary* — _${commentary}_\n_${commentary}_`, privateText.repeat(1_000)],
             );
           }),
-          slackMessage("🛠️ `sleep 5`", "private-tool-identity"),
+          slackMessage("`sleep 5`", "private-tool-identity"),
         ],
       });
     } catch (error) {
