@@ -5,11 +5,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readRecentDreamDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
-import { runDreamNarrative, type DreamingCompletion } from "./dreaming-narrative.js";
+import { runDreamNarrative } from "./dreaming-narrative.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { createDreamingCompletion, createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 function setNarrativeTestEnv(stateDir: string): void {
@@ -21,23 +21,53 @@ function createLogger() {
 function expectLogIncludes(source: ReturnType<typeof vi.fn>, text: string) {
   expect(source.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
 }
-function createCompletion(text = "The repository whispered of forgotten endpoints.") {
-  return { complete: vi.fn<DreamingCompletion["complete"]>().mockResolvedValue({ text }) };
-}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
 describe("runDreamNarrative", () => {
+<<<<<<< HEAD
+=======
+  it("writes the completion using the workspace owner's configured model", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-completion-");
+    const subagent = createDreamingCompletion();
+    const outcome = await runDreamNarrative({
+      agentId: "researcher",
+      timeoutMs: 180_000,
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["API endpoints need authentication"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      model: "anthropic/claude-sonnet-4-6",
+      logger: createLogger(),
+    });
+
+    expect(subagent.complete).toHaveBeenCalledOnce();
+    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "researcher",
+      model: "anthropic/claude-sonnet-4-6",
+      timeoutMs: 180_000,
+      message: expect.stringContaining("API endpoints need authentication"),
+      extraSystemPrompt: expect.stringContaining("Output ONLY the diary entry"),
+    });
+    expect(outcome).toEqual({ status: "completed" });
+    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
+      "The repository whispered of forgotten endpoints.",
+    );
+  });
+
+>>>>>>> 754eebb6572c (fix(memory): let slow models finish dream diary entries)
   it.each([
     new Error("Completion failed", { cause: new Error("unknown model: ollama/missing-model") }),
   ])("retries an unavailable configured model with the default (%s)", async (error) => {
     const workspaceDir = await createTempWorkspace("dreaming-model-retry-");
-    const subagent = createCompletion("The default model carried the diary home.");
+    const subagent = createDreamingCompletion("The default model carried the diary home.");
     subagent.complete.mockRejectedValueOnce(error);
     await runDreamNarrative({
       agentId: "main",
+      timeoutMs: 180_000,
       subagent,
       workspaceDir,
       data: { phase: "rem", snippets: ["A configured endpoint was absent."] },
@@ -46,8 +76,12 @@ describe("runDreamNarrative", () => {
     });
 
     expect(subagent.complete).toHaveBeenCalledTimes(2);
-    expect(subagent.complete.mock.calls[0]?.[0].model).toBe("ollama/missing-model");
+    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({
+      model: "ollama/missing-model",
+      timeoutMs: 180_000,
+    });
     expect(subagent.complete.mock.calls[1]?.[0]).not.toHaveProperty("model");
+    expect(subagent.complete.mock.calls[1]?.[0]).toHaveProperty("timeoutMs", 180_000);
     expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
       "The default model carried the diary home.",
     );
@@ -55,7 +89,7 @@ describe("runDreamNarrative", () => {
 
   it("does not retry unauthorized model selection even when its cause names an unavailable model", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-model-denied-");
-    const subagent = createCompletion();
+    const subagent = createDreamingCompletion();
     subagent.complete.mockRejectedValue(
       Object.assign(
         new Error("model override is not authorized", {
@@ -67,6 +101,7 @@ describe("runDreamNarrative", () => {
     const logger = createLogger();
     await runDreamNarrative({
       agentId: "main",
+      timeoutMs: 180_000,
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: ["A private raw staging fragment."] },
@@ -83,9 +118,17 @@ describe("runDreamNarrative", () => {
 
   it("writes only a generic trace after empty completion", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-fallback-");
+<<<<<<< HEAD
     const subagent = createCompletion("   \n  ");
+=======
+    const subagent = createDreamingCompletion("   \n  ");
+    if (failure) {
+      subagent.complete.mockRejectedValue(failure);
+    }
+>>>>>>> 754eebb6572c (fix(memory): let slow models finish dream diary entries)
     const outcome = await runDreamNarrative({
       agentId: "main",
+      timeoutMs: 180_000,
       subagent,
       workspaceDir,
       data: { phase: "deep", snippets: ["A private raw staging fragment."] },
@@ -100,10 +143,11 @@ describe("runDreamNarrative", () => {
 
   it.each([undefined])("skips empty data for owner %s", async (agentId) => {
     const workspaceDir = await createTempWorkspace("dreaming-empty-");
-    const subagent = createCompletion();
+    const subagent = createDreamingCompletion();
     await expect(
       runDreamNarrative({
         agentId,
+        timeoutMs: 180_000,
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: [] },
@@ -118,9 +162,10 @@ describe("runDreamNarrative", () => {
 
   it("keeps ownerless sweeps alive with a local trace", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-ownerless-");
-    const subagent = createCompletion();
+    const subagent = createDreamingCompletion();
     await runDreamNarrative({
       subagent,
+      timeoutMs: 180_000,
       workspaceDir,
       data: { phase: "light", snippets: ["An ownerless memory fragment."] },
       logger: createLogger(),
@@ -136,7 +181,7 @@ describe("runDreamNarrative", () => {
     async (reject, { signal }) => {
       const workspaceDir = await createTempWorkspace("dreaming-detached-");
       const completion = createDeferred<{ text: string }>();
-      const subagent = createCompletion();
+      const subagent = createDreamingCompletion();
       subagent.complete.mockReturnValue(completion.promise);
       const published = createDeferred<void>();
       const logger = createLogger();
@@ -148,6 +193,7 @@ describe("runDreamNarrative", () => {
         await expect(
           runDreamNarrative({
             agentId: "main",
+            timeoutMs: 180_000,
             subagent,
             workspaceDir,
             data: { phase: "rem", snippets: ["A detached fragment."] },
@@ -253,6 +299,7 @@ describe("runDreamNarrative deletion boundary", () => {
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const operation = runDreamNarrative({
         agentId: "main",
+        timeoutMs: 180_000,
         subagent,
         workspaceDir,
         data,
