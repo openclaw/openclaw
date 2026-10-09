@@ -43,6 +43,21 @@ function beginOpenAIObservation(
   });
 }
 
+function beginAnthropicObservation(
+  params: Pick<ObservationParams, "sessionId"> & Partial<ObservationParams>,
+) {
+  return beginPromptCacheObservation({
+    messages: [],
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-6",
+    modelApi: "anthropic-messages",
+    streamStrategy: "boundary-aware:anthropic-messages",
+    systemPrompt: "stable system",
+    tools: [{ name: "read" }],
+    ...params,
+  });
+}
+
 describe("prompt cache observability", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -588,13 +603,7 @@ describe("prompt cache observability", () => {
     },
   );
 
-  it("collects canonical trimmed tool snapshots", () => {
-    expect(
-      collectPromptCacheTools([{ name: "write" }, { name: "" }, {}, { name: " read " }]),
-    ).toEqual([{ name: "read" }, { name: "write" }]);
-  });
-
-  it("collects prompt-cache tools without aborting on unreadable descriptors", () => {
+  it("collects canonical trimmed tool snapshots while skipping unreadable descriptors", () => {
     const unreadableTool = {
       get name(): string {
         throw new Error("tool name getter exploded");
@@ -602,7 +611,13 @@ describe("prompt cache observability", () => {
     };
 
     expect(
-      collectPromptCacheTools([{ name: " read " }, unreadableTool, { name: "write" }]),
+      collectPromptCacheTools([
+        { name: "write" },
+        { name: "" },
+        {},
+        unreadableTool,
+        { name: " read " },
+      ]),
     ).toEqual([{ name: "read" }, { name: "write" }]);
   });
 
@@ -738,30 +753,16 @@ describe("prompt cache observability", () => {
   });
 
   it("suppresses cache-break events for small drops", () => {
-    beginPromptCacheObservation({
-      messages: [],
+    beginAnthropicObservation({
       sessionId: scopedKey("session-1"),
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      modelApi: "anthropic-messages",
-      streamStrategy: "boundary-aware:anthropic-messages",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-1"),
       usage: { cacheRead: 5_000 },
     });
 
-    beginPromptCacheObservation({
-      messages: [],
+    beginAnthropicObservation({
       sessionId: scopedKey("session-1"),
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      modelApi: "anthropic-messages",
-      streamStrategy: "boundary-aware:anthropic-messages",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
 
     expect(
@@ -872,27 +873,15 @@ describe("prompt cache observability", () => {
   it("attributes dynamic system prompt suffix changes separately from the stable prefix", () => {
     const sessionId = scopedKey("dynamic-system-suffix");
     const stablePrefix = "stable instructions and tool capability directory";
-    beginPromptCacheObservation({
-      messages: [],
+    beginAnthropicObservation({
       sessionId,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      modelApi: "anthropic-messages",
-      streamStrategy: "boundary-aware:anthropic-messages",
       systemPrompt: `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}first turn context`,
-      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
 
-    const next = beginPromptCacheObservation({
-      messages: [],
+    const next = beginAnthropicObservation({
       sessionId,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      modelApi: "anthropic-messages",
-      streamStrategy: "boundary-aware:anthropic-messages",
       systemPrompt: `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}second turn context`,
-      tools: [{ name: "read" }],
     });
 
     // The stable prefix digest is unchanged; only the suffix moved, which a
