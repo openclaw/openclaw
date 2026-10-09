@@ -1,11 +1,10 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { readPreparedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
-import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -15,13 +14,10 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
-import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
 import {
   createOrResumeClientVoiceSession,
@@ -30,23 +26,19 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
-  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceGatewayControl,
   RealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-types.js";
 import { makeBridge } from "../../../talk/session-runtime.test-support.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../../chat-abort.js";
-import { handleGatewayRequest } from "../../server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  retainGatewayDeviceRevocation,
+} from "../../device-revocation.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../server-plugin-in-process-dispatch.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
-import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
-import { drainingRelaySessions } from "../relay/state.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import {
   cleanupTalkConnection,
@@ -59,7 +51,19 @@ import {
   requestTalkVoiceChange,
   resolveTalkVoiceSession,
 } from "../voice-selection.js";
-import { talkClientHandlers } from "./client.js";
+import {
+  browserControl,
+  callback,
+  client,
+  config,
+  context,
+  dispatch,
+  installNativeConsultTestHooks,
+  providerInstructions,
+  providerScope,
+  setNativeConsultConfig,
+  submitProviderResult,
+} from "./native-consult-target.test-support.js";
 import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
@@ -85,148 +89,7 @@ vi.mock("../../../talk/provider-resolver.js", () => ({
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 
-let state: OpenClawTestState;
-let config: OpenClawConfig;
-let client: ReturnType<typeof sharingPolicyClient> & { connId: string };
-let callback: RealtimeVoiceAgentConsultRunner | undefined;
-let providerInstructions: string | undefined;
-const browserVoiceSessionIds = new Set<string>();
-let browserControl: RealtimeVoiceGatewayControl | undefined;
-const submitProviderResult = vi.fn();
-const context = {
-  getRuntimeConfig: () => config,
-  getClientConnIds: () => new Set([client.connId]),
-  chatAbortControllers: new Map(),
-  broadcastToConnIds: vi.fn(),
-  logGateway: { warn: vi.fn() },
-} as unknown as GatewayRequestContext;
-
-async function dispatch(
-  method: string,
-  params: Record<string, unknown>,
-  handlers: GatewayRequestHandlers = {},
-) {
-  const respond = vi.fn();
-  await handleGatewayRequest({
-    req: { type: "req", id: "native-consult", method, params },
-    client,
-    context,
-    isWebchatConnect: () => false,
-    respond,
-    extraHandlers: { ...talkClientHandlers, ...talkSessionHandlers, ...handlers },
-  });
-  const payload = respond.mock.calls.at(-1)?.[1];
-  if (
-    method === "talk.client.create" &&
-    isRecord(payload) &&
-    typeof payload.voiceSessionId === "string"
-  ) {
-    browserVoiceSessionIds.add(payload.voiceSessionId);
-  }
-  return respond;
-}
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "talk-native-consult" });
-  config = {
-    agents: {
-      ownership: "explicit",
-      entries: { primary: {}, voice: { workspace: state.workspaceDir } },
-    },
-    talk: { agentId: "voice" },
-  };
-  client = {
-    ...sharingPolicyClient({ user: ensureProfileForEmail("native-listener@example.test").id }),
-    connId: "native-consult-client",
-  };
-  callback = undefined;
-  providerInstructions = undefined;
-  browserVoiceSessionIds.clear();
-  browserControl = undefined;
-  vi.clearAllMocks();
-  mocks.runEmbeddedAgent.mockReset().mockResolvedValue({
-    payloads: [{ text: "Synthetic consult answer" }],
-    meta: { durationMs: 0 },
-  });
-  context.chatAbortControllers.clear();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  const provider: RealtimeVoiceProviderPlugin = {
-    id: "synthetic-voice",
-    label: "Synthetic voice",
-    capabilities: mocks.capabilities,
-    isConfigured: () => true,
-    createBrowserSession: async (request) => {
-      providerInstructions = request.instructions;
-      callback = request.runAgentConsult;
-      browserControl = request.gatewayControl;
-      browserControl?.bindBridge({
-        connect: async () => undefined,
-        sendAudio: () => undefined,
-        setMediaTimestamp: () => undefined,
-        handleBargeIn: () => undefined,
-        submitToolResult: submitProviderResult,
-        acknowledgeMark: () => undefined,
-        close: () => undefined,
-        isConnected: () => true,
-      });
-      return {
-        provider: "synthetic-voice",
-        transport: "webrtc",
-        clientSecret: "synthetic-offer",
-        offerUrl: "/test/offer",
-      };
-    },
-    createBridge: (request) => {
-      providerInstructions = request.instructions;
-      callback = request.runAgentConsult;
-      return {
-        connect: async () => undefined,
-        sendAudio: () => undefined,
-        setMediaTimestamp: () => undefined,
-        handleBargeIn: () => undefined,
-        submitToolResult: () => undefined,
-        acknowledgeMark: () => undefined,
-        close: () => undefined,
-        isConnected: () => true,
-      };
-    },
-  };
-  Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
-    value: { isBrowserSessionConfigured: () => true, cancelBrowserSession: async () => undefined },
-  });
-  mocks.resolveProvider.mockReturnValue({
-    provider,
-    providerConfig: {},
-    capabilities: {
-      ...mocks.capabilities,
-      supportsGatewayControl: true,
-      handlesAgentConsult: true,
-    },
-  });
-});
-
-afterEach(async () => {
-  try {
-    for (const browserVoiceSessionId of browserVoiceSessionIds) {
-      await closeTalkClientGatewayControlSession({
-        voiceSessionId: browserVoiceSessionId,
-        sessionKey: "main",
-        connId: client.connId,
-      });
-    }
-    cleanupTalkConnection(client.connId, context.logGateway);
-    await Promise.all(
-      [...drainingRelaySessions].map(
-        (session) => session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
-      ),
-    );
-  } finally {
-    clientVoiceSessionTesting.reset();
-    embeddedRunTesting.resetActiveEmbeddedRuns();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await state.cleanup();
-  }
-});
+installNativeConsultTestHooks(mocks);
 
 async function createRelayCall(params: Record<string, unknown> = {}) {
   const respond = await dispatch("talk.session.create", {
@@ -260,7 +123,7 @@ it.each([undefined, "main"])(
         createdActor: { type: "human", source: "profile", id: "another-person" },
       },
     );
-    config = { ...config, talk: { agentId: "primary" } };
+    setNativeConsultConfig({ ...config, talk: { agentId: "primary" } });
     expect(
       await dispatch("talk.session.steer", {
         sessionId,
@@ -317,7 +180,7 @@ it.each([undefined, "main"])(
 
 it("rejects retained relay mapping changes even when the physical store is unchanged", async () => {
   const { sessionId } = await createRelayCall();
-  config = { ...config, session: { mainKey: "home" } };
+  setNativeConsultConfig({ ...config, session: { mainKey: "home" } });
   expect(
     await dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }),
   ).toHaveBeenCalledWith(
@@ -773,6 +636,175 @@ it("restores bounded relay history after the original voice provider finishes cl
 });
 
 describe.each(["browser", "relay"] as const)("native %s Talk consultation", (transport) => {
+  it.each(["completed", "detached"] as const)(
+    "retains the authenticated source after the setup RPC releases it (%s)",
+    async (disposition) => {
+      const connection = new AbortController();
+      const requestAuthority = captureGatewayDeviceRevocation(
+        context,
+        { deviceId: "talk-source", role: "operator" },
+        () => true,
+        connection.signal,
+      );
+      const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
+      let respond: Awaited<ReturnType<typeof dispatch>>;
+      try {
+        respond = await dispatch(
+          method,
+          {
+            sessionKey: "main",
+            mode: "realtime",
+            transport: transport === "browser" ? "webrtc" : "gateway-relay",
+            brain: "agent-consult",
+            ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
+          },
+          {},
+          requestAuthority.isCurrent,
+        );
+      } finally {
+        // The websocket dispatch releases this hold once talk.*.create returns.
+        requestAuthority.release();
+      }
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expect(requestAuthority.isCurrent()).toBe(true);
+      const result = respond.mock.calls[0]![1] as { voiceSessionId: string; sessionId?: string };
+      let admittedAuthority: ReturnType<typeof readPreparedRunOperatorAuthority>;
+      const started = createDeferredCore();
+      const finish = createDeferredCore();
+      mocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
+        admittedAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
+        started.resolve();
+        // This is the real late capture made by Codex parent registration before inference.
+        const continuation = await captureOperatorToolGatewayContinuationContext();
+        try {
+          continuation?.assertCurrent();
+          expect(admittedAuthority?.profileId).toBe(client.authenticatedUserProfile?.profileId);
+          expect(continuation?.operatorAuthority?.source).toBe(admittedAuthority?.source);
+        } finally {
+          continuation?.release();
+        }
+        if (disposition === "detached") {
+          await finish.promise;
+          // Accepted work keeps the same authority after its audio owner closes.
+          admittedAuthority?.assertCurrent();
+          const detached = await captureOperatorToolGatewayContinuationContext();
+          try {
+            detached?.assertCurrent();
+          } finally {
+            detached?.release();
+          }
+        }
+        return { payloads: [{ text: "Source still authorized" }], meta: { durationMs: 0 } };
+      });
+      // Provider sockets inherit setup's async context; callback invocation must replace it.
+      expect(providerScope).toBeDefined();
+      const pending = withPluginRuntimeGatewayRequestScope(providerScope!, () =>
+        callback!({ prompt: "Continue after setup" }),
+      );
+      void pending.catch(() => {});
+      try {
+        if (disposition === "detached") {
+          await started.promise;
+          expect(admittedAuthority).toBeDefined();
+          cleanupTalkConnection(client.connId, context.logGateway);
+          expect(() => admittedAuthority?.assertCurrent()).not.toThrow();
+          finish.resolve();
+        }
+        await expect(pending).resolves.toEqual({ text: "Source still authorized" });
+        if (disposition === "completed") {
+          expect(() => admittedAuthority?.assertCurrent()).not.toThrow();
+          if (transport === "browser") {
+            await closeTalkClientGatewayControlSession({
+              voiceSessionId: result.voiceSessionId,
+              sessionKey: "main",
+              connId: client.connId,
+            });
+          } else {
+            await dispatch("talk.session.close", { sessionId: result.sessionId });
+          }
+        }
+        expect(() => admittedAuthority?.assertCurrent()).toThrow(/authority is no longer active/);
+        expect(() => retainGatewayDeviceRevocation(requestAuthority.isCurrent)).toThrow(
+          "Gateway caller authority is no longer active.",
+        );
+      } finally {
+        finish.resolve();
+        await pending.catch(() => {});
+      }
+    },
+  );
+
+  it("releases the source when provider startup fails", async () => {
+    const connection = new AbortController();
+    const requestAuthority = captureGatewayDeviceRevocation(
+      context,
+      { deviceId: "failed-talk-source", role: "operator" },
+      () => true,
+      connection.signal,
+    );
+    const provider = mocks.resolveProvider().provider as RealtimeVoiceProviderPlugin;
+    if (transport === "browser") {
+      vi.spyOn(provider, "createBrowserSession").mockRejectedValue(new Error("Startup failed"));
+    } else {
+      vi.spyOn(provider, "createBridge").mockImplementation(() => {
+        throw new Error("Startup failed");
+      });
+    }
+    try {
+      const respond = await dispatch(
+        transport === "browser" ? "talk.client.create" : "talk.session.create",
+        {
+          sessionKey: "main",
+          mode: "realtime",
+          transport: transport === "browser" ? "webrtc" : "gateway-relay",
+          brain: "agent-consult",
+          ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
+        },
+        {},
+        requestAuthority.isCurrent,
+      );
+      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    } finally {
+      requestAuthority.release();
+    }
+    expect(() => retainGatewayDeviceRevocation(requestAuthority.isCurrent)).toThrow(
+      "Gateway caller authority is no longer active.",
+    );
+    expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("still rejects provider consultations after device authority is revoked", async () => {
+    const connection = new AbortController();
+    const requestAuthority = captureGatewayDeviceRevocation(
+      context,
+      { deviceId: "revoked-talk-source", role: "operator" },
+      () => true,
+      connection.signal,
+    );
+    try {
+      const respond = await dispatch(
+        transport === "browser" ? "talk.client.create" : "talk.session.create",
+        {
+          sessionKey: "main",
+          mode: "realtime",
+          transport: transport === "browser" ? "webrtc" : "gateway-relay",
+          brain: "agent-consult",
+          ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
+        },
+        {},
+        requestAuthority.isCurrent,
+      );
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    } finally {
+      requestAuthority.release();
+    }
+    invalidateGatewayDeviceRevocation(context, "revoked-talk-source");
+    await expect(callback!({ prompt: "This source was revoked" })).rejects.toThrow(
+      /authority is no longer active/,
+    );
+    expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "custom main", scope: "per-sender" as const, canonicalKey: "agent:voice:home" },
     { name: "global", scope: "global" as const, canonicalKey: "global" },

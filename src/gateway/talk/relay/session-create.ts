@@ -623,6 +623,7 @@ export function createTalkRealtimeRelaySession(
     void closeRelaySession(active, "error");
   };
   const relay: RelaySession = {
+    releaseConsultAuthority: params.consultAuthority?.executionContext?.release,
     getToolAuthorityOverlay: consultRunner.getToolAuthorityOverlay,
     id: relaySessionId,
     connId: params.connId,
