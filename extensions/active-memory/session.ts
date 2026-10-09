@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   deliveryContextFromSession,
+  rethrowIncognitoSessionError,
   sessionDeliveryOrigin,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -12,51 +13,38 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-export function resolveCanonicalSessionKeyFromSessionId(params: {
+export async function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionId?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const sessionId = params.sessionId?.trim();
   if (!sessionId) {
     return undefined;
   }
   try {
-    let bestMatch:
-      | {
-          sessionKey: string;
-          updatedAt: number;
-        }
-      | undefined;
-    for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
+    const match = await params.api.runtime.agent.session.getSessionEntryByIdAsync({
       agentId: params.agentId,
-      readOnly: true,
-    })) {
-      if (!entry || normalizeOptionalString(entry.sessionId) !== sessionId) {
-        continue;
-      }
-      const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
-      if (!bestMatch || updatedAt > bestMatch.updatedAt) {
-        bestMatch = { sessionKey, updatedAt };
-      }
-    }
-    return bestMatch?.sessionKey?.trim() || undefined;
-  } catch {
+      sessionId,
+    });
+    return match?.sessionKey.trim() || undefined;
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return undefined;
   }
 }
 
-export function resolveRecallRunChannelContext(params: {
+export async function resolveRecallRunChannelContext(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
-}): {
+}): Promise<{
   messageChannel?: string;
   messageProvider?: string;
-} {
+}> {
   const isRunnableChannelName = (channel: string) =>
     !channel.includes(":") && !channel.includes("/");
   const explicitChannel = normalizeOptionalString(params.channelId);
@@ -75,23 +63,24 @@ export function resolveRecallRunChannelContext(params: {
       : undefined;
   const resolvedSessionKey =
     normalizeOptionalString(params.sessionKey) ??
-    resolveCanonicalSessionKeyFromSessionId({
+    (await resolveCanonicalSessionKeyFromSessionId({
       api: params.api,
       agentId: params.agentId,
       sessionId: params.sessionId,
-    });
+    }));
   let strongEntryChannel: string | undefined;
   let weakEntryChannel: string | undefined;
   if (resolvedSessionKey) {
     try {
-      const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+      const sessionEntry = await params.api.runtime.agent.session.getSessionEntryAsync({
         agentId: params.agentId,
         sessionKey: resolvedSessionKey,
       });
       const channel = normalizeOptionalString(deliveryContextFromSession(sessionEntry)?.channel);
       strongEntryChannel = channel && isRunnableChannelName(channel) ? channel : undefined;
       weakEntryChannel = normalizeOptionalString(sessionDeliveryOrigin(sessionEntry)?.provider);
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       // Explicit hints still identify the channel if session lookup is unavailable.
     }
   }
@@ -223,7 +212,7 @@ export async function persistPluginStatusLines(params: {
   }
   try {
     if (!params.statusLine && !debugLine) {
-      const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+      const existingEntry = await params.api.runtime.agent.session.getSessionEntryAsync({
         agentId,
         sessionKey,
       });
@@ -268,6 +257,7 @@ export async function persistPluginStatusLines(params: {
       },
     });
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     params.api.logger.debug?.(
       `active-memory: failed to persist session status note (${error instanceof Error ? error.message : String(error)})`,
     );

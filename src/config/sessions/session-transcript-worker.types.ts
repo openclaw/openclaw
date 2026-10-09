@@ -47,6 +47,7 @@ import type {
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type {
+  LatestTranscriptAssistantText,
   TranscriptEvent,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaResult,
@@ -159,6 +160,7 @@ import type {
   SessionTranscriptWatermarkWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
   SessionTranscriptDeltaWorkerInput,
+  SessionTranscriptLatestAssistantWorkerInput,
   SessionMemoryCaptureWorkerInput,
   SessionProgressCardWorkerInput,
   VoiceSessionsWorkerInput,
@@ -364,6 +366,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptWatermarkWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
   | SessionTranscriptDeltaWorkerInput
+  | SessionTranscriptLatestAssistantWorkerInput
   | SessionMemoryCaptureWorkerInput
   | SessionTranscriptAnchorsWorkerInput
   | SessionActivitySummarySourceWorkerInput
@@ -435,6 +438,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "transcript-visible-delta": {
       kind: "transcript-visible-delta";
       result: SessionTranscriptVisibleMessageDeltaResult;
+    };
+    "transcript-latest-assistant": {
+      kind: "transcript-latest-assistant";
+      result: LatestTranscriptAssistantText | undefined;
     };
     "session-memory-capture": { kind: "session-memory-capture"; result: SessionMemoryTranscript };
     "board-snapshot": {
@@ -596,6 +603,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readVisibleDelta: CancellableSessionHistoryReader<
       Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-visible-delta" }>,
       SessionTranscriptVisibleMessageDeltaResult
+    >;
+    readLatestAssistant: CancellableSessionHistoryReader<
+      SessionTranscriptLatestAssistantWorkerInput,
+      LatestTranscriptAssistantText | undefined
     >;
     readSessionMemoryCapture: CancellableSessionHistoryReader<
       SessionMemoryCaptureWorkerInput,

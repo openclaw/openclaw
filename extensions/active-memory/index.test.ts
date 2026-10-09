@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { IncognitoSessionEndedError } from "openclaw/plugin-sdk/acp-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -336,15 +337,15 @@ describe("active-memory plugin", () => {
         resolveCliBackendDispatchEligibility,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
-          getSessionEntry: vi.fn(
-            (params: { sessionKey: string }) => hoisted.sessionStore[params.sessionKey],
+          getSessionEntryAsync: vi.fn(
+            async (params: { sessionKey: string }) => hoisted.sessionStore[params.sessionKey],
           ),
-          listSessionEntries: vi.fn(() =>
-            Object.entries(hoisted.sessionStore).map(([sessionKey, entry]) => ({
-              sessionKey,
-              entry,
-            })),
-          ),
+          getSessionEntryByIdAsync: vi.fn(async (params: { sessionId: string }) => {
+            const match = Object.entries(hoisted.sessionStore)
+              .filter(([, entry]) => entry.sessionId === params.sessionId)
+              .sort(([, a], [, b]) => Number(b.updatedAt) - Number(a.updatedAt))[0];
+            return match ? { sessionKey: match[0], entry: match[1] } : undefined;
+          }),
           patchSessionEntry: vi.fn(
             async (params: {
               sessionKey: string;
@@ -1691,6 +1692,54 @@ describe("active-memory plugin", () => {
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     },
   );
+
+  it("propagates lost incognito ownership instead of treating eligibility as an optional miss", async () => {
+    const ended = new IncognitoSessionEndedError();
+    api.runtime.agent.session.getSessionEntryAsync.mockRejectedValueOnce(ended);
+    const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
+
+    await expect(
+      runPromptBuild(
+        { prompt: "what did we decide?" },
+        { sessionKey: "agent:main:incognito:test" },
+      ),
+    ).rejects.toBe(ended);
+
+    expect(openKeyedStore).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the audience after asynchronous recall metadata preparation", async () => {
+    registerPluginConfig({ mode: "always" });
+    const prepared = createDeferred<void>();
+    const resume = createDeferred<Record<string, unknown>>();
+    let audienceCurrent = true;
+    api.runtime.agent.session.getSessionEntryAsync
+      .mockResolvedValueOnce(hoisted.sessionStore["agent:main:main"])
+      .mockImplementationOnce(() => {
+        prepared.resolve();
+        return resume.promise;
+      });
+    const pending = runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey: "agent:main:main",
+        assertMemoryAudienceCurrent: () => {
+          if (!audienceCurrent) {
+            throw new Error("memory audience ended");
+          }
+        },
+      },
+    );
+    await prepared.promise;
+    audienceCurrent = false;
+    resume.resolve(hoisted.sessionStore["agent:main:main"]);
+
+    expect(await pending).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+  });
 
   it.each(
     // prettier-ignore
@@ -4139,6 +4188,27 @@ describe("active-memory plugin", () => {
       }
     },
   );
+
+  it("keeps incognito recall helpers private and suppresses debugging exports", async () => {
+    registerPluginConfig({ persistTranscripts: true, mode: "always" });
+    const sessionKey = "agent:main:dashboard:incognito-private-recall";
+    seedSession(sessionKey, "private-parent");
+
+    await runPromptBuild({ prompt: "what did we decide?" }, { sessionKey });
+
+    const childKey = lastEmbeddedSessionKey();
+    expect(childKey).toMatch(/^agent:main:subagent:incognito-[a-f0-9]{12}$/);
+    expect(hoisted.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childKey,
+        fallbackEntry: expect.objectContaining({ incognito: true }),
+      }),
+    );
+    expect(hoisted.sessionStore[childKey]).toBeUndefined();
+    await expect(
+      fs.stat(path.join(stateDir, "plugins", "active-memory", "transcripts")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
     const sessionKey = "agent:main:cache-cap";

@@ -1629,6 +1629,28 @@ no schema, stored bytes, durability, retention, permissions, or update migration
 it claims no incognito T1 retirement. The production owner selection and native
 selector deletion remain a later atomic cutover.
 
+### Incognito SDK history preparation (P04, inactive)
+
+Async SDK history reads retain their explicitly selected actor and physical store.
+Raw transcript delta includes off-path events; exact visible-message delta retains
+its own cursor, reset, message-count, and required-byte contract; display delta is
+a separate projection. Latest-assistant reads reuse the existing raw-history
+kernel, so a trailing user message does not hide the preceding assistant reply.
+Recent conversation text retains its entry owner through page reads and preserves
+role filters, ordering, and timestamps. Durable async latest-assistant reads use
+the existing history worker; released synchronous getters remain synchronous.
+
+Explicitly selected private absence returns the corresponding empty or missing
+read without durable discovery. A retained ended actor still raises
+`INCOGNITO_SESSION_ENDED`, and current source authority is checked after awaited
+consumption. Mirror correlation, idempotency receipts, and lifecycle cleanup
+continue through the P02 transaction owners.
+
+Production acquisition remains host-owned until P12. Unbound incognito calls keep
+their native owner and allocate no actor; native selector removal remains P12.
+This prerequisite claims no incognito T1 retirement and changes no schema, stored
+bytes, durability, retention, permissions, content limits, or update behavior.
+
 ### Existing worker flows
 
 Remote model catalog refreshes capture the shared store before downloading and

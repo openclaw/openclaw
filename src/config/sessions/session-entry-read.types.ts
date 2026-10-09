@@ -77,7 +77,7 @@ export type SessionExactEntriesWorkerSelection =
   | {
       sessionKeys?: never;
       selection: { kind: "session-id"; sessionId: string };
-      projection: "sharing";
+      projection: "sharing" | "full";
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {

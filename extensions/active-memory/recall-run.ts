@@ -5,12 +5,13 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   cleanupSessionLifecycleArtifacts,
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
   patchSessionEntry,
+  rethrowIncognitoSessionError,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -47,7 +48,8 @@ async function persistActiveMemoryTranscriptArtifact(params: {
     let sourceEvents: readonly unknown[];
     try {
       sourceEvents = await readSessionTranscriptEvents(source);
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       continue;
     }
     for (const event of sourceEvents) {
@@ -93,6 +95,7 @@ async function cleanupActiveMemoryRecallSession(params: {
       }
       return;
     } catch (error) {
+      rethrowIncognitoSessionError(error);
       lastError = error;
     }
   }
@@ -131,21 +134,25 @@ export async function runRecallSubagent(params: {
   }
   const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   const parentSessionKey = params.parentSessionKey;
+  const incognito = isIncognitoSessionKey(parentSessionKey);
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
-  const subagentSuffix = `active-memory:${crypto
+  const subagentId = crypto
     .createHash("sha1")
     .update(`${subagentScope}:${params.query}:${subagentSessionId}`)
     .digest("hex")
-    .slice(0, 12)}`;
-  const subagentSessionKey = parentSessionKey
-    ? `${parentSessionKey}:${subagentSuffix}`
-    : `agent:${params.agentId}:${subagentSuffix}`;
-  const persistedDir = params.config.persistTranscripts
-    ? resolveSafeTranscriptDir(
-        resolvePersistentTranscriptBaseDir(params.api, params.agentId),
-        params.config.transcriptDir,
-      )
-    : undefined;
+    .slice(0, 12);
+  const subagentSessionKey = incognito
+    ? `agent:${params.agentId}:subagent:incognito-${subagentId}`
+    : parentSessionKey
+      ? `${parentSessionKey}:active-memory:${subagentId}`
+      : `agent:${params.agentId}:active-memory:${subagentId}`;
+  const persistedDir =
+    params.config.persistTranscripts && !incognito
+      ? resolveSafeTranscriptDir(
+          resolvePersistentTranscriptBaseDir(params.api, params.agentId),
+          params.config.transcriptDir,
+        )
+      : undefined;
   const artifactSessionFile =
     persistedDir !== undefined ? path.join(persistedDir, `${subagentSessionId}.jsonl`) : undefined;
   const storePath = params.storePath;
@@ -187,6 +194,7 @@ export async function runRecallSubagent(params: {
             sources: transcriptSources,
             sessionFile: artifactSessionFile,
           }).catch((error: unknown) => {
+            rethrowIncognitoSessionError(error);
             const message = toSingleLineErrorMessage(error);
             params.api.logger.debug?.(
               `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
@@ -219,6 +227,7 @@ export async function runRecallSubagent(params: {
       sessionId: subagentSessionId,
       sessionFile: runtimeSessionFile,
       updatedAt: Date.now(),
+      ...(incognito ? { incognito: true } : {}),
     };
     const createdEntry = await patchSessionEntry({
       agentId: params.agentId,
@@ -243,7 +252,7 @@ export async function runRecallSubagent(params: {
       query: params.query,
       searchQuery: params.searchQuery,
     });
-    const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
+    const { messageChannel, messageProvider } = await resolveRecallRunChannelContext({
       api: params.api,
       agentId: params.agentId,
       sessionKey: parentSessionKey,
@@ -352,6 +361,7 @@ export async function runRecallSubagent(params: {
       ...(await readRecallEvidence()),
     };
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.abortSignal?.aborted) {
       const partialReply = await readPartialAssistantTextFromSources(transcriptSources);
       attachPartialTimeoutData(error, {

@@ -1,6 +1,7 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeActiveMemoryFastMode } from "./config.js";
 import { getModelRef } from "./query.js";
 import { runRecallSubagent } from "./recall-run.js";
@@ -67,25 +68,25 @@ function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined):
         : "auto";
 }
 
-function prepareRecallRunContext(params: {
+async function prepareRecallRunContext(params: {
   api: OpenClawPluginApi;
   runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
-}): {
+}): Promise<{
   parentSessionKey?: string;
   storePath: string;
   fastMode?: ActiveMemoryFastMode;
-} {
+}> {
   const parentSessionKey =
     params.sessionKey ??
-    resolveCanonicalSessionKeyFromSessionId({
+    (await resolveCanonicalSessionKeyFromSessionId({
       api: params.api,
       agentId: params.agentId,
       sessionId: params.sessionId,
-    });
+    }));
   const storePath = params.api.runtime.agent.session.resolveStorePath(
     params.runtimeConfig.session?.store,
     { agentId: params.agentId },
@@ -94,12 +95,14 @@ function prepareRecallRunContext(params: {
     return { parentSessionKey, storePath, fastMode: params.config.fastMode };
   }
   const sessionFastMode = parentSessionKey
-    ? params.api.runtime.agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: parentSessionKey,
-        storePath,
-        readConsistency: "latest",
-      })?.fastMode
+    ? (
+        await params.api.runtime.agent.session.getSessionEntryAsync({
+          agentId: params.agentId,
+          sessionKey: parentSessionKey,
+          storePath,
+          readConsistency: "latest",
+        })
+      )?.fastMode
     : undefined;
   const fastMode =
     normalizeActiveMemoryFastMode(sessionFastMode) ??
@@ -277,7 +280,9 @@ async function resolveActiveRecall(
     return result;
   }
 
-  const runContext = prepareRecallRunContext(params);
+  const runContext = await prepareRecallRunContext(params);
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
   logPrefix = buildLogPrefix(runContext.fastMode);
 
   if (params.config.logging) {
@@ -419,6 +424,7 @@ async function resolveActiveRecall(
     }
     return result;
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.abortSignal?.aborted) {
       if (recallTimedOut) {
         recordRecallTimeout();

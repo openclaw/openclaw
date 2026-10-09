@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginRecord } from "./loader-records.js";
+import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -26,6 +28,39 @@ function createApis(runtime: PluginRuntime, config: OpenClawConfig = {}) {
 }
 
 describe("plugin registry runtime session ownership", () => {
+  it.each(["key", "id"] as const)(
+    "fences a managed asynchronous %s read when its plugin retires before disclosure",
+    async (selection) => {
+      const runtime = createPluginRuntime();
+      const pending = createDeferredCore<SessionEntry | undefined>();
+      const entry = { sessionId: "managed", updatedAt: 1 };
+      runtime.agent.session.getSessionEntryAsync = () => pending.promise;
+      runtime.agent.session.getSessionEntryByIdAsync = async () => {
+        const entry = await pending.promise;
+        return entry ? { sessionKey: "agent:main:managed", entry } : undefined;
+      };
+      const registry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "managed-reader",
+        source: "/plugins/managed-reader/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = registry.createApi(record, { config: {} });
+      const reading =
+        selection === "key"
+          ? api.runtime.agent.session.getSessionEntryAsync({ sessionKey: "agent:main:managed" })
+          : api.runtime.agent.session.getSessionEntryByIdAsync({
+              agentId: "main",
+              sessionId: "managed",
+            });
+      revokePluginRecord(registry.registry, record);
+      pending.resolve(entry);
+      await expect(reading).rejects.toThrow("runtime is no longer active");
+    },
+  );
+
   it("resolves persisted runtime requests at the plugin execution boundary", async () => {
     const sessionKey = "agent:worker:voice";
     const entry: SessionEntry = {

@@ -7,6 +7,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   applyCliRuntimeRecallTimeoutDefault,
   hasDeprecatedModelFallbackPolicy,
@@ -159,7 +160,7 @@ export default definePluginEntry({
             return { text: `Active Memory: ${enabled ? "on" : "off"} globally.` };
           }
         }
-        const sessionKey = resolveCommandSessionKey({
+        const sessionKey = await resolveCommandSessionKey({
           api,
           config,
           sessionKey: ctx.sessionKey,
@@ -271,7 +272,7 @@ export default definePluginEntry({
             const resolvedSessionKey =
               ctx.sessionKey?.trim() ||
               (resolvedAgentId
-                ? resolveCanonicalSessionKeyFromSessionId({
+                ? await resolveCanonicalSessionKeyFromSessionId({
                     api,
                     agentId: resolvedAgentId,
                     sessionId: ctx.sessionId,
@@ -312,7 +313,7 @@ export default definePluginEntry({
               return undefined;
             }
             if (
-              shouldSkipActiveMemoryForHarnessSession({
+              await shouldSkipActiveMemoryForHarnessSession({
                 api,
                 agentId: effectiveAgentId,
                 sessionKey: resolvedSessionKey,
@@ -439,6 +440,7 @@ export default definePluginEntry({
                   authorityFingerprint: toolAuthority.fingerprint,
                   debug: (message) => api.logger.debug?.(message),
                 }).catch((error: unknown) => {
+                  rethrowIncognitoSessionError(error);
                   api.logger.debug?.(
                     `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
                   );
@@ -557,6 +559,7 @@ export default definePluginEntry({
                 : undefined;
             return publishPrependContext([laneOneContext, recallContext]);
           } catch (error) {
+            rethrowIncognitoSessionError(error);
             if (deadlineController.signal.aborted) {
               return undefined;
             }

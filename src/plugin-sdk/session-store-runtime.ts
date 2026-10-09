@@ -7,7 +7,10 @@ import {
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
 import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  resolveExplicitSessionStorePathForScope,
+  resolveSessionStorePathCore,
+} from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
@@ -20,7 +23,12 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryByIdReadOnlyInWorker,
+  readSessionEntryReadOnlyInWorker,
+  readSessionUpdatedAtInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
@@ -44,6 +52,7 @@ import {
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
+export { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 
 export {
   deliveryContextFromSession,
@@ -160,6 +169,27 @@ export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessi
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
+}
+
+/** Loads the complete public entry through the selected asynchronous read owner. */
+export async function getSessionEntryAsync(
+  params: SessionStoreReadParams,
+): Promise<SessionEntry | undefined> {
+  const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
+  return entry ? projectPluginSessionEntry(entry) : undefined;
+}
+
+/** Looks up a visible current session ID in one selected store. */
+export async function getSessionEntryByIdAsync(
+  params: Omit<SessionStoreReadParams, "sessionKey"> & { sessionId: string },
+): Promise<SessionStoreEntrySummary | undefined> {
+  const selected = await readSessionEntryByIdReadOnlyInWorker({
+    ...toSessionAccessScope({ ...params, sessionKey: "" }),
+    sessionId: params.sessionId,
+  });
+  return selected
+    ? { sessionKey: selected.sessionKey, entry: projectPluginSessionEntry(selected.entry) }
+    : undefined;
 }
 
 /** Reads the current session binding of one canonical transport address. */
@@ -377,8 +407,41 @@ export async function cleanupSessionLifecycleArtifacts(
       agentId: params.agentId,
       env: params.env,
     });
-  return await cleanupAccessorSessionLifecycleArtifacts({
+  const selection = {
+    agentId: params.agentId,
+    env: params.env,
     storePath,
+    sessionKey: params.agentId
+      ? `agent:${params.agentId}:${params.sessionKeySegmentPrefix.trim()}`
+      : undefined,
+  };
+  const source = captureIncognitoSessionSource(selection);
+  if (source && "kind" in source) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
+  if (source) {
+    const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
+    if (!sessionKeySegmentPrefix || !params.transcriptContentMarker) {
+      return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+    }
+    return cleanupAccessorSessionLifecycleArtifacts({
+      kind: "incognito",
+      actor: source.actor,
+      authority: { assertCurrent: () => source.actor.assertCurrent() },
+      admissionSignal: source.admissionSignal,
+      env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(source.actor.path, "../../../..") },
+      ownerStorePath: storePath,
+      input: {
+        sessionKeySegmentPrefix,
+        transcriptContentMarker: params.transcriptContentMarker,
+        pluginOwnerId: params.pluginOwnerId?.trim(),
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+        nowMs: params.nowMs ?? Date.now(),
+      },
+    });
+  }
+  return await cleanupAccessorSessionLifecycleArtifacts({
+    storePath: resolveExplicitSessionStorePathForScope(selection) ?? storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
