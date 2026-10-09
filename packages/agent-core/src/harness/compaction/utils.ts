@@ -313,9 +313,12 @@ function serializeConversationEntries(messages: Message[]): {
   entries: string[];
   /** Tool-result entries rendered with the call that produced them, for sampled input. */
   labeledResults: Map<number, string>;
+  /** User-message entries, which carry the asks, decisions and corrections. */
+  userEntries: number[];
 } {
   const parts: string[] = [];
   const labeledResults = new Map<number, string>();
+  const userEntries: number[] = [];
   // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
   const callLabels = createToolCallOccurrenceQueue<string>();
   let omissionMessages = 0;
@@ -349,6 +352,7 @@ function serializeConversationEntries(messages: Message[]): {
         labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
         parts.push(`[Tool result]: ${content}`);
       } else {
+        userEntries.push(parts.length);
         parts.push(`[User${formatPersistedSenderSuffix(msg)}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
@@ -376,7 +380,7 @@ function serializeConversationEntries(messages: Message[]): {
     }
   }
 
-  return { entries: parts, labeledResults };
+  return { entries: parts, labeledResults, userEntries };
 }
 
 /**
@@ -390,11 +394,15 @@ const MIN_TRIMMED_ENTRY_CHARS = 200;
 const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
 // Covers "\n\n[... N characters omitted ...]\n\n" for any UTF-16 length.
 const ELISION_MARKER_RESERVE_CHARS = 64;
-const SUMMARY_INPUT_HEAD_SHARE = 0.1;
 const SUMMARY_INPUT_TAIL_SHARE = 0.5;
+const SUMMARY_INPUT_USER_SHARE = 0.25;
+const SUMMARY_INPUT_HEAD_SHARE = 0.1;
 const SUMMARY_INPUT_MIDDLE_SLICES = 8;
-// Each omission marker is under 100 characters; one can follow the head and each slice.
-const OMISSION_MARKER_RESERVE_CHARS = (SUMMARY_INPUT_MIDDLE_SLICES + 1) * 100;
+// Older user messages share their budget evenly, within these bounds each.
+const MAX_USER_ENTRY_CHARS = 2_000;
+const MIN_USER_ENTRY_CHARS = 400;
+// A gap marker ("[... 12345 entries omitted ...]") and its separator stay under 40 characters.
+const OMISSION_MARKER_CHARS = 40;
 
 /**
  * Keep both ends of `text` within `maxChars` CJK-weighted characters: the start
@@ -444,12 +452,13 @@ export interface BoundedConversation {
 
 /**
  * Serialize messages for one summary request within `maxChars` CJK-weighted
- * characters. Small inputs are unchanged. Larger inputs keep the newest entries
- * verbatim (half the budget), the oldest entries (a tenth), and eight evenly
- * spaced runs of the span between them. Sampled entries are trimmed to 6,000
- * characters, and every gap is marked with its entry count, so the summarizer
- * knows what it did not see. Each tool result names its call, because sampling
- * can separate the two. The transcript itself is not changed.
+ * characters. Small inputs are unchanged. Larger inputs keep, in this order:
+ * the newest entries verbatim (half the budget); older user messages, which
+ * carry the asks, decisions and corrections (a quarter, newest first, each up
+ * to 2,000 characters); the oldest entries (a tenth); and eight evenly spaced
+ * runs of what remains. Sampled entries are trimmed to 6,000 characters, every
+ * gap is marked with its entry count, and each tool result names its call,
+ * because sampling can separate the two. The transcript itself is not changed.
  */
 export function serializeConversationWithinBudget(
   messages: Message[],
@@ -472,35 +481,43 @@ export function serializeConversationWithinBudget(
   );
   const weights = entries.map((entry) => estimateStringChars(entry));
 
-  const budget = Math.max(0, maxChars - OMISSION_MARKER_RESERVE_CHARS);
   const selected = new Map<number, string>();
   let trimmedEntries = 0;
-  let usedChars = 0;
+  // Every maximal run of left-out entries renders one marker; the whole span starts as one.
+  let usedChars = OMISSION_MARKER_CHARS;
 
-  // Keeps the entry when it fits `limit`, eliding its middle when needed.
+  // Keeps the entry within `limit`, eliding its middle when needed. The cost
+  // includes the change in gap markers: taking an entry inside a gap splits it.
   const take = (index: number, limit: number, maxEntryChars = limit): boolean => {
-    const entry = entries[index] ?? "";
-    const weight = weights[index] ?? 0;
-    const entryLimit = Math.min(limit, maxEntryChars + separatorChars);
-    if (weight + separatorChars <= entryLimit) {
-      selected.set(index, entry);
-      usedChars += weight + separatorChars;
+    if (selected.has(index)) {
       return true;
     }
-    const trimmed = elideMiddleWithinWeight(entry, entryLimit - separatorChars);
-    if (trimmed === undefined) {
-      return false;
+    const leftOpen = index > 0 && !selected.has(index - 1);
+    const rightOpen = index < entries.length - 1 && !selected.has(index + 1);
+    const markerDelta = leftOpen && rightOpen ? 1 : !leftOpen && !rightOpen ? -1 : 0;
+    const markerCost = markerDelta * OMISSION_MARKER_CHARS;
+    const entry = entries[index] ?? "";
+    const entryLimit = Math.min(limit - markerCost, maxEntryChars + separatorChars);
+    let text = entry;
+    let chars = (weights[index] ?? 0) + separatorChars;
+    if (chars > entryLimit) {
+      const trimmed = elideMiddleWithinWeight(entry, entryLimit - separatorChars);
+      if (trimmed === undefined) {
+        return false;
+      }
+      text = trimmed;
+      chars = estimateStringChars(trimmed) + separatorChars;
+      trimmedEntries += 1;
     }
-    selected.set(index, trimmed);
-    usedChars += estimateStringChars(trimmed) + separatorChars;
-    trimmedEntries += 1;
+    selected.set(index, text);
+    usedChars += chars + markerCost;
     return true;
   };
 
   // Newest entries carry the live task, so they stay verbatim. Only the newest
   // entry may be trimmed, when it alone exceeds the tail share.
   let tailStart = entries.length;
-  const tailLimit = Math.floor(budget * SUMMARY_INPUT_TAIL_SHARE);
+  const tailLimit = Math.floor(maxChars * SUMMARY_INPUT_TAIL_SHARE);
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const remaining = tailLimit - usedChars;
     const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
@@ -510,17 +527,47 @@ export function serializeConversationWithinBudget(
     tailStart = index;
   }
 
+  // Older user messages state what was asked, decided and corrected; a fact the
+  // user gave once must not depend on where the samples fall. When they do not
+  // all fit, they are spread evenly across the history, newest first.
+  const olderUsers = serialized.userEntries.filter((index) => index < tailStart);
+  if (olderUsers.length > 0) {
+    const userBudget = Math.floor(maxChars * SUMMARY_INPUT_USER_SHARE);
+    const userLimit = usedChars + userBudget;
+    const userEntryChars = Math.min(
+      MAX_USER_ENTRY_CHARS,
+      Math.max(
+        MIN_USER_ENTRY_CHARS,
+        Math.floor(userBudget / olderUsers.length - OMISSION_MARKER_CHARS),
+      ),
+    );
+    const userCosts = olderUsers.reduce(
+      (sum, index) =>
+        sum +
+        Math.min((weights[index] ?? 0) + separatorChars, userEntryChars + separatorChars) +
+        OMISSION_MARKER_CHARS,
+      0,
+    );
+    const stride = Math.max(1, userCosts / userBudget);
+    for (let position = olderUsers.length - 1; position >= 0; position -= stride) {
+      const index = olderUsers[Math.round(position)];
+      if (index === undefined || !take(index, userLimit - usedChars, userEntryChars)) {
+        break;
+      }
+    }
+  }
+
   // The oldest entries usually state the goal and the constraints of the session.
   let headEnd = 0;
-  const headLimit = usedChars + Math.floor(budget * SUMMARY_INPUT_HEAD_SHARE);
+  const headLimit = usedChars + Math.floor(maxChars * SUMMARY_INPUT_HEAD_SHARE);
   while (headEnd < tailStart && take(headEnd, headLimit - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
     headEnd += 1;
   }
 
-  // Evenly spaced runs show how the omitted span developed.
+  // Evenly spaced runs show how the remaining span developed.
   const middleCount = tailStart - headEnd;
   if (middleCount > 0) {
-    const sliceLimit = Math.floor((budget - usedChars) / SUMMARY_INPUT_MIDDLE_SLICES);
+    const sliceLimit = Math.floor((maxChars - usedChars) / SUMMARY_INPUT_MIDDLE_SLICES);
     let nextFree = headEnd;
     for (let slice = 0; slice < SUMMARY_INPUT_MIDDLE_SLICES; slice += 1) {
       let index = Math.max(
@@ -546,9 +593,7 @@ export function serializeConversationWithinBudget(
       continue;
     }
     if (gap > 0) {
-      parts.push(
-        `[... ${gap} conversation ${gap === 1 ? "entry" : "entries"} omitted from this summary input ...]`,
-      );
+      parts.push(`[... ${gap} ${gap === 1 ? "entry" : "entries"} omitted ...]`);
       omittedEntries += gap;
       gap = 0;
     }

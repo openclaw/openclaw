@@ -174,7 +174,7 @@ describe("summary request input budget", () => {
     const prompt = await summarize(messages, createModel(1_000_000));
 
     expect(conversationOf(prompt)).toBe(serializeConversation(convertToLlm(messages)));
-    expect(prompt).not.toContain("omitted from this summary input");
+    expect(prompt).not.toContain("entries omitted ...]");
   });
 
   it("keeps one summary request bounded when the history fills a 1M-token window", async () => {
@@ -196,7 +196,7 @@ describe("summary request input budget", () => {
     // The oldest turn usually states the goal of the session.
     expect(conversation).toContain("[User]: ask-0 ");
     // Every gap names its size, and the sizes add up to what was left out.
-    const gaps = [...conversation.matchAll(/\[\.\.\. (\d+) conversation entr(?:y|ies) omitted/gu)];
+    const gaps = [...conversation.matchAll(/\[\.\.\. (\d+) entr(?:y|ies) omitted \.\.\.\]/gu)];
     expect(gaps.length).toBeGreaterThan(1);
     const kept = conversation
       .split("\n\n")
@@ -224,7 +224,7 @@ describe("summary request input budget", () => {
 
     const promptTokens = estimateStringChars(prompt) / CHARS_PER_TOKEN_ESTIMATE;
     expect(promptTokens + outputTokens).toBeLessThan(32_768);
-    expect(prompt).toContain("omitted from this summary input");
+    expect(prompt).toContain("entries omitted ...]");
   });
 
   it("fails without a model call when the window cannot hold the request", async () => {
@@ -384,7 +384,7 @@ describe("summary request input budget", () => {
       MAX_SUMMARY_INPUT_CHARS,
     );
 
-    expect(text).toContain("omitted from this summary input");
+    expect(text).toContain("entries omitted ...]");
     expect(text).toMatch(/\[Tool result of write_report\(cmd="r+\.\.\.\)\]: WRITE_FAILED: quota$/u);
   });
 
@@ -481,5 +481,57 @@ describe("summary request input budget", () => {
 
     expect(text).toContain('[Tool result of exec(cmd="first")]: OUT-FIRST');
     expect(text).toContain('[Tool result of exec(cmd="second")]: OUT-SECOND');
+  });
+
+  it("keeps every user decision from a long tool-heavy history", () => {
+    const messages = createLongSession(400);
+    const decisions = [40, 133, 217, 301].map((turn) => ({
+      turn,
+      text: `DECISION-${turn}: use advisory locks, not Redis`,
+    }));
+    for (const { turn, text } of decisions) {
+      messages[turn * 3] = { role: "user", content: text, timestamp: turn };
+    }
+    for (let turn = 0; turn < 400; turn += 1) {
+      if (!decisions.some((decision) => decision.turn === turn)) {
+        messages[turn * 3] = { role: "user", content: `ask-${turn}`, timestamp: turn };
+      }
+    }
+
+    const { text } = serializeConversationWithinBudget(
+      convertToLlm(messages),
+      MAX_SUMMARY_INPUT_CHARS,
+    );
+
+    expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
+    for (const { text: decision } of decisions) {
+      expect(text).toContain(`[User]: ${decision}`);
+    }
+    for (let turn = 0; turn < 400; turn += 1) {
+      expect(text).toMatch(new RegExp(`\\[User\\]: (?:ask|DECISION)-${turn}\\b`, "u"));
+    }
+  });
+
+  it("spreads user messages across the history when they do not all fit", () => {
+    const messages: AgentMessage[] = Array.from({ length: 2_000 }, (_, index) => ({
+      role: "user" as const,
+      content: `USER-${index} ${"note ".repeat(80)}`,
+      timestamp: index,
+    }));
+
+    const { text } = serializeConversationWithinBudget(
+      convertToLlm(messages),
+      MAX_SUMMARY_INPUT_CHARS,
+    );
+    const kept = [...text.matchAll(/\[User\]: USER-(\d+) /gu)].map((match) => Number(match[1]));
+
+    expect(estimateStringChars(text)).toBeLessThanOrEqual(MAX_SUMMARY_INPUT_CHARS);
+    // Each tenth of the history keeps some of its user messages.
+    for (let tenth = 0; tenth < 10; tenth += 1) {
+      expect(
+        kept.some((index) => Math.floor(index / 200) === tenth),
+        `tenth ${tenth}`,
+      ).toBe(true);
+    }
   });
 });
