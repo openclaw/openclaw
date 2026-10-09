@@ -5,7 +5,7 @@ import {
   ConversationSendResultSchema,
   ConversationTurnResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -136,12 +136,12 @@ function createDeps() {
   );
   // The registry resolves the opaque ref to its real (channel, account, target)
   // route; the budget ledger keys on that route, not the raw conversationRef.
-  const resolveConversationMock = vi.fn(() => conversation);
+  const readConversationMock = vi.fn(async () => conversation);
   return {
     callGateway: callGatewayMock as never,
-    resolveConversation: resolveConversationMock as never,
+    readConversation: readConversationMock as never,
     callGatewayMock,
-    resolveConversationMock,
+    readConversationMock,
   };
 }
 

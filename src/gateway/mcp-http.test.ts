@@ -39,7 +39,6 @@ import {
 } from "../infra/system-events.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
-import { angleSchema, objectSchema } from "./mcp-http.test-support.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const activeAdmissions: PreparedAgentRunAdmission[] = [];
@@ -175,6 +174,8 @@ import {
   sendLoopbackToolCall,
   sendRaw,
   startLoopbackServerForTest,
+  angleSchema,
+  objectSchema,
   type McpToolResultPayload,
   type MockGatewayTool,
   type MockGatewayScopedTools,

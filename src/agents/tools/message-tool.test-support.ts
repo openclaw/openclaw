@@ -4,7 +4,10 @@
 // exact plugin shape the main suite exercises instead of a divergent copy.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
-import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 
 // Shape of the object the message tool passes into runMessageAction. Shared by both
 // suites so their runner-mock assertions read the same fields the production call site
@@ -65,9 +68,6 @@ type MessageToolSchema = NonNullable<ReturnType<DescribeMessageTool>>["schema"];
 
 export function createChannelPlugin(params: {
   id: string;
-  label: string;
-  docsPath: string;
-  blurb: string;
   aliases?: string[];
   actions?: ChannelMessageActionName[];
   capabilities?: readonly ChannelMessageCapability[];
@@ -83,10 +83,10 @@ export function createChannelPlugin(params: {
     id: params.id as ChannelPlugin["id"],
     meta: {
       id: params.id as ChannelPlugin["id"],
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: params.blurb,
+      label: params.id,
+      selectionLabel: params.id,
+      docsPath: `/channels/${params.id}`,
+      blurb: "Test channel",
       aliases: params.aliases,
     },
     capabilities: { chatTypes: ["direct", "group"], media: true },
