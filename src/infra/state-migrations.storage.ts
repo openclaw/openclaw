@@ -10,16 +10,20 @@ function archiveLegacyFileSource(params: {
   sourcePath: string;
   label: string;
   warnings: string[];
+  deduplicate?: boolean;
 }): LegacyArchiveResolution | null {
   try {
     let sourceSha256: string | undefined;
-    // Reuse any identical archive, including a numbered collision from an earlier run.
+    // By default, reuse identical archives, including numbered collisions from earlier runs.
     for (let index = 1; ; index++) {
       const targetPath =
         index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
       if (!fs.existsSync(targetPath)) {
         fs.renameSync(params.sourcePath, targetPath);
         return { targetPath, action: "archived" };
+      }
+      if (params.deduplicate === false) {
+        continue;
       }
       // Legacy sources can exceed whole-file allocation limits; hash only collisions.
       sourceSha256 ??= sha256FileSync(params.sourcePath);
@@ -39,6 +43,7 @@ export function archiveLegacyImportSource(params: {
   label: string;
   changes: string[];
   warnings: string[];
+  deduplicate?: boolean;
 }): LegacyArchiveResolution | null {
   try {
     fs.chmodSync(params.sourcePath, 0o600);
@@ -50,6 +55,7 @@ export function archiveLegacyImportSource(params: {
     sourcePath: params.sourcePath,
     label: `${params.label} legacy source`,
     warnings: params.warnings,
+    deduplicate: params.deduplicate,
   });
   if (!resolution) {
     return null;
