@@ -213,7 +213,7 @@ Configured intervals and stagger windows retain millisecond precision in human-r
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
-For provider network failures, request timeouts, overloads, rate limits, and server errors (not the job's own execution timeout), the scheduler first re-runs the job after 30s, 1m, and 5m, and holds failure alerts and owner repair requests until those re-runs also fail.
+For provider network failures, request timeouts, overloads, rate limits, and server errors (not the job's own execution timeout), the scheduler first re-runs the job after 30s, 1m, and 5m (or at its next scheduled run when sooner), and holds failure alerts and owner repair requests until those re-runs also fail.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 
