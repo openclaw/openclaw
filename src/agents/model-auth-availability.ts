@@ -1075,12 +1075,12 @@ export function createModelAuthAvailabilityResolver(
     ) {
       // The ready account listing did not return this dual-route id, so its subscription route
       // is not entitled. A usable Platform credential keeps today's selection and preference.
-      const platformRoutes = routeResolution.routes.filter(
+      const [firstPlatformRoute, ...restPlatformRoutes] = routeResolution.routes.filter(
         (route) => route.authRequirement !== "subscription",
       );
-      const platform = platformRoutes.length
+      const platform = firstPlatformRoute
         ? selectOpenAIModelRouteAuth({
-            resolution: { ...routeResolution, routes: platformRoutes },
+            resolution: { ...routeResolution, routes: [firstPlatformRoute, ...restPlatformRoutes] },
             sourcePlan,
             configuredAuthMode: automaticRouteAuthMode,
           })
