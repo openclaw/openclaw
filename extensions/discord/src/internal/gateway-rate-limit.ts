@@ -66,10 +66,7 @@ export class GatewaySendLimiter {
     const oldest = this.outboundSendTimestamps[0] ?? now;
     return {
       remainingEvents: Math.max(0, GATEWAY_SEND_LIMIT - this.outboundSendTimestamps.length),
-      resetTime:
-        this.outboundSendTimestamps.length > 0
-          ? oldest + GATEWAY_SEND_WINDOW_MS
-          : now + GATEWAY_SEND_WINDOW_MS,
+      resetTime: oldest + GATEWAY_SEND_WINDOW_MS,
       currentEventCount: this.outboundSendTimestamps.length,
       queuedEvents: this.outboundQueue.length,
       droppedEvents: this.droppedEvents,

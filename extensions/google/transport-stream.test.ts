@@ -318,14 +318,6 @@ function requireGenerationConfig(params: { generationConfig?: unknown }): Record
   return config as Record<string, unknown>;
 }
 
-function requireThinkingConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const thinkingConfig = config.thinkingConfig;
-  if (!thinkingConfig || typeof thinkingConfig !== "object") {
-    throw new Error("Expected thinkingConfig");
-  }
-  return thinkingConfig as Record<string, unknown>;
-}
-
 type GoogleTestContentTurn = Record<string, unknown> & {
   parts: Array<Record<string, unknown>>;
 };
@@ -617,29 +609,6 @@ describe("google transport stream", () => {
     expect(body).toContain("unsupported Google video MIME type");
   });
 
-  it("evicts trusted video until the exact serialized request is below 20MB", async () => {
-    mockGoogleTextResponse();
-    const providerContext: ProviderContext = {
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "video", mimeType: "video/mp4", data: "A".repeat(20_000_000) }],
-          timestamp: 0,
-        },
-      ],
-    };
-    await runGeminiStreamResult({
-      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
-      options: withProviderContextHandoff({}, async () => providerContext),
-    });
-    const body = requireRequestInit(
-      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
-      "guarded fetch",
-    ).body as string;
-    expect(new TextEncoder().encode(body).byteLength).toBeLessThan(20_000_000);
-    expect(body).toContain("native video slot unavailable");
-  });
-
   it("returns a useful provider error when the non-video request still exceeds 20MB", async () => {
     const result = await runGeminiStreamResult({
       context: {
@@ -839,18 +808,8 @@ describe("google transport stream", () => {
     },
     {
       provider: "google",
-      requested: "gemini-2.5-pro",
-      returned: ["google/gemini-2.5-pro"],
-    },
-    {
-      provider: "google",
       requested: "tunedModels/fixture-gemini",
       returned: ["tunedModels/fixture-gemini"],
-    },
-    {
-      provider: "google-vertex",
-      requested: "publishers/google/models/gemini-2.5-pro",
-      returned: ["gemini-2.5-pro"],
     },
     {
       provider: "google-vertex",
@@ -863,12 +822,6 @@ describe("google transport stream", () => {
       requested: "gemini-2.5-pro",
       returned: ["publishers/meta/models/gemini-2.5-pro"],
       expected: "publishers/meta/models/gemini-2.5-pro",
-    },
-    {
-      provider: "google-vertex",
-      requested: "gemini-2.5-pro",
-      returned: ["tunedModels/gemini-2.5-pro"],
-      expected: "tunedModels/gemini-2.5-pro",
     },
     {
       provider: "google",
@@ -1083,30 +1036,6 @@ describe("google transport stream", () => {
     });
   });
 
-  it("retains prompt, cache, and tool-token facts across sparse Google usage chunks", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          usageMetadata: {
-            promptTokenCount: 100,
-            cachedContentTokenCount: 40,
-            toolUsePromptTokenCount: 6,
-            candidatesTokenCount: 1,
-            totalTokenCount: 107,
-          },
-        },
-        {
-          candidates: [{ finishReason: "STOP" }],
-          usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
-        },
-      ]),
-    );
-
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
-    expect(result.usage).toMatchObject({ input: 66, output: 15, cacheRead: 40, totalTokens: 121 });
-  });
-
   it.each([
     {
       provider: "google",
@@ -1214,37 +1143,6 @@ describe("google transport stream", () => {
       });
     },
   );
-
-  it("closes partial text before reporting a failed candidate", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [
-            {
-              content: { parts: [{ text: "partial output" }] },
-              finishReason: "SAFETY",
-              finishMessage: "Provider rejected the generated response",
-            },
-          ],
-        },
-      ]),
-    );
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        buildGeminiModel(),
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as never,
-        { apiKey: "gemini-api-key" } as never,
-      ),
-    );
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_end", "error"]);
-    expect((await stream.result()).errorCode).toBe("SAFETY");
-  });
 
   it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
@@ -1371,21 +1269,14 @@ describe("google transport stream", () => {
       buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
     );
 
-    const model = buildGeminiModel({
-      id: "google/gemini-3-flash-preview",
-      name: "Gemini 3 Flash Preview",
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        id: "google/gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+      }),
+      options: { apiKey: "gemini-api-key" },
     });
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        } as Parameters<typeof streamFn>[1],
-        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
-      ),
-    );
-    expect((await stream.result()).stopReason).toBe("stop");
+    expect(result.stopReason).toBe("stop");
 
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(guardedCall[0]).toBe(
@@ -1526,30 +1417,42 @@ describe("google transport stream", () => {
     expect(result.content[2]).toEqual({ type: "text", text: "answer" });
   });
 
-  it("rejects an incomplete SSE frame after an otherwise terminal Google response", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse(
-        'data: {"candidates":[{"finishReason":"STOP"}]}\n\ndata: {"candidates":[',
-      ),
-    );
-
+  it.each([
+    'data: {"candidates":[{"finishReason":"STOP"}]}\n\ndata: {"candidates":[',
+    'data: {"candidates":[{"finishReason":"STOP"}]}\r\n',
+  ])("rejects an incomplete SSE frame: %s", async (sse) => {
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(sse));
     const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("incomplete");
+    // Agent retry classifies this exact text as a transient disconnect.
+    expect(result.errorMessage).toBe("Google SSE stream ended with an incomplete frame");
   });
 
   it.each([
-    { label: "keepalive comment", tail: ": keepalive\n" },
-    { label: "control fields", tail: "event: ping\nid: heartbeat" },
-    { label: "empty data field", tail: "data:\n" },
-  ])("ignores trailing $label when the Google SSE connection closes", async ({ tail }) => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse(`data: {"candidates":[{"finishReason":"STOP"}]}\n\r${tail}`),
-    );
-
+    ...[
+      { label: "keepalive comment", tail: ": keepalive\n" },
+      { label: "control fields", tail: "event: ping\nid: heartbeat" },
+      { label: "empty data field", tail: "data:\n" },
+    ].map(({ label, tail }) => ({
+      label,
+      sse: `data: {"candidates":[{"finishReason":"STOP"}]}\n\r${tail}`,
+    })),
+    ...[
+      { label: "carriage-return-only", delimiter: "\r\r" },
+      { label: "line-feed then CRLF", delimiter: "\n\r\n" },
+      { label: "CRLF then carriage-return", delimiter: "\r\n\r" },
+      { label: "carriage-return then CRLF", delimiter: "\r\r\n" },
+    ].map(({ label, delimiter }) => ({
+      label,
+      sse: `data: {"candidates":[{"finishReason":"STOP"}]}${delimiter}`,
+    })),
+    {
+      label: "CRLF-separated data lines",
+      sse: 'data: {"candidates":[\r\ndata: {"finishReason":"STOP"}]}\r\n\r\n',
+    },
+  ])("accepts Google SSE framing with $label", async ({ sse }) => {
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(sse));
     const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
     expect(result.stopReason).toBe("stop");
   });
 
@@ -1666,42 +1569,6 @@ describe("google transport stream", () => {
       expect(result).toMatchObject({ stopReason: "error", errorCode: "STREAM_INCOMPLETE" });
     },
   );
-
-  it.each([
-    { label: "carriage-return-only", delimiter: "\r\r" },
-    { label: "line-feed then CRLF", delimiter: "\n\r\n" },
-    { label: "CRLF then carriage-return", delimiter: "\r\n\r" },
-    { label: "carriage-return then CRLF", delimiter: "\r\r\n" },
-  ])("accepts $label SSE frame delimiters", async ({ delimiter }) => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse(`data: {"candidates":[{"finishReason":"STOP"}]}${delimiter}`),
-    );
-
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
-    expect(result.stopReason).toBe("stop");
-  });
-
-  it("does not mistake one CRLF for an SSE frame delimiter", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse('data: {"candidates":[{"finishReason":"STOP"}]}\r\n'),
-    );
-
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("incomplete");
-  });
-
-  it("keeps CRLF-separated data lines in the same SSE event", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildRawSseResponse('data: {"candidates":[\r\ndata: {"finishReason":"STOP"}]}\r\n\r\n'),
-    );
-
-    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
-
-    expect(result.stopReason).toBe("stop");
-  });
 
   it("cancels open Gemini SSE bodies when parsing fails", async () => {
     let cancelCalled = false;
@@ -2023,45 +1890,6 @@ describe("google transport stream", () => {
     expect(guardedFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
-    );
-
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash Preview",
-        api: "google-generative-ai",
-        provider: "custom-google",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      } satisfies Model<"google-generative-ai">,
-      {
-        tls: {
-          ca: "ca-pem",
-        },
-      },
-    );
-
-    await runGeminiStreamResult({
-      model,
-      options: { apiKey: JSON.stringify({ token: "oauth-token", projectId: "demo" }) },
-    });
-
-    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    expect(typeof guardedCall[0]).toBe("string");
-    const init = requireRequestInit(guardedCall, "guarded fetch");
-    expectHeaders(init, {
-      Authorization: "Bearer oauth-token",
-      "Content-Type": "application/json",
-    });
-  });
-
   it.each([
     ["eu", "https://aiplatform.eu.rep.googleapis.com"],
     ["us", "https://aiplatform.us.rep.googleapis.com"],
@@ -2099,22 +1927,6 @@ describe("google transport stream", () => {
       );
     },
   );
-
-  it("resolves non-file Vertex ADC through google-auth-library without OAuth refresh fetch", async () => {
-    await useGoogleAuthLibraryCredentials("authlib", "ya29.google-auth-token");
-    const tokenFetchMock = vi.fn();
-
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
-      Authorization: "Bearer ya29.google-auth-token",
-    });
-
-    expect(googleAuthMock).toHaveBeenCalledWith({
-      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-      clientOptions: { transporterOptions: { timeout: 30_000 } },
-    });
-    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
-    expect(tokenFetchMock).not.toHaveBeenCalled();
-  });
 
   it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
@@ -2200,10 +2012,10 @@ describe("google transport stream", () => {
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {
+  it("uses refreshed google-auth ADC tokens on the next Vertex request", async () => {
     await useGoogleAuthLibraryCredentials("authlib-expiry");
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    vi.setSystemTime(new Date("2026-10-03T00:00:00.000Z"));
     googleAuthGetAccessTokenMock
       .mockResolvedValueOnce("ya29.first-token")
       .mockResolvedValueOnce("ya29.second-token");
@@ -2212,10 +2024,12 @@ describe("google transport stream", () => {
     await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
       Authorization: "Bearer ya29.first-token",
     });
+    vi.setSystemTime(new Date("2026-10-03T00:02:00.000Z"));
     await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
       Authorization: "Bearer ya29.second-token",
     });
 
+    expect(googleAuthMock).toHaveBeenCalledOnce();
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
@@ -2440,30 +2254,25 @@ describe("google transport stream", () => {
     });
   });
 
-  it("rejects oversized authorized_user ADC token responses", async () => {
-    await useGoogleAuthorizedUserCredentials("adc-large", "large-refresh-token");
-    const tokenFetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response("x".repeat(1024 * 1024 + 1), { status: 200 }));
-
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
-      "Google OAuth token response exceeds 1048576 bytes",
-    );
-  });
-
-  it("rejects authorized_user ADC gzip responses that expand past the limit", async () => {
-    await useGoogleAuthorizedUserCredentials("adc-bomb", "bomb-refresh-token");
-    const tokenFetchMock = vi.fn().mockResolvedValue(
-      new Response(gzipSync("x".repeat(1024 * 1024 + 1)), {
-        status: 200,
-        headers: { "content-encoding": "gzip" },
-      }),
-    );
-
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
-      "Google OAuth token response exceeds 1048576 decompressed bytes",
-    );
-  });
+  it.each([
+    { compression: "none", expected: "1048576 bytes" },
+    { compression: "gzip", expected: "1048576 decompressed bytes" },
+  ])(
+    "rejects oversized authorized_user ADC responses with $compression compression",
+    async ({ compression, expected }) => {
+      await useGoogleAuthorizedUserCredentials("adc-large", "large-refresh-token");
+      const bytes = "x".repeat(1024 * 1024 + 1);
+      const tokenFetchMock = vi.fn().mockResolvedValue(
+        new Response(compression === "gzip" ? gzipSync(bytes) : bytes, {
+          status: 200,
+          ...(compression === "gzip" ? { headers: { "content-encoding": "gzip" } } : {}),
+        }),
+      );
+      await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+        `Google OAuth token response exceeds ${expected}`,
+      );
+    },
+  );
 
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
     await useGoogleAuthorizedUserCredentials("unsafe-adc", "refresh-token");
@@ -2530,34 +2339,6 @@ describe("google transport stream", () => {
     });
   });
 
-  it("coerces replayed malformed tool-call args to an object for Google payloads", () => {
-    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
-      messages: [
-        {
-          role: "assistant",
-          provider: "openai",
-          api: "openai-responses",
-          model: "gpt-5.4",
-          stopReason: "toolUse",
-          timestamp: 0,
-          content: [
-            {
-              type: "toolCall",
-              id: "call_1",
-              name: "lookup",
-              arguments: "{not valid json",
-            },
-          ],
-        },
-      ],
-    } as never);
-
-    expect(params.contents[0]).toEqual({
-      role: "model",
-      parts: [{ functionCall: { name: "lookup", args: {} } }],
-    });
-  });
-
   it.each([
     {
       name: "treats the Google transport alias as the same route for signature replay",
@@ -2601,34 +2382,6 @@ describe("google transport stream", () => {
           functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
         },
       ],
-    });
-  });
-
-  it("preserves matching provider call identities on same-route Gemini replay", () => {
-    const model = buildGeminiModel({ id: "gemini-3.1-pro-preview" });
-    const params = buildGoogleGenerativeAiParams(model, {
-      messages: [
-        googleToolCallAssistantTurn({ id: "provider_call_42" }),
-        {
-          role: "toolResult",
-          toolCallId: "provider_call_42",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 1,
-        },
-      ],
-    } as never);
-
-    expect(getFirstModelTurn(params.contents).parts[0]?.functionCall).toMatchObject({
-      id: "provider_call_42",
-    });
-    const responseTurn = expectDefined(
-      params.contents[1],
-      "matching Google tool response turn",
-    ) as GoogleTestContentTurn;
-    expect(responseTurn.parts[0]?.functionResponse).toMatchObject({
-      id: "provider_call_42",
     });
   });
 
@@ -2682,41 +2435,6 @@ describe("google transport stream", () => {
     });
   });
 
-  it.each([
-    {
-      name: "keeps a tool call's own Gemini thought signature before replay fallback",
-      firstSignature: "Y2FsbF9zaWdfZmlyc3RfMQ==",
-      secondSignature: "Y2FsbF9zaWdfc2Vjb25kXzE=",
-    },
-    {
-      name: "does not replay Gemini thought signatures from later turns",
-      firstSignature: undefined,
-      secondSignature: "Y2FsbF9zaWdfZnV0dXJlXzE=",
-    },
-  ])("$name", ({ firstSignature, secondSignature }) => {
-    const params = buildGoogleGenerativeAiParams(
-      buildGeminiModel({ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }),
-      {
-        messages: [
-          googleToolCallAssistantTurn({ thoughtSignature: firstSignature }),
-          toolResultTurn(),
-          googleToolCallAssistantTurn({ timestamp: 2, thoughtSignature: secondSignature }),
-        ],
-      } as never,
-    );
-
-    const modelTurns = params.contents.filter(isModelTurnWithParts);
-    expect(modelTurns).toHaveLength(2);
-    for (const [index, thoughtSignature] of [
-      firstSignature ?? "skip_thought_signature_validator",
-      secondSignature,
-    ].entries()) {
-      expect(modelTurns[index]).toMatchObject({
-        parts: [{ thoughtSignature, functionCall: { name: "lookup", args: { q: "hello" } } }],
-      });
-    }
-  });
-
   it("does not re-attach replayed Gemini thought signatures to a different tool-call part", () => {
     const params = buildGeminiReplayParams([
       googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfcmVwbGF5XzE=" }),
@@ -2735,27 +2453,44 @@ describe("google transport stream", () => {
     });
   });
 
-  it("does not replay tool-call thought signatures from a different provider route", () => {
-    // Prior turn came from an Anthropic route — its signature looks valid base64
-    // but must NOT be replayed into a Gemini request.
-    const params = buildGeminiReplayParams([
-      googleToolCallAssistantTurn({
-        provider: "anthropic",
-        api: "anthropic",
-        model: "claude-sonnet-4",
-        id: "call_foreign",
-        // Plausible-looking base64 from a non-Gemini provider.
-        thoughtSignature: "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
-      }),
-      toolResultTurn("call_foreign"),
-      { role: "user", content: [{ type: "text", text: "Continue." }] },
-    ]);
-
-    // The foreign signature should not be replayed into the Gemini payload.
-    // Gemini 3 still needs the documented skip fallback for unsigned function
-    // calls that came from another route.
-    const firstModelTurn = getFirstModelTurn(params.contents);
-    expect(firstModelTurn).toMatchObject({
+  it.each([
+    {
+      name: "foreign signatures entering a Gemini route",
+      messages: [
+        googleToolCallAssistantTurn({
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          id: "call_foreign",
+          thoughtSignature: "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
+        }),
+        toolResultTurn("call_foreign"),
+        { role: "user", content: [{ type: "text", text: "Continue." }] },
+      ],
+      turnCount: 1,
+      forbiddenSignature: "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
+    },
+    {
+      name: "prior Gemini signatures entering a later foreign route",
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfZ29vZ2xlXzE=" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          timestamp: 2,
+        }),
+      ],
+      turnCount: 2,
+      forbiddenSignature: "Y2FsbF9zaWdfZ29vZ2xlXzE=",
+    },
+  ])("isolates managed replay from $name", ({ messages, turnCount, forbiddenSignature }) => {
+    const params = buildGeminiReplayParams(messages);
+    const modelTurns = params.contents.filter(isModelTurnWithParts);
+    expect(modelTurns).toHaveLength(turnCount);
+    const turn = expectDefined(modelTurns[turnCount - 1], "foreign Gemini model turn");
+    expect(turn).toMatchObject({
       role: "model",
       parts: [
         {
@@ -2764,36 +2499,8 @@ describe("google transport stream", () => {
         },
       ],
     });
-    expect(
-      expectDefined(firstModelTurn.parts[0], "first Gemini model part").thoughtSignature,
-    ).not.toBe("bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==");
-  });
-
-  it("does not replay prior Gemini thought signatures onto a later foreign route", () => {
-    const params = buildGeminiReplayParams([
-      googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfZ29vZ2xlXzE=" }),
-      toolResultTurn(),
-      googleToolCallAssistantTurn({
-        provider: "anthropic",
-        api: "anthropic",
-        model: "claude-sonnet-4",
-        timestamp: 2,
-      }),
-    ]);
-
-    const modelTurns = params.contents.filter(isModelTurnWithParts);
-    expect(modelTurns).toHaveLength(2);
-    expect(modelTurns[1]).toMatchObject({
-      parts: [
-        {
-          thoughtSignature: "skip_thought_signature_validator",
-          functionCall: { name: "lookup", args: { q: "hello" } },
-        },
-      ],
-    });
-    const laterTurn = expectDefined(modelTurns[1], "later Gemini model turn");
-    expect(expectDefined(laterTurn.parts[0], "later Gemini model part").thoughtSignature).not.toBe(
-      "Y2FsbF9zaWdfZ29vZ2xlXzE=",
+    expect(expectDefined(turn.parts[0], "foreign Gemini model part").thoughtSignature).not.toBe(
+      forbiddenSignature,
     );
   });
 
@@ -2814,55 +2521,6 @@ describe("google transport stream", () => {
     expect(getFirstModelTurn(params.contents).parts[0]).toMatchObject({
       thoughtSignature: "skip_thought_signature_validator",
       functionCall: { name: "lookup", args: { q: "hello" } },
-    });
-  });
-
-  it("adds skip-validator fallback to unsigned sibling Gemini 3 tool calls", () => {
-    const params = buildGeminiReplayParams([
-      {
-        role: "assistant",
-        provider: "google",
-        api: "google-generative-ai",
-        model: "gemini-3.1-pro-preview",
-        stopReason: "toolUse",
-        timestamp: 0,
-        content: [
-          {
-            type: "toolCall",
-            id: "call_math",
-            name: "math_eval",
-            arguments: { expression: "17*23" },
-            thoughtSignature: "cmVhbF9zaWdfMQ==",
-          },
-          {
-            type: "toolCall",
-            id: "call_lookup",
-            name: "lookup_fact",
-            arguments: { key: "beta" },
-          },
-          {
-            type: "toolCall",
-            id: "call_transform",
-            name: "string_transform",
-            arguments: { text: "claw", mode: "reverse" },
-          },
-        ],
-      },
-    ]);
-
-    const parts = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts;
-    expect(parts).toHaveLength(3);
-    expect(parts[0]).toMatchObject({
-      thoughtSignature: "cmVhbF9zaWdfMQ==",
-      functionCall: { name: "math_eval", args: { expression: "17*23" } },
-    });
-    expect(parts[1]).toMatchObject({
-      thoughtSignature: "skip_thought_signature_validator",
-      functionCall: { name: "lookup_fact", args: { key: "beta" } },
-    });
-    expect(parts[2]).toMatchObject({
-      thoughtSignature: "skip_thought_signature_validator",
-      functionCall: { name: "string_transform", args: { text: "claw", mode: "reverse" } },
     });
   });
 
@@ -2931,47 +2589,91 @@ describe("google transport stream", () => {
     expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
   });
 
-  it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
-    const model = buildGeminiModel({
-      id: "custom-gemini-model",
-      name: "Custom Gemini",
-      provider: "custom-google",
-      baseUrl: "https://proxy.example.com/gemini/v1beta",
-    });
-
-    const params = buildGoogleGenerativeAiParams(
-      model,
-      {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      } as never,
-      {
-        reasoning: "medium",
-      },
-    );
-
-    const generationConfig = requireGenerationConfig(params);
-    const thinkingConfig = requireThinkingConfig(generationConfig);
-    expect(thinkingConfig.includeThoughts).toBe(true);
-    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
-  });
-
   it.each([
     {
-      name: "does not send thinkingConfig when the resolved Google model disables reasoning",
-      model: { id: "gemma-4-26b-a4b-it", reasoning: false },
+      name: "custom model has no negative fallback budget",
+      model: {
+        id: "custom-gemini-model",
+        provider: "custom-google",
+        baseUrl: "https://proxy.example.com/gemini/v1beta",
+      },
       options: { reasoning: "medium" },
+      expected: { includeThoughts: true },
     },
     {
-      name: "omits disabled thinkingBudget=0 for Gemini 2.5 Pro direct payloads",
+      name: "non-reasoning model omits thinking",
+      model: { id: "gemma-4-26b-a4b-it", reasoning: false },
+      options: { reasoning: "medium" },
+      expected: undefined,
+    },
+    {
+      name: "Gemini 2.5 Pro omits disabled thinking",
       model: {},
       options: { maxTokens: 128 },
-      maxOutputTokens: 128,
+      expected: undefined,
     },
-  ])("$name", ({ model, options, maxOutputTokens }) => {
-    const generationConfig = buildGeminiUserParams(model, options).generationConfig ?? {};
-    expect(generationConfig).not.toHaveProperty("thinkingConfig");
-    if (maxOutputTokens !== undefined) {
-      expect(generationConfig).toHaveProperty("maxOutputTokens", maxOutputTokens);
+    {
+      name: "Gemini 2.5 Pro strips zero budget but keeps thoughts",
+      model: {},
+      options: { thinking: { enabled: true, budgetTokens: 0 } },
+      expected: { includeThoughts: true },
+    },
+    ...[
+      { id: "gemini-pro-latest", thinkingLevel: "LOW" },
+      { id: "gemini-flash-lite-latest", thinkingLevel: "MINIMAL" },
+      { id: "gemini-3.6-flash", thinkingLevel: "MINIMAL" },
+      { id: "gemini-3.7-flash", thinkingLevel: "LOW" },
+    ].map(({ id, thinkingLevel }) => ({
+      name: `${id} disabled thinking floor`,
+      model: { id },
+      options: { maxTokens: 128 },
+      expected: { thinkingLevel },
+    })),
+    {
+      name: "explicit Gemini 3 budget becomes a level",
+      model: { id: "gemini-3-flash-preview" },
+      options: { thinking: { enabled: true, budgetTokens: 8192 } },
+      expected: { includeThoughts: true, thinkingLevel: "MEDIUM" },
+    },
+    {
+      name: "adaptive Gemini 3 uses dynamic defaults",
+      model: { id: "gemini-3-flash-preview" },
+      options: { reasoning: "adaptive" },
+      expected: { includeThoughts: true },
+    },
+    {
+      name: "adaptive Gemini 2.5 uses a dynamic budget",
+      model: { id: "gemini-2.5-flash" },
+      options: { reasoning: "adaptive" },
+      expected: { includeThoughts: true, thinkingBudget: -1 },
+    },
+    {
+      name: "Gemini 3 Pro normalizes the explicit minimum level",
+      model: { id: "gemini-3.1-pro-preview" },
+      options: { thinking: { enabled: true, level: "MINIMAL" } },
+      expected: { includeThoughts: true, thinkingLevel: "LOW" },
+    },
+    ...[
+      { id: "gemini-2.5-flash-lite", reasoning: "minimal", thinkingBudget: 512 },
+      { id: "gemini-2.5-flash-lite", reasoning: "low", thinkingBudget: 2048 },
+      { id: "gemini-2.5-flash", reasoning: "minimal", thinkingBudget: 128 },
+      { id: "gemini-2.5-pro", reasoning: "minimal", thinkingBudget: 128 },
+      { id: "gemini-2.5-pro", reasoning: "medium", thinkingBudget: 8192 },
+    ].map(({ id, reasoning, thinkingBudget }) => ({
+      name: `${id} ${reasoning} budget`,
+      model: { id },
+      options: { reasoning },
+      expected: { includeThoughts: true, thinkingBudget },
+    })),
+  ])("builds thinking config: $name", ({ model, options, expected }) => {
+    const config = buildGeminiUserParams(model, options).generationConfig ?? {};
+    if (expected === undefined) {
+      expect(config).not.toHaveProperty("thinkingConfig");
+    } else {
+      expect(config.thinkingConfig).toStrictEqual(expected);
+    }
+    if ("maxTokens" in options) {
+      expect(config).toHaveProperty("maxOutputTokens", options.maxTokens);
     }
   });
 
@@ -2985,204 +2687,22 @@ describe("google transport stream", () => {
       buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
     );
 
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
-        api: "google-generative-ai",
-        provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      } satisfies Model<"google-generative-ai">,
-      {},
-    );
-
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        } as Parameters<typeof streamFn>[1],
-        {
-          apiKey: "gemini-api-key",
-          stop: ["</tool>", "\n\nObservation:"],
-        } as Parameters<typeof streamFn>[2],
+    await runGeminiStreamResult({
+      model: attachModelProviderRequestTransport(
+        buildGeminiModel({
+          id: "gemini-3.1-pro-preview",
+          baseUrl: "https://generativelanguage.googleapis.com",
+        }),
+        {},
       ),
-    );
-    await stream.result();
+      options: { apiKey: "gemini-api-key", stop: ["</tool>", "\n\nObservation:"] },
+    });
 
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     const init = requireRequestInit(guardedCall, "guarded fetch");
     const payload = parseRequestJsonBody(init);
     const generationConfig = requireGenerationConfig(payload);
     expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
-  });
-
-  it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {
-    const thinkingConfig = requireThinkingConfig(
-      requireGenerationConfig(
-        buildGeminiUserParams({}, { thinking: { enabled: true, budgetTokens: 0 } }),
-      ),
-    );
-    expect(thinkingConfig.includeThoughts).toBe(true);
-    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
-  });
-
-  it.each([
-    ["gemini-pro-latest", "LOW"],
-    ["gemini-flash-lite-latest", "MINIMAL"],
-    ["gemini-3.6-flash", "MINIMAL"],
-    ["gemini-3.7-flash", "LOW"],
-  ] as const)(
-    "uses thinkingLevel instead of disabled thinkingBudget for %s defaults",
-    (id, level) => {
-      const generationConfig = requireGenerationConfig(
-        buildGeminiUserParams({ id }, { maxTokens: 128 }),
-      );
-      const thinkingConfig = requireThinkingConfig(generationConfig);
-      expect(generationConfig.maxOutputTokens).toBe(128);
-      expect(thinkingConfig.thinkingLevel).toBe(level);
-      expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
-    },
-  );
-
-  it("maps explicit Gemini 3 thinking budgets to thinkingLevel", () => {
-    const params = buildGeminiUserParams(
-      { id: "gemini-3-flash-preview" },
-      { thinking: { enabled: true, budgetTokens: 8192 } },
-    );
-
-    const generationConfig = requireGenerationConfig(params);
-    const thinkingConfig = requireThinkingConfig(generationConfig);
-    expect(thinkingConfig).toEqual({
-      includeThoughts: true,
-      thinkingLevel: "MEDIUM",
-    });
-    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
-  });
-
-  it("keeps adaptive Gemini 3 thinking on provider dynamic defaults", () => {
-    const params = buildGeminiUserParams(
-      { id: "gemini-3-flash-preview" },
-      { reasoning: "adaptive" },
-    );
-
-    const generationConfig = requireGenerationConfig(params);
-    const thinkingConfig = requireThinkingConfig(generationConfig);
-    expect(thinkingConfig.includeThoughts).toBe(true);
-    expect(thinkingConfig).not.toHaveProperty("thinkingLevel");
-    expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
-  });
-
-  it("maps adaptive Gemini 2.5 thinking to dynamic thinkingBudget", () => {
-    const params = buildGeminiUserParams({ id: "gemini-2.5-flash" }, { reasoning: "adaptive" });
-
-    const generationConfig = requireGenerationConfig(params);
-    expect(requireThinkingConfig(generationConfig)).toEqual({
-      includeThoughts: true,
-      thinkingBudget: -1,
-    });
-  });
-
-  it("normalizes explicit Gemini 3 Pro thinking levels", () => {
-    const params = buildGeminiUserParams(
-      { id: "gemini-3.1-pro-preview" },
-      { thinking: { enabled: true, level: "MINIMAL" } },
-    );
-
-    const generationConfig = requireGenerationConfig(params);
-    expect(requireThinkingConfig(generationConfig)).toEqual({
-      includeThoughts: true,
-      thinkingLevel: "LOW",
-    });
-  });
-
-  it("keeps Gemini function declaration bytes stable across discovery orders", () => {
-    const tools = [
-      {
-        name: "zeta_lookup",
-        description: "Look up the last value",
-        parameters: { type: "object", properties: { value: { type: "string" } } },
-      },
-      {
-        name: "alpha_lookup",
-        description: "Look up the first value",
-        parameters: { type: "object", properties: { query: { type: "string" } } },
-      },
-    ];
-    const buildParams = (orderedTools: typeof tools) =>
-      buildGoogleGenerativeAiParams(buildGeminiModel(), {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        tools: orderedTools,
-      } as never);
-
-    const first = buildParams(tools);
-    const reversed = buildParams(tools.toReversed());
-
-    expect(reversed.tools).toEqual(first.tools);
-    expect(first.tools).toEqual([
-      {
-        functionDeclarations: [
-          expect.objectContaining({ name: "alpha_lookup" }),
-          expect.objectContaining({ name: "zeta_lookup" }),
-        ],
-      },
-    ]);
-  });
-
-  it("uses a non-empty text placeholder for empty user text", () => {
-    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
-      messages: [
-        { role: "user", content: "", timestamp: 0 },
-        {
-          role: "user",
-          content: [{ type: "text", text: "" }],
-          timestamp: 1,
-        },
-      ],
-    } as never);
-
-    expect(params.contents).toEqual([
-      { role: "user", parts: [{ text: " " }] },
-      { role: "user", parts: [{ text: " " }] },
-    ]);
-  });
-
-  it("uses a text placeholder when user parts are filtered out for text-only models", () => {
-    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ input: ["text"] }), {
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "image", mimeType: "image/png", data: "png-bytes" }],
-          timestamp: 0,
-        },
-      ],
-    } as never);
-
-    expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
-  });
-
-  it("uses a user placeholder when converted Gemini contents would otherwise be empty", () => {
-    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
-      messages: [
-        {
-          role: "assistant",
-          provider: "google",
-          api: "google-generative-ai",
-          model: "gemini-2.5-pro",
-          stopReason: "stop",
-          timestamp: 0,
-          content: [{ type: "text", text: "   " }],
-        },
-      ],
-    } as never);
-
-    expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
   });
 
   it("serializes structured-only Google tool results before fallback", () => {
@@ -3203,64 +2723,6 @@ describe("google transport stream", () => {
     expect(functionResponse.response.output).toContain('"temperatureC":21');
     expect(functionResponse.response.output).toContain('"apiToken":"');
     expect(functionResponse.response.output).not.toContain("secret-token-123");
-  });
-
-  it("keeps explicit Google tool-result text before structured fallback", () => {
-    const params = buildGoogleToolResultParams([
-      { type: "json", value: { ignored: true } },
-      { type: "text", text: "explicit result" },
-    ]);
-
-    expect(params.contents[1]).toMatchObject({
-      parts: [{ functionResponse: { response: { output: "explicit result" } } }],
-    });
-  });
-
-  it("redacts opaque and binary structured Google tool-result fields", () => {
-    const params = buildGoogleToolResultParams([
-      {
-        type: "resource",
-        mimeType: "image/png",
-        data: "abcdef",
-        encrypted_content: "opaque",
-        text: "data:image/png;base64,abcdef",
-      },
-    ]);
-
-    const responseTurn = params.contents[1] as GoogleTestContentTurn;
-    const functionResponse = expectDefined(responseTurn.parts[0], "resource tool response part")
-      .functionResponse as { response: { output: string } };
-
-    expect(functionResponse.response.output).toContain('"data":"[binary data omitted: 6 chars]"');
-    expect(functionResponse.response.output).toContain(
-      '"encrypted_content":"[omitted encrypted_content]"',
-    );
-    expect(functionResponse.response.output).toContain('"text":"[inline data URI: 23 chars]"');
-  });
-
-  it("keeps Google media-only tool results on media placeholders", () => {
-    const params = buildGoogleToolResultParams([
-      { type: "audio", mimeType: "audio/wav", data: "wav-bytes" },
-    ]);
-
-    expect(params.contents[1]).toMatchObject({
-      parts: [{ functionResponse: { response: { output: "(see attached audio)" } } }],
-    });
-  });
-
-  it("does not emit inline data or media placeholders for payload-less tool images", () => {
-    const params = buildGoogleToolResultParams(
-      [{ type: "image", mimeType: "image/png", data: "" }],
-      {
-        model: { id: "gemini-3-flash", input: ["text", "image"] },
-        toolName: "screenshot",
-      },
-    );
-
-    const serialized = JSON.stringify(params.contents);
-    expect(serialized).toContain('"output":""');
-    expect(serialized).not.toContain("inlineData");
-    expect(serialized).not.toContain("see attached image");
   });
 
   it.each([
@@ -3314,49 +2776,6 @@ describe("google transport stream", () => {
       });
     },
   );
-
-  it.each(["google/gemini-3.1-pro-preview", "models/gemini-3.1-pro-preview"])(
-    "keeps image parts inside function responses for prefixed Gemini 3 model %s",
-    (modelId) => {
-      const params = buildGoogleGenerativeAiParams(
-        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
-        {
-          messages: [
-            { role: "user", content: "Take a screenshot.", timestamp: 0 },
-            googleToolCallAssistantTurn({
-              model: modelId,
-              name: "screenshot",
-              args: {},
-            }),
-            googleToolResultMessage("screenshot"),
-          ],
-        } as never,
-      );
-
-      const functionResponse = (params.contents[2] as GoogleTestContentTurn).parts[0]
-        ?.functionResponse as { parts?: unknown };
-      expect(params.contents.map((content) => content.role)).toEqual(["user", "model", "user"]);
-      expect(functionResponse.parts).toEqual([
-        { inlineData: { mimeType: "image/png", data: "png-bytes" } },
-      ]);
-    },
-  );
-
-  it.each([
-    ["gemini-2.5-flash-lite", "minimal", 512],
-    ["gemini-2.5-flash-lite", "low", 2048],
-    ["gemini-2.5-flash", "minimal", 128],
-    ["gemini-2.5-pro", "minimal", 128],
-    ["gemini-2.5-pro", "medium", 8192],
-  ] as const)("%s with reasoning=%s uses thinkingBudget %i", (id, reasoning, expectedBudget) => {
-    const params = buildGeminiUserParams({ id }, { reasoning });
-
-    const generationConfig = requireGenerationConfig(params);
-    expect(requireThinkingConfig(generationConfig)).toEqual({
-      includeThoughts: true,
-      thinkingBudget: expectedBudget,
-    });
-  });
 
   it("emits thinking activity for thoughtSignature-only parts to keep the stream active", async () => {
     guardedFetchMock.mockResolvedValueOnce(

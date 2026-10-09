@@ -61,7 +61,6 @@ export type DiscordReactOpts = {
   timeoutMs?: number;
 };
 
-/** Guild asset upload options: client access plus the sender-scoped media read policy. */
 export type DiscordAssetUploadOpts = DiscordReactOpts & DiscordOutboundMediaOpts;
 
 export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {

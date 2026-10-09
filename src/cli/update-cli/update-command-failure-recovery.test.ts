@@ -474,13 +474,22 @@ describe("post-update failure recovery observation", () => {
     },
   );
 
-  it.each(["foreground", "managed"] as const)(
-    "probes the %s Gateway's effective port instead of a different configured endpoint",
-    async (kind) => {
-      vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19430");
-      if (kind === "foreground") {
+  it.each([
+    { endpoint: "foreground", failure: "returned", unsafe: false },
+    { endpoint: "managed", failure: "returned", unsafe: false },
+    { endpoint: "configured", failure: "returned", unsafe: false },
+    { endpoint: "configured", failure: "thrown", unsafe: false },
+    { endpoint: "configured", failure: "returned", unsafe: true },
+  ] as const)(
+    "observes $endpoint recovery after $failure failure (unsafe=$unsafe)",
+    async ({ endpoint, failure, unsafe }) => {
+      const effectivePort = endpoint !== "configured";
+      if (effectivePort) {
+        vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19430");
+      }
+      if (endpoint === "foreground") {
         mocks.activePort.mockResolvedValueOnce(19431);
-      } else {
+      } else if (endpoint === "managed") {
         mocks.managedService.mockResolvedValueOnce({
           installed: true,
           loadState: { status: "loaded" },
@@ -498,83 +507,54 @@ describe("post-update failure recovery observation", () => {
           verdict: { kind: "owned", root, fingerprint: "fixture", refreshDefinition: false },
         });
       }
-      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(async ({ gatewayPort }) => ({
-        ok: gatewayPort === 19431,
-        score: gatewayPort === 19431 ? 7 : 0,
-        summary: gatewayPort === 19431 ? "healthy" : "wrong Gateway endpoint",
-      }));
-      mocks.converge.mockImplementationOnce(async ({ result }) => ({
-        resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
-      }));
-      await expect(
-        finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
-      ).rejects.toMatchObject({
-        result: { recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" } },
+      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(async ({ gatewayPort }) => {
+        const ok = !effectivePort || gatewayPort === 19431;
+        return {
+          ok,
+          score: ok ? 7 : 0,
+          summary: ok ? "Gateway version and readiness verified." : "wrong Gateway endpoint",
+        };
       });
-      expect(verifyUpdatedGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ gatewayPort: 19431, expectedVersion: "2026.9.5" }),
-      );
-    },
-  );
-
-  it("preserves an unsafe restart verdict even when the Gateway is healthy", async () => {
-    const reason = "state-migration-started";
-    vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
-      ok: true,
-      score: 7,
-      summary: "Gateway version and readiness verified.",
-    });
-    mocks.converge.mockImplementationOnce(async ({ result }) => ({
-      resultWithPostUpdate: {
-        ...result,
-        status: "error",
-        reason: "post-update-plugins",
-        recovery: { serviceRestartSafe: false, reason },
-      },
-    }));
-    await expect(
-      finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
-    ).rejects.toMatchObject({
-      result: { recovery: { serviceRestartSafe: false, reason } },
-    });
-    expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
-  });
-
-  it.each(["returned", "thrown"] as const)(
-    "records a serving Gateway after a %s post-update failure",
-    async (failure) => {
-      vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
-        ok: true,
-        score: 7,
-        summary: "Gateway version and readiness verified.",
-      });
+      const unsafeReason = "state-migration-started";
       if (failure === "thrown") {
         mocks.converge.mockRejectedValueOnce(new Error("plugin finalization failed"));
       } else {
         mocks.converge.mockImplementationOnce(async ({ result }) => ({
-          resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
+          resultWithPostUpdate: {
+            ...result,
+            status: "error",
+            reason: "post-update-plugins",
+            ...(unsafe ? { recovery: { serviceRestartSafe: false, reason: unsafeReason } } : {}),
+          },
         }));
       }
+      const recovery = unsafe
+        ? { serviceRestartSafe: false, reason: unsafeReason }
+        : { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" };
       await expect(
         finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
       ).rejects.toMatchObject({
         result: {
           status: "error",
           reason: failure === "thrown" ? "post-update-failed" : "post-update-plugins",
-          recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
+          recovery,
         },
       });
       expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
-      expect(verifyUpdatedGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ purpose: "recovery", expectedVersion: "2026.9.5" }),
-      );
-      expect(mocks.printResult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
+      if (effectivePort) {
+        expect(verifyUpdatedGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ gatewayPort: 19431, expectedVersion: "2026.9.5" }),
+        );
+      } else if (!unsafe) {
+        expect(verifyUpdatedGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ purpose: "recovery", expectedVersion: "2026.9.5" }),
+        );
+        expect(mocks.printResult).toHaveBeenCalledWith(
+          expect.objectContaining({ recovery }),
+          expect.anything(),
+          expect.anything(),
+        );
+      }
     },
   );
 });

@@ -1,22 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "./sqlite-readonly-worker.compile-cache-runtime.test-support.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-describe.each(["sync", "async", "scoped"] as const)("SQLite child compile cache (%s)", (mode) => {
-  it.for([
-    { label: "active programmatic cache", active: true, cache: undefined, disable: undefined },
-    { label: "explicit cache", active: true, cache: "explicit", disable: undefined },
-    { label: "empty explicit cache", active: true, cache: "", disable: undefined },
-    { label: "disabled cache", active: true, cache: undefined, disable: "1" },
-    { label: "empty disable policy", active: true, cache: undefined, disable: "" },
-    { label: "unavailable cache", active: false, cache: undefined, disable: undefined },
-  ] as const)("preserves $label through the real worker", async (testCase, { signal }) => {
+// The shared cache policy matrix lives in sqlite-worker-store.compile-cache.test.ts.
+it.for(["sync", "async", "scoped"] as const)(
+  "inherits the owned compile cache through the real %s worker",
+  async (mode, { signal }) => {
     const root = fixture.createTempDir("openclaw-sqlite-child-cache-");
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -27,16 +21,10 @@ describe.each(["sync", "async", "scoped"] as const)("SQLite child compile cache 
     delete env.NODE_OPTIONS;
     const result = await fixture.track(
       runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(sqliteReadOnlyCompileCacheParentEntrypoint),
-            resolveTestNodeExecPath(),
-          ),
+        (workerArgv) => [
+          ...workerArgv(resolveRuntimeWorkerUrl(sqliteReadOnlyCompileCacheParentEntrypoint)),
           root,
           mode,
-          testCase.active ? "1" : "0",
-          testCase.cache ?? "unset",
-          testCase.disable ?? "unset",
         ],
         env,
         undefined,
@@ -46,5 +34,5 @@ describe.each(["sync", "async", "scoped"] as const)("SQLite child compile cache 
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("readonly-cache:verified");
-  });
-});
+  },
+);

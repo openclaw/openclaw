@@ -67,7 +67,7 @@ function createWorkerArtifactFixtures(
       return joined;
     }
 
-    function node(args: string[], cwd = root, env = process.env) {
+    function node(args: Parameters<typeof runNodeScript>[0], cwd = root, env = process.env) {
       const completion = fixtureLifetime.track(
         runNodeScript(args, compilerEnv(env, "node"), undefined, {
           cwd,
@@ -337,6 +337,7 @@ export function workerProbe(
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { pluginRuntimeRetentionEntrypoint } from ${JSON.stringify(path.join(root, "src/plugins/runtime-retention-entrypoint.test-support.ts"))};
+    import { resolveForwardedExitCompilerArgs } from ${JSON.stringify(path.join(root, "src/bootstrap/node-exit-safe-compilers.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-snapshot-source.ts"))};
     import { openNodeSqliteDatabase } from ${JSON.stringify(path.join(root, "src/infra/node-sqlite.ts"))};
@@ -400,8 +401,11 @@ export function workerProbe(
           }
           const sourceLoader = sourceMode && !process.versions.bun;
           expect(args.includes('--import')).toBe(sourceLoader);
-          if (sourceLoader) expect(args[1].startsWith('file:')).toBe(true);
-          expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
+          const forwardedCompilerArgs = resolveForwardedExitCompilerArgs();
+          if (sourceLoader) expect(args[forwardedCompilerArgs.length + 1].startsWith('file:')).toBe(true);
+          const runtimeArgs = [...forwardedCompilerArgs, ...(sourceLoader ? ['--import', expect.stringMatching(/^file:/)] : process.versions.bun ? ['--no-install'] : [])];
+          expect(args.slice(0, runtimeArgs.length + 1)).toEqual([...runtimeArgs, fileURLToPath(generation)]);
+          expect(args[runtimeArgs.length]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           ${receiptEndpoint ? `sendReceipt(${JSON.stringify(path.join(directory, "generations.jsonl"))}, 'written');` : ""}

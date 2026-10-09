@@ -500,23 +500,21 @@ export function prepareTalkRealtimeRelayAgentControl(
   if (requestedSessionKey && requestedSessionKey !== sessionKey) {
     throw new Error("Realtime relay steering session key does not match the relay session");
   }
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (relaySessions.get(session.id) !== session) {
+      throw new Error("Realtime relay session closed while steering the agent run");
+    }
+  };
   const runTarget = resolveOwnedActiveTalkRunTarget({
     context: session.context,
     clientConnId: session.connId,
     sessionTarget: session.sessionTarget,
     scope: { kind: "voice-session", voiceSessionId: session.id },
-    assertCurrent: () => {
-      params.assertCurrent?.();
-      if (relaySessions.get(session.id) !== session) {
-        throw new Error("Realtime relay session closed while steering the agent run");
-      }
-    },
+    assertCurrent,
   });
   return async () => {
-    params.assertCurrent?.();
-    if (relaySessions.get(session.id) !== session) {
-      throw new Error("Realtime relay session closed while steering the agent run");
-    }
+    assertCurrent();
     const result = await controlRealtimeVoiceAgentRun({
       sessionKey: canonicalKey,
       runTarget,

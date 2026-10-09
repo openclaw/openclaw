@@ -1,4 +1,3 @@
-/** Audits installed daemon service definitions for drift and repair candidates. */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -25,6 +24,7 @@ import {
   readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
+import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 
 export type {
   GatewayServiceCommand,
@@ -190,7 +190,11 @@ function auditManagedServiceEnvironment(
   issues: ServiceConfigIssue[],
   expectedManagedServiceEnvKeys?: Iterable<string>,
 ) {
-  const inlineKeys = collectInlineManagedServiceEnvKeys(command, expectedManagedServiceEnvKeys);
+  // Reinstall can migrate the managed base, but never rewrites operator drop-ins.
+  const inlineKeys = collectInlineManagedServiceEnvKeys(
+    resolveManagedGatewayServiceCommand(command),
+    expectedManagedServiceEnvKeys,
+  );
   if (inlineKeys.length === 0) {
     return;
   }
@@ -318,11 +322,7 @@ function auditGatewayServicePath(
   }
 }
 
-/**
- * Check if the service's embedded token differs from the config file token.
- * Returns an issue if drift is detected (service will use old token after restart).
- * The invoking CLI selects recovery advice for its installation.
- */
+/** The invoking CLI selects recovery advice for its installation. */
 export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
@@ -417,10 +417,11 @@ export async function auditGatewayServiceConfig(params: {
     definitionDriftError = "Service definition inspection could not be completed.";
   }
 
-  const notes = {
+  return {
+    ok: issues.length === 0,
+    issues,
     ...(runtimeNote ? { runtimeNote } : {}),
     ...(definitionDrift.length ? { definitionDrift } : {}),
     ...(definitionDriftError ? { definitionDriftError } : {}),
   };
-  return { ok: issues.length === 0, issues, ...notes };
 }

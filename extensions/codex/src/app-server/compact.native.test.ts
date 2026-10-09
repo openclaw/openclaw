@@ -178,6 +178,8 @@ it(
             ...options,
             startOptions: {
               ...startOptions,
+              // User-scoped homes prefer an installed desktop app; prove the pinned package.
+              managedCommandOrder: "package-only",
               transport: "stdio",
               args: startOptions.args ?? ["app-server"],
               cwd: native.cwd,

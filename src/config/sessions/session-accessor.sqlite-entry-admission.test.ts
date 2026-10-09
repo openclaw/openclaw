@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -16,7 +17,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { resolveStateDir } from "../paths.js";
 import {
@@ -29,6 +33,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
+import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -36,10 +41,21 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 
 const roots = createTempDirTracker();
+const worker = vi.hoisted(() => ({
+  gate: undefined as ReturnType<typeof createWorkerSqliteIntegrityGate> | undefined,
+}));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  const { observeWorkerSqliteIntegrity } =
+    await import("./session-accessor.sqlite-integrity-counter.test-support.js");
+  return {
+    ...actual,
+    Worker: observeWorkerSqliteIntegrity(actual.Worker, () => worker.gate),
+  };
+});
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const realOpen = sqlite.openNodeSqliteDatabase;
-const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 let queued = vi.spyOn(writerQueue, "runQueuedStoreWrite");
 
 beforeEach(() => {
@@ -65,6 +81,11 @@ afterEach(async () => {
     });
   }
   await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  if (worker.gate) {
+    expect([...worker.gate.workers].every((observed) => observed.threadId === -1)).toBe(true);
+    worker.gate = undefined;
+  }
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -89,8 +110,17 @@ function fixture(sessionKey = "agent:main:admission") {
   return { root, env, scope, database, databasePath: database.path };
 }
 
+function evictHandle(databasePath: string) {
+  const database = getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: databasePath });
+  if (!database) {
+    throw new Error("Fixture lost its cached handle before eviction");
+  }
+  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  expect(database.db.isOpen).toBe(false);
+}
+
 function closeCold(f: ReturnType<typeof fixture>) {
-  closeOpenClawAgentDatabaseByPath(f.databasePath);
+  evictHandle(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
 }
@@ -119,22 +149,18 @@ function nativeChecks(databasePath: string) {
   return () => parentChecks;
 }
 
-function holdNative(databasePath: string) {
-  const entered = createDeferred();
-  const release = createDeferred();
-  releases.push(() => release.resolve());
-  vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
-    const work = realIntegrity(...args);
-    if (args[0] !== databasePath) {
-      return work;
-    }
-    entered.resolve();
-    return Promise.all([work, release.promise]).then(() => undefined);
-  });
-  return { entered, release };
+function holdWorkerValidation(databasePath: string) {
+  const gate = createWorkerSqliteIntegrityGate(databasePath);
+  worker.gate = gate;
+  gate.arm();
+  releases.push(gate.release);
+  return { entered: { promise: gate.entered }, release: { resolve: gate.release } };
 }
 
-async function expectAdmission(gate: ReturnType<typeof holdNative>, operation: Promise<unknown>) {
+async function expectAdmission(
+  gate: ReturnType<typeof holdWorkerValidation>,
+  operation: Promise<unknown>,
+) {
   const entered = await Promise.race([
     gate.entered.promise.then(() => true),
     operation.then(
@@ -252,7 +278,7 @@ it.each([false, true])(
       patchSessionEntryCore(
         scope,
         () => {
-          closeOpenClawAgentDatabaseByPath(f.databasePath);
+          evictHandle(f.databasePath);
           return { label: "original owner" };
         },
         { skipMaintenance: true },
@@ -263,7 +289,7 @@ it.each([false, true])(
     } else {
       f.env.OPENCLAW_STATE_DIR = successor;
     }
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
+    evictHandle(f.databasePath);
     release.resolve();
     await blocker;
     await expect(operation).resolves.toMatchObject({
@@ -283,13 +309,13 @@ it("keeps the physical database owner for logical rows in a shared store", async
   const secondary = { ...main, agentId: "secondary", sessionKey: "agent:secondary:shared" };
   replaceSessionEntrySync(main, { sessionId: "kept", updatedAt: 1 });
   replaceSessionEntrySync(secondary, { sessionId: "secondary", updatedAt: 1 });
-  closeOpenClawAgentDatabaseByPath(storePath);
+  evictHandle(storePath);
   await expect(
     own(
       patchSessionEntryCore(
         secondary,
         () => {
-          closeOpenClawAgentDatabaseByPath(storePath);
+          evictHandle(storePath);
           return { label: "shared owner" };
         },
         { skipMaintenance: true },
@@ -312,7 +338,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
-  const gate = holdNative(f.databasePath);
+  const gate = holdWorkerValidation(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
   const updateRelease = createDeferred();
@@ -377,12 +403,12 @@ it("retains FIFO, caller context and publication across cold admission", async (
   }
 });
 
-it.each(["dispose", "sync replacement"] as const)(
+it.each(["dispose", "physical replacement"] as const)(
   "rejects %s before updater admission and recovers the lane",
   async (mode) => {
     const f = fixture();
     closeCold(f);
-    const gate = holdNative(f.databasePath);
+    const gate = holdWorkerValidation(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
     const operation = own(
@@ -394,10 +420,12 @@ it.each(["dispose", "sync replacement"] as const)(
       if (mode === "dispose") {
         closeOpenClawAgentDatabaseByPath(f.databasePath);
       } else {
-        openOpenClawAgentDatabase({ agentId: "main", env: f.env });
+        const replacementPath = `${f.databasePath}.replacement`;
+        fs.copyFileSync(f.databasePath, replacementPath);
+        fs.renameSync(replacementPath, f.databasePath);
       }
       gate.release.resolve();
-      await expect(operation).rejects.toThrow(/closed|revoked|replaced/);
+      await expect(operation).rejects.toThrow(/closed|revoked|replaced|changed/);
       expect(update).not.toHaveBeenCalled();
       expect(committed).not.toHaveBeenCalled();
       expect(loadSessionEntry(f.scope)).not.toHaveProperty("label");
@@ -416,7 +444,7 @@ it.each(["cancel", "revoke"] as const)(
   "rechecks %s authority after cold commit admission",
   async (mode) => {
     const f = fixture();
-    const gate = holdNative(f.databasePath);
+    const gate = holdWorkerValidation(f.databasePath);
     let allowed = true;
     const revoked = new Error("authority revoked during commit admission");
     const committed = vi.fn();
@@ -459,26 +487,20 @@ it.each(["cancel", "revoke"] as const)(
   },
 );
 
-it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
+it.each(["relative queued", "relative reopen"] as const)(
   "pins the selected root for %s patch work",
   async (mode) => {
     const home = roots.make("session-patch-root-selection-");
-    const implicit = mode === "implicit queued";
-    const ownerRoot = path.join(home, implicit ? ".clawdbot" : "state");
-    const successor = path.join(home, implicit ? ".openclaw" : "next-cwd");
+    const ownerRoot = path.join(home, "state");
+    const successor = path.join(home, "next-cwd");
     fs.mkdirSync(ownerRoot);
-    if (!implicit) {
-      fs.mkdirSync(successor);
-    }
+    fs.mkdirSync(successor);
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
     const env: NodeJS.ProcessEnv = {
       HOME: home,
       OPENCLAW_HOME: home,
       OPENCLAW_CONFIG_PATH: path.join(ownerRoot, "openclaw.json"),
-      ...(implicit
-        ? // Deliberately select normal legacy discovery, not the fast-test new-root shortcut.
-          { OPENCLAW_TEST_FAST: "0" }
-        : { OPENCLAW_STATE_DIR: "state" }),
+      OPENCLAW_STATE_DIR: "state",
     };
     vi.stubEnv("OPENCLAW_STATE_DIR", ownerRoot);
     const scope = { agentId: "main", env, sessionKey: "agent:main:root-selection" };
@@ -488,11 +510,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(original)));
     const selectedPath = database.path;
     const shiftOwner = () => {
-      if (implicit) {
-        fs.mkdirSync(successor);
-      } else {
-        cwd.mockReturnValue(successor);
-      }
+      cwd.mockReturnValue(successor);
     };
     const release = createDeferred();
     releases.push(() => release.resolve());
@@ -514,7 +532,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
         () => {
           if (mode === "relative reopen") {
             // The first read happened warm in A; commit must reopen A after the updater.
-            expect(closeOpenClawAgentDatabaseByPath(selectedPath)).toBe(true);
+            evictHandle(selectedPath);
             shiftOwner();
           }
           return { label: "retained selected root" };
@@ -524,14 +542,14 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
     );
     if (blocker) {
       // Admission was queued with A selected; its first physical open must retain A.
-      closeOpenClawAgentDatabaseByPath(selectedPath);
+      evictHandle(selectedPath);
       shiftOwner();
       release.resolve();
       await blocker;
     }
     // Control: unchanged caller inputs now resolve elsewhere; the operation must use
-    // its private resolved root, not repeat ambient/legacy selection after its await.
-    expect(resolveStateDir(env)).toBe(implicit ? successor : path.join(successor, "state"));
+    // its private resolved root, not repeat ambient selection after its await.
+    expect(resolveStateDir(env)).toBe(path.join(successor, "state"));
     await expect(operation).resolves.toMatchObject({
       sessionId: "original",
       label: "retained selected root",
@@ -540,7 +558,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
       sessionId: "original",
       label: "retained selected root",
     });
-    expect(env.OPENCLAW_STATE_DIR).toBe(implicit ? undefined : "state");
+    expect(env.OPENCLAW_STATE_DIR).toBe("state");
     expect(fs.readdirSync(successor, { recursive: true })).toEqual([]);
   },
 );

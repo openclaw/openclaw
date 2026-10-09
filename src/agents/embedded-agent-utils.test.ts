@@ -86,6 +86,23 @@ function makeAssistantMessage(
 }
 
 describe("createAssistantVisibleStreamText", () => {
+  it("withholds a split runtime-context header until ordinary text diverges", () => {
+    const privateStream = createAssistantVisibleStreamText();
+
+    expect(privateStream.append("OpenClaw runtime cont")).toEqual({ text: "", delta: "" });
+    expect(privateStream.append("ext:\nprivate\nEnd OpenClaw runtime context.\nVisible")).toEqual({
+      text: "Visible",
+      delta: "Visible",
+    });
+
+    const ordinaryStream = createAssistantVisibleStreamText();
+    expect(ordinaryStream.append("OpenClaw runtime cont")).toEqual({ text: "", delta: "" });
+    expect(ordinaryStream.append("rol is useful")).toEqual({
+      text: "OpenClaw runtime control is useful",
+      delta: "OpenClaw runtime control is useful",
+    });
+  });
+
   it("keeps interleaved streams independent when one is replaced", () => {
     const first = createAssistantVisibleStreamText();
     const second = createAssistantVisibleStreamText();
@@ -387,6 +404,13 @@ describe("extractAssistantThinking", () => {
 });
 
 describe("stripDowngradedToolCallText", () => {
+  it("withholds a partial runtime-context header from cumulative snapshots", () => {
+    expect(sanitizeAssistantVisibleStreamText("OpenClaw runtime cont")).toBe("");
+    expect(sanitizeAssistantVisibleStreamText("OpenClaw runtime control is useful")).toBe(
+      "OpenClaw runtime control is useful",
+    );
+  });
+
   it.each([
     { input: "Hello [Historical context: example]  \n", expected: "Hello   \n" },
     {

@@ -1,6 +1,7 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
+import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
@@ -44,24 +45,23 @@ export async function reportUpdateStepCompletion(
   step: Parameters<NonNullable<UpdateStepProgress["onStepComplete"]>>[0],
   commandFailure?: { cause: unknown },
 ): Promise<void> {
-  let reportOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  let reportingFailure: { cause: unknown };
   try {
     await progress?.onStepComplete?.(step);
-  } catch (error) {
-    reportOutcome = { ok: false, error };
-  }
-  if (reportOutcome.ok) {
     return;
+  } catch (error) {
+    reportingFailure = { cause: error };
   }
   if (commandFailure || isFailedUpdateStep(step)) {
     const failure = commandFailure ? commandFailure.cause : createUpdateStepFailureError(step);
+    // Keep the command failure primary without discarding the reporting failure.
     throw new AggregateError(
-      [failure, reportOutcome.error],
+      [failure, reportingFailure.cause],
       "Update command and completion reporting failed",
       { cause: failure },
     );
   }
-  throw reportOutcome.error;
+  throw reportingFailure.cause;
 }
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
@@ -111,11 +111,21 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   if (
     !failureFacts &&
     result.code !== 0 &&
-    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
-    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+    [
+      "package-install",
+      "package-install-prefer-online",
+      "package-install-omit-optional",
+      "package-pack",
+    ].includes(name) &&
+    (/(?:^|[\\/])(?:npm|bun)(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
       /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
   ) {
-    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+    failureFacts = createNpmFailureFacts(
+      result.stdout,
+      result.stderr,
+      env,
+      /(?:^|[\\/])bun(?:\.exe)?$/iu.test(argv[0] ?? "") ? "bun" : "npm",
+    );
   }
   failureFacts ??= isFailedUpdateStep({
     exitCode: result.code,
@@ -128,7 +138,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
           {
             check: name,
             code:
-              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              parseNpmErrorCode(result.stderr) ??
               (result.termination && result.termination !== "exit"
                 ? result.termination
                 : "command-failed"),
@@ -170,6 +180,7 @@ export function normalizeFallbackFailureReason(
   switch (stepName) {
     case "package-install":
     case "package-install-omit-optional":
+    case "package-install-prefer-online":
     case "package-stage":
     case "package-verify":
     case "package-swap":
@@ -187,7 +198,7 @@ export function normalizeFallbackFailureReason(
 
 export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
-): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
+): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
   return {
     defaultCommandEnv,
@@ -196,10 +207,7 @@ export async function buildUpdateCommandRunner(
       (async (argv, options) =>
         await runCommandWithTimeout(argv, {
           ...options,
-          env:
-            defaultCommandEnv && options.env
-              ? { ...defaultCommandEnv, ...options.env }
-              : (defaultCommandEnv ?? options.env),
+          env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
           // Package-manager trees must not outlive a timed-out updater.
           killProcessTree: true,
         })),

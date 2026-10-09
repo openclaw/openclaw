@@ -27,9 +27,9 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import { loadTranscriptEvents } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { loadTranscriptEvents } from "./session-transcript-events.js";
 
 const failures = vi.hoisted(() => ({
   publication: undefined as Error | undefined,
@@ -39,6 +39,14 @@ vi.mock("./session-accessor.sqlite-identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-identity.js")>();
   return {
     ...actual,
+    publishCommittedSessionIdentity: (
+      ...args: Parameters<typeof actual.publishCommittedSessionIdentity>
+    ) => {
+      if (failures.publication) {
+        throw failures.publication;
+      }
+      return actual.publishCommittedSessionIdentity(...args);
+    },
     prepareLifecycleIdentityPublication: (
       ...args: Parameters<typeof actual.prepareLifecycleIdentityPublication>
     ) => {

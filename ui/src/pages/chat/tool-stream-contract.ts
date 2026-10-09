@@ -104,3 +104,7 @@ export type ToolStreamHost = {
   requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
+
+export type LiveToolStreamState = Partial<
+  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">
+>;

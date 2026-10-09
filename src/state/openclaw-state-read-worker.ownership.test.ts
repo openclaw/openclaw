@@ -40,75 +40,68 @@ function ownedSource() {
 async function completeRead(options: ReturnType<typeof source>["options"]) {
   const task = queueTask();
   task.result.resolve(emptyReply);
-  const result = await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  const result = await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   await task.captured;
   return result;
 }
 
-it("refuses expired ownership before submitting a read even when the monitor tick is late", async () => {
-  const { options, pathname, owner } = ownedSource();
-  try {
-    await expect(completeRead(options)).resolves.toEqual(emptyReply);
-    const open = vi.spyOn(fs, "openSync");
-    now = 999;
-    await expect(completeRead(options)).resolves.toEqual(emptyReply);
-    expect(open.mock.calls.filter(([target]) => target === owner.path)).toHaveLength(0);
-    open.mockRestore();
-
-    fs.unlinkSync(owner.path);
-    fs.writeFileSync(owner.path, "replacement");
-    await expect(completeRead(options)).resolves.toEqual(emptyReply);
-    now = 1000;
-    const submittedBefore = mock.runTask.mock.calls.length;
-    // A faulty admission gets a reply instead of leaving this regression hanging.
-    const unexpectedTask = queueTask();
-    unexpectedTask.result.resolve(emptyReply);
-    await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).rejects.toThrow(
-      /could not be verified|Shared-state read and cleanup failed/,
-    );
-    expect(mock.runTask).toHaveBeenCalledTimes(submittedBefore);
-    expect(() => assertStateDatabaseAccessAllowed(pathname)).toThrow("could not be verified");
-  } finally {
-    owner.release();
-  }
-});
-
-it("refuses an already queued read at dispatch when ownership expires before the worker receives it", async () => {
-  const { options, owner } = ownedSource();
-  const dispatch = createDeferredCore();
-  let readSettled: Promise<unknown> = Promise.resolve();
-  try {
-    await completeRead(options);
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-    const settled = result.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    readSettled = settled;
-    await task.submitted;
-    fs.unlinkSync(owner.path);
-    fs.writeFileSync(owner.path, "replacement");
-    now = 1000;
-    // Capturing the input is the worker-receive boundary; admission runs first.
-    const received = vi.fn();
-    void task.captured.then(
-      (request) => {
-        received(request);
-        task.result.resolve(emptyReply);
-      },
-      () => undefined,
-    );
-    dispatch.resolve();
-    await expect(task.captured).rejects.toThrow("could not be verified");
-    expect(await settled).toHaveProperty("error");
-    expect(received).not.toHaveBeenCalled();
-  } finally {
-    dispatch.resolve();
-    await readSettled;
-    owner.release();
-  }
-});
+it.each(["submission", "dispatch"] as const)(
+  "refuses expired ownership at %s even when the monitor tick is late",
+  async (boundary) => {
+    const { options, pathname, owner } = ownedSource();
+    const dispatch = createDeferredCore();
+    let readSettled: Promise<unknown> = Promise.resolve();
+    try {
+      await expect(completeRead(options)).resolves.toEqual(emptyReply);
+      if (boundary === "submission") {
+        const open = vi.spyOn(fs, "openSync");
+        now = 999;
+        await expect(completeRead(options)).resolves.toEqual(emptyReply);
+        expect(open.mock.calls.filter(([target]) => target === owner.path)).toHaveLength(0);
+        open.mockRestore();
+        fs.unlinkSync(owner.path);
+        fs.writeFileSync(owner.path, "replacement");
+        await expect(completeRead(options)).resolves.toEqual(emptyReply);
+        now = 1000;
+        const submittedBefore = mock.runTask.mock.calls.length;
+        const unexpectedTask = queueTask();
+        unexpectedTask.result.resolve(emptyReply);
+        await expect(
+          executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
+        ).rejects.toThrow(/could not be verified|Shared-state read and cleanup failed/);
+        expect(mock.runTask).toHaveBeenCalledTimes(submittedBefore);
+        expect(() => assertStateDatabaseAccessAllowed(pathname)).toThrow("could not be verified");
+      } else {
+        const task = queueTask(dispatch.promise);
+        const settled = executeExistingOpenClawStateRead(options, { type: "backup.runs" }).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        readSettled = settled;
+        await task.submitted;
+        fs.unlinkSync(owner.path);
+        fs.writeFileSync(owner.path, "replacement");
+        now = 1000;
+        const received = vi.fn();
+        void task.captured.then(
+          (request) => {
+            received(request);
+            task.result.resolve(emptyReply);
+          },
+          () => undefined,
+        );
+        dispatch.resolve();
+        await expect(task.captured).rejects.toThrow("could not be verified");
+        expect(await settled).toHaveProperty("error");
+        expect(received).not.toHaveBeenCalled();
+      }
+    } finally {
+      dispatch.resolve();
+      await readSettled;
+      owner.release();
+    }
+  },
+);
 
 it("retries an intact owner's read after one transient verification error without poisoning strict access", async () => {
   const { options, pathname, owner } = ownedSource();
@@ -129,9 +122,9 @@ it("retries an intact owner's read after one transient verification error withou
     // On the old implementation this callback consumes EMFILE and permanently
     // poisons the owner; without a monitor the expired read consumes it instead.
     vi.advanceTimersByTime(1000);
-    await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).rejects.toThrow(
-      /could not be verified|EMFILE|Shared-state read and cleanup failed/,
-    );
+    await expect(
+      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
+    ).rejects.toThrow(/could not be verified|EMFILE|Shared-state read and cleanup failed/);
     expect(failVerification).toBe(false);
     expect(mock.runTask).toHaveBeenCalledOnce();
     await expect(completeRead(options)).resolves.toEqual(emptyReply);

@@ -25,6 +25,25 @@ afterEach(() => {
 });
 
 describe("native Bash execution policy", () => {
+  it("rejects native Bash when OpenClaw owns shell execution", async () => {
+    const { context } = await createExecution({ nativeTools: ["Bash"] });
+    context.hostOwnedTools = ["exec", "process"];
+    let decision: CliBackendToolPermissionResult | undefined;
+    const runExit = await runPlugin(context, async function* (execution) {
+      decision = await execution.requestToolPermission({
+        toolName: "Bash",
+        toolInput: { command: "echo must-use-managed-exec" },
+      });
+      yield SUCCESS_RESULT;
+    });
+    expect(decision).toEqual({
+      behavior: "deny",
+      message: "Use OpenClaw exec; its native equivalent is unavailable.",
+    });
+    expect(runExit).toMatchObject({ reason: "exit", exitCode: 0 });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["allowlist", "on-miss", "allow"],
     ["deny", "on-miss", "deny"],

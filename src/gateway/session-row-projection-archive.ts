@@ -13,7 +13,7 @@ export function isColdArchivedSessionRow(row: records.Row) {
 export function createSessionRowProjectionArchive(params: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
-  enqueue: (id: string, change?: SessionRowChange) => void;
+  invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
   invalidateFacts: (row: records.Row) => void;
@@ -76,7 +76,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;
@@ -104,15 +104,7 @@ export function createSessionRowProjectionArchive(params: {
       const id = records.identity(row);
       params.put(row);
       params.dirty.add(id);
-      params.enqueue(id);
       return undefined;
-    },
-    isCurrentMaterialization(row: records.Row) {
-      const current = params.rows.get(records.identity(row));
-      return (
-        records.ready(current) &&
-        (current.entry.archivedAt === undefined || current.materialized === row.materialized)
-      );
     },
     invalidateRows(
       change: Extract<SessionRowChange, { all: true }>,
@@ -125,7 +117,11 @@ export function createSessionRowProjectionArchive(params: {
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {
-            row.pendingDatabaseFacts = row.retainedDatabaseFacts;
+            row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
+              row.retainedDatabaseFacts,
+            )
+              ? row.retainedDatabaseFacts
+              : undefined;
           }
         } else {
           row.pendingDatabaseFacts = undefined;
@@ -142,7 +138,13 @@ export function createSessionRowProjectionArchive(params: {
           continue;
         }
         params.dirty.add(records.identity(row));
-        params.enqueue(records.identity(row), change);
+        if (
+          typeof change.scope !== "string" ||
+          change.factsInvalidated ||
+          ((change.scope === "config" || change.scope === "catalog") && row.entry?.fallbackNotice)
+        ) {
+          params.invalidateTranscript(records.identity(row));
+        }
       }
     },
     setPageSize: (size: number) => {
@@ -192,12 +194,11 @@ export function createSessionRowProjectionArchive(params: {
       readPins.clear();
       pinCounts.clear();
     },
-    describe(initial: records.Row | undefined) {
-      if (initial?.entry?.archivedAt === undefined) {
-        return initial;
+    describe(row: records.Row | undefined) {
+      if (row?.entry?.archivedAt === undefined) {
+        return row;
       }
-      const row = initial;
-      if (records.ready(row) && row.entry.archivedAt !== undefined) {
+      if (records.ready(row)) {
         const id = records.identity(row);
         materialized.delete(id);
         materialized.add(id);

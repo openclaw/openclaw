@@ -12,19 +12,6 @@ import { sendMessageSlack } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
-type SlackDraftStream = {
-  update: (update: SlackDraftStreamUpdate) => void;
-  flush: () => Promise<void>;
-  clear: (options?: { preserveHumanReplies?: boolean }) => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  forceNewMessage: () => void;
-  dropDetachedMessages: () => Promise<void>;
-  finalizeMessage: (messageId: string, editFinal: () => Promise<void>) => Promise<boolean>;
-  messageId: () => string | undefined;
-  channelId: () => string | undefined;
-};
-
 type SlackDraftStreamUpdate =
   | string
   | {
@@ -60,7 +47,7 @@ export function createSlackDraftStream(params: {
   send?: typeof sendMessageSlack;
   edit?: typeof editSlackMessage;
   remove?: typeof deleteSlackMessage;
-}): SlackDraftStream {
+}) {
   const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const send = params.send ?? sendMessageSlack;

@@ -80,13 +80,22 @@ export function diffGatewayReloadPaths(
       refinementPrefixes.add(`plugins.entries.${pluginId}`);
     }
   }
-  // Decision selectors refine to authored leaves; other wildcard owners retain parent lifecycle rules.
-  if (refinementPrefixes.delete("agents.entries.*.decisionModel")) {
-    for (const config of [prevConfig, nextConfig]) {
-      for (const [agentId, agent] of Object.entries(config.agents?.entries ?? {})) {
-        if (agent.decisionModel !== undefined) {
-          refinementPrefixes.add(`agents.entries.${agentId}.decisionModel`);
-        }
+  const rosterPaths: string[] = [];
+  if ((prevConfig.agents?.entries === undefined) !== (nextConfig.agents?.entries === undefined)) {
+    rosterPaths.push("agents.entries");
+  }
+  const refineDecisionModel = refinementPrefixes.delete("agents.entries.*.decisionModel");
+  for (const [config, other] of [
+    [prevConfig, nextConfig],
+    [nextConfig, prevConfig],
+  ] as const) {
+    for (const [agentId, agent] of Object.entries(config.agents?.entries ?? {})) {
+      // Membership changes affect implicit workspace ownership even for empty entries.
+      if (!Object.hasOwn(other.agents?.entries ?? {}, agentId)) {
+        rosterPaths.push(`agents.entries.${agentId}`);
+      }
+      if (refineDecisionModel && agent.decisionModel !== undefined) {
+        refinementPrefixes.add(`agents.entries.${agentId}.decisionModel`);
       }
     }
   }
@@ -97,5 +106,8 @@ export function diffGatewayReloadPaths(
   );
   // Effective Talk owners can change without an authored provider key changing.
   // Ordinary ownership boundaries are already preserved by the reload prefixes.
-  return [...changedPaths, ...boundaryPaths.filter((path) => !changedPaths.includes(path))];
+  return [
+    ...changedPaths,
+    ...[...rosterPaths, ...boundaryPaths].filter((path) => !changedPaths.includes(path)),
+  ];
 }

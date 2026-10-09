@@ -1,21 +1,18 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
-import type {
-  GetReplyOptions,
-  SourceReplyDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
   ReplyDispatchKind,
   ReplyDispatcher,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
-import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { ChatType } from "../channels/chat-type.js";
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookContextWindow,
+} from "./hook-agent-context.types.js";
 import type {
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -23,7 +20,6 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
-import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookCronChangedEvent,
@@ -42,13 +38,8 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
-import type {
-  PluginHookSkillChangedEvent,
-  PluginHookSkillContext,
-  PluginHookSkillProposalChangedEvent,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
-} from "./hook-skill.types.js";
+import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareEvent,
@@ -58,6 +49,13 @@ import type {
 } from "./host-hook-turn-types.js";
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 import type { PluginHookSessionContext } from "./session-end-transcript.js";
+
+export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+
+export type {
+  PluginHookAgentContext,
+  PluginHookToolAuthority,
+} from "./hook-agent-context.types.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -93,16 +91,8 @@ export {
 } from "./hook-before-tool-call-result.js";
 export type {
   PluginHookSkillArtifact,
-  PluginHookSkillBundleFile,
-  PluginHookSkillBundleSnapshot,
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,
-  PluginHookSkillEvaluationFinding,
-  PluginHookSkillProposalChangedEvent,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
-  PluginHookSkillProposalEvaluationOutcome,
-  PluginHookSkillProposalKind,
 } from "./hook-skill.types.js";
 
 const PLUGIN_HOOK_NAMES = [
@@ -140,8 +130,6 @@ const PLUGIN_HOOK_NAMES = [
   "heartbeat_prompt_contribution",
   "cron_reconciled",
   "cron_changed",
-  "skill_proposal_evaluate",
-  "skill_proposal_changed",
   "skill_changed",
   "before_dispatch",
   "reply_dispatch",
@@ -176,16 +164,10 @@ const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
   typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
 
-const PROMPT_INJECTION_HOOK_NAMES = [
-  "agent_turn_prepare",
-  "before_prompt_build",
-  "heartbeat_prompt_contribution",
-] as const satisfies readonly PluginHookName[];
-
-const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK_NAMES);
-
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
-  promptInjectionHookNameSet.has(hookName);
+  hookName === "agent_turn_prepare" ||
+  hookName === "before_prompt_build" ||
+  hookName === "heartbeat_prompt_contribution";
 
 const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
 
@@ -232,74 +214,10 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
       }
     : { requiresToolAuthority?: never });
 
-export type PluginHookToolAuthority = {
-  /** Opaque host fingerprint for the exact turn, route, policy, and active tool surface. */
-  readonly fingerprint: string;
-  /** Checks whether the finalized turn surface contains this exact tool. */
-  allows(toolName: string): boolean;
-  /** Rejects retained or timed-out capabilities after the host dispatch closes. */
-  assertActive(): void;
-};
-
-type PluginHookContextWindow = {
-  /** Resolved effective context-token budget after model/config/agent caps. */
-  contextTokenBudget?: number;
-  /** Source that supplied the resolved context-token budget. */
-  contextWindowSource?: PluginHookContextWindowSource;
-  /** Native/configured reference window when a lower cap wins. */
-  contextWindowReferenceTokens?: number;
-};
-
 type PluginHookUsage = Pick<
   NormalizedUsage,
   "input" | "output" | "cacheRead" | "cacheWrite" | "total"
 >;
-
-export type PluginHookAgentContext = PluginHookContextWindow & {
-  runId?: string;
-  jobId?: string;
-  trace?: DiagnosticTraceContext;
-  agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  workspaceDir?: string;
-  /** Run-prepared repository identities; empty when the turn is outside a repository. */
-  activeProjectKeys?: string[];
-  modelProviderId?: string;
-  modelId?: string;
-  messageProvider?: string;
-  /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
-  channel?: string;
-  /** Channel account used by the agent when multiple accounts are configured. */
-  accountId?: string;
-  /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
-  chatId?: string;
-  /** Sender identity for channel-originated runs when available. */
-  senderId?: string;
-  trigger?: string;
-  channelId?: string;
-  /**
-   * Typed origin of the turn's user-role input. Absent when the producer did not
-   * supply a classification; absence does not establish human origin.
-   */
-  inputProvenance?: InputProvenance;
-  /**
-   * @deprecated Core does not populate cross-app sender ids. Channel plugins
-   * should expose channel-specific identities by augmenting `channelContext.sender`.
-   */
-  senderExternalId?: string;
-  /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
-  channelContext?: PluginHookChannelContext;
-  /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
-  toolAuthority?: PluginHookToolAuthority;
-  /**
-   * Present for before_prompt_build only. Checks this handler's result-acceptance lifetime,
-   * not tool authorization or eventual model consumption. Underlying work is not cancelled.
-   */
-  readonly hookInvocation?: Readonly<{ assertActive(): void }>;
-};
-
-type PluginHookContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -478,30 +396,6 @@ export type PluginHookBeforeDispatchContext = {
 export type PluginHookBeforeDispatchResult = {
   handled: boolean;
   text?: string;
-};
-
-export type PluginHookReplyDispatchEvent = {
-  ctx: FinalizedMsgContext;
-  runId?: string;
-  sessionKey?: string;
-  toolsAllow?: string[];
-  images?: Array<{ data: string; mimeType: string }>;
-  inboundAudio: boolean;
-  sessionTtsAuto?: TtsAutoMode;
-  ttsChannel?: string;
-  suppressUserDelivery?: boolean;
-  suppressReplyLifecycle?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  shouldRouteToOriginating: boolean;
-  originatingChannel?: string;
-  originatingTo?: string;
-  originatingAccountId?: string;
-  originatingThreadId?: string | number;
-  originatingChatType?: ChatType;
-  shouldSendToolSummaries: boolean;
-  shouldSendFullToolDetails: boolean;
-  sendPolicy: "allow" | "deny";
-  isTailDispatch?: boolean;
 };
 
 export type PluginHookReplyDispatchContext = {
@@ -1036,15 +930,6 @@ export type PluginHookHandlerMap = {
   >;
   cron_reconciled: AsyncPluginHook<PluginHookCronReconciledEvent, PluginHookCronReconciledContext>;
   cron_changed: AsyncPluginHook<PluginHookCronChangedEvent, PluginHookGatewayContext>;
-  skill_proposal_evaluate: AsyncPluginHook<
-    PluginHookSkillProposalEvaluateEvent,
-    PluginHookSkillContext,
-    PluginHookSkillProposalEvaluateResult
-  >;
-  skill_proposal_changed: AsyncPluginHook<
-    PluginHookSkillProposalChangedEvent,
-    PluginHookSkillContext
-  >;
   skill_changed: AsyncPluginHook<PluginHookSkillChangedEvent, PluginHookSkillContext>;
   before_install: AsyncPluginHook<
     PluginHookBeforeInstallEvent,

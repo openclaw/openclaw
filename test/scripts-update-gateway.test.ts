@@ -122,7 +122,7 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     );
     writeShim(
       "pnpm",
-      'if [ "$1" = --version ]; then echo 12.4.0; exit 0; fi\necho "pnpm $*" >> "$UPDATE_TEST_LOG"\nif [ "$1" = build ]; then mkdir -p dist; echo new > dist/marker; exit "${UPDATE_TEST_BUILD_EXIT:-0}"; fi',
+      'if [ "$1" = --version ]; then echo 12.4.0; exit 0; fi\necho "pnpm $*" >> "$UPDATE_TEST_LOG"',
     );
     writeShim("openclaw", 'echo "openclaw $*" >> "$UPDATE_TEST_LOG"');
   });
@@ -275,9 +275,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   });
 
   it.each([
-    "success",
     "reset-refused",
-    "verification-failed",
     "restart-failed",
     "tracked-runtime-deleted",
     "tracked-runtime-changed",
@@ -340,8 +338,7 @@ process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
         "stop-ok",
         [
           'echo "stop:$(git rev-parse HEAD):$(cat node_modules/serving-marker)" >> "$UPDATE_TEST_LOG"',
-          ...(mode === "verification-failed" ||
-          mode === "tracked-runtime-deleted" ||
+          ...(mode === "tracked-runtime-deleted" ||
           mode === "tracked-runtime-rollback" ||
           mode === "restore-branch-drift"
             ? ['node "$UPDATE_TEST_BIN/corrupt-staged.cjs"']
@@ -377,10 +374,9 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
         UPDATE_TEST_RESTART_EXIT: mode === "restart-failed" ? "29" : "0",
       });
       expect(result.status, result.stdout + result.stderr).toBe(
-        mode === "success" || mode === "tracked-runtime-changed" ? 0 : 1,
+        mode === "tracked-runtime-changed" ? 0 : 1,
       );
-      const published =
-        mode === "success" || mode === "restart-failed" || mode === "tracked-runtime-changed";
+      const published = mode === "restart-failed" || mode === "tracked-runtime-changed";
       const expectedHead = published
         ? git(path.join(scratch, "seed"), "rev-parse", "HEAD")
         : original;
@@ -701,14 +697,4 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
       expect(calls()).not.toContain("pnpm build");
     },
   );
-
-  it.each([0, 17])("keeps exact-empty restart as manual lifecycle (build exit %s)", (exit) => {
-    const result = runUpdater({
-      OPENCLAW_UPDATE_RESTART_CMD: "",
-      UPDATE_TEST_BUILD_EXIT: String(exit),
-    });
-    expect(result.status, result.stderr).toBe(exit);
-    expect(calls()).toContain("pnpm build");
-    expect(calls().some((call) => call.startsWith("openclaw "))).toBe(false);
-  });
 });

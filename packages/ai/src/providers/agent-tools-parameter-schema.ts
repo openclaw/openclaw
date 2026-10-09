@@ -80,27 +80,6 @@ const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>(
   MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
 );
 
-function resolveToolParameterSchemaCacheKey(
-  options: ToolParameterSchemaOptions | undefined,
-): string {
-  const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
-  const toolSchemaProfile = normalizeLowercaseStringOrEmpty(
-    options?.modelCompat?.toolSchemaProfile,
-  );
-  const unsupportedKeywords = Array.from(
-    resolveUnsupportedToolSchemaKeywords(options?.modelCompat),
-  ).toSorted();
-  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
-  return JSON.stringify([
-    normalizedProvider,
-    normalizedModelId,
-    toolSchemaProfile,
-    unsupportedKeywords,
-    omitEmptyArrayItems,
-  ]);
-}
-
 function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
 }
@@ -280,19 +259,6 @@ const OPENAPI_SCHEMA_ANNOTATION_KEYS = new Set([
   "example",
 ]);
 
-function appendNullSchemaType(type: unknown): unknown {
-  if (type === "null") {
-    return type;
-  }
-  if (typeof type === "string") {
-    return [type, "null"];
-  }
-  if (Array.isArray(type)) {
-    return type.includes("null") ? type : [...type, "null"];
-  }
-  return type;
-}
-
 function isNullSchemaLike(schema: unknown): boolean {
   if (!isSchemaRecord(schema)) {
     return false;
@@ -307,28 +273,6 @@ function isNullSchemaLike(schema: unknown): boolean {
     return true;
   }
   return Array.isArray(schema.enum) && schema.enum.includes(null);
-}
-
-function hasOpenApiComposition(schema: Record<string, unknown>): boolean {
-  return ["allOf", "anyOf", "oneOf"].some((key) => Array.isArray(schema[key]));
-}
-
-function schemaCompositionAlreadyAllowsNull(schema: Record<string, unknown>): boolean {
-  return (
-    (Array.isArray(schema.anyOf) && schema.anyOf.some(isNullSchemaLike)) ||
-    (Array.isArray(schema.oneOf) && schema.oneOf.some(isNullSchemaLike))
-  );
-}
-
-function wrapNullableComposedSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  if (schemaCompositionAlreadyAllowsNull(schema)) {
-    return schema;
-  }
-  const wrapped: Record<string, unknown> = {
-    anyOf: [schema, { type: "null" }],
-  };
-  copySchemaMeta(schema, wrapped);
-  return wrapped;
 }
 
 function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
@@ -386,14 +330,22 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
 
   if (nullable) {
     normalized ??= Object.fromEntries(entries);
-    if (hasOpenApiComposition(normalized)) {
-      return wrapNullableComposedSchema(normalized);
-    }
-    if ("type" in normalized) {
-      const nextType = appendNullSchemaType(normalized.type);
-      if (nextType !== normalized.type) {
-        normalized.type = nextType;
+    if ([normalized.allOf, normalized.anyOf, normalized.oneOf].some(Array.isArray)) {
+      if (
+        (Array.isArray(normalized.anyOf) && normalized.anyOf.some(isNullSchemaLike)) ||
+        (Array.isArray(normalized.oneOf) && normalized.oneOf.some(isNullSchemaLike))
+      ) {
+        return normalized;
       }
+      const wrapped = { anyOf: [normalized, { type: "null" }] };
+      copySchemaMeta(normalized, wrapped);
+      return wrapped;
+    }
+    const type = normalized.type;
+    if (typeof type === "string" && type !== "null") {
+      normalized.type = [type, "null"];
+    } else if (Array.isArray(type) && !type.includes("null")) {
+      normalized.type = [...type, "null"];
     }
     if (Array.isArray(normalized.enum) && !normalized.enum.includes(null)) {
       normalized.enum = [...normalized.enum, null];
@@ -403,7 +355,8 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
   return changed || nullable ? (normalized ?? schema) : schema;
 }
 
-function normalizeToolParameterSchemaUncached(
+/** Return a provider-compatible JSON schema for a model-facing tool. */
+export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
@@ -412,14 +365,32 @@ function normalizeToolParameterSchemaUncached(
   const normalizedToolSchemaProfile = normalizeLowercaseStringOrEmpty(
     options?.modelCompat?.toolSchemaProfile,
   );
+  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
+  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  const source = schema && typeof schema === "object" ? schema : undefined;
+  const cacheKey = source
+    ? JSON.stringify([
+        normalizedProvider,
+        normalizedModelId,
+        normalizedToolSchemaProfile,
+        [...unsupportedToolSchemaKeywords].toSorted(),
+        omitEmptyArrayItems,
+      ])
+    : "";
+  if (source) {
+    const cached = toolParameterSchemaCache.get(source, cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const rememberResult = (normalized: TSchema): TSchema =>
+    source ? toolParameterSchemaCache.remember(source, cacheKey, normalized) : normalized;
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
     isGeminiModelId(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
-  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
-  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
   const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";
   const preserveRefs =
     normalizedProvider === "openai" &&
@@ -435,7 +406,7 @@ function normalizeToolParameterSchemaUncached(
       ? (inlinedSchema as Record<string, unknown>)
       : undefined;
   if (!schemaRecord) {
-    return inlinedSchema as TSchema;
+    return rememberResult(inlinedSchema as TSchema);
   }
 
   function applyProviderCleaning(s: unknown): TSchema {
@@ -455,7 +426,7 @@ function normalizeToolParameterSchemaUncached(
         unsupportedToolSchemaKeywords,
       );
     }
-    return arrayItemsCompatibleSchema as TSchema;
+    return rememberResult(arrayItemsCompatibleSchema as TSchema);
   }
 
   const flattenableVariantKey = Array.isArray(schemaRecord.anyOf)
@@ -565,24 +536,4 @@ function normalizeToolParameterSchemaUncached(
 
   // Gemini and OpenAI require an object root; retain discriminator enums while flattening.
   return applyProviderCleaning(flattenedSchema);
-}
-
-/** Return a provider-compatible JSON schema for a model-facing tool. */
-export function normalizeToolParameterSchema(
-  schema: unknown,
-  options?: ToolParameterSchemaOptions,
-): TSchema {
-  if (!schema || typeof schema !== "object") {
-    return normalizeToolParameterSchemaUncached(schema, options);
-  }
-  const cacheKey = resolveToolParameterSchemaCacheKey(options);
-  const cached = toolParameterSchemaCache.get(schema, cacheKey);
-  if (cached) {
-    return cached;
-  }
-  return toolParameterSchemaCache.remember(
-    schema,
-    cacheKey,
-    normalizeToolParameterSchemaUncached(schema, options),
-  );
 }

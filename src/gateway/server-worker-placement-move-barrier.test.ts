@@ -120,7 +120,7 @@ describe("worker placement move destination", () => {
           assertCurrent: assertAuthority,
           assertBindingCurrent: assertAuthority,
           config: {},
-          entry: { sessionId },
+          entry: { sessionId, updatedAt: 1 },
           target,
           worktree: { id: "research-worktree", path: "/gateway/research" },
           workspace: { kind: "local", path: "/gateway/research" },
@@ -185,7 +185,7 @@ describe("worker placement move destination", () => {
             await createGatewayWorkerPlacementMoveBarrier({
               ...options,
               loadSessionRuntime: async () => ({
-                managedWorktrees: { findLiveByOwner: () => undefined },
+                managedWorktrees: { findLiveByOwner: async () => undefined },
                 resolveCanonicalSessionEntryFromStoreKeys,
                 resolveGatewaySessionStoreTargetWithStore,
               }),
@@ -248,7 +248,7 @@ describe("worker placement move destination", () => {
         },
         awaitTurnClaimRelease: async (_sessionId, wait) => await wait(),
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         }),
@@ -334,7 +334,7 @@ describe("worker placement move destination", () => {
         placements: { waitForTurnClaimRelease: vi.fn() },
         awaitTurnClaimRelease: (_sessionId, wait) => wait(),
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         }),
@@ -499,7 +499,7 @@ describe("worker placement move destination", () => {
             retireSessionPlacement: vi.fn(),
             pruneOrphanedWorkspaceReconciliations: async () => [],
             listWorkspaceReconciliationOwners: async () => [],
-            listPendingWorkspaceResults: () => [],
+            listPendingWorkspaceResultsAsync: async () => [],
           } as never,
           environments: {} as never,
           gatewayNamespace: "gateway-test",

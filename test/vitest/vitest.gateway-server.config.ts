@@ -1,5 +1,6 @@
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayServerBackedHttpTestFiles,
@@ -18,6 +19,7 @@ export function createGatewayServerVitestConfig(
     dir: "src/gateway",
     env,
     exclude: [
+      ...databaseWorkerCoreTestFiles,
       ...gatewayDatabaseWorkerTestFiles,
       "src/gateway/server-methods/**/*.test.ts",
       ...gatewayServerExcludedTestFiles,

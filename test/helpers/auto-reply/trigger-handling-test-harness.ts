@@ -297,7 +297,7 @@ export function makeCfg(home: string): OpenClawConfig {
         // Trigger tests assert routing/authorization behavior, not delivery pacing.
         humanDelay: { mode: "off" },
       },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
     channels: {
       whatsapp: {

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -11,6 +14,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -19,6 +23,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
@@ -28,6 +34,7 @@ import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
+  prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
 
@@ -39,7 +46,7 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it("reuses selection through transcript refreshes and refreshes metadata ordering", async () => {
+it("maintains list order across metadata changes and archived-row rematerialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const first = "agent:main:first";
@@ -57,7 +64,7 @@ it("reuses selection through transcript refreshes and refreshes metadata orderin
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const scan = vi.spyOn(projection, "selectEntries");
     try {
-      const list = async (sortBy?: "lastInteractionAt") =>
+      const list = async (sortBy?: "lastInteractionAt" | "activity") =>
         (await listProjectedSessions({ projection, opts: { limit: 1, sortBy } })).sessions;
       expect((await list())[0]?.key).toBe(first);
       scan.mockClear();
@@ -67,12 +74,88 @@ it("reuses selection through transcript refreshes and refreshes metadata orderin
       expect((await list())[0]?.key).toBe(first);
       expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
       expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
+      expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list())[0]?.key).toBe(first);
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: second },
         { sessionId: second, updatedAt: 3, label: "Changed metadata" },
       );
       expect((await list())[0]).toMatchObject({ key: second, label: "Changed metadata" });
+      const third = "agent:main:third";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3 },
+      );
+      expect((await list())[0]?.key).toBe(third);
+      expect((await list("lastInteractionAt"))[0]?.key).toBe(third);
+      expect(
+        await listProjectedSessions({ projection, opts: { limit: 1, offset: 1 } }),
+      ).toMatchObject({
+        totalCount: 3,
+        nextOffset: 2,
+        hasMore: true,
+        sessions: [{ key: second }],
+      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3, archivedAt: 5 },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      const archived = await listProjectedSessions({ projection, opts: { archived: true } });
+      expect(archived.sessions.map((row) => row.key)).toEqual([third]);
+      const archivedQuery = { agentId: "main", key: third };
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      await projection.ensureMaterialized();
+      expect(projection.capture(archivedQuery)?.materialized).toBeUndefined();
+      const rematerialized = await listProjectedSessions({
+        projection,
+        opts: { archived: true },
+      });
+      expect(rematerialized.sessions.map((row) => row.key)).toEqual([third]);
+      expect(rematerialized.totalCount).toBe(1);
+      expect(projection.capture(archivedQuery)?.materialized).toBeDefined();
+      expect((await list())[0]?.key).toBe(second);
+      expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: projection.capture({ agentId: "main", key: third })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: third, storeKeys: [third] },
+      });
+      const remaining = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", sortBy: "activity" },
+      });
+      expect(remaining.sessions.map((row) => row.key)).toEqual([second, first]);
+      expect(remaining).toMatchObject({ totalCount: 2, nextOffset: null, hasMore: false });
+      // Deletion publishes topology; keyed updates must reuse the rebuilt scope.
+      scan.mockClear();
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: first },
+        { sessionId: first, updatedAt: 2, lastInteractionAt: 1, pinnedAt: 10 },
+      );
+      expect((await list())[0]?.key).toBe(first);
+      expect((await list("activity"))[0]?.key).toBe(second);
+      expect((await list("lastInteractionAt"))[0]?.key).toBe(first);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: first },
+        { sessionId: first, updatedAt: 2, lastInteractionAt: 1, label: "Unpinned" },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
+      projection.onSelectionChange(() => {
+        throw new Error("Synthetic selection observer failure");
+      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: first },
+        { sessionId: first, updatedAt: 5, label: "Changed despite observer failure" },
+      );
+      expect((await list())[0]).toMatchObject({
+        key: first,
+        label: "Changed despite observer failure",
+      });
+      expect(() => projection.dispose()).not.toThrow();
+      expect(projection.selectEntries()).toEqual([]);
     } finally {
       scan.mockRestore();
       projection.dispose();
@@ -214,6 +297,25 @@ it.each([false, true])(
       const cfg = { agents: { entries: { main: {}, ops: {} } } };
       const projection = createSessionRowProjectionFixture({ cfg, store: {} });
       const parent = "agent:main:parent";
+      const now = Date.now();
+      projection.state.rowContext.subagentRuns = buildSubagentRunReadIndexFromRuns({
+        now,
+        runs: new Map<string, SubagentRunRecord>([
+          [
+            "ordinary-run",
+            {
+              runId: "ordinary-run",
+              childSessionKey: "agent:main:ordinary",
+              requesterSessionKey: parent,
+              requesterDisplayKey: parent,
+              task: "Synthetic child selection",
+              cleanup: "keep",
+              createdAt: now,
+              execution: { status: "running", startedAt: now },
+            },
+          ],
+        ]),
+      });
       const samples = [
         ["shadow-global", "global", "main", "fallback"],
         ["ordinary", "agent:main:ordinary", "main", "primary"],
@@ -230,7 +332,7 @@ it.each([false, true])(
           sessionId,
           updatedAt: 1,
           ...(["ordinary", "shadow-global", "unknown-shadow"].includes(sessionId)
-            ? { spawnedBy: parent, status: "running" as const }
+            ? { spawnedBy: parent }
             : {}),
         };
         return {
@@ -245,10 +347,22 @@ it.each([false, true])(
           entry,
         };
       });
-      projection.selectEntries = (query) =>
-        query?.parentSessionKey
+      projection.selectEntries = (query) => {
+        if (query?.sessionIdOrKey) {
+          const keys = new Set(
+            rows
+              .filter(
+                (row) =>
+                  row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
+              )
+              .map((row) => row.key),
+          );
+          return rows.filter((row) => keys.has(row.key));
+        }
+        return query?.parentSessionKey
           ? rows.filter((row) => row.entry.spawnedBy === query.parentSessionKey)
           : rows;
+      };
       projection.state.scope = () => ({
         paths: new Map([
           ["primary", 0],
@@ -296,6 +410,41 @@ it.each([false, true])(
           prepareSessionRowSelection(projection, { ...prepared.opts, spawnedBy: parent }),
         );
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
+        if (activeOnly) {
+          const context = requestContext(cfg);
+          const registrations = [
+            ["main", "shadow-global"],
+            ["ops", "ops-global"],
+            ["main", "unknown-shadow"],
+          ].map(([agentId, sessionId]) =>
+            registerChatAbortController({
+              chatAbortControllers: context.chatAbortControllers,
+              runId: sessionId!,
+              agentId,
+              sessionId: sessionId!,
+              sessionKey: `agent:${agentId}:run-alias`,
+              timeoutMs: 60_000,
+            }),
+          );
+          try {
+            const { filters } = prepareProjectedSessionList({
+              projection,
+              context,
+              opts: prepared.opts,
+              now,
+              metadataPrepared: true,
+            });
+            // The live fallback ID cannot displace its inactive physical winner.
+            // Other agents' sentinel rows and same-ID aliases remain independently visible.
+            expect(
+              filterAndSortSessionEntries(filters).map(([, entry]) => entry.sessionId),
+            ).toEqual(["ops-global", "unknown-shadow"]);
+          } finally {
+            for (const registration of registrations) {
+              registration.cleanup();
+            }
+          }
+        }
       } finally {
         projection.dispose();
       }
@@ -305,7 +454,7 @@ it.each([false, true])(
 
 it("rejects duplicate ordinary keys introduced after store admission before filtering or pagination", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const secondary = state.statePath("secondary.sqlite");
     const key = "agent:main:original";
@@ -466,7 +615,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           0,
         );
         runs.set(runtime.runId, { ...runtime, controllerSessionKey: other });
-        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        persistRegistryFixture(runs, [runtime.runId]);
         const moved = await list();
         expect(moved.sessions.map((row) => row.key)).toEqual([
           key("dashboard:persistent"),
@@ -478,7 +627,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           controllerSessionKey: undefined,
           requesterSessionKey: parent,
         });
-        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        persistRegistryFixture(runs, [runtime.runId]);
         expect((await list()).totalCount).toBe(4);
       } finally {
         ownership.mockRestore();

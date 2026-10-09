@@ -136,7 +136,7 @@ suite.define(() => {
       await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
     };
     const filter = async (label: "Archived" | "All") => {
-      await sidebar.getByRole("button", { name: "Filter & sort" }).click();
+      await sidebar.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(sidebar.page(), "Status", label);
       await closeSidebarMenu(page);
     };
@@ -180,7 +180,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "Research", exact: true })
+        .getByRole("menuitem", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
       const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");

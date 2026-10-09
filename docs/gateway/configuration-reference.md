@@ -70,13 +70,22 @@ See [Configuration - agents](/gateway/config-agents) for:
 
 ## `worktreeRoot`
 
-Moved to [Configuration — runtime basics](/gateway/config-runtime).
+Worktree storage (`worktreeRoot`), filesystem acceleration (`worktreeAcceleration`), and the live-checkout cap (`worktreeMaxCount`) are documented in [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup live in
 [Configuration - tools and custom providers](/gateway/config-tools).
+
+`agents.entries.<id>.tools.github.allowInSandbox` is an optional boolean,
+defaulting to `false`. Set it on an agent's managed GitHub identity to expose
+that identity to the agent's own Docker or Podman sandbox, including a
+role-required sandbox. The profile is mounted read-only at `/openclaw/github`;
+effective shared scope refuses injection. This setting is not accepted under
+global `tools.github`, and security audit warns for every opted-in agent.
+See [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for
+setup, credential exposure, and backend requirements.
 
 ## Models
 

@@ -10,10 +10,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { withFileMutationQueue } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
-import { createWriteToolDefinition } from "./write.js";
+import { createWriteTool } from "./write.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
   vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
@@ -822,17 +825,18 @@ describe("read tool", () => {
     const blockerStarted = createDeferred();
     const releaseBlocker = createDeferred();
     const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
-    const blocker = withFileMutationQueue(writePath, async () => {
-      blockerStarted.resolve();
-      await releaseBlocker.promise;
-    });
+    const blocker = withFileMutationQueueKeyResolution(
+      resolveFileMutationQueueKey(writePath),
+      async () => {
+        blockerStarted.resolve();
+        await releaseBlocker.promise;
+      },
+    );
     await blockerStarted.promise;
-    const writeResult = createWriteToolDefinition(tempDir).execute(
+    const writeResult = createWriteTool(tempDir).execute(
       "write",
       { path: writePath, content: "first snapshot" },
       undefined,
-      undefined,
-      {} as never,
     );
     const readResult = createReadToolDefinition(tempDir, {
       operations: {
@@ -859,18 +863,19 @@ describe("read tool", () => {
     const readPath = path.join(tempDir, "cafe\u0301.txt");
     const blockerStarted = createDeferred();
     const releaseBlocker = createDeferred();
-    const blocker = withFileMutationQueue(writePath, async () => {
-      blockerStarted.resolve();
-      await releaseBlocker.promise;
-    });
+    const blocker = withFileMutationQueueKeyResolution(
+      resolveFileMutationQueueKey(writePath),
+      async () => {
+        blockerStarted.resolve();
+        await releaseBlocker.promise;
+      },
+    );
     await blockerStarted.promise;
 
-    const writeResult = createWriteToolDefinition(tempDir).execute(
+    const writeResult = createWriteTool(tempDir).execute(
       "write",
       { path: writePath, content: "normalized snapshot" },
       undefined,
-      undefined,
-      {} as never,
     );
     const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
     const readResult = createReadToolDefinition(tempDir, {

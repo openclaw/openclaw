@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

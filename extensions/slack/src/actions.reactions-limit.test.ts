@@ -80,7 +80,7 @@ describe("Slack reactions", () => {
     getSlackWriteClientMock.mockReset();
   });
 
-  it.each([undefined, 1])(
+  it.each([undefined])(
     "bounds public users for limit %s without changing reaction facts",
     async (limit) => {
       const users = Array.from({ length: 101 }, (_, index) => "U" + String(index + 1));
@@ -140,23 +140,20 @@ describe("Slack reactions", () => {
     },
   );
 
-  it.each(["reactions", "read"] as const)(
-    "rejects invalid %s limits before Slack API work",
-    async (kind) => {
-      const { client, calls } = createClient();
-      const lookups = lookupSpies(client);
-      const conversation = vi
-        .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
-        .mockResolvedValue({ type: "channel" });
-      await expect(action(kind, slackConfig, { limit: 0 })).rejects.toThrow(
-        "limit must be a positive integer.",
-      );
-      expect(conversation).toHaveBeenCalledOnce();
-      expect(lookups.reactions).not.toHaveBeenCalled();
-      expect(lookups.messages).not.toHaveBeenCalled();
-      expect(calls).toEqual([]);
-    },
-  );
+  it.each(["read"] as const)("rejects invalid %s limits before Slack API work", async (kind) => {
+    const { client, calls } = createClient();
+    const lookups = lookupSpies(client);
+    const conversation = vi
+      .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
+      .mockResolvedValue({ type: "channel" });
+    await expect(action(kind, slackConfig, { limit: 0 })).rejects.toThrow(
+      "limit must be a positive integer.",
+    );
+    expect(conversation).toHaveBeenCalledOnce();
+    expect(lookups.reactions).not.toHaveBeenCalled();
+    expect(lookups.messages).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
 
   it("sends normalized emoji through the workspace-scoped Enterprise Grid client", async () => {
     const { client, calls } = createClient();

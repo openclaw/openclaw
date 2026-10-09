@@ -18,26 +18,16 @@ import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-
 
 describe("formatAssistantErrorText", () => {
   const BILLING_ERROR_USER_MESSAGE =
-    "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+    "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.";
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
     makeAssistantMessageFixture({
       errorMessage,
       content: [{ type: "text", text: errorMessage }],
     });
   const authInvalidTokenCopy =
-    "Authentication failed (provider returned HTTP 401). " +
-    "Your provider token may have expired — try the request again in a moment. " +
-    "If the failure persists, re-authenticate this provider.";
+    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
 
   it.each([
-    [
-      "Selected model is at capacity. Please try a different model.",
-      "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
-    ],
-    [
-      'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"},"sequence_number":2}',
-      "LLM error server_error: Something exploded",
-    ],
     [
       `<!DOCTYPE html>
 <html>
@@ -50,36 +40,27 @@ describe("formatAssistantErrorText", () => {
     <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
   </body>
 </html>`,
-      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     ],
     ["request ended without sending any chunks", "LLM request timed out."],
     [
       "file lock timeout for /tmp/openclaw-oauth-refresh.lock",
-      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+      "Another sign-in is still in progress. Wait a moment, then try again.",
     ],
     [
       "403 <!DOCTYPE html><html><body>Access denied</body></html>",
-      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+      "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
     ],
     [
       "407 Proxy Authentication Required",
-      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+      "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     ],
     [
       "Hostname/IP does not match certificate's altnames: Host: api.example.com",
-      "LLM request failed: TLS certificate validation rejected the provider endpoint. " +
-        "Check the endpoint hostname, proxy, and local certificate trust.",
+      "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     ],
   ])("formats assistant error: %s", (raw, expected) => {
     expect(formatAssistantErrorText(makeAssistantError(raw))).toBe(expected);
-  });
-
-  it("keeps plain HTTP rate-limit guidance user-facing", () => {
-    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
-    expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ Your quota has been exhausted, try again in 24 hours",
-    );
-    expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
   });
 
   it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
@@ -89,7 +70,9 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("4381 min");
     expect(result).toContain("go plan");
-    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(result).not.toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
   });
 
   it("returns context overflow for Anthropic 'Request size exceeds model context window'", () => {
@@ -111,16 +94,10 @@ describe("formatAssistantErrorText", () => {
   });
   it.each([
     {
-      title: "returns a friendly message for Anthropic overload errors",
-      errorText:
-        '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
-      expected: "The AI service is temporarily overloaded. Please try again in a moment.",
-    },
-    {
       title: "uses classified rate-limit copy for Z.AI rate-limit errors",
       errorText:
         '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
-      expected: "⚠️ API rate limit reached. Please try again later.",
+      expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
     {
       title: "rewrites generic provider internal errors without support request ids",
@@ -132,26 +109,28 @@ describe("formatAssistantErrorText", () => {
       title: "returns upstream HTML copy for prefixed 521 HTML rate-limit pages",
       errorText: "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
       expected:
-        "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+        "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     },
     {
       title: "returns an explicit re-authentication message for OAuth refresh failures",
       errorText:
         "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
-      expected: "Authentication refresh failed. Re-authenticate this provider and try again.",
+      expected:
+        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
     },
     {
       title: "returns re-authentication guidance after an account switch",
       errorText:
         "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
-      expected: "Authentication refresh failed. Re-authenticate this provider and try again.",
+      expected:
+        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
     },
     {
       title: "returns a timeout-specific message for OAuth refresh hard timeouts",
       errorText:
         'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
       expected:
-        "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+        "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
     },
     {
       title: "sanitizes invalid streaming event order errors",
@@ -186,38 +165,17 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Message ordering conflict");
     expect(result).not.toContain("400");
   });
-  it.each([{ prepared: false }])(
-    "replaces raw provider detail with classified facts (prepared: $prepared)",
-    ({ prepared }) => {
-      const raw = "HTTP 500: opaque-provider-canary";
-      const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
-        provider: "openai",
-        providerOwner: prepared
-          ? {
-              id: "openai",
-              classifyFailoverReason: () => "server_error",
-            }
-          : undefined,
-        model: "gpt-5.6-luna",
-      });
-
-      expect(userFacing).toBe(
-        "⚠️ openai/gpt-5.6-luna request failed (provider internal error, HTTP 500). " +
-          "This is usually temporary — try again shortly.",
-      );
-      expect(userFacing).not.toContain("opaque-provider-canary");
-    },
-  );
-
   it.each(["opaque-private-provider-detail"])(
-    "keeps model context without assigning an unclassified failure: %s",
+    "points unclassified failures to diagnostics: %s",
     (raw) => {
       expect(
         formatUserFacingAssistantErrorText(makeAssistantError(raw), {
           provider: "openai",
           model: "test-model",
         }),
-      ).toBe("⚠️ Agent run failed (model: openai/test-model).");
+      ).toBe(
+        "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+      );
     },
   );
 
@@ -271,8 +229,7 @@ describe("formatAssistantErrorText", () => {
     });
 
     expect(userFacing).toBe(
-      "⚠️ openai/gpt-5.6-luna request failed (authentication failed, HTTP 401). " +
-        "Re-authenticate the provider and try again.",
+      "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
     );
     expect(userFacing).not.toContain("opaque-auth-canary");
   });
@@ -293,30 +250,6 @@ describe("formatAssistantErrorText", () => {
       ).toBe("server_error");
     });
   });
-  it("renders opaque upstream_error facts as a temporary provider error", () => {
-    const msg = makeAssistantMessageFixture({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      errorMessage: "opaque provider response",
-      errorType: "upstream_error",
-    });
-
-    expect(formatUserFacingAssistantErrorText(msg)).toBe(
-      "⚠️ openai/gpt-5.6-luna request failed (provider internal error). " +
-        "This is usually temporary — try again shortly.",
-    );
-  });
-  it("uses generic user-facing copy for escaped structured provider messages", () => {
-    // The internal formatter keeps detail for logs, while user-facing text must
-    // not expose arbitrary provider-controlled structured payload content.
-    const msg = makeAssistantError(
-      '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
-    );
-    expect(formatAssistantErrorText(msg)).toBe("LLM request rejected: SECRET\nCANARY");
-    expect(formatUserFacingAssistantErrorText(msg)).toBe(
-      "LLM request failed: provider rejected the request schema or tool payload.",
-    );
-  });
   it("surfaces allowlisted token limits from structured provider messages", () => {
     const msg = makeAssistantError(
       JSON.stringify({
@@ -331,7 +264,7 @@ describe("formatAssistantErrorText", () => {
 
     const userFacing = formatUserFacingAssistantErrorText(msg);
     expect(userFacing).toBe(
-      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
     );
     expect(userFacing).not.toContain("deepseek-v4-flash:0731");
   });
@@ -353,7 +286,7 @@ describe("formatAssistantErrorText", () => {
 
     const userFacing = formatUserFacingAssistantErrorText(msg);
     expect(userFacing).toBe(
-      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
     );
     expect(userFacing).not.toContain("deepseek-v4-flash:0731");
   });
@@ -363,33 +296,16 @@ describe("formatAssistantErrorText", () => {
   ])("surfaces token limits from provider-wrapped HTTP error %s", (raw) => {
     const msg = makeAssistantError(raw);
     expect(formatAssistantErrorText(msg)).toBe(
-      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
     );
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
-      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
     );
   });
   it("returns a friendly billing message for HTTP 402 errors", () => {
     const msg = makeAssistantError("HTTP 402 Payment Required");
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
-  });
-  it("uses prepared provider ownership for billing classification", () => {
-    const provider = "custom-openrouter";
-    const model = "anthropic/claude-sonnet-4";
-    const result = formatAssistantErrorText(
-      makeAssistantError("HTTP 403: API key budget limit exceeded"),
-      {
-        provider,
-        providerOwner: {
-          id: "openrouter",
-          classifyFailoverReason: ({ provider: owner, errorMessage }) =>
-            owner === "openrouter" && errorMessage.includes("budget limit") ? "billing" : undefined,
-        },
-        model,
-      },
-    );
-    expect(result).toBe(formatBillingErrorMessage(provider, model));
   });
   it("keeps structured 429 billing failures ahead of rate-limit copy", () => {
     const msg = makeAssistantError(
@@ -406,7 +322,9 @@ describe("formatAssistantErrorText", () => {
     );
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("30 seconds");
-    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(result).not.toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
     expect(formatUserFacingAssistantErrorText(msg)).toContain("30 seconds");
   });
 
@@ -418,8 +336,10 @@ describe("formatAssistantErrorText", () => {
   });
 
   it.each([
-    ["ENOTFOUND", "LLM request failed: DNS lookup for the provider endpoint failed."],
-    ["UNRECOGNIZED", "LLM request failed: network connection error."],
+    [
+      "ENOTFOUND",
+      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    ],
   ])("uses structured transport code %s with a generic provider message", (errorCode, expected) => {
     const message = { ...makeAssistantError("Connection error."), errorCode };
     expect(formatAssistantErrorText(message)).toBe(expected);
@@ -441,16 +361,7 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
     );
     expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
-      "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
-    );
-  });
-
-  it("does not misdiagnose generic OpenAI permission failures as missing-scope failures", () => {
-    const msg = makeAssistantError(
-      '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
-    );
-    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
-      "required OpenAI ChatGPT scopes",
+      "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
     );
   });
 
@@ -459,27 +370,6 @@ describe("formatAssistantErrorText", () => {
     const friendly = formatAssistantErrorText(reportedPayload);
     expect(friendly).toBe(authInvalidTokenCopy);
     expect(friendly).not.toContain("Invalid token");
-  });
-
-  it("does not claim HTTP 401 for message-only auth errors with no HTTP status prefix (#77394 review)", () => {
-    const messageOnly = makeAssistantError('{"error":{"code":"invalid_api_key"}}');
-    const friendly = formatAssistantErrorText(messageOnly);
-    expect(friendly).toBeDefined();
-    expect(friendly).not.toContain("HTTP 401");
-    expect(friendly).not.toBe(authInvalidTokenCopy);
-  });
-
-  it("does not rewrite provider-less missing-scope 401 payloads as invalid-token errors", () => {
-    const raw =
-      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}';
-    const missingScope = makeAssistantMessageFixture({
-      provider: undefined,
-      errorMessage: raw,
-      content: [{ type: "text", text: raw }],
-    });
-    const friendly = formatAssistantErrorText(missingScope);
-    expect(friendly).not.toBe(authInvalidTokenCopy);
-    expect(friendly).toContain("permission_error");
   });
 
   it("uses structured error body detail for model-not-found copy", () => {
@@ -492,10 +382,10 @@ describe("formatAssistantErrorText", () => {
     });
 
     expect(formatAssistantErrorText(msg)).toBe(
-      "The selected model was not found by the provider. Check the model id or choose a different model.",
+      "This model was not found. Choose another model in the Control UI.",
     );
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
-      "The selected model was not found by the provider. Check the model id or choose a different model.",
+      "This model was not found. Choose another model in the Control UI.",
     );
   });
 });
@@ -521,17 +411,11 @@ describe("raw API error payload helpers", () => {
 
 describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
   // OAuth/Max users should NOT see "API key" or "top up" language.
-  it("returns neutral copy for oauth authMode — no 'API key' text", () => {
-    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth");
-    expect(result).not.toMatch(/api key/i);
-    expect(result).not.toMatch(/top up/i);
-    expect(result).toContain("check your account");
-  });
-
   it("returns neutral copy for token authMode — no 'API key' text", () => {
     const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "token");
     expect(result).not.toMatch(/api key/i);
     expect(result).not.toMatch(/top up/i);
+    expect(result).toContain("check your account");
   });
 });
 

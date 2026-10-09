@@ -25,6 +25,7 @@ it.each(["release", "timeout"])(
       const plugin = path.join(root, "plugin");
       const release = path.join(root, "release-disposal");
       const observation = path.join(root, "disposal.json");
+      const naturalExit = path.join(root, "natural-exit");
       fs.mkdirSync(plugin);
       fs.mkdirSync(path.join(root, "workspace"));
       fs.writeFileSync(
@@ -47,6 +48,7 @@ it.each(["release", "timeout"])(
         path.join(plugin, "index.cjs"),
         `const fs = require("node:fs");
 module.exports = { id: "disposal-proof", register(api) {
+  process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(naturalExit)}, "closed"));
   api.lifecycle.registerRuntimeLifecycle({ id: "retirement", async dispose() {
     fs.writeFileSync(${JSON.stringify(observation)}, JSON.stringify({pid: process.pid, stateDir: process.env.OPENCLAW_STATE_DIR}));
     process.stderr.write("fixture disposal entered\\n");
@@ -197,6 +199,12 @@ try {
       expect(workerPid).toBeTypeOf("number");
       expect(() => process.kill(workerPid!, 0)).toThrow();
       expect(fs.readFileSync(configPath, "utf8")).toBe(config);
+      if (mode === "release") {
+        expect(
+          fs.existsSync(naturalExit),
+          "Doctor worker must drain native handles naturally",
+        ).toBe(true);
+      }
       if (mode === "timeout") {
         expect(result.stderr).toMatch(/Doctor disposal timed out after \d+ms; checks completed/u);
       }

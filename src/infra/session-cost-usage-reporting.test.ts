@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   loadSessionCostSummary,
   loadSessionLogs,
@@ -12,7 +12,7 @@ import {
 } from "./session-cost-usage.js";
 import type { CostBreakdown } from "./session-cost-usage.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 const flatPricing = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
 const tieredPricing: ModelDefinitionConfig["cost"] = {
   ...flatPricing,

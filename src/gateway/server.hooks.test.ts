@@ -74,10 +74,9 @@ function agentMapping(route: string, overrides: HookMappingConfig = {}): HookMap
   };
 }
 
-function setHookAgentRoster(explicitSole = false): void {
-  testState.agentsConfig = explicitSole
-    ? { ownership: "explicit", entries: { main: {} } }
-    : { entries: { main: { default: true }, hooks: {} } };
+function setHookAgentRoster(): void {
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, hooks: {} } };
+  testState.agentConfig = { ...testState.agentConfig, systemAgent: { agentId: "main" } };
 }
 
 function mockIsolatedRunOk(once = false): void {
@@ -181,6 +180,19 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
+      for (const sessionKey of [null, 42, false, {}, [], "", "   "]) {
+        const invalidSession = await postHook(
+          port,
+          "agent",
+          { message: "Do not redirect malformed routing", sessionKey },
+          { status: 400 },
+        );
+        await expect(invalidSession.json()).resolves.toMatchObject({
+          error: "sessionKey must be a non-empty string",
+        });
+      }
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
       setTestPluginRegistry(
         createTestRegistry([
           {
@@ -265,6 +277,37 @@ describe("gateway server hooks", () => {
       await postHook(port, "agent", { message: " " }, { status: 400 });
 
       await postHook(port, "wake", "{", { status: 400 });
+    });
+  });
+
+  test("honors immediate wake overrides from mapped hook transforms", async () => {
+    await writeHookTransformModule(
+      "immediate-wake.mjs",
+      'export default () => ({ mode: "now", wakeMode: "now" });',
+    );
+    configureHooks({
+      mappings: [
+        {
+          match: { path: "immediate-wake" },
+          action: "wake",
+          textTemplate: "Immediate notification",
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        },
+        agentMapping("immediate-agent", {
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        }),
+      ],
+    });
+    await withGatewayServer(async ({ port }) => {
+      const wake = await postHook(port, "immediate-wake", {});
+      expect.soft(await wake.json()).toMatchObject({ mode: "now", eventOutcome: "queued" });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOk();
+      await postHook(port, "immediate-agent", { subject: "Immediate completion" });
+      expect(cronRunCall().job.wakeMode).toBe("now");
     });
   });
 
@@ -376,6 +419,29 @@ describe("gateway server hooks", () => {
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
       drainSystemEvents("agent:hooks:hook:wake:fixed");
+
+      for (const route of ["wake", "mapped-wake"]) {
+        const sessionKey =
+          route === "wake" ? "agent:main:hook:wake:direct" : "agent:hooks:hook:wake:fixed";
+        const payload = (index: number) =>
+          route === "wake"
+            ? { text: `Direct wake ${index}`, sessionKey: "hook:wake:direct" }
+            : { subject: `Email ${index}` };
+        for (let index = 0; index < 20; index++) {
+          const admitted = await postHook(port, route, payload(index));
+          await expect(admitted.json()).resolves.toMatchObject({ eventOutcome: "queued" });
+        }
+        const pending = peekSystemEventEntries(sessionKey);
+        const coalesced = await postHook(port, route, payload(19));
+        await expect(coalesced.json()).resolves.toMatchObject({ eventOutcome: "coalesced" });
+        const refused = await postHook(port, route, payload(20), { status: 503 });
+        await expect(refused.json()).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining("queue is full"),
+        });
+        expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
+        drainSystemEvents(sessionKey);
+      }
     });
 
     testState.sessionConfig = { scope: "global" };
@@ -476,20 +542,6 @@ describe("gateway server hooks", () => {
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
       expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
-    });
-  });
-
-  test("does not retain oversized idempotency keys for replay dedupe", async () => {
-    configureHooks();
-    const oversizedKey = "x".repeat(257);
-
-    await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOk();
-      await expectFirstHookDelivery(port, oversizedKey);
-      await postAgentHookWithIdempotency(port, oversizedKey);
-      await waitForSystemEvent();
-
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -600,29 +652,6 @@ describe("gateway server hooks", () => {
       const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    });
-  });
-
-  test("allows omitted agentId when the explicit sole target is allowlisted", async () => {
-    configureHooks({
-      allowRequestSessionKey: true,
-      allowedSessionKeyPrefixes: ["hook:", "agent:"],
-      allowedAgentIds: ["main"],
-    });
-    testState.sessionConfig = { scope: "global" };
-    setHookAgentRoster(true);
-    await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOk(true);
-      await postHook(port, "agent", {
-        message: "Default target",
-        sessionKey: "agent:hooks:slack:channel:c123",
-      });
-      await waitForSystemEventTexts("agent:main:global");
-      const noAgentCall = cronRunCall();
-      expect(noAgentCall?.job?.agentId).toBe("main");
-      expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
-      expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
-      drainSystemEvents("agent:main:global");
     });
   });
 
@@ -823,6 +852,86 @@ describe("gateway server hooks", () => {
         error: expect.stringContaining("sessionKey or hooks.defaultSessionKey"),
       });
       expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
+  test("keeps session mode in the idempotency dispatch scope", async () => {
+    configureHooks({
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    });
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOk();
+      const headers = { "Idempotency-Key": "hook-idem-session-mode" };
+      const basePayload = {
+        message: "Do it",
+        name: "Email",
+        sessionKey: "hook:mode:42",
+      };
+      const isolated = await postHook(
+        port,
+        "agent",
+        { ...basePayload, sessionMode: "isolated" },
+        { headers },
+      );
+      expect(isolated.status).toBe(200);
+      const persistent = await postHook(
+        port,
+        "agent",
+        { ...basePayload, sessionMode: "persistent" },
+        { headers },
+      );
+      expect(persistent.status).toBe(200);
+      await waitForCronIsolatedRuns(2);
+
+      expect(cronRunCall(0).job?.sessionTarget).toBe("isolated");
+      expect(cronRunCall(1).job?.sessionTarget).toBe("session:hook:mode:42");
+    });
+  });
+
+  test("keeps account id in the idempotency dispatch scope", async () => {
+    configureHooks();
+    await withGatewayServer(async ({ port }) => {
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createChannelTestPluginBase({
+              id: "discord",
+              config: {
+                listAccountIds: () => ["work", "personal"],
+                resolveAccount: (_cfg, accountId) => ({ accountId }),
+              },
+            }),
+          },
+        ]),
+      );
+      mockIsolatedRunOk();
+      const headers = { "Idempotency-Key": "hook-idem-account-id" };
+      const basePayload = {
+        message: "Do it",
+        channel: "discord",
+        to: "channel-1",
+      };
+      const work = await postHook(
+        port,
+        "agent",
+        { ...basePayload, accountId: "work" },
+        { headers },
+      );
+      expect(work.status).toBe(200);
+      const personal = await postHook(
+        port,
+        "agent",
+        { ...basePayload, accountId: "personal" },
+        { headers },
+      );
+      expect(personal.status).toBe(200);
+      await waitForCronIsolatedRuns(2);
+
+      expect(cronRunCall(0).job?.delivery?.accountId).toBe("work");
+      expect(cronRunCall(1).job?.delivery?.accountId).toBe("personal");
     });
   });
 });

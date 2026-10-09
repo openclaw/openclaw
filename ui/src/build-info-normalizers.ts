@@ -5,11 +5,6 @@ import { normalizeNullableString } from "../../packages/normalization-core/src/s
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
-type ControlUiBuildMetadata = Pick<
-  ControlUiBuildInfo,
-  "version" | "commit" | "builtAt" | "release"
->;
-
 const FULL_GIT_SHA = /^[0-9a-f]{40}$/u;
 const UTC_BUILD_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
 const BUILD_ID_MAX_LENGTH = 96;
@@ -44,24 +39,25 @@ function normalizeControlUiBuildId(value: unknown): string {
   return normalized?.slice(0, BUILD_ID_MAX_LENGTH) || "dev";
 }
 
-function deriveControlUiBuildId(info: ControlUiBuildMetadata): string {
-  return [info.version, info.release ? "release" : null, info.commit?.slice(0, 12), info.builtAt]
-    .filter((value): value is string => Boolean(value))
-    .join("-");
-}
-
 export function normalizeControlUiBuildInfo(value: unknown): ControlUiBuildInfo {
   const record = asRecord(value);
   const version = normalizeNullableString(record.version);
   const commit = normalizeControlUiCommit(record.commit);
   const builtAt = normalizeControlUiBuildTimestamp(record.builtAt);
   const release = record.release === true;
-  const metadata = { version, commit, builtAt, release };
   return {
-    ...metadata,
+    version,
+    commit,
+    builtAt,
+    release,
     commitAt: normalizeControlUiBuildTimestamp(record.commitAt),
     branch: normalizeControlUiBranch(record.branch),
     dirty: typeof record.dirty === "boolean" ? record.dirty : null,
-    buildId: normalizeControlUiBuildId(record.buildId ?? deriveControlUiBuildId(metadata)),
+    buildId: normalizeControlUiBuildId(
+      record.buildId ??
+        [version, release ? "release" : null, commit?.slice(0, 12), builtAt]
+          .filter(Boolean)
+          .join("-"),
+    ),
   };
 }

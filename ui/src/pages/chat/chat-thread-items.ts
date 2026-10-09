@@ -129,13 +129,7 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessa
     }
   }
   const text = extractTextCached(toolMessage) ?? undefined;
-  const toolName =
-    typeof toolMessage.toolName === "string"
-      ? toolMessage.toolName
-      : typeof toolMessage.tool_name === "string"
-        ? toolMessage.tool_name
-        : undefined;
-  const preview = extractToolPreview(text, toolName);
+  const preview = extractToolPreview(text);
   if (preview?.kind !== "canvas") {
     return null;
   }
@@ -157,7 +151,7 @@ export function canvasPreviewBaseIdentity(
 
 export function createCanvasAssistantMessage(
   source: ChatMessagePreview,
-  timestamp = source.timestamp,
+  timestamp: number | null,
 ): unknown {
   return appendCanvasBlockToAssistantMessage(
     {
@@ -200,8 +194,8 @@ export function transcriptPositionTimestamp(
 export function findNearestAssistantMessage(
   items: ChatItem[],
   toolTimestamp: number | null,
-  minimumIndex = 0,
-  maximumIndex = items.length,
+  minimumIndex: number,
+  maximumIndex: number,
 ) {
   let currentTurnStart = minimumIndex;
   let currentTurnEnd = maximumIndex;
@@ -255,8 +249,8 @@ export function findNearestAssistantMessage(
 export function findCanvasInsertionIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
-  minimumIndex = 0,
-  maximumIndex = items.length,
+  minimumIndex: number,
+  maximumIndex: number,
 ): number {
   if (toolTimestamp == null) {
     return maximumIndex;

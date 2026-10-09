@@ -58,6 +58,7 @@ export async function createPtyAdapter(
     },
     {
       abortSignal: params.abortSignal,
+      initiateSpawn: params.initiateSpawn,
       assertCurrent: () => {
         params.assertCurrent?.();
         params.beforeSpawn?.();
@@ -154,9 +155,7 @@ export async function createPtyAdapter(
         stdinEnded = true;
         const eof = process.platform === "win32" ? "\x1a" : "\x04";
         pty.write(eof);
-      } catch {
-        // ignore EOF errors
-      }
+      } catch {}
     },
     destroy: () => {
       stdinDestroyed = true;

@@ -60,7 +60,20 @@ Runtime selections resolve in the requesting agent's scope before becoming owner
 ## Compute workers
 
 Code-mode execution, compaction planning, and file-tool planning use the reusable `WorkerTaskPool`.
-Their pools share a CPU admission limit of `max(1, availableParallelism() - 1)`
+Its scheduler and task protocol live in the private `@openclaw/worker-runtime`
+package. The OpenClaw host adapter owns native worker creation, resource custody,
+and process accounting. Plugins use the public
+[worker SDK entrypoints](/plugins/sdk-overview/infrastructure#worker-task-admission).
+
+The package keeps task results, execution settlement, and resource release as
+separate facts. A retained task can return a result while its owner still holds
+the worker and input charge. Native operations, database resources, and cleanup
+receipts make that distinction necessary; a general-purpose task queue alone
+does not replace those owners. The
+[package contributor guide](https://github.com/openclaw/openclaw/blob/main/packages/worker-runtime/README.md)
+explains the host boundary, async context lifetime, and reproducible benchmarks.
+
+These compute pools share a CPU admission limit of `max(1, availableParallelism() - 1)`
 within the calling isolate, reserving a CPU where possible for the Gateway. Ordered
 database and model-generation workers keep their existing independent limits.
 

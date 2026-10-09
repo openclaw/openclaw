@@ -4,14 +4,12 @@ import {
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
 } from "../config/sessions/lifecycle.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   createSessionDiffBaselineCaptureClaim,
   type SessionDiffBaselineCapture,
 } from "../config/sessions/session-diff-baseline-capture.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -59,16 +57,16 @@ function requireAuthoritativeGeneration(params: {
   return params.entry;
 }
 
-function loadAuthoritativeGeneration(params: {
+async function loadAuthoritativeGeneration(params: {
   agentId: string;
   expectedLifecycleRevision: string | undefined;
   expectedSessionId: string;
   sessionKey: string;
   storePath: string;
-}): InternalSessionEntry {
+}): Promise<InternalSessionEntry> {
   let entry: InternalSessionEntry | undefined;
   try {
-    entry = loadSessionEntryReadOnly({
+    entry = await readSessionEntryReadOnlyInWorker({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -114,7 +112,7 @@ async function persistCaptureResult(params: {
             sessionDiffBaselineCapture: { ...params.capture, status: "unavailable" },
           } satisfies Partial<InternalSessionEntry>);
     },
-    { preserveActivity: true, skipMaintenance: true },
+    { preserveActivity: true, skipMaintenance: true, workerGuard: {} },
   ).catch((error: unknown) => {
     if (isSessionWorkStartInvalidatedError(error)) {
       throw error;
@@ -159,6 +157,30 @@ async function settleCapture(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<InternalSessionEntry> {
+  // A pending read or claim response can arrive after an earlier capture settled
+  // and left captureInFlight. Revalidate inside the shared promise before recapturing.
+  const authoritative = await loadAuthoritativeGeneration({
+    agentId: params.agentId,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
+    expectedSessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  if (authoritative.sessionDiffBaseline?.sessionId === params.sessionId) {
+    return authoritative;
+  }
+  const capture = matchingCapture(authoritative);
+  if (capture?.captureId !== params.capture.captureId) {
+    throw invalidatedSessionWork({
+      entry: authoritative,
+      expectedSessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
+  }
+  if (capture.status === "unavailable") {
+    return authoritative;
+  }
+
   let baseline: SessionDiffBaseline | undefined;
   try {
     const { captureSessionDiffBaseline } = await import("./session-diff.js");
@@ -191,7 +213,7 @@ export async function ensureSessionDiffBaseline(params: {
     return params.entry;
   }
 
-  let entry = loadAuthoritativeGeneration({
+  let entry = await loadAuthoritativeGeneration({
     agentId: params.agentId,
     expectedLifecycleRevision: params.entry.lifecycleRevision,
     expectedSessionId: params.entry.sessionId,
@@ -226,7 +248,7 @@ export async function ensureSessionDiffBaseline(params: {
         }
         return { sessionDiffBaselineCapture: pending } satisfies Partial<InternalSessionEntry>;
       },
-      { preserveActivity: true, skipMaintenance: true },
+      { preserveActivity: true, skipMaintenance: true, workerGuard: {} },
     );
     entry = requireAuthoritativeGeneration({
       entry: armed,

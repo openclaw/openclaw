@@ -107,7 +107,9 @@ class ResizableDivider extends OpenClawLitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.setStaticAccessibilityAttributes();
+    this.setAttribute("role", "separator");
+    this.setAttribute("tabindex", "0");
+    this.setAttribute("aria-orientation", this.orientation);
     this.addEventListener("pointerdown", this.handlePointerDown);
     this.addEventListener("keydown", this.handleKeyDown);
   }
@@ -139,7 +141,10 @@ class ResizableDivider extends OpenClawLitElement {
       return;
     }
     this.classList.add("dragging");
-    this.capturePointer(e.pointerId);
+    this.activePointerId = e.pointerId;
+    if (typeof this.setPointerCapture === "function") {
+      this.setPointerCapture(e.pointerId);
+    }
 
     window.addEventListener("pointermove", this.handlePointerMove);
     for (const type of DRAG_END_EVENTS) {
@@ -211,10 +216,6 @@ class ResizableDivider extends OpenClawLitElement {
       this.flushPointerMove();
       this.emitResize(this.dragRatio, "resize-end");
     }
-    this.stopDragging();
-  };
-
-  private stopDragging() {
     const pointerId = this.activePointerId;
     if (pointerId === null) {
       return;
@@ -223,7 +224,13 @@ class ResizableDivider extends OpenClawLitElement {
     // Releasing capture can synchronously report capture loss. Remove the
     // listener first so one owner end cannot emit resize-end twice.
     this.removeEventListener("lostpointercapture", this.finishDragging);
-    this.releaseActivePointer(pointerId);
+    this.activePointerId = null;
+    if (
+      typeof this.releasePointerCapture === "function" &&
+      (typeof this.hasPointerCapture !== "function" || this.hasPointerCapture(pointerId))
+    ) {
+      this.releasePointerCapture(pointerId);
+    }
     if (this.dragFrame) {
       cancelAnimationFrame(this.dragFrame);
       this.dragFrame = 0;
@@ -234,7 +241,7 @@ class ResizableDivider extends OpenClawLitElement {
     for (const type of DRAG_END_EVENTS) {
       window.removeEventListener(type, this.finishDragging);
     }
-  }
+  };
 
   private emitResize(nextRatio: number, type: "resize" | "resize-end" = "resize") {
     const splitRatio = this.clampRatio(nextRatio);
@@ -262,17 +269,13 @@ class ResizableDivider extends OpenClawLitElement {
     }
     const previousBounds = this.previousElementSibling?.getBoundingClientRect();
     const nextBounds = this.nextElementSibling?.getBoundingClientRect();
-    const siblingSize =
-      this.orientation === "horizontal"
-        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0)
-        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0);
+    const dimension = this.orientation === "horizontal" ? "height" : "width";
+    const siblingSize = (previousBounds?.[dimension] ?? 0) + (nextBounds?.[dimension] ?? 0);
     if (siblingSize > 0) {
       return siblingSize;
     }
     const containerBounds = this.parentElement?.getBoundingClientRect();
-    return this.orientation === "horizontal"
-      ? (containerBounds?.height ?? 0)
-      : (containerBounds?.width ?? 0);
+    return containerBounds?.[dimension] ?? 0;
   }
 
   private currentRatio() {
@@ -288,31 +291,6 @@ class ResizableDivider extends OpenClawLitElement {
 
   private setCurrentAriaValue(value: number) {
     this.setAttribute("aria-valuenow", String(this.toAriaValue(value)));
-  }
-
-  private setStaticAccessibilityAttributes() {
-    this.setAttribute("role", "separator");
-    this.setAttribute("tabindex", "0");
-    this.setAttribute("aria-orientation", this.orientation);
-  }
-
-  private capturePointer(pointerId: number) {
-    this.activePointerId = pointerId;
-    if (typeof this.setPointerCapture !== "function") {
-      return;
-    }
-    this.setPointerCapture(pointerId);
-  }
-
-  private releaseActivePointer(pointerId: number) {
-    this.activePointerId = null;
-    if (typeof this.releasePointerCapture !== "function") {
-      return;
-    }
-    if (typeof this.hasPointerCapture === "function" && !this.hasPointerCapture(pointerId)) {
-      return;
-    }
-    this.releasePointerCapture(pointerId);
   }
 }
 

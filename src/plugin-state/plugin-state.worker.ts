@@ -1,5 +1,5 @@
 import { err, ok } from "@openclaw/normalization-core/result";
-import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
+import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
@@ -34,7 +34,10 @@ import {
   listPluginStateEntriesInKeyRange,
   lookupPluginStateEntries,
 } from "./plugin-state-store.reads.js";
-import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
+import {
+  readPluginStateRetention,
+  registerPluginStateEntry,
+} from "./plugin-state-store.retention.js";
 import {
   type PluginStateWorkerOperations,
   pluginStateWorkerOperations,
@@ -53,7 +56,7 @@ export function executePluginStateCommand(
 ): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
   const admit = (stage: "transaction" | "commit") =>
-    requestSessionEntryCurrentAdmission(command.input?.sessionEntryCurrentSource, {
+    requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
       stage,
       facts: undefined,
     });
@@ -163,6 +166,17 @@ export function executePluginStateCommand(
     );
   }
   try {
+    if (command.type === "pluginState.replaceEntry") {
+      // Replacing an approval first revokes its predecessor, even if registration fails.
+      runOpenClawStateWriteTransaction(
+        (store) => {
+          admit("transaction");
+          deletePluginStateEntry(store.db, command.input);
+          admit("commit");
+        },
+        { ...options, database },
+      );
+    }
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
@@ -187,7 +201,22 @@ export function executePluginStateCommand(
               case "pluginState.moveEntries":
                 return movePluginStateEntries(store, command.input);
               case "pluginState.register":
+              case "pluginState.replaceEntry":
                 return registerPluginStateEntry(store, command.input);
+              case "pluginState.replace": {
+                clearPluginStateNamespace(store.db, command.input);
+                if (command.input.entries.length === 0) {
+                  return undefined;
+                }
+                const retention = readPluginStateRetention(store.db, {
+                  ...command.input,
+                  now: Date.now(),
+                });
+                for (const entry of command.input.entries) {
+                  registerPluginStateEntry(store, { ...command.input, ...entry }, retention);
+                }
+                return undefined;
+              }
               case "pluginState.registerIfAbsent":
                 return registerPluginStateEntryIfAbsent(store, command.input);
               case "pluginState.deleteIfEqual":

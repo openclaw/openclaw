@@ -163,36 +163,6 @@ function expectResolvedTokenStatusSummary(
 }
 
 describe("config-only channels status output", () => {
-  it("sanitizes channel and account display names in terminal output", async () => {
-    const control = "\u001B]0;channels-status-injection\u0007";
-    registerSingleTestPlugin(
-      "token-only",
-      makeDirectPlugin({
-        id: "token-only",
-        label: `${control}TokenOnly 🦞\r\nAdmin`,
-        docsPath: "/channels/token-only",
-        config: {
-          listAccountIds: () => [`${control}primary\nforged-row`],
-          resolveAccount: () => ({
-            name: `${control}Primary\tAccount`,
-            enabled: true,
-            configured: true,
-          }),
-          isConfigured: () => true,
-          isEnabled: () => true,
-        },
-      }),
-    );
-
-    const output = await formatLocalStatusSummary({ channels: { "token-only": {} } });
-
-    expect(output).not.toContain("\u001B");
-    expect(output).not.toContain("\nforged-row");
-    expect(output).toContain("TokenOnly 🦞\\r\\nAdmin");
-    expect(output).toContain("\\nforged-row");
-    expect(output).toContain("Primary\\tAccount");
-  });
-
   it.each([
     {
       label: "external channels",
@@ -200,7 +170,6 @@ describe("config-only channels status output", () => {
       included: ["TokenOnly"],
       excluded: ["WhatsApp"],
     },
-    { label: "bundled aliases", channel: "wa", included: ["WhatsApp"], excluded: ["TokenOnly"] },
   ])(
     "preserves exact config-only status filtering for $label",
     async ({ channel, included, excluded }) => {

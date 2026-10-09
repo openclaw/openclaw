@@ -1,22 +1,21 @@
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
-  acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
-  getAcpSessionKysely,
-  legacyAcpDatabaseSessionKeys,
-  parseAcpDatabaseSessionKeyCandidates,
-  resolveLegacyFreeAcpSessionKey,
+  parseAcpDatabaseSessionKey,
   resolveReadableAcpSessionRow,
-  selectLegacyFreeAcpSessionRows,
+  selectAcpSessionRowsByKeys,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
@@ -36,6 +35,9 @@ export function readAcpSessionMeta(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
+  if (params.sessionKey.trim() && captureIncognitoSessionBinding(params)) {
+    throw new IncognitoSessionSyncAccessError("readAcpSessionMeta", "readAcpSessionMetaAsync");
+  }
   return readAcpSessionEntry({
     ...params,
     sessionKey: params.sessionKey.trim(),
@@ -54,78 +56,28 @@ export function readAcpSessionMetaBatch(params: {
   cfg?: OpenClawConfig;
 }): Map<SessionEntry, SessionAcpMeta | undefined> {
   const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
-  const entriesByKey = new Map<
-    string,
-    Array<{ entry: SessionEntry; rawSessionKey: string; legacyKeys: string[] }>
-  >();
+  const entriesByKey = new Map<string, SessionEntry[]>();
   for (const item of params.entries) {
-    const rawSessionKey = item.sessionKey.trim();
-    const sessionKey = buildAcpDatabaseSessionKey(rawSessionKey, item.agentId);
-    if (item.entry?.acp) {
-      result.set(item.entry, item.entry.acp);
-      continue;
-    }
-    const legacyKeys = legacyAcpDatabaseSessionKeys(rawSessionKey, item.agentId, params.cfg);
-    const entries = entriesByKey.get(sessionKey) ?? [];
-    entries.push({ entry: item.entry, rawSessionKey, legacyKeys });
-    entriesByKey.set(sessionKey, entries);
+    result.set(item.entry, undefined);
+    const sessionKey = normalizeStoreSessionKey(item.sessionKey);
+    const key = buildAcpDatabaseSessionKey(
+      sessionKey,
+      item.agentId ?? parseAgentSessionKey(sessionKey)?.agentId,
+    );
+    const entries = entriesByKey.get(key) ?? [];
+    entries.push(item.entry);
+    entriesByKey.set(key, entries);
   }
   if (entriesByKey.size === 0) {
     return result;
   }
-
   withExistingOpenClawStateDatabaseReadOnly(
     ({ db: database }) => {
-      // Chunked IN keeps each statement under SQLite's bind-variable cap, matching the
-      // sharing-store membership precedent; one statement per 500 keys instead of per row.
-      const db = getAcpSessionKysely(database);
-      const requestedKeySet = new Set<string>();
-      for (const [sessionKey, entries] of entriesByKey) {
-        requestedKeySet.add(sessionKey);
-        for (const item of entries) {
-          for (const legacyKey of item.legacyKeys) {
-            requestedKeySet.add(legacyKey);
-          }
+      for (const row of selectAcpSessionRowsByKeys(database, [...entriesByKey.keys()])) {
+        for (const entry of entriesByKey.get(row.session_key) ?? []) {
+          const readable = resolveReadableAcpSessionRow({ row, entry });
+          result.set(entry, readable ? rowToAcpSessionMeta(readable) : undefined);
         }
-      }
-      const requestedKeys = [...requestedKeySet];
-      const keyChunks: string[][] = [];
-      for (let index = 0; index < requestedKeys.length; index += 500) {
-        keyChunks.push(requestedKeys.slice(index, index + 500));
-      }
-      const rows = keyChunks.flatMap(
-        (chunk) =>
-          executeSqliteQuerySync(
-            database,
-            db.selectFrom("acp_sessions").selectAll().where("session_key", "in", chunk),
-          ).rows,
-      );
-      const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
-      const unresolved: Array<{ entry: SessionEntry; key: string }> = [];
-      for (const [sessionKey, entries] of entriesByKey) {
-        for (const item of entries) {
-          const row = [sessionKey, ...item.legacyKeys]
-            .map((key) => rowsByKey.get(key))
-            .map((candidateRow) =>
-              resolveReadableAcpSessionRow({ row: candidateRow, entry: item.entry }),
-            )
-            .find((candidateRow) => candidateRow !== undefined);
-          result.set(item.entry, row ? rowToAcpSessionMeta(row) : undefined);
-          const legacyKey = !row && resolveLegacyFreeAcpSessionKey(item.rawSessionKey);
-          if (legacyKey) {
-            unresolved.push({ entry: item.entry, key: legacyKey });
-          }
-        }
-      }
-      const legacyRows = selectLegacyFreeAcpSessionRows(
-        database,
-        unresolved.map(({ key }) => key),
-      );
-      for (const { entry, key } of unresolved) {
-        const row = legacyRows
-          .get(key)
-          ?.find((candidate) => acpSessionRowMatchesEntry(candidate, entry));
-        result.set(entry, row ? rowToAcpSessionMeta(row) : undefined);
       }
     },
     { env: params.env, path: params.databasePath },
@@ -157,16 +109,12 @@ export function writeAcpSessionMetaForMigration(params: {
   runOpenClawStateWriteTransaction(
     (database) => {
       upsertAcpSessionMetaRow(database.db, row);
-      for (const identity of parseAcpDatabaseSessionKeyCandidates(sessionKey)) {
-        const keys = new Set([
-          identity.storeSessionKey,
-          resolveLegacyFreeAcpSessionKey(identity.storeSessionKey),
-        ]);
-        for (const key of keys) {
-          if (key) {
-            sessionChanges.emit({ sessionKey: key, agentId: identity.agentId }, database.db);
-          }
-        }
+      const identity = parseAcpDatabaseSessionKey(sessionKey);
+      if (identity) {
+        sessionChanges.emit(
+          { sessionKey: identity.storeSessionKey, agentId: identity.agentId },
+          database.db,
+        );
       }
     },
     { database: params.database, env: params.env, path: params.databasePath },
@@ -186,10 +134,10 @@ export function readAcpSessionEntry(params: {
   if (!sessionKey) {
     return null;
   }
-  const storeEntry = readSessionEntryFromStore(params);
-  if (!storeEntry.storePath) {
-    return null;
+  if (captureIncognitoSessionBinding(params)) {
+    throw new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync");
   }
+  const storeEntry = readSessionEntryFromStore(params);
   const acp = readAcpSessionMetaForEntry({
     sessionKey: storeEntry.storeSessionKey,
     agentId: storeEntry.agentId,

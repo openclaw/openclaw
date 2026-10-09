@@ -7,7 +7,7 @@ import {
 } from "../../infra/fs-observation-mode.js";
 import { observationPrefixKind } from "../../infra/fs-observation-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { WatchTarget } from "./refresh-watch-targets.js";
+import type { WatchTarget } from "./refresh-watch-targets.types.js";
 
 /** Observe a blocking link entry, never an implicit recursive target admission. */
 export async function skillsObservationScope(
@@ -37,7 +37,7 @@ export async function skillsObservationScope(
 /** Capture transport policy and its diagnostic lifetime with the subscription. */
 export function skillsObservationTransport(targetPath: string) {
   const mode = resolveFsObservationMode();
-  const pollIntervalMs = Math.max(30_000, resolveFsObservationIntervalMs());
+  const pollIntervalMs = resolveFsObservationIntervalMs(process.env, 30_000);
   let pollingFallbackWarned = false;
   return {
     mode,

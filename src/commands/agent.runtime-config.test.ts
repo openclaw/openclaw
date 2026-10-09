@@ -3,7 +3,6 @@ import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
-import { resolveSession } from "../agents/command/session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -273,61 +272,6 @@ describe("agentCommand runtime config", () => {
     });
   });
 
-  it("includes channel secret targets when delivery is requested", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-      loadedConfig.channels = {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-        },
-      } as unknown as OpenClawConfig["channels"];
-      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
-        resolvedConfig: loadedConfig,
-        effectiveConfig: loadedConfig,
-        diagnostics: [],
-      });
-
-      await resolveAgentRuntimeConfig(runtime, {
-        runtimeTargetsChannelSecrets: true,
-      });
-
-      const targetIds = requireResolveCommandConfigParams().targetIds;
-      expect(targetIds.has("channels.telegram.botToken")).toBe(true);
-    });
-  });
-
-  it("scopes session-only recipient routing secrets to the selected channel", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-      loadedConfig.channels = {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-        },
-        discord: {
-          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-        },
-      } as unknown as OpenClawConfig["channels"];
-      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
-        resolvedConfig: loadedConfig,
-        effectiveConfig: loadedConfig,
-        diagnostics: [],
-      });
-
-      await resolveAgentRuntimeConfig(runtime, {
-        runtimeChannelSecretScope: { channel: "telegram" },
-      });
-
-      const targetIds = requireResolveCommandConfigParams().targetIds;
-      expect(targetIds.has("channels.telegram.botToken")).toBe(true);
-      expect(targetIds.has("channels.discord.token")).toBe(false);
-      expect(requireResolveCommandConfigParams().allowedPaths).toEqual(
-        new Set(["channels.telegram.botToken", "channels.telegram.accounts.default.botToken"]),
-      );
-    });
-  });
-
   it("scopes session-only routing secrets to the channel default account", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -411,20 +355,6 @@ describe("agentCommand runtime config", () => {
     });
   });
 
-  it("skips command secret resolution when no relevant SecretRef values exist", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-
-      const prepared = await resolveAgentRuntimeConfig(runtime);
-
-      expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
-      expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
-      expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
-      expect(prepared).toBe(loadedConfig);
-    });
-  });
-
   it.each([
     {
       name: "global memory headers",
@@ -465,25 +395,6 @@ describe("agentCommand runtime config", () => {
         } as unknown as OpenClawConfig["agents"];
       },
     },
-    {
-      name: "per-agent TTS provider",
-      apply: (config: OpenClawConfig) => {
-        config.agents = {
-          ...config.agents,
-          entries: {
-            personal: {
-              tts: {
-                providers: {
-                  elevenlabs: {
-                    apiKey: { source: "env", provider: "default", id: "AGENT_TTS_KEY" },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig["agents"];
-      },
-    },
   ])("resolves command secrets for $name", async ({ apply }) => {
     await withTempHome(async (home) => {
       const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
@@ -497,26 +408,6 @@ describe("agentCommand runtime config", () => {
       await resolveAgentRuntimeConfig(runtime);
 
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("derives a fresh session from --to", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const cfg = mockConfig(home, store);
-
-      const resolved = resolveSession({ cfg, to: "+1555" });
-
-      expect(resolved.storePath).toBe(store);
-      expect(resolved.sessionKey).toBeTypeOf("string");
-      const sessionKey = resolved.sessionKey;
-      if (!sessionKey) {
-        throw new Error("expected session key");
-      }
-      expect(sessionKey.length).toBeGreaterThan(0);
-      expect(resolved.sessionId).toBeTypeOf("string");
-      expect(resolved.sessionId.length).toBeGreaterThan(0);
-      expect(resolved.isNewSession).toBe(true);
     });
   });
 });

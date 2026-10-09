@@ -53,6 +53,7 @@ import {
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
+  measureClaudePartialMessage,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
@@ -173,14 +174,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
   };
 
-  const beginTaggedReasoningMessage = () => {
+  const beginClaudeMessage = (messageId?: string) => {
     finishTaggedReasoningMessage();
     taggedReasoningRouter = createLeadingTaggedReasoningRouter();
     currentTaggedReasoningText = "";
-  };
-
-  const beginClaudeMessage = (messageId?: string) => {
-    beginTaggedReasoningMessage();
     pendingMessageSeparator = true;
     previousMessageHadToolUse = currentMessageHadToolUse;
     currentMessageHadToolUse = false;
@@ -224,9 +221,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   };
 
   const handleCustomJsonlLine = (line: string, rawLine: string): boolean => {
-    if (parseErrorText) {
-      return true;
-    }
     const lifecycle = cliOutputLifecycle.parseCliBackendLifecycleLine({
       line,
       backendId: params.providerId,
@@ -610,7 +604,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (!line && !claudeStreamJson) {
       return;
     }
-    if (!turnBudget.chargeLine() && !claudeStreamJson) {
+    if (!claudeStreamJson && !turnBudget.chargeLine()) {
       parseErrorText = turnBudget.errorText(false);
       lineBuffer.pending = "";
       return;
@@ -628,14 +622,29 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     const parsedRecords = decodeCliRecords(line);
     if (claudeStreamJson) {
+      const partialChars =
+        parsedRecords.length === 1
+          ? measureClaudePartialMessage(parsedRecords[0]!, rawLine)
+          : undefined;
       const normalized =
         parsedRecords.length === 1
           ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
           : undefined;
-      // Exempt actual media bytes only; JSON serialization must not erase wire whitespace.
-      const retainedChars = normalized
-        ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
-        : rawLine.length;
+      const partialMessage = partialChars !== undefined;
+      // Partial-message deltas are discarded as soon as they're assembled, so
+      // they are exempt from the ordinary line odometer (matches #150132/#153545);
+      // every other Claude line still counts toward it.
+      if (!partialMessage && !turnBudget.chargeLine()) {
+        // The line that exhausts the budget may itself be the terminal result.
+        watchForClaudeTerminalResult(line);
+        return;
+      }
+      // Neither media omission nor token-envelope discounts may erase wire whitespace.
+      const retainedChars =
+        partialChars ??
+        (normalized
+          ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+          : rawLine.length);
       if (!turnBudget.chargeChars(retainedChars + 1)) {
         // The line that exhausts the budget may itself be the terminal result.
         watchForClaudeTerminalResult(line);

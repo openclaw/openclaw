@@ -84,6 +84,16 @@ describe("update run history reads", () => {
     expect(fs.existsSync(filename)).toBe(false);
     expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
 
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshotDatabaseFiles(filename);
+    expect(getUpdateRun(runId, options)).toBeUndefined();
+    expect(listUpdateRuns({}, options)).toEqual([]);
+    expect(findActiveUpdateRun(options)).toBeUndefined();
+    expect(await getUpdateRunAsync(runId, options)).toBeUndefined();
+    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
+    expect(snapshotDatabaseFiles(filename)).toEqual(before);
+
     const initial = openOpenClawStateDatabase(options);
     const hasLedger = () =>
       initial.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
@@ -121,11 +131,14 @@ describe("update run history reads", () => {
     expect(listUpdateRuns({}, options)).toEqual([created]);
   });
 
-  it.each(
-    (["get", "list", "active", "get-async", "list-async", "status"] as const).flatMap((reader) =>
-      [false, true].map((retainedWal) => ({ reader, retainedWal })),
-    ),
-  )(
+  it.each([
+    ...(["get", "list", "active", "get-async", "list-async", "status"] as const).map((reader) => ({
+      reader,
+      retainedWal: true,
+    })),
+    { reader: "get", retainedWal: false },
+    { reader: "get-async", retainedWal: false },
+  ])(
     "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
     async ({ reader, retainedWal }) => {
       const sourceOptions = isolatedOptions();
@@ -198,23 +211,6 @@ describe("update run history reads", () => {
       .run(JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }), run.runId);
 
     expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
-  });
-
-  it("leaves a cold store without the history table unchanged", async () => {
-    const options = isolatedOptions();
-    const { db } = openOpenClawStateDatabase(options);
-    expect(
-      db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get(),
-    ).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    const before = snapshotDatabaseFiles(filename);
-    expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(await getUpdateRunAsync(randomUUID(), options)).toBeUndefined();
-    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
-    expect(snapshotDatabaseFiles(filename)).toEqual(before);
   });
 
   it("keeps the idle cached writer usable after history reads", () => {

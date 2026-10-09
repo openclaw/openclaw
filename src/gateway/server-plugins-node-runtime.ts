@@ -207,21 +207,3 @@ export function projectGatewayRuntimeNodes(
     return Object.assign({}, nodeRecord, { invocableCommands });
   });
 }
-
-// The gateway context is optional (absent outside an in-process Gateway) and the
-// dispatcher enforces isolation + email content wrapping, so this only forwards the
-// host-bound plugin id.
-export function createGatewayHooksRuntime(
-  resolveGatewayContext?: GatewayContextResolver,
-): PluginRuntime["hooks"] {
-  return {
-    dispatchHookAgentTurn: async (params) => {
-      const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
-      const gatewayContext = resolveGatewayContext?.();
-      if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
-        throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
-      }
-      return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
-    },
-  };
-}

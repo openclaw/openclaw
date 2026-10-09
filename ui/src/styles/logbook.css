@@ -1,7 +1,3 @@
-/* ===========================================
-   Logbook Tab - automatic work journal timeline
-   =========================================== */
-
 .logbook {
   display: flex;
   flex-direction: column;

@@ -236,6 +236,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
       providers: [anthropic],
+      providerIds: ["anthropic"],
     });
     expect(prepared.providers).toEqual([openai, anthropic]);
   });
@@ -254,7 +255,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       staticCatalogProviderIds: ["byteplus-plan"],
     });
 
-    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
+      providers: [byteplus],
+      providerIds: ["byteplus-plan"],
+    });
   });
 
   it("treats an explicit empty provider scope as no discovery", async () => {
@@ -427,30 +431,48 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider: anthropic });
   });
 
-  it("falls back to static provider catalogs when runtime discovery has no rows", async () => {
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      createProviderWithStaticCatalog("minimax"),
-    ]);
-    mocks.runProviderCatalog.mockResolvedValue(null);
-    mocks.runProviderStaticCatalog.mockResolvedValue({
-      providers: {
-        minimax: {
-          baseUrl: "https://api.minimax.io/anthropic",
-          api: "anthropic-messages" as const,
-          models: [createTextModel("MiniMax-M2.7", "MiniMax M2.7")],
-        },
-      },
-    });
+  it.each([false, true])(
+    "falls back to static provider catalogs when runtime discovery has no rows (prepared: %s)",
+    async (prepared) => {
+      const provider = { ...createProviderWithStaticCatalog("minimax"), pluginId: "minimax" };
+      const staticConfig: ModelProviderConfig = {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        models: [createTextModel("MiniMax-M2.7", "MiniMax M2.7")],
+      };
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+      mocks.runProviderCatalog.mockResolvedValue(null);
+      mocks.runProviderStaticCatalog.mockResolvedValue({ providers: { minimax: staticConfig } });
 
-    const providers = await discover({
-      providerDiscoveryProviderIds: ["minimax"],
-    });
+      const providers = await discover({
+        providerDiscoveryProviderIds: ["minimax"],
+        ...(prepared
+          ? {
+              preparedStaticProviderCatalog: {
+                providers: [provider],
+                entries: [
+                  {
+                    provider,
+                    providerConfigs: {
+                      minimax: {
+                        ...staticConfig,
+                        models: [createTextModel("prepared-minimax", "Prepared MiniMax")],
+                      },
+                    },
+                  },
+                ],
+              },
+            }
+          : {}),
+      });
 
-    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
-    // Static catalogs are the startup fallback when scoped runtime discovery is empty.
-    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-    expect(providers?.minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M2.7"]);
-  });
+      expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
+      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(prepared ? 0 : 1);
+      expect(providers?.minimax?.models.map((model) => model.id)).toEqual([
+        prepared ? "prepared-minimax" : "MiniMax-M2.7",
+      ]);
+    },
+  );
   it.each([
     { scoped: false, api: "openai-completions" as const },
     { scoped: false, api: "openai-responses" as const },
@@ -700,12 +722,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         entries: [
           {
             provider: openai,
-            result: { providers: openaiConfigs },
             providerConfigs: openaiConfigs,
           },
           {
             provider: anthropic,
-            result: { providers: anthropicConfigs },
             providerConfigs: anthropicConfigs,
           },
         ],

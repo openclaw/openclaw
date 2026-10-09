@@ -42,7 +42,8 @@ export async function waitForAssertion(assertion: () => void, timeoutMs = 2_000,
 export async function flushScheduledDispatchStep() {
   await Promise.resolve();
   if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
-    await vi.runOnlyPendingTimersAsync();
+    // Advance acknowledgement work without expiring unrelated run deadlines.
+    await vi.advanceTimersByTimeAsync(10);
   } else {
     await waitForRealTimer(15);
   }

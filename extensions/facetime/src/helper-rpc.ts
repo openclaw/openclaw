@@ -69,8 +69,6 @@ type PendingHelperHandshake = {
   bundleIdentifier: string;
   processId: number;
   processStartedAtMs: number;
-  clientNonce: string;
-  serverNonce: string;
   connectionEpoch: string;
   connectionKey: string;
 };
@@ -94,12 +92,10 @@ export class FaceTimeHelperSocketServer {
   readonly #socketAuthSessions = new Map<net.Socket, HelperAuthSession>();
   readonly #authDeadlineTimers = new Map<net.Socket, ReturnType<typeof setTimeout>>();
   readonly #pending = new Map<string, PendingRpc>();
-  readonly #logger: RuntimeLogger;
   #started = false;
   #connectionGeneration = 0;
 
   constructor(private readonly params: HelperSocketServerParams) {
-    this.#logger = params.logger;
     this.#server = net.createServer((socket) => this.#handleSocket(socket));
   }
 
@@ -255,7 +251,7 @@ export class FaceTimeHelperSocketServer {
       }
     });
     socket.on("error", (error) => {
-      this.#logger.debug?.(`[facetime] helper socket error: ${formatErrorMessage(error)}`);
+      this.params.logger.debug?.(`[facetime] helper socket error: ${formatErrorMessage(error)}`);
     });
     socket.on("close", () => {
       const disconnectedBundle = this.#socketPeers.get(socket)?.bundleIdentifier;
@@ -282,7 +278,9 @@ export class FaceTimeHelperSocketServer {
     try {
       parsed = JSON.parse(line);
     } catch (error) {
-      this.#logger.debug?.(`[facetime] rejected invalid helper JSON: ${formatErrorMessage(error)}`);
+      this.params.logger.debug?.(
+        `[facetime] rejected invalid helper JSON: ${formatErrorMessage(error)}`,
+      );
       socket.destroy();
       return;
     }
@@ -298,7 +296,7 @@ export class FaceTimeHelperSocketServer {
 
     const payload = this.#consumeHelperEnvelope(socket, record);
     if (!payload) {
-      this.#logger.warn?.("[facetime] rejected unauthenticated or replayed helper message");
+      this.params.logger.warn?.("[facetime] rejected unauthenticated or replayed helper message");
       socket.destroy();
       return;
     }
@@ -312,20 +310,18 @@ export class FaceTimeHelperSocketServer {
     }
 
     const transactionId = typeof payload.transactionId === "string" ? payload.transactionId : "";
-    if (transactionId && this.#pending.has(transactionId)) {
-      const pending = this.#pending.get(transactionId);
+    const pending = transactionId ? this.#pending.get(transactionId) : undefined;
+    if (pending) {
       this.#pending.delete(transactionId);
-      if (pending) {
-        clearTimeout(pending.timeout);
-        if (typeof payload.error === "string" && payload.error) {
-          pending.reject(
-            payload.ambiguous === true
-              ? new FaceTimeHelperAmbiguousError(payload.error, payload)
-              : new FaceTimeHelperActionError(payload.error),
-          );
-        } else {
-          pending.resolve(payload);
-        }
+      clearTimeout(pending.timeout);
+      if (typeof payload.error === "string" && payload.error) {
+        pending.reject(
+          payload.ambiguous === true
+            ? new FaceTimeHelperAmbiguousError(payload.error, payload)
+            : new FaceTimeHelperActionError(payload.error),
+        );
+      } else {
+        pending.resolve(payload);
       }
       return;
     }
@@ -392,8 +388,6 @@ export class FaceTimeHelperSocketServer {
       bundleIdentifier,
       processId,
       processStartedAtMs,
-      clientNonce,
-      serverNonce,
       connectionEpoch,
       connectionKey: helperHmac(this.params.ipcKey, `session\n${context}`),
     };
@@ -498,7 +492,7 @@ export class FaceTimeHelperSocketServer {
     return payloadRecord;
   }
 
-  #writeServerPayload(socket: net.Socket, payload: Record<string, unknown>): string {
+  #writeServerPayload(socket: net.Socket, payload: Record<string, unknown>): void {
     const session = this.#socketAuthSessions.get(socket);
     if (!session) {
       throw new FaceTimeHelperUnavailableError("FaceTime helper socket is not authenticated");
@@ -520,7 +514,6 @@ export class FaceTimeHelperSocketServer {
     }
     session.outgoingSequence = sequence;
     socket.write(`${envelope}\r\n`);
-    return envelope;
   }
 
   async #sendAction(action: string, data: Record<string, unknown>): Promise<HelperActionResult> {

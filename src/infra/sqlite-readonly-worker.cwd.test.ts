@@ -9,11 +9,15 @@ import {
   createScopedSqliteReadOnlyWorker,
 } from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
-import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-owner.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("cold-starts an absolute SQLite snapshot when the invoking cwd is unavailable", async () => {
+it.each(
+  process.platform !== "win32" && process.getuid?.() !== 0
+    ? ["unavailable", "inaccessible"]
+    : ["unavailable"],
+)("cold-starts an absolute SQLite snapshot when the invoking cwd is %s", async (condition) => {
   const root = tempDirs.make("openclaw-sqlite-unavailable-cwd-");
   const source = path.join(root, "source.sqlite");
   const stagingRoot = path.join(root, "staging");
@@ -23,8 +27,13 @@ it("cold-starts an absolute SQLite snapshot when the invoking cwd is unavailable
   writer.exec("CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('preserved');");
   writer.close();
   const before = fs.readFileSync(source);
+  const inaccessibleCwd = path.join(root, "inaccessible-cwd");
+  fs.mkdirSync(inaccessibleCwd, { mode: 0o000 });
   const unavailable = new Error("ENOENT: invoking directory was removed");
   const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+    if (condition === "inaccessible") {
+      return inaccessibleCwd;
+    }
     throw unavailable;
   });
   let worker: ReturnType<typeof createScopedSqliteReadOnlyWorker> | undefined;
@@ -43,6 +52,7 @@ it("cold-starts an absolute SQLite snapshot when the invoking cwd is unavailable
     }
   } finally {
     cwd.mockRestore();
+    fs.chmodSync(inaccessibleCwd, 0o700);
     await worker?.close();
   }
   expect(witness).toEqual({ value: "preserved" });

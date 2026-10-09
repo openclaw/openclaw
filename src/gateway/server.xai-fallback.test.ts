@@ -246,12 +246,16 @@ it(
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
-            defaults: { workspace, skipBootstrap: true },
+            ownership: "explicit",
+            defaults: {
+              workspace,
+              skipBootstrap: true,
+              systemAgent: { agentId: "fallback" },
+            },
             entries: Object.fromEntries(
               scenarios.map((name) => [
                 name,
                 {
-                  default: name === "fallback",
                   model: {
                     primary: `xai/${primaryModel}`,
                     fallbacks: name === "no-fallback" ? [] : [`openai/${fallbackModel}`],

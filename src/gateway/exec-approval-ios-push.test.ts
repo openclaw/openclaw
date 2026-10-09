@@ -171,8 +171,9 @@ vi.mock("../infra/device-pairing.js", async () => {
   };
 });
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateProcessDeviceIdentity: () => ({ deviceId: "gateway-device-1" }),
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: () => ({ deviceId: "gateway-device-1" }),
 }));
 
 vi.mock("../infra/push-apns.js", () => ({

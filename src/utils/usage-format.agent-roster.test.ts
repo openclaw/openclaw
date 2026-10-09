@@ -12,14 +12,14 @@ describe("usage-format agent roster", () => {
     resetUsageFormatCachesForTest();
   });
 
-  it("uses the default agent directory from a list-shaped roster", async () => {
-    const opsAgentDir = path.join(tempDirs.make("openclaw-usage-list-roster-"), "custom-ops-agent");
+  it("uses the sole agent directory from a canonical roster", async () => {
+    const opsAgentDir = path.join(tempDirs.make("openclaw-usage-roster-"), "custom-ops-agent");
     await fs.mkdir(opsAgentDir, { recursive: true });
     await fs.writeFile(
       path.join(opsAgentDir, "models.json"),
       JSON.stringify({
         providers: {
-          "demo-list-roster": {
+          "demo-roster": {
             models: [
               {
                 id: "demo-model",
@@ -33,13 +33,13 @@ describe("usage-format agent roster", () => {
     );
     const config = {
       agents: {
-        list: [{ id: "ops", default: true, agentDir: opsAgentDir }],
+        entries: { ops: { agentDir: opsAgentDir } },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
     expect(
       resolveModelCostConfig({
-        provider: "demo-list-roster",
+        provider: "demo-roster",
         model: "demo-model",
         config,
       })?.input,

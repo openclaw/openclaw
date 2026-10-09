@@ -18,7 +18,9 @@ const { config, callGatewayMock } = vi.hoisted(() => ({
   } satisfies OpenClawConfig,
   callGatewayMock: vi.fn(),
 }));
+// mock-isolation: Steering stays in this receiver; unexpected RPCs must hit the spy, never a live Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
+// mock-isolation: Pin this routing fixture; live config publication is covered by Gateway admission tests.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => config,
   resolveGatewayPort: () => 18789,
@@ -126,14 +128,25 @@ it.each([
       // Dispatch can await transport initialization; synchronize on provider entry.
       await Promise.race([initialResponseStarted.promise, prompt]);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      const queueMessage = vi.fn((text: string, options?: EmbeddedAgentQueueMessageOptions) =>
-        steerActiveSessionWithOptionalDeliveryWait(session, text, options, runScopedCallerKey),
+      const queueMessage = vi.fn(
+        (text: string, options?: EmbeddedAgentQueueMessageOptions, assertCurrent?: () => void) =>
+          steerActiveSessionWithOptionalDeliveryWait(
+            session,
+            text,
+            options,
+            runScopedCallerKey,
+            () => {
+              assertCurrent?.();
+              return true;
+            },
+          ),
       );
       setActiveEmbeddedRun(
         "caller-active-session",
         {
           ...(hiddenRun ? { runId } : {}),
           queueMessage,
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
           isStreaming: () => true,
           isCompacting: () => false,
           supportsTranscriptCommitWait,

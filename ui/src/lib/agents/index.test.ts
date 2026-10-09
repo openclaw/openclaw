@@ -664,9 +664,11 @@ describe("setDefaultAgent", () => {
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
       config.state.configForm = {
         agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "kimi" } },
           entries: {
             main: { model: "gpt-5.5" },
-            kimi: { default: true },
+            kimi: {},
           },
         },
       };
@@ -681,9 +683,11 @@ describe("setDefaultAgent", () => {
     expect(refreshAgents).not.toHaveBeenCalled();
     expect(config.state.configForm).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "kimi" } },
         entries: {
           main: { model: "gpt-5.5" },
-          kimi: { default: true },
+          kimi: {},
         },
       },
     });

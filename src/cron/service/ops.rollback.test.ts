@@ -95,47 +95,58 @@ describe("cron service ops persist rollback", () => {
     expect((await loadCronStore(storePath)).jobs).toEqual([]);
   });
 
-  it("rolls back an added job from the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    await writeCronStoreSnapshot({ storePath, jobs: [] });
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
-    });
-
-    expect(state.timer).toBeNull();
-    expect(state.store?.jobs ?? []).toEqual([]);
-    const listed = await list(state, { includeDisabled: true });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    expect(listed).toEqual([]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs).toEqual([]);
-  });
-
-  it("keeps the pre-update job in the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(update(state, job.id, { name: "renamed cleanup" })).rejects.toThrow("disk full");
-    });
-
-    const inMemory = state.store?.jobs.find((entry) => entry.id === job.id);
-    expect(inMemory?.name).toBe("daily cleanup");
-    const loaded = await loadCronStore(storePath);
-    const stored = loaded.jobs.find((entry) => entry.id === job.id);
-    expect(stored?.name).toBe("daily cleanup");
-  });
+  it.each(["add", "update", "remove"] as const)(
+    "rolls back a failed %s in live and durable state",
+    async (operation) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-06-09T00:00:00.000Z");
+      const state = createOkIsolatedCronState({ storePath, now });
+      const job =
+        operation === "add" ? undefined : await add(state, makeCreateInput("daily cleanup"));
+      state.timer?.cancel();
+      if (job && operation === "remove") {
+        job.state.startupCatchupAtMs = now + 5_000;
+      }
+      if (!job) {
+        await writeCronStoreSnapshot({ storePath, jobs: [] });
+      }
+      const liveBefore = structuredClone(state.store?.jobs ?? []);
+      const durableBefore = (await loadCronStore(storePath)).jobs;
+      await withCronJobWriteFailure(storePath, async () => {
+        const mutation = job
+          ? operation === "update"
+            ? update(state, job.id, { name: "renamed cleanup" })
+            : remove(state, job.id)
+          : add(state, makeCreateInput("daily cleanup"));
+        await expect(mutation).rejects.toThrow("disk full");
+      });
+      expect(state.store?.jobs ?? []).toEqual(liveBefore);
+      expect((await loadCronStore(storePath)).jobs).toEqual(durableBefore);
+      if (job && operation === "update") {
+        expect(state.store?.jobs.find((entry) => entry.id === job.id)?.name).toBe("daily cleanup");
+        expect(
+          (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.name,
+        ).toBe("daily cleanup");
+      }
+      if (job && operation === "remove") {
+        expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
+      }
+      if (!job) {
+        expect(state.timer).toBeNull();
+        expect(await list(state, { includeDisabled: true })).toEqual([]);
+        state.timer?.cancel();
+        const recovered = await add(state, makeCreateInput("daily cleanup"));
+        state.timer?.cancel();
+        expect((await list(state, { includeDisabled: true })).map((entry) => entry.id)).toEqual([
+          recovered.id,
+        ]);
+        state.timer?.cancel();
+        expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual([
+          recovered.id,
+        ]);
+      }
+    },
+  );
 
   it("does not clone the store before a missing or invalid update reaches commit", async () => {
     const { storePath } = await makeStorePath();
@@ -155,67 +166,6 @@ describe("cron service ops persist rollback", () => {
     if (state.timer) {
       state.timer.cancel();
     }
-  });
-
-  it("keeps a removed job in the live store when persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(remove(state, job.id)).rejects.toThrow("disk full");
-    });
-
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it("restores a job's catch-up deferral when a remove persist fails", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    job.state.startupCatchupAtMs = now + 5_000;
-
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(remove(state, job.id)).rejects.toThrow("disk full");
-    });
-
-    expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
-    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
-  });
-
-  it("recovers after a failed persist so the next mutation succeeds", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-06-09T00:00:00.000Z");
-    const state = createOkIsolatedCronState({ storePath, now });
-
-    await writeCronStoreSnapshot({ storePath, jobs: [] });
-    await withCronJobWriteFailure(storePath, async () => {
-      await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
-    });
-    const job = await add(state, makeCreateInput("daily cleanup"));
-    if (state.timer) {
-      state.timer.cancel();
-    }
-
-    const listed = await list(state, { includeDisabled: true });
-    if (state.timer) {
-      state.timer.cancel();
-    }
-    expect(listed.map((entry) => entry.id)).toEqual([job.id]);
-    const loaded = await loadCronStore(storePath);
-    expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
   it.each(["mutation"] as const)(

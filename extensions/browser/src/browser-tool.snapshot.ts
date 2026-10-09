@@ -1,33 +1,33 @@
 /**
- * Browser agent tool snapshot execution and inline page-state feedback.
- *
  * Owns the model-facing snapshot result shape (untrusted-content wrapping,
  * caps, dialog states) and attaches fresh page state to actions that changed
  * the page document so the model does not need a follow-up snapshot call.
  */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { imageResultFromFile } from "openclaw/plugin-sdk/channel-actions";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   formatErrorMessage,
   truncateSanitizedExternalContent,
+  wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
+import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
+import { browserSnapshot } from "./browser/client.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  browserSnapshot,
-  getRuntimeConfig,
-  imageResultFromFile,
-  normalizeOptionalString,
-  readStringValue,
-  resolveRuntimeImageSanitization,
-  wrapExternalContent,
-} from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role-snapshot.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 
@@ -183,7 +183,6 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
   return msg.includes("refs=aria") && msg.includes("not support");
 }
 
-/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;

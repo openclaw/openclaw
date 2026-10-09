@@ -16,37 +16,34 @@ function projectionState(): Parameters<typeof applySelectedSessionProjection>[0]
 }
 
 describe("applySelectedSessionProjection", () => {
-  it("retains pane-owned metadata when a scoped list omits the selected session", () => {
+  it.each([
+    undefined,
+    {
+      archived: false,
+      effectiveQueueMode: "followup",
+      key: "agent:main:main",
+      kind: "direct",
+      queueMode: "followup",
+      updatedAt: 1,
+    },
+  ] as const)("projects selected metadata only when its row is present: %j", (row) => {
     const state = projectionState();
-
-    expect(applySelectedSessionProjection(state, undefined)).toBe(false);
-    expect(state).toEqual({
-      chatEffectiveQueueMode: "interrupt",
-      chatQueueModeOverride: "interrupt",
-      selectedChatSessionArchived: true,
-      selectedChatSessionIncognito: true,
-    });
-  });
-
-  it("adopts metadata from a matching session row", () => {
-    const state = projectionState();
-
-    expect(
-      applySelectedSessionProjection(state, {
-        archived: false,
-        effectiveQueueMode: "followup",
-        key: "agent:main:main",
-        kind: "direct",
-        queueMode: "followup",
-        updatedAt: 1,
-      }),
-    ).toBe(true);
-    expect(state).toEqual({
-      chatEffectiveQueueMode: "followup",
-      chatQueueModeOverride: "followup",
-      selectedChatSessionArchived: false,
-      selectedChatSessionIncognito: false,
-    });
+    expect(applySelectedSessionProjection(state, row)).toBe(row !== undefined);
+    expect(state).toEqual(
+      row
+        ? {
+            chatEffectiveQueueMode: "followup",
+            chatQueueModeOverride: "followup",
+            selectedChatSessionArchived: false,
+            selectedChatSessionIncognito: false,
+          }
+        : {
+            chatEffectiveQueueMode: "interrupt",
+            chatQueueModeOverride: "interrupt",
+            selectedChatSessionArchived: true,
+            selectedChatSessionIncognito: true,
+          },
+    );
   });
 
   it("adopts an archived routed row published after the active list omitted it", () => {
@@ -171,9 +168,17 @@ describe("resolveArtifactDownloadSource", () => {
     },
   );
 
-  it.each(["network", "missing route", "SPA fallback", "wrong content type"])(
-    "reauthorizes inline bytes when the HTTPS proxy returns %s",
-    async (failure) => {
+  it.each([
+    { failure: "network", mimeType: "image/png", type: "image", reject: false },
+    { failure: "missing route", mimeType: "image/png", type: "image", reject: false },
+    { failure: "SPA fallback", mimeType: "image/png", type: "image", reject: false },
+    { failure: "wrong content type", mimeType: "image/png", type: "image", reject: false },
+    { failure: "unsafe SVG", mimeType: "image/svg+xml", type: "image", reject: true },
+    { failure: "unsafe HTML", mimeType: "text/html", type: "image", reject: true },
+    { failure: "non-image artifact", mimeType: "image/png", type: "file", reject: true },
+  ])(
+    "reauthorizes failed transfers but rejects unsafe blobs: $failure",
+    async ({ failure, mimeType, type, reject }) => {
       vi.stubGlobal("location", new URL("https://control.test"));
       vi.stubGlobal(
         "fetch",
@@ -185,53 +190,35 @@ describe("resolveArtifactDownloadSource", () => {
             ok: failure !== "missing route",
             status: failure === "missing route" ? 404 : 200,
             headers: new Headers(
-              failure === "wrong content type" ? { "Content-Disposition": "attachment" } : {},
+              reject || failure === "wrong content type"
+                ? { "Content-Disposition": 'attachment; filename="artifact"' }
+                : {},
             ),
-            blob: async () => new Blob(["UI"], { type: "text/html" }),
+            blob: async () => new Blob(["untrusted"], { type: reject ? mimeType : "text/html" }),
           };
         }),
       );
+      const download = { artifact: { ...artifact, mimeType, type }, url: ticket };
       const request = vi
         .fn()
-        .mockResolvedValueOnce({ artifact, url: ticket })
-        .mockResolvedValue(inline);
+        .mockResolvedValueOnce(download)
+        .mockResolvedValue(reject ? download : inline);
       const result = await resolveArtifactDownloadSource(
         { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
         { sessionKey: "agent:main:main", artifactId: artifact.id },
       );
-      expect(result).toEqual({ url: "data:image/png;base64,cG5n" });
-      expect(request.mock.calls.map(([, params]) => params)).toEqual([
-        { sessionKey: "agent:main:main", artifactId: artifact.id, transport: "http" },
-        { sessionKey: "agent:main:main", artifactId: artifact.id },
-      ]);
+      if (reject) {
+        expect(result).toBeNull();
+        expect(request).toHaveBeenCalledOnce();
+      } else {
+        expect(result).toEqual({ url: "data:image/png;base64,cG5n" });
+        expect(request.mock.calls.map(([, params]) => params)).toEqual([
+          { sessionKey: "agent:main:main", artifactId: artifact.id, transport: "http" },
+          { sessionKey: "agent:main:main", artifactId: artifact.id },
+        ]);
+      }
     },
   );
-
-  it.each([
-    { mimeType: "image/svg+xml", type: "image" },
-    { mimeType: "text/html", type: "image" },
-    { mimeType: "image/png", type: "file" },
-  ])("rejects $type HTTP blobs with $mimeType at the chat boundary", async ({ mimeType, type }) => {
-    vi.stubGlobal("location", new URL("https://control.test"));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        headers: new Headers({ "Content-Disposition": 'attachment; filename="artifact"' }),
-        blob: async () => new Blob(["untrusted"], { type: mimeType }),
-      })),
-    );
-    const request = vi.fn().mockResolvedValue({
-      artifact: { ...artifact, mimeType, type },
-      url: ticket,
-    });
-    const result = await resolveArtifactDownloadSource(
-      { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
-      { sessionKey: "agent:main:main", artifactId: artifact.id },
-    );
-    expect(result).toBeNull();
-    expect(request).toHaveBeenCalledOnce();
-  });
 
   it("discards a failed transfer after reconnect without requesting inline bytes", async () => {
     vi.stubGlobal("location", new URL("https://control.test"));
@@ -312,66 +299,38 @@ describe("SessionParticipationTracker", () => {
       ...patch,
     });
 
-  it("blocks only on a positively observed restricted state", () => {
+  it.each([
+    { visibility: "draft", sharingRole: "member", blocked: true },
+    { visibility: "read-only", sharingRole: "viewer", blocked: true },
+    { visibility: "shared", sharingRole: "member", blocked: false },
+  ] as const)(
+    "holds only observed restrictions while refreshing: $visibility",
+    ({ visibility, sharingRole, blocked }) => {
+      const tracker = new SessionParticipationTracker();
+      expect(resolve(tracker, { session: { visibility, sharingRole } })).toBe(blocked);
+      expect(resolve(tracker, { listLoading: true })).toBe(blocked);
+      // Completed absence is not a revocation (filtering, pagination, and deletion).
+      expect(resolve(tracker)).toBe(false);
+      expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
+        false,
+      );
+      expect(resolve(tracker, { listLoading: true })).toBe(false);
+    },
+  );
+
+  it.each(["connection", "agent"] as const)("scopes held restrictions to the %s", (change) => {
+    const tracker = new SessionParticipationTracker();
+    const sessionKey = "main\0global";
     expect(
-      resolve(new SessionParticipationTracker(), {
-        session: { visibility: "draft", sharingRole: "member" },
-      }),
+      resolve(tracker, { sessionKey, session: { visibility: "draft", sharingRole: "member" } }),
     ).toBe(true);
-    expect(
-      resolve(new SessionParticipationTracker(), {
-        session: { visibility: "read-only", sharingRole: "viewer" },
-      }),
-    ).toBe(true);
-    expect(
-      resolve(new SessionParticipationTracker(), {
-        session: { visibility: "shared", sharingRole: "member" },
-      }),
-    ).toBe(false);
-  });
-
-  it("never blocks a session that is absent from a completed list (filter/pagination/deletion)", () => {
-    const tracker = new SessionParticipationTracker();
-    // Even a previously restricted session that drops out of a filtered or
-    // paginated list must not stay blocked once the load completes.
-    expect(resolve(tracker, { session: { visibility: "draft", sharingRole: "member" } })).toBe(
-      true,
-    );
-    expect(resolve(tracker)).toBe(false);
-  });
-
-  it("holds the last known block across an in-flight refresh to avoid flicker", () => {
-    const tracker = new SessionParticipationTracker();
-    expect(resolve(tracker, { session: { visibility: "draft", sharingRole: "member" } })).toBe(
-      true,
-    );
-    expect(resolve(tracker, { listLoading: true })).toBe(true);
-    // A session last known unrestricted is not held blocked during a refresh.
-    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
-      false,
-    );
-    expect(resolve(tracker, { listLoading: true })).toBe(false);
-  });
-
-  it("forgets held state when the gateway connection changes", () => {
-    const tracker = new SessionParticipationTracker();
-    expect(resolve(tracker, { session: { visibility: "draft", sharingRole: "member" } })).toBe(
-      true,
-    );
-    expect(resolve(tracker, { listLoading: true })).toBe(true);
-    tracker.reset();
-    expect(resolve(tracker, { listLoading: true })).toBe(false);
-  });
-
-  it("keeps agent-relative global session history separate", () => {
-    const tracker = new SessionParticipationTracker();
-    expect(
-      resolve(tracker, {
-        sessionKey: "main\0global",
-        session: { visibility: "draft", sharingRole: "member" },
-      }),
-    ).toBe(true);
-    expect(resolve(tracker, { sessionKey: "work\0global", listLoading: true })).toBe(false);
-    expect(resolve(tracker, { sessionKey: "main\0global", listLoading: true })).toBe(true);
+    expect(resolve(tracker, { sessionKey, listLoading: true })).toBe(true);
+    if (change === "connection") {
+      tracker.reset();
+      expect(resolve(tracker, { sessionKey, listLoading: true })).toBe(false);
+    } else {
+      expect(resolve(tracker, { sessionKey: "work\0global", listLoading: true })).toBe(false);
+      expect(resolve(tracker, { sessionKey, listLoading: true })).toBe(true);
+    }
   });
 });

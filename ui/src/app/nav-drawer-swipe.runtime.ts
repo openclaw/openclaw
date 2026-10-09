@@ -43,7 +43,7 @@ export class NavDrawerSwipeOwner {
     this.host.addEventListener("touchstart", this.handleStart, { passive: true });
     this.host.addEventListener("touchmove", this.handleMove, { passive: false });
     this.host.addEventListener("touchend", this.handleEnd, { passive: true });
-    this.host.addEventListener("touchcancel", this.handleCancel, { passive: true });
+    this.host.addEventListener("touchcancel", this.cancel, { passive: true });
     if (this.host.navDrawerOpen) {
       this.opened();
     }
@@ -53,7 +53,7 @@ export class NavDrawerSwipeOwner {
     this.host.removeEventListener("touchstart", this.handleStart);
     this.host.removeEventListener("touchmove", this.handleMove);
     this.host.removeEventListener("touchend", this.handleEnd);
-    this.host.removeEventListener("touchcancel", this.handleCancel);
+    this.host.removeEventListener("touchcancel", this.cancel);
     this.reset();
   }
 
@@ -102,10 +102,10 @@ export class NavDrawerSwipeOwner {
     backdrop.style.opacity = String(swipe.drawerWidth > 0 ? reveal / swipe.drawerWidth : 0);
   }
 
-  private cancel(): void {
+  private readonly cancel = (): void => {
     this.swipe = null;
     requestAnimationFrame(() => this.reset());
-  }
+  };
 
   private readonly handleStart = (event: TouchEvent): void => {
     this.reset();
@@ -199,6 +199,4 @@ export class NavDrawerSwipeOwner {
       requestAnimationFrame(() => this.reset());
     }
   };
-
-  private readonly handleCancel = (): void => this.cancel();
 }

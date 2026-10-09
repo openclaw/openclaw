@@ -33,12 +33,9 @@ import {
   resolvePersonalGitHubOwner,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.js";
+import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  getUserProfileListItem,
-} from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -239,7 +236,7 @@ beforeEach(async () => {
   lifecycle = createGitHubOAuthLifecycle({
     scheduler: createTestGatewayScheduler(),
     getConfig: () => config,
-    getPersistedConfig: () => config,
+    getPersistedConfig: async () => config,
     warn: vi.fn(),
   });
   context = {
@@ -455,7 +452,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       await state.writeConfig(config);
       if (kind === "pat") {
         const secretName = "github-setup-11111111111111111111111111111111";
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           scope: { kind: "team" },
           name: secretName,
           value: tokens.accessToken,
@@ -845,8 +842,8 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     expect(dir).toContain(path.join("credentials", "github", "personal"));
     expect((await fs.stat(dir)).mode & 0o077).toBe(0);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
     expect(listGitHubOAuthRecords()).toEqual([]);
     expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
     await purgeExpiredSecretStoreEntries();

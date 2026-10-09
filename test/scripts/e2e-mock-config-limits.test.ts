@@ -1169,95 +1169,89 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
-  it.for(["current", "legacy"])(
-    "resumes the MCP Code Mode fixture (%s catalog)",
-    async (mode, ctx) => {
-      const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
-      const tools = createCodeModeTools({});
-      await withMockServer(ctx, mockOpenAiPath, env, async (baseUrl) => {
-        const input: Record<string, unknown>[] = [
-          { content: "mcp code mode api file qa check", role: "user" },
-        ];
-        const request = async () => {
-          const response = await fetch(`${baseUrl}/v1/responses`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              input,
-              stream: false,
-              tools: tools.map(({ name, parameters }) => ({
-                name,
-                parameters,
-                type: "function",
-              })),
-            }),
-          });
-          expect(response.status).toBe(200);
-          const result = await response.json();
-          for (const call of result.output ?? []) {
-            if (call.type !== "function_call") {
-              continue;
-            }
-            const tool = tools.find((entry) => entry.name === call.name);
-            if (!tool) {
-              throw new Error(`Mock emitted undeclared tool: ${call.name}`);
-            }
-            validateToolArguments(tool, {
-              type: "toolCall",
-              id: call.call_id,
-              name: call.name,
-              arguments: JSON.parse(call.arguments),
-            });
-          }
-          return result;
-        };
-        const first = await request();
-        expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
-        const execArguments = JSON.parse(first.output[0].arguments);
-        expect(execArguments).toEqual({
-          title: expect.any(String),
-          code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
+  it("resumes the MCP Code Mode fixture", async (ctx) => {
+    const tools = createCodeModeTools({});
+    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+      const input: Record<string, unknown>[] = [
+        { content: "mcp code mode api file qa check", role: "user" },
+      ];
+      const request = async () => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input,
+            stream: false,
+            tools: tools.map(({ name, parameters }) => ({
+              name,
+              parameters,
+              type: "function",
+            })),
+          }),
         });
-        expect(execArguments.code).toContain(
-          mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
-        );
-
-        for (const reason of ["pending_tools", "yield"]) {
-          input.push({
-            output: JSON.stringify({ status: "waiting", runId: "cm_fixture", reason, output: [] }),
-            type: "function_call_output",
-          });
-          const pending = await request();
-          expect(pending.output?.[0]).toMatchObject({
-            arguments: JSON.stringify({ runId: "cm_fixture" }),
-            name: "wait",
-            type: "function_call",
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        for (const call of result.output ?? []) {
+          if (call.type !== "function_call") {
+            continue;
+          }
+          const tool = tools.find((entry) => entry.name === call.name);
+          if (!tool) {
+            throw new Error(`Mock emitted undeclared tool: ${call.name}`);
+          }
+          validateToolArguments(tool, {
+            type: "toolCall",
+            id: call.call_id,
+            name: call.name,
+            arguments: JSON.parse(call.arguments),
           });
         }
+        return result;
+      };
+      const first = await request();
+      expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
+      const execArguments = JSON.parse(first.output[0].arguments);
+      expect(execArguments).toEqual({
+        title: expect.any(String),
+        code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
+      });
+      expect(execArguments.code).toContain("catalog.all().some(");
 
+      for (const reason of ["pending_tools", "yield"]) {
         input.push({
-          output: JSON.stringify({
-            status: "completed",
-            value: {
-              marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
-              resultText: "fixture-note-alpha",
-            },
-          }),
+          output: JSON.stringify({ status: "waiting", runId: "cm_fixture", reason, output: [] }),
           type: "function_call_output",
         });
-        const completed = await request();
-        expect(completed.output?.[0]?.content?.[0]?.text).toContain(
-          "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
-        );
+        const pending = await request();
+        expect(pending.output?.[0]).toMatchObject({
+          arguments: JSON.stringify({ runId: "cm_fixture" }),
+          name: "wait",
+          type: "function_call",
+        });
+      }
 
-        input.push({ output: "fixture call failed", type: "function_call_output" });
-        const failed = await request();
-        expect(failed.output?.[0]?.content?.[0]?.text).toBe(
-          "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
-        );
+      input.push({
+        output: JSON.stringify({
+          status: "completed",
+          value: {
+            marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
+            resultText: "fixture-note-alpha",
+          },
+        }),
+        type: "function_call_output",
       });
-    },
-  );
+      const completed = await request();
+      expect(completed.output?.[0]?.content?.[0]?.text).toContain(
+        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
+      );
+
+      input.push({ output: "fixture call failed", type: "function_call_output" });
+      const failed = await request();
+      expect(failed.output?.[0]?.content?.[0]?.text).toBe(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    });
+  });
 
   it.for([
     { output: { status: "waiting", runId: "cm_fixture" }, tools: ["exec"] },
@@ -1645,9 +1639,9 @@ async function tryBind(port: number) {
 describe("SQLite flip mock endpoint ownership", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([false, true])(
+  it.for([false, true])(
     "owns the first published endpoint and handles config failure (unverified stop=%s)",
-    async (unverifiedStop) => {
+    async (unverifiedStop, { signal }) => {
       vi.mocked(spawn).mockClear();
       const envSnapshot = captureFullEnv();
       process.env.ANTHROPIC_API_KEY = "ambient-provider-fixture";
@@ -1730,7 +1724,7 @@ describe("SQLite flip mock endpoint ownership", () => {
       );
 
       try {
-        const result = await runSqliteSessionsTranscriptsFlipProof().catch(
+        const result = await runSqliteSessionsTranscriptsFlipProof({ signal }).catch(
           (error: unknown) => error,
         );
         const mockAtSettlement = {

@@ -50,7 +50,10 @@ try {
     const start = Math.max(0, size - 2000);
     const buffer = Buffer.alloc(Math.min(2000, size));
     const bytes = fs.readSync(fd, buffer, 0, buffer.length, utf16 ? start - start % 2 : start);
-    tail = buffer.subarray(0, bytes).toString(utf16 ? "utf16le" : "utf8");
+    let offset = 0;
+    if (utf16 && bytes >= 2 && buffer.readUInt16LE(0) >= 0xdc00 && buffer.readUInt16LE(0) <= 0xdfff) offset = 2;
+    if (!utf16) while (offset < bytes && (buffer[offset] & 0xc0) === 0x80) offset++;
+    tail = buffer.subarray(offset, bytes).toString(utf16 ? "utf16le" : "utf8");
   } finally { fs.closeSync(fd); }
 } catch {}
 process.stdout.write("node-runtime=" + runtime + " node-pid=" + (alive ? "alive" : "dead-or-absent") + " node.log tail: " + tail);`,
@@ -69,7 +72,25 @@ process.stdout.write("node-runtime=" + runtime + " node-pid=" + (alive ? "alive"
     label = "box evidence unavailable";
     detail = error instanceof Error ? error.message : "diagnostic command failed";
   }
-  const prefix = `${label}: `;
+  let prefix = `${label}: `;
   const safeDetail = redactToolPayloadText(detail).replace(/\s+/gu, " ").trim();
-  return `${prefix}${truncateUtf8Prefix(safeDetail, MAX_NODE_ENROLLMENT_EVIDENCE_BYTES - prefix.length)}`;
+  const evidence =
+    label === "box evidence"
+      ? /^node-runtime=(.*?) node-pid=(alive|dead-or-absent) node\.log tail: (.*)$/u.exec(
+          safeDetail,
+        )
+      : null;
+  if (evidence) {
+    // Bound the runtime path independently so process state and the newest log bytes survive.
+    prefix += `node-runtime=${truncateUtf8Prefix(evidence[1]!, 256)} node-pid=${evidence[2]} node.log tail: `;
+  }
+  const bytes = Buffer.from(evidence?.[3] ?? safeDetail);
+  let start = Math.max(
+    0,
+    bytes.length - (MAX_NODE_ENROLLMENT_EVIDENCE_BYTES - Buffer.byteLength(prefix)),
+  );
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) {
+    start++;
+  }
+  return `${prefix}${bytes.subarray(start).toString("utf8")}`;
 }

@@ -38,7 +38,6 @@ const UPDATE_STEP_NOTICE_MS = 30_000;
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
-  onHeartbeat?: UpdateStepProgress["onHeartbeat"];
   onStepStart?: (
     step: Parameters<NonNullable<UpdateStepProgress["onStepStart"]>>[0],
     record?: UpdateRunRecord,
@@ -57,15 +56,6 @@ type ProgressController = {
   dispose: () => void;
 };
 
-function readDisplayRecord(runId: string, env?: NodeJS.ProcessEnv, source = "report") {
-  try {
-    return getUpdateRun(runId, { env });
-  } catch (error) {
-    defaultRuntime.error(`Update ${source} history unavailable: ${formatErrorMessage(error)}`);
-    return undefined;
-  }
-}
-
 export function createUpdateProgress(
   enabled: boolean,
   run?: UpdateCommandOptions["run"],
@@ -77,7 +67,6 @@ export function createUpdateProgress(
   let currentSpinner: ReturnType<typeof spinner> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stepNotice: ReturnType<typeof setInterval> | undefined;
-  let currentPhase: UpdateRunPhase | undefined;
   let currentRecord: UpdateRunRecord | undefined;
   let pendingRead: AbortController | undefined;
   let polling = true;
@@ -108,7 +97,6 @@ export function createUpdateProgress(
       return;
     }
     currentRecord = record;
-    currentPhase = record.phase;
     // A child process can cross several phases between reads. Replay the recorded
     // timeline rather than losing fast transitions or inferring unobserved phases.
     for (const phase of UPDATE_RUN_PHASES) {
@@ -188,7 +176,7 @@ export function createUpdateProgress(
   const progress: UpdateDisplayProgress = {
     onStepStart: (step, record) => {
       finalize(record ?? currentRecord, false);
-      const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
+      const label = currentRecord ? `${currentRecord.phase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
         currentSpinner = spinner({ indicator: "timer" });
         currentSpinner.start(theme.accent(label));
@@ -215,7 +203,6 @@ export function createUpdateProgress(
     suspend: () => {
       if (observation === "active") {
         observation = "suspended";
-        currentPhase = undefined;
         currentRecord = undefined;
         pausePolling();
         stop();
@@ -240,7 +227,14 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
       : step.signal
         ? ` — interrupted (${step.signal})`
         : "";
-  defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
+  const statusIcon = step.advisory
+    ? theme.warn("!")
+    : !isFailedUpdateStep(step)
+      ? theme.success("\u2713")
+      : step.exitCode === null
+        ? theme.warn("?")
+        : theme.error("\u2717");
+  defaultRuntime.log(`  ${statusIcon} ${step.name}${termination} ${duration}`);
   for (const finding of step.doctorLintFindings ?? []) {
     defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
   }
@@ -262,22 +256,15 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
     ? [step.stdoutTail, step.stderrTail]
     : updateStepDiagnostics(step).tails;
   for (const output of tails) {
-    for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
+    for (const line of (output ?? "")
+      .trimEnd()
+      .split("\n")
+      .slice(step.termination === "signal" ? -80 : -10)) {
       if (line.trim()) {
         defaultRuntime.log(`    ${color(line)}`);
       }
     }
   }
-}
-
-function formatStepStatus(step: Omit<UpdateStepResult, "cwd">): string {
-  return step.advisory
-    ? theme.warn("!")
-    : !isFailedUpdateStep(step)
-      ? theme.success("\u2713")
-      : step.exitCode === null
-        ? theme.warn("?")
-        : theme.error("\u2717");
 }
 
 export async function printResult(
@@ -297,7 +284,14 @@ export async function printResult(
   let report: ReturnType<typeof renderUpdateRunReport> | undefined;
   const readRun =
     result.runId && !reportHints.record && reportHints.readHistory !== false
-      ? () => readDisplayRecord(result.runId!, opts.run?.env)
+      ? () => {
+          try {
+            return getUpdateRun(result.runId!, { env: opts.run?.env });
+          } catch (error) {
+            defaultRuntime.error(`Update report history unavailable: ${formatErrorMessage(error)}`);
+            return undefined;
+          }
+        }
       : undefined;
   // The artifact owner reads under its lock and reconciles after publication.
   // Captured and detached reports never reopen retained history.
