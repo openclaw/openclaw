@@ -1708,6 +1708,13 @@ read without durable discovery. A retained ended actor still raises
 consumption. Mirror correlation, idempotency receipts, and lifecycle cleanup
 continue through the P02 transaction owners.
 
+Active Memory prepares one parent-entry snapshot per recall request and reuses it
+for eligibility, fast mode, and channel context; final authority checks remain
+current. Memory publication's connection-local TEMP scratch table creation and
+explicitly TEMP-qualified cleanup expire local read facts without revoking MAIN
+schema admission. Mixed SQL batches, unqualified drops, and actual MAIN schema
+changes retain their existing invalidation and repair behavior.
+
 Production acquisition remains host-owned until P12. Unbound incognito calls keep
 their native owner and allocate no actor; native selector removal remains P12.
 This prerequisite claims no incognito T1 retirement and changes no schema, stored
