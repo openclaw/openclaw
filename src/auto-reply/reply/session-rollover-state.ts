@@ -28,10 +28,11 @@ export function resolveReplySessionRolloverState(
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
+    // Appearance travels with the preserved selection; do not keep a second list here.
+    ...preservedSelection,
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
-    category: entry.category,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,

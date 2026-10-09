@@ -2457,6 +2457,63 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     });
   });
 
+  it("preserves custom session appearance across /new and /reset", async () => {
+    const storePath = await makeStorePath("openclaw-reset-appearance-");
+    const sessionKey = "agent:main:telegram:dm:user-appearance";
+    const existingSessionId = "existing-session-appearance";
+    const appearance = {
+      icon: "🦞",
+      color: "blue",
+      category: "Operator group",
+      boardFace: "dashboard",
+      boardPresentation: "expanded",
+      visibility: "draft",
+    } as const;
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: appearance,
+    });
+
+    for (const { name, result, stored } of cases) {
+      expect(result.isNewSession, name).toBe(true);
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionId, name).toBe(existingSessionId);
+      expectEntryFields(result.sessionEntry, appearance, name);
+      expectEntryFields(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant"),
+        appearance,
+        name,
+      );
+    }
+  });
+
+  it("does not invent a session icon when none was set across /new and /reset", async () => {
+    const storePath = await makeStorePath("openclaw-reset-no-appearance-");
+    const sessionKey = "agent:main:telegram:dm:user-no-appearance";
+    const existingSessionId = "existing-session-no-appearance";
+    const cases = await runExplicitResetCases({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      entry: { label: "plain-session" },
+    });
+
+    for (const { name, result, stored } of cases) {
+      expect(result.resetTriggered, name).toBe(true);
+      expect(result.sessionEntry.icon, name).toBeUndefined();
+      expect(result.sessionEntry.color, name).toBeUndefined();
+      expect(result.sessionEntry.category, name).toBeUndefined();
+      expect(result.sessionEntry.boardFace, name).toBeUndefined();
+      expect(result.sessionEntry.boardPresentation, name).toBeUndefined();
+      expect(
+        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").icon,
+        name,
+      ).toBeUndefined();
+    }
+  });
+
   it.each([
     {
       name: "selected model, auth profile, and runtime caches",
