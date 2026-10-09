@@ -705,7 +705,7 @@ describe("captured model decisions", () => {
       expires: Date.now() + 60 * 60_000,
     } as const;
     const evaluate = (
-      outcome: { status: "ready"; listedModelIds: string[] } | { status: "unavailable" },
+      outcome: { status: "ready"; listedModelIds: readonly string[] } | { status: "unavailable" },
       withApiKey: boolean,
       id: string,
     ) =>
