@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -10,6 +12,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 
 const controlUiAssetsMocks = vi.hoisted(() => ({
   ensureControlUiAssetsBuilt: vi.fn(),
@@ -39,6 +42,7 @@ function readyAssets(root = "/repo/dist/control-ui", publicAssetBuildId?: string
 }
 
 describe("createGatewayControlUiRootLifecycle", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(fs, "realpathSync").mockImplementation((rootPath) => String(rootPath));
@@ -99,6 +103,38 @@ describe("createGatewayControlUiRootLifecycle", () => {
     await lifecycle.stop();
     expect(() => readControlUiRootAsset(root, "index.html", true)).toThrow();
     expect(read).not.toHaveBeenCalled();
+  });
+
+  test("reads a cold asset while the shared compute budget is occupied", async () => {
+    const root = tempDirs.make("control-ui-compute-contention-");
+    fs.writeFileSync(path.join(root, "index.html"), "synthetic asset");
+    const capacity = getWorkerComputeCapacity();
+    const permits = Array.from({ length: capacity.getSnapshot().limit }, () => {
+      const permit = capacity.acquire(
+        () => {},
+        () => false,
+      );
+      if (!permit) {
+        throw new Error("Expected an unused compute budget");
+      }
+      return permit;
+    });
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const read = readControlUiRootAsset({ kind: "resolved", path: root }, "index.html", true);
+    try {
+      const pool = run.mock.contexts[0];
+      if (!(pool instanceof WorkerTaskPool)) {
+        throw new Error("Expected the file read to reach its worker pool");
+      }
+      expect(pool.getSnapshot().activeTasks).toBe(1);
+      await expect(read).resolves.toMatchObject({ file: { body: Buffer.from("synthetic asset") } });
+    } finally {
+      for (const permit of permits) {
+        capacity.release(permit);
+      }
+      await read;
+      await drainGlobalSingletonLifecycleState();
+    }
   });
 
   test("prepares retained generations for bundled roots without delaying construction", async () => {

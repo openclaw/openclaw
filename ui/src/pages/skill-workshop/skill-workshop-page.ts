@@ -101,18 +101,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
   }
 
-  override updated() {
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (
-      this.scope &&
-      runtimeConfig &&
-      !runtimeConfig.state.configSnapshot &&
-      !runtimeConfig.state.configLoading
-    ) {
-      void runtimeConfig.ensureLoaded();
-    }
-  }
-
   private async load(): Promise<void> {
     const scope = this.scope;
     if (!scope) {
@@ -121,6 +109,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     const generation = this.generation;
     const sequence = ++this.loadSequence;
     const isCurrent = () => generation === this.generation && sequence === this.loadSequence;
+    void this.context?.runtimeConfig.ensureLoaded();
     this.loading = true;
     this.error = null;
     this.requestUpdate();
@@ -422,7 +411,9 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       access: resolveWorkshopAccess(context.gateway.snapshot),
       snapshot: this.snapshot,
       loading: this.loading,
-      error: this.error,
+      error:
+        this.error ??
+        (context.runtimeConfig.state.configSnapshot ? null : context.runtimeConfig.state.lastError),
       viewer: this.viewer,
       filter: this.filter,
       sort: this.sort,

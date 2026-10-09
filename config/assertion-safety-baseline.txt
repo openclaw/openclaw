@@ -32,7 +32,7 @@ extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
-extensions/browser/src/browser-proxy-upload.ts	2
+extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
 extensions/browser/src/browser-tool.actions.ts	9
@@ -550,7 +550,6 @@ extensions/memory-core/src/short-term-promotion-apply.ts	1
 extensions/memory-core/src/short-term-promotion-memory-write.ts	2
 extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
-extensions/memory-core/src/short-term-promotion-utils.ts	4
 extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/tools.ts	2
 extensions/memory-lancedb/doctor-contract-api.ts	1
@@ -884,7 +883,6 @@ extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
-extensions/telegram/src/bot-message-context.session.ts	1
 extensions/telegram/src/bot-message-context.ts	2
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
@@ -915,7 +913,7 @@ extensions/telegram/src/request-timeouts.ts	1
 extensions/telegram/src/rich-message.ts	1
 extensions/telegram/src/security-audit.ts	3
 extensions/telegram/src/send-actions.ts	2
-extensions/telegram/src/send-context.ts	2
+extensions/telegram/src/send-context.ts	1
 extensions/telegram/src/send-edit.ts	1
 extensions/telegram/src/send-location.ts	2
 extensions/telegram/src/send-outbound.ts	1
@@ -1882,7 +1880,7 @@ src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	3
+src/config/sessions/session-accessor.sqlite-read.ts	2
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1

@@ -281,7 +281,7 @@ describe("legacy MCP OAuth Doctor migration", () => {
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
   });
 
-  it.each(["post-commit-error", "native-exit"] as const)(
+  it.each(["publication-error", "native-exit"] as const)(
     "retains the actual import outcome across %s failure",
     async (mode) => {
       const { env, stateDir } = useStateDir();
@@ -311,10 +311,8 @@ describe("legacy MCP OAuth Doctor migration", () => {
         source_sha256: createHash("sha256").update(bytes).digest("hex"),
         removed_source: mode === "native-exit" ? 0 : 1,
       });
-      if (mode === "post-commit-error") {
-        expect(result.warnings.join("\n")).toContain(
-          "MCP OAuth import committed, but result delivery failed:",
-        );
+      if (mode === "publication-error") {
+        expect(result.warnings).toEqual([]);
         expect(result.changes).toContain(
           `Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`,
         );

@@ -19,6 +19,16 @@ import {
   type TelegramSupersedeAuthContext,
 } from "./telegram-ingress-supersede-auth.js";
 
+function* telegramUpdateMessages(update: unknown) {
+  const root = asOptionalObjectRecord(update);
+  for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
+    const message = asOptionalObjectRecord(root?.[key]);
+    if (message) {
+      yield message;
+    }
+  }
+}
+
 function isRecognizedTelegramTextCommand(rawText: string, botUsername?: string): boolean {
   return (
     maybeResolveTextAlias(
@@ -50,15 +60,7 @@ function isTelegramCommandTargetedAtBot(commandText: string, botUsername?: strin
 
 /** True when the update carries a bot_command entity addressed to this bot. */
 function updateHasBotCommandEntityForBot(update: unknown, botUsername?: string): boolean {
-  const root = asOptionalObjectRecord(update);
-  if (!root) {
-    return false;
-  }
-  for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
-    const message = asOptionalObjectRecord(root[key]);
-    if (!message) {
-      continue;
-    }
+  for (const message of telegramUpdateMessages(update)) {
     const body = readStringField(message, "text") ?? readStringField(message, "caption") ?? "";
     for (const entities of [message.entities, message.caption_entities]) {
       if (!Array.isArray(entities)) {
@@ -82,17 +84,13 @@ function updateHasBotCommandEntityForBot(update: unknown, botUsername?: string):
 
 function extractUpdateText(update: unknown): string {
   const root = asOptionalObjectRecord(update);
-  if (!root) {
-    return "";
-  }
-  for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
-    const msg = asOptionalObjectRecord(root[key]);
+  for (const msg of telegramUpdateMessages(root)) {
     const text = readStringField(msg, "text") ?? readStringField(msg, "caption");
     if (text !== undefined) {
       return text;
     }
   }
-  return readStringField(asOptionalObjectRecord(root.callback_query), "data") ?? "";
+  return readStringField(asOptionalObjectRecord(root?.callback_query), "data") ?? "";
 }
 
 /**

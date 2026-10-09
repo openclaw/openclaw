@@ -36,42 +36,39 @@ function inspectEntry(file: string, allowNotDirectory = false) {
 
 export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateImmutableInstall {
   const { descriptor, prepared } = record;
-  return {
+  const result: UpdateImmutableInstall = {
     root: descriptor.root,
     currentSha: descriptor.current.sha,
     currentPath: descriptor.current.path,
     ...(descriptor.activationEnabled ? { activationEnabled: true } : {}),
-    ...(record.activation?.operation
-      ? {
-          activation: {
-            operationId: record.activation.operation.operationId,
-            phase: record.activation.operation.phase,
-            previousSha: record.activation.operation.previous.sha,
-            candidateSha: record.activation.operation.candidate.sha,
-          },
-        }
-      : {}),
-    ...(record.activation?.lastResult
-      ? {
-          lastActivation: {
-            operationId: record.activation.lastResult.operationId,
-            outcome: record.activation.lastResult.outcome,
-            selectedSha: record.activation.lastResult.selectedSha,
-            verifiedAtMs: record.activation.lastResult.verifiedAtMs,
-          },
-        }
-      : {}),
-    ...(prepared
-      ? {
-          prepared: {
-            sha: prepared.sha,
-            path: prepared.path,
-            buildDigest: prepared.buildDigest,
-            preparedAtMs: prepared.preparedAtMs,
-          },
-        }
-      : {}),
   };
+  const operation = record.activation?.operation;
+  if (operation) {
+    result.activation = {
+      operationId: operation.operationId,
+      phase: operation.phase,
+      previousSha: operation.previous.sha,
+      candidateSha: operation.candidate.sha,
+    };
+  }
+  const lastResult = record.activation?.lastResult;
+  if (lastResult) {
+    result.lastActivation = {
+      operationId: lastResult.operationId,
+      outcome: lastResult.outcome,
+      selectedSha: lastResult.selectedSha,
+      verifiedAtMs: lastResult.verifiedAtMs,
+    };
+  }
+  if (prepared) {
+    result.prepared = {
+      sha: prepared.sha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: prepared.preparedAtMs,
+    };
+  }
+  return result;
 }
 
 async function installationRoot(input: string): Promise<string | null> {

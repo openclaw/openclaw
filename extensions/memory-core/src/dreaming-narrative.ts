@@ -189,6 +189,7 @@ export type DreamNarrativeRequest = {
   timezone?: string;
   model?: string;
   logger: Logger;
+  runInBackground?: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
 export type DreamNarrativeOutcome =
@@ -277,9 +278,9 @@ async function generateAndAppendDreamNarrative(
  * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
  */
 export async function runDreamNarrative(
-  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string; detached?: boolean },
+  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string },
 ): Promise<DreamNarrativeOutcome> {
-  const { agentId, detached, ...rest } = params;
+  const { agentId, runInBackground, ...rest } = params;
   // Nothing to narrate is a no-op on every path; checking ownership first would let an
   // ownerless empty sweep append a diary entry for material that never existed.
   if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
@@ -299,14 +300,12 @@ export async function runDreamNarrative(
         });
         return { status: "completed" as const };
       };
-  if (detached) {
-    // The shared runtime queue bounds inference; the sweep never waits for diary publication.
-    queueMicrotask(() => {
-      void job().catch((error: unknown) => {
-        rest.logger.warn(
-          `memory-core: detached dreaming narrative failed for ${rest.data.phase} phase: ${formatErrorMessage(error)}`,
-        );
-      });
+  if (runInBackground) {
+    // Keep completion and publication in the owning instance after the sweep returns.
+    void runInBackground(job).catch((error: unknown) => {
+      rest.logger.warn(
+        `memory-core: detached dreaming narrative failed for ${rest.data.phase} phase: ${formatErrorMessage(error)}`,
+      );
     });
     return { status: "pending" };
   }

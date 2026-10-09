@@ -24,13 +24,9 @@ const createMemoryRuntimeMock = vi.hoisted(() =>
   })),
 );
 
+// mock-isolation: Keep the lazy manager engine outside registration tests.
 vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
-  memoryRuntime: {
-    closeAllMemorySearchManagers: vi.fn(async () => {}),
-    closeMemorySearchManager: closeMemorySearchManagerMock,
-    getMemorySearchManager: getMemorySearchManagerMock,
-  },
 }));
 
 import plugin from "./index.js";

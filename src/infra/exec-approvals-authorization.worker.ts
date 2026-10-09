@@ -13,6 +13,7 @@ import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { execPolicyMutationOperations } from "./exec-approvals-mutation.worker.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
+import { execApprovalRetirementOperations } from "./exec-approvals-retirement.worker.js";
 import {
   snapshotFromExecApprovalsDatabase,
   assertExecApprovalsMutationAllowed,
@@ -96,6 +97,7 @@ export function commitExecAuthorizationsInWorker(
 }
 
 export const execAuthorizationOperations = {
+  ...execApprovalRetirementOperations,
   ...execPolicyMutationOperations,
   "execApprovals.commitAuthorizations": commitExecAuthorizationsInWorker,
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

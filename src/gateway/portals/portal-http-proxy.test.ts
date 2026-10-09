@@ -329,57 +329,47 @@ describe("portal HTTP proxy", () => {
     expect(rejected.elapsedMs).toBeLessThan(2000);
   });
 
-  it("destroys the unauthorized upgrade server socket after flushing 401 while the client is still open", async () => {
-    const httpServers: Server[] = [];
-    const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers });
-    services.add(service);
-    const portal = await service.open({ targetPort, title: "App" });
-    const listener = httpServers[0];
-    if (!listener) {
-      throw new Error("expected the portal HTTP listener");
-    }
-    let serverSocket: Duplex | undefined;
-    listener.prependOnceListener("upgrade", (_req, socket) => {
-      serverSocket = socket;
-    });
-    const client = net.connect({ host: "127.0.0.1", port: portal.listenPort });
-    client.on("error", () => {});
-    await once(client, "connect");
-    const started = Date.now();
-    client.write(
-      [
-        "GET / HTTP/1.1",
-        `Host: 127.0.0.1:${portal.listenPort}`,
-        "Connection: Upgrade",
-        "Upgrade: websocket",
-        "Sec-WebSocket-Version: 13",
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-        "",
-        "",
-      ].join("\r\n"),
-    );
-    const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("unauthorized upgrade timed out")), 2000);
-      client.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-        if (Buffer.concat(chunks).includes("\r\n\r\n")) {
-          clearTimeout(timer);
-          resolve();
-        }
+  it.for(["unauthorized", "unavailable"] as const)(
+    "closes the %s upgrade after flushing its response while the client remains open",
+    async (failure, { signal }) => {
+      const httpServers: Server[] = [];
+      const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers });
+      services.add(service);
+      const portal = await service.open({
+        targetPort,
+        target: workerTarget(async () => {
+          throw new Error("Worker unavailable");
+        }, targetPort),
       });
-    });
-    const raw = Buffer.concat(chunks).toString("utf8");
-    expect(raw).toContain("HTTP/1.1 401 Unauthorized");
-    expect(raw).toContain("Unauthorized");
-    expect(client.destroyed).toBe(false);
-    await expect.poll(() => serverSocket?.destroyed === true).toBe(true);
-    expect(client.destroyed).toBe(false);
-    console.log(
-      `[portal unauthorized upgrade teardown] server_destroyed_before_client=true elapsed_ms=${Date.now() - started}`,
-    );
-    client.destroy();
-  });
+      const upgraded = createDeferredCore<Duplex>();
+      httpServers[0]!.once("upgrade", (_req, socket) => upgraded.resolve(socket));
+      const client = net.connect({
+        host: "127.0.0.1",
+        port: portal.listenPort,
+        allowHalfOpen: true,
+      });
+      try {
+        const chunks: Buffer[] = [];
+        client.on("data", (chunk: Buffer) => chunks.push(chunk));
+        await once(client, "connect", { signal });
+        const ended = once(client, "end", { signal });
+        const query = failure === "unavailable" ? `?${portal.tokenQuery}` : "";
+        client.write(
+          `GET /${query} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+        );
+        const serverSocket = await upgraded.promise;
+        await ended;
+        const response = Buffer.concat(chunks).toString("utf8");
+        expect(response).toContain(
+          failure === "unauthorized" ? "HTTP/1.1 401 Unauthorized" : "HTTP/1.1 502 Bad Gateway",
+        );
+        expect(serverSocket.destroyed).toBe(true);
+        expect(client.writableEnded).toBe(false);
+      } finally {
+        client.destroy();
+      }
+    },
+  );
 
   it("keeps concurrent portal HTTP sessions authorized in A-B-A order", async () => {
     targetHandler = (_req, res) => {

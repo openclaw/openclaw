@@ -668,21 +668,26 @@ describe("update run ledger", () => {
         options,
       );
       clock.mockReturnValue(2_000);
-      finishUpdateRun(run.runId, { status }, options);
+      const nextAction = "Run openclaw update repair.";
+      finishUpdateRun(run.runId, { status, nextAction }, options);
       closeOpenClawStateDatabaseForTest();
 
       const persisted = getUpdateRun(run.runId, options);
+      const completion = { status: stepStatus, endedAtMs: 2_000 };
+      expect(persisted).toMatchObject({ phase: "finished", origin: { nextAction } });
+      expect(persisted?.steps.filter((step) => step.step === "requested")).toEqual([
+        { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 1_000 },
+      ]);
+      expect(finishUpdateRun(run.runId, { status, nextAction: "later" }, options)).toEqual(
+        persisted,
+      );
       expect(persisted?.steps.some((step) => step.status === "in_progress")).toBe(false);
       expect(persisted?.steps.find((step) => step.step === "openclaw doctor")).toEqual({
         step: "openclaw doctor",
-        status: stepStatus,
         startedAtMs: 1_000,
-        endedAtMs: 2_000,
+        ...completion,
       });
-      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject({
-        status: stepStatus,
-        endedAtMs: 2_000,
-      });
+      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject(completion);
       for (const step of recordedSteps) {
         expect(persisted?.steps.find((entry) => entry.step === step.step)).toEqual(step);
       }

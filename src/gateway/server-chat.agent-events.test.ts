@@ -1663,6 +1663,42 @@ describe("agent event handler", () => {
     });
   });
 
+  it.each([false, true])(
+    "settles failure persistence without delaying another run's final (write fails=%s)",
+    async (writeFails) => {
+      const persistence = createDeferred();
+      persistGatewaySessionLifecycleEventMock.mockReturnValueOnce(persistence.promise);
+      const h = createHarness({ resolveSessionKeyForRun: (runId) => `session-${runId}` });
+      try {
+        await h.emit("failed", "lifecycle", {
+          phase: "error",
+          error: "runtime connection lost",
+          executionSettled: true,
+        });
+        expect(h.chat()).toEqual([]);
+
+        await h.emit("completed", "lifecycle", { phase: "end" });
+        expect(h.chat().map(([, payload]) => [payload.runId, payload.state])).toEqual([
+          ["completed", "final"],
+        ]);
+
+        if (writeFails) {
+          persistence.reject(new Error("disk full"));
+        } else {
+          persistence.resolve();
+        }
+        await persistence.promise.catch(() => undefined);
+        expect(h.chat().map(([, payload]) => [payload.runId, payload.state])).toEqual([
+          ["completed", "final"],
+          ["failed", "error"],
+        ]);
+      } finally {
+        persistence.resolve();
+        await h.handler.dispose();
+      }
+    },
+  );
+
   it("broadcasts a terminal fallback snapshot when persistence fails", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-failed-write",
@@ -2007,7 +2043,7 @@ describe("agent event handler", () => {
       ["lifecycle", { msg: "status update" }],
     ]);
 
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
 
     const finalPayload = h.chat().at(-1)?.[1] as {
       state?: string;
@@ -2191,7 +2227,7 @@ describe("agent event handler", () => {
         { phase: "error", error: "chat.send failed" },
         { seq: linked ? 1 : 2 },
       );
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       const errors = h.chat().filter(([, payload]) => payload.state === "error");
       expect(errors).toHaveLength(linked ? 1 : 0);
       if (linked) {

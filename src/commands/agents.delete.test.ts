@@ -17,7 +17,7 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   listOpenClawRegisteredAgentDatabases,
@@ -28,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -523,8 +524,8 @@ describe("agents delete command", () => {
         registerOpenClawAgentDatabase({ agentId: "main", path: file });
       }
       registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
-      recordAgentProvenance("main", { createdVia: "operator" });
-      recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "main" });
+      await recordAgentProvenance("main", { createdVia: "operator" });
+      await recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "main" });
       moveToTrash.mockImplementation(async (target) => {
         await fs.rename(target, `${target}.trashed`);
         return `${target}.trashed`;

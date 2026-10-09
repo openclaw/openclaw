@@ -16,7 +16,6 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
-import "./src/memory/background-context.js";
 import {
   buildMemoryPromptSection,
   MEMORY_GET_TOOL_CONTRACT,
@@ -164,6 +163,7 @@ function resolveMemoryToolOptions(
     conversationRecall: ctx.conversationRecall,
     activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+    runInBackgroundContext: host.runInBackgroundContext,
   };
 }
 
@@ -180,23 +180,17 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       return await createMemoryRuntime(host).authorizeSearchHits(params);
     },
     async classifyWorkspaceMemoryPaths(params) {
-      const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
-        import("./src/workspace-path-classifier.js"),
-        import("./src/dreaming-state.js"),
-      ]);
-      if (host.openKeyedStore) {
-        dreamingState.configureMemoryCoreDreamingState(host.openKeyedStore);
-      }
+      const { classifyWorkspaceMemoryPaths } = await import("./src/workspace-path-classifier.js");
       return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig,
     async closeAllMemorySearchManagers() {
-      const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeAllMemorySearchManagers();
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      await createMemoryRuntime(host).closeAllMemorySearchManagers();
     },
     async closeMemorySearchManager(params) {
-      const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
-      await runtime.closeMemorySearchManager(params);
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      await createMemoryRuntime(host).closeMemorySearchManager(params);
     },
   };
 }
@@ -211,7 +205,11 @@ export default definePluginEntry({
       api.runtime.llm.acquireLocalService(...args);
     const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options);
-    const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
+    const host = {
+      acquireLocalService,
+      openKeyedStore,
+      runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+    } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);

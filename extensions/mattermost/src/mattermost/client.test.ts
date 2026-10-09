@@ -601,6 +601,30 @@ describe("Mattermost DM retries", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it.each([400, 401, 403, 404, 429, 500, 503])(
+    "preserves HTTP %s retry policy when the error response body fails",
+    async (status) => {
+      const fetchImpl = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull() {
+                throw new TypeError("network error");
+              },
+            }),
+            { status, headers: jsonHeaders },
+          ),
+      );
+      const client = createMattermostClient({ ...clientParams, fetchImpl });
+      const outcome = rejection(createMattermostDirectChannelWithRetry(client, ["u1", "u2"]));
+      await vi.runAllTimersAsync();
+      expect(fetchImpl).toHaveBeenCalledTimes(status === 429 || status >= 500 ? 4 : 1);
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining(`Mattermost API ${status}`),
+      });
+    },
+  );
+
   it("stops after exhausting the retry budget", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

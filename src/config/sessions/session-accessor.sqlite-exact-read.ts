@@ -3,7 +3,6 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { executeSqliteQueryTakeFirstSync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -47,6 +46,7 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-row.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
@@ -234,34 +234,6 @@ type PhysicalSessionEntryReadScope = {
   readSource: SessionEntryReadSource;
   projection?: SessionEntryReadScope["projection"];
 };
-
-export function assertCapturedSessionEntryReadSource(
-  source: CapturedSessionEntryReadSource,
-  database?: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
-): void {
-  if (typeof source.databaseIdentity === "string" && (!database || database.path !== source.path)) {
-    assertExistingDatabaseIdentity(
-      source.path,
-      `file:${source.databaseIdentity}`,
-      source.databaseBirthtime,
-    );
-  }
-  if (!database) {
-    if (typeof source.databaseIdentity === "symbol") {
-      throw new Error("Captured session database is no longer open");
-    }
-    return;
-  }
-  const physical = readOpenClawAgentDatabaseIdentity(database);
-  if (
-    database.agentId !== source.agentId ||
-    physical.identity !== source.databaseIdentity ||
-    physical.birthtime !== source.databaseBirthtime ||
-    !isOpenClawAgentDatabasePathCurrent(database)
-  ) {
-    throw new Error("Captured session database changed before read");
-  }
-}
 
 /** Retained windows occupy a key even when they have no current readable entry. */
 export function retainSessionEntryKeyAbsence(params: {

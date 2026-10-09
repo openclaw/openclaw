@@ -4,7 +4,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketEndpoint, type ChromeWebSocketEndpoint } from "../chrome.js";
-import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
+import { BrowserProfileUnavailableError } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import {
   assertInteractionCurrent,
@@ -12,17 +12,10 @@ import {
   type InteractionTargetOptions,
 } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
-import { readBody, resolveProfileContext } from "./agent.shared.js";
+import { handleRouteError, readBody, resolveProfileContext } from "./agent.shared.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import {
-  jsonBrowserError,
-  jsonError,
-  readHttpOrigin,
-  runProfileRouteOperation,
-  toStringOrEmpty,
-} from "./utils.js";
+import { jsonError, readHttpOrigin, runProfileRouteOperation, toStringOrEmpty } from "./utils.js";
 
 function readPermissions(raw: unknown): string[] | null {
   if (!Array.isArray(raw)) {
@@ -209,14 +202,9 @@ export function registerBrowserPermissionRoutes(
       });
       return res.json({ ok: true, origin, ...granted });
     } catch (error) {
-      if (isProfileRestartRequiredError(error)) {
-        throw error;
-      }
-      const mapped = toBrowserErrorResponse(error);
-      if (mapped) {
-        return jsonBrowserError(res, mapped);
-      }
-      return jsonError(res, 500, error instanceof Error ? error.message : String(error));
+      return handleRouteError(res, error, {
+        formatMessage: (err) => (err instanceof Error ? err.message : String(err)),
+      });
     }
   });
 }

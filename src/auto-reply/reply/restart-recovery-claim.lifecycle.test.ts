@@ -19,6 +19,7 @@ import {
 import {
   createAgentRunStaleLifecycleError,
   isAgentRunStaleLifecycleError,
+  isRestartRecoveryClaimChangedError,
 } from "../../infra/agent-lifecycle-error.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -337,6 +338,7 @@ describe("restart recovery claim settlement", () => {
     "missing-generation",
     "commit-rotation",
     "commit-abort",
+    "session-retarget",
   ] as const)(
     "preserves the delivery claim when queued cleanup loses ownership through %s",
     async (interruption) => {
@@ -345,7 +347,7 @@ describe("restart recovery claim settlement", () => {
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
       let restartAborted = false;
-      let interruptBeforeCommit = false;
+      let sessionId = "session";
       let entry: InternalSessionEntry = {
         sessionId: "session",
         updatedAt: 1,
@@ -363,20 +365,7 @@ describe("restart recovery claim settlement", () => {
           interruption === "missing-generation" ? undefined : lifecycleGeneration,
         admissionRunId: "recovery-run",
         getEntry: () => entry,
-        getSessionId: () => {
-          if (interruptBeforeCommit) {
-            interruptBeforeCommit = false;
-            // The store awaits the prepared patch before entering its write transaction.
-            queueMicrotask(() => {
-              if (interruption === "commit-rotation") {
-                rotateAgentEventLifecycleGeneration();
-              } else {
-                restartAborted = true;
-              }
-            });
-          }
-          return "session";
-        },
+        getSessionId: () => sessionId,
         isRestartAbort: () => restartAborted,
         resolveDeliveryContext: () => deliveryContext,
         setEntry: (next) => {
@@ -426,21 +415,57 @@ describe("restart recovery claim settlement", () => {
         return current;
       });
       await writerEntered.promise;
-      interruptBeforeCommit = interruption === "commit-rotation" || interruption === "commit-abort";
+      let interruptedAtCommit = false;
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, options) =>
+          createAdmission((request, grant) => {
+            if (
+              !interruptedAtCommit &&
+              (interruption === "commit-rotation" || interruption === "commit-abort") &&
+              request.stage === "transaction" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-validated"
+            ) {
+              interruptedAtCommit = true;
+              if (interruption === "commit-rotation") {
+                rotateAgentEventLifecycleGeneration();
+              } else {
+                restartAborted = true;
+              }
+            }
+            admit(request, grant);
+          }, options),
+        );
       // The old cleanup enters before shutdown; its actual write waits behind the handoff.
       const clearing = controller.clear().catch((error: unknown) => {
-        expect(isAgentRunStaleLifecycleError(error)).toBe(true);
+        expect(
+          interruption === "session-retarget"
+            ? isRestartRecoveryClaimChangedError(error)
+            : isAgentRunStaleLifecycleError(error),
+        ).toBe(true);
       });
       try {
         if (interruption === "restart-abort") {
           restartAborted = true;
         } else if (interruption === "successor-generation") {
           successorGeneration = rotateAgentEventLifecycleGeneration();
+        } else if (interruption === "session-retarget") {
+          sessionId = "successor-session";
         }
       } finally {
         releaseWriter.resolve();
       }
-      await Promise.all([handoff, clearing]);
+      try {
+        await Promise.all([handoff, clearing]);
+      } finally {
+        admission.mockRestore();
+      }
+      expect(interruptedAtCommit).toBe(
+        interruption === "commit-rotation" || interruption === "commit-abort",
+      );
 
       const persisted = loadSessionEntry(scope);
       expect(persisted).toMatchObject({

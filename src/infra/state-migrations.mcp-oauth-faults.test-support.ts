@@ -8,7 +8,7 @@ import * as workerCpu from "./worker-cpu.js";
 /** Fault only the real import for this exact source; preserve admission messages and SQL. */
 export function observeLegacyMcpOAuthImport(
   sourceKey: string,
-  mode: "observe" | "post-commit-error" | "native-exit",
+  mode: "observe" | "publication-error" | "native-exit",
 ) {
   const exit = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
   let writerThreadId: number | undefined;
@@ -25,9 +25,9 @@ export function observeLegacyMcpOAuthImport(
           const exit = new Int32Array(workerData.mcpMigrationExit);
           Atomics.store(exit, 0, 1);
           Atomics.store(exit, 1, threadId);
-          // Forward the real receipt before disrupting this exact command's completion.
+          // Forward the real receipt before faulting publication or exiting its writer.
           if (workerData.mcpMigrationFaultMode === "native-exit") process.exit(0);
-          throw new Error("simulated MCP OAuth result delivery failure");
+          throw new Error("simulated MCP OAuth receipt publication failure");
         }
         return result;
       };

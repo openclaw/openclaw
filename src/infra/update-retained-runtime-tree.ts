@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
+import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   assertUpdateCandidatePluginLinkTarget,
@@ -173,15 +173,7 @@ export async function linkUpdateCandidatePluginTrees(
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
   const drain = async () => {
-    const result = await runTasksWithConcurrency({
-      tasks: files.map((entry) => () => materialize(entry)),
-      limit: 4,
-      errorMode: "stop",
-    });
-    // Cleanup must never race an admitted filesystem write, including on failure.
-    if (result.hasError) {
-      throw result.firstError;
-    }
+    await runUpdateCandidatePluginTasks(files.map((entry) => () => materialize(entry)));
     files.length = 0;
     inodes.clear();
   };

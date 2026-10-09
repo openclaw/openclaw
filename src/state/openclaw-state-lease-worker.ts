@@ -92,6 +92,7 @@ function assertOpenClawStateLeaseWorkerOwned(
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
+  domainFacts?: unknown,
 ): number {
   const expiresAt = readOwnedLeaseExpiry(database, identity);
   requestSqliteWorkerOperationAdmission({
@@ -100,6 +101,7 @@ function assertOpenClawStateLeaseWorkerOwned(
       kind: purpose === "write" ? "state-lease" : `state-lease-${purpose}`,
       identity,
       expiresAt,
+      ...(domainFacts === undefined ? {} : { domainFacts }),
     },
   });
   // Host admission can wait; verify again before publishing the observed expiry.
@@ -112,11 +114,12 @@ export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
+  domainFacts?: unknown,
 ): number {
   if (!database.isTransaction) {
     throw new Error("State lease worker ownership requires an active transaction");
   }
-  return assertOpenClawStateLeaseWorkerOwned(database, identity, purpose, stage);
+  return assertOpenClawStateLeaseWorkerOwned(database, identity, purpose, stage, domainFacts);
 }
 
 /** One grant covers the complete lease set held by this transaction. */

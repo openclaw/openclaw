@@ -248,7 +248,7 @@ async function prepareHistoryRead(
         { readHarnessCompletionSourceInDatabase },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly.js"),
-        import("./session-accessor.sqlite-exact-read.js"),
+        import("./session-entry-read-source.js"),
         import("./session-harness-completion-source.kernel.js"),
       ]);
       return () => {
@@ -274,7 +274,7 @@ async function prepareHistoryRead(
         { readPendingInputSourceInDatabase },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly.js"),
-        import("./session-accessor.sqlite-exact-read.js"),
+        import("./session-entry-read-source.js"),
         import("./session-pending-input-source.kernel.js"),
       ]);
       return () => {
@@ -417,7 +417,7 @@ async function prepareHistoryRead(
       const [{ withOpenClawAgentDatabaseReadOnly }, { hasSessionTranscriptMessageInDatabase }] =
         await Promise.all([
           import("../../state/openclaw-agent-db-readonly.js"),
-          import("./session-accessor.sqlite-read.js"),
+          import("./session-accessor.sqlite-transcript-metadata-read.js"),
         ]);
       return () => {
         const read = withOpenClawAgentDatabaseReadOnly(

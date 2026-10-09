@@ -11,8 +11,8 @@ import {
   addSessionMaintenancePreserveKeys,
   collectSessionWorkAdmissionKeysFromSnapshot,
   resolveSessionMaintenancePreserveKeys,
-  type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
 type PreparedSessionMaintenancePreserveKeys = {

@@ -506,10 +506,13 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   const record = (restored) => recordUpdateHandoffOutcome(
     restored ? reason : "managed-service-handoff-restore-failed", restored, childStatus, expectedRevision,
   );
-  if (decision?.serviceRestartSafe !== true || !decision.version) {
-    appendLog("recovery refused: original runtime identity could not be verified");
+  const refuse = (message) => {
+    if (message) appendLog(message);
     record(false);
     return false;
+  };
+  if (decision?.serviceRestartSafe !== true || !decision.version) {
+    return refuse("recovery refused: original runtime identity could not be verified");
   }
   const expectedVersion = decision.version;
   const expectedBuildId = decision.buildId;
@@ -532,9 +535,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   if (childStatus) expectedRevision = recordUpdateHandoffOutcome(reason, undefined, childStatus);
   if (recovery?.kind === "systemd") {
     if (!pendingServiceStop || (await pendingServiceStop).code !== 0) {
-      appendLog("recovery refused: exact systemd stop did not complete");
-      record(false);
-      return false;
+      return refuse("recovery refused: exact systemd stop did not complete");
     }
     const parked = await inspectSystemdService(recovery.unit);
     // A Gateway that exits non-zero during the stop (KillMode=mixed) settles the unit
@@ -546,9 +547,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       (parked.ActiveState !== "inactive" && parked.ActiveState !== "failed") ||
       parked.MainPID !== "0" || !(previousGeneration || isParkedSystemdGeneration(parked, true)) ||
       !ownsRecovery()) {
-      appendLog("recovery refused: parked systemd service identity changed or stop is incomplete");
-      record(false);
-      return false;
+      return refuse("recovery refused: parked systemd service identity changed or stop is incomplete");
     }
     const started = childStatus
       ? await restart()
@@ -572,13 +571,10 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     if (before.code === 0) {
       const pid = parseLaunchdPid(before.stdout);
       if (pid && pid !== params.parentPid) {
-        appendLog("recovery refused: launchd service has another process generation");
-        record(false);
-        return false;
+        return refuse("recovery refused: launchd service has another process generation");
       }
     } else if (!isLaunchdNotLoaded(before)) {
-      record(false);
-      return false;
+      return refuse();
     }
     if (childStatus) {
       const restarted = await restart();

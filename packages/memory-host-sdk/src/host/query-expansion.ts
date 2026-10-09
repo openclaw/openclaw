@@ -643,10 +643,14 @@ function isValidKeyword(token: string): boolean {
   );
 }
 
-function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
+/** Extract ordered, unique keywords from a conversational query for FTS search. */
+export function extractKeywords(
+  query: string,
+  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
+): string[] {
   const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
-  const normalized = normalizeLowercaseStringOrEmpty(text);
+  const normalized = normalizeLowercaseStringOrEmpty(query);
 
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
 
@@ -693,19 +697,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
     }
   }
 
-  return tokens;
-}
-
-/** Extract ordered, unique keywords from a conversational query for FTS search. */
-export function extractKeywords(
-  query: string,
-  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
-): string[] {
   return [
-    ...new Set(
-      tokenize(query, opts).filter(
-        (token) => !isQueryStopWordToken(token) && isValidKeyword(token),
-      ),
-    ),
+    ...new Set(tokens.filter((token) => !isQueryStopWordToken(token) && isValidKeyword(token))),
   ];
 }

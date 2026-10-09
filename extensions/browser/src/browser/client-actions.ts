@@ -63,6 +63,11 @@ function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
   return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
 }
 
+// Keep optional fields as own properties in node-proxy requests.
+function projectBrowserOptions<Options extends object>(opts: Options, fields: (keyof Options)[]) {
+  return Object.fromEntries(fields.map((key) => [key, opts[key]]));
+}
+
 export async function browserNavigate(
   baseUrl: BrowserClientTarget,
   opts: BrowserTimedActionOptions & {
@@ -90,13 +95,7 @@ export async function browserArmDialog(
   return await postBrowserJson(
     baseUrl,
     "/hooks/dialog",
-    {
-      accept: opts.accept,
-      promptText: opts.promptText,
-      dialogId: opts.dialogId,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    },
+    projectBrowserOptions(opts, ["accept", "promptText", "dialogId", "targetId", "timeoutMs"]),
     browserClientTimeout(
       baseUrl,
       undefined,
@@ -118,14 +117,7 @@ export async function browserArmFileChooser(
   return await postBrowserJson(
     baseUrl,
     "/hooks/file-chooser",
-    {
-      paths: opts.paths,
-      ref: opts.ref,
-      inputRef: opts.inputRef,
-      element: opts.element,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    },
+    projectBrowserOptions(opts, ["paths", "ref", "inputRef", "element", "targetId", "timeoutMs"]),
     browserClientTimeout(
       baseUrl,
       undefined,
@@ -144,11 +136,7 @@ export async function browserWaitForDownload(
   return await postBrowserJson(
     baseUrl,
     "/wait/download",
-    {
-      targetId: opts.targetId,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
+    projectBrowserOptions(opts, ["targetId", "path", "timeoutMs"]),
     resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
     opts,
   );
@@ -164,12 +152,7 @@ export async function browserDownload(
   return await postBrowserJson(
     baseUrl,
     "/download",
-    {
-      targetId: opts.targetId,
-      ref: opts.ref,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
+    projectBrowserOptions(opts, ["targetId", "ref", "path", "timeoutMs"]),
     resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
     opts,
   );
@@ -205,12 +188,7 @@ export async function browserScreenshotAction(
     baseUrl,
     "/screenshot",
     {
-      targetId: opts.targetId,
-      fullPage: opts.fullPage,
-      ref: opts.ref,
-      element: opts.element,
-      type: opts.type,
-      labels: opts.labels,
+      ...projectBrowserOptions(opts, ["targetId", "fullPage", "ref", "element", "type", "labels"]),
       timeoutMs: effectiveTimeoutMs,
     },
     effectiveTimeoutMs,

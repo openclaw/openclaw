@@ -36,7 +36,6 @@ import {
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
-import { withMemoryPublicationExecution } from "./manager-publication-lifetime.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationConnection,
@@ -507,18 +506,11 @@ export class MemoryIndexDatabase {
       for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
         await scope.execute({ type: "stage.append", input: { operation, fragments } });
       }
-      let needsDiscard = true;
-      const current = await this.retryPublication(async () => {
-        const outcome = await scope.execute({
-          type: "cache.write",
-          input: { operation, expectedRevision },
-        });
-        if (outcome.ok || outcome.entered) {
-          needsDiscard = false;
-        }
-        return outcome;
-      }, prepare);
-      if (needsDiscard) {
+      const current = await this.retryPublication(
+        () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
+        prepare,
+      );
+      if (current === undefined) {
         await scope.execute({ type: "stage.discard", input: { operation } });
       }
       if (current === false) {
@@ -542,26 +534,23 @@ export class MemoryIndexDatabase {
           type: "stage.start",
           input: { operation, header, rows: chunks.length },
         });
-        let needsDiscard = true;
         for (const fragments of memoryPublicationBatches(replacement)) {
           await scope.execute({ type: "stage.append", input: { operation, fragments } });
         }
-        const result = await this.retryPublication(async () => {
-          const outcome = await scope.execute({
-            type: "source.replace",
-            input: { operation, state: this.publicationState() },
-          });
-          if (outcome.ok || outcome.entered) {
-            needsDiscard = false;
-          }
-          return outcome;
-        }, prepare);
+        const result = await this.retryPublication(
+          () =>
+            scope.execute({
+              type: "source.replace",
+              input: { operation, state: this.publicationState() },
+            }),
+          prepare,
+        );
         if (this.isShadow) {
           assertCurrent();
         }
         // Thrown failures close the Worker through runPublication. A further
         // command on that failed scope could hide the original write outcome.
-        if (needsDiscard) {
+        if (result === undefined) {
           await scope.execute({ type: "stage.discard", input: { operation } });
         }
         return result;
@@ -639,13 +628,36 @@ export class MemoryIndexDatabase {
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
     try {
-      await withMemoryPublicationExecution(
-        { database: this.db, options: this.writeOptions },
-        () => {
-          this.publicationGenerationActive = true;
-          return run();
-        },
-      );
+      // This store only retains the canonical executor; concrete publication
+      // stores still own their connection policy and cleanup.
+      const execution = this.writeOptions
+        ? await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
+            this.writeOptions,
+            this.db,
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+              input: undefined,
+              retainExecutionUntilClose: true,
+            },
+          )
+        : undefined;
+      this.publicationGenerationActive = true;
+      const failures: unknown[] = [];
+      for (const settle of [run, () => execution?.close()]) {
+        try {
+          await settle();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
+          cause: failures[0],
+        });
+      }
     } finally {
       this.publicationGenerationActive = false;
     }

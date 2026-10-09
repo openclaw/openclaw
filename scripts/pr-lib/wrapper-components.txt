@@ -235,6 +235,8 @@ scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
 src/agents/agent-bundle-mcp-names.ts
 src/agents/agent-create-error.ts
+src/agents/agent-delete-session-store-safety.kernel.ts
+src/agents/agent-delete-session-store-safety.targets.ts
 src/agents/agent-dir-registry.ts
 src/agents/agent-roster.ts
 src/agents/agent-run-terminal-receipt.ts
@@ -1373,6 +1375,9 @@ src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
+src/plugins/plugin-instance-background.ts
+src/plugins/legacy-sdk-resource-host.ts
+src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
@@ -1608,6 +1613,7 @@ src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-startup.ts
+src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts
 src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
@@ -1882,6 +1888,7 @@ src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts
 src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
 src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
+src/config/sessions/session-transcript-append-postimage.ts
 src/config/sessions/session-transcript-fts.ts
 src/config/sessions/session-transcript-index.ts
 src/config/sessions/session-transcript-projection-append.ts

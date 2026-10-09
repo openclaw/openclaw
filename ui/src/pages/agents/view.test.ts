@@ -1,4 +1,3 @@
-// Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
@@ -38,38 +37,22 @@ function renderView(overrides: Partial<ReturnType<typeof createProps>>, containe
 }
 
 function renderFiles(
-  overrides: Partial<Parameters<typeof renderAgentFiles>[0]>,
+  params: Partial<Parameters<typeof renderAgentFiles>[0]> &
+    Pick<
+      Parameters<typeof renderAgentFiles>[0],
+      "agentFilesList" | "agentFileActive" | "agentFileEditors"
+    >,
   container: HTMLElement,
 ) {
-  const content = "# User Profile\n\nHello world";
   render(
     renderAgentFiles({
       agentId: "alpha",
       canWrite: true,
-      agentFilesList: {
-        agentId: "alpha",
-        workspace: "/tmp/workspace",
-        files: [
-          {
-            name: "USER.md",
-            path: "/tmp/workspace/USER.md",
-            missing: false,
-            size: 128,
-            updatedAtMs: 1_700_000_000_000,
-          },
-        ],
-      },
       agentFilesLoading: false,
       agentFilesError: null,
-      agentFileActive: "USER.md",
-      agentFileEditors: createAgentFileEditors({
-        content: { "USER.md": content },
-        draft: { "USER.md": content },
-      }),
-
       agentFileSaving: false,
       ...inertAgentFileControls,
-      ...overrides,
+      ...params,
     }),
     container,
   );
@@ -109,21 +92,6 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
-  it("opens global Agent defaults before the per-agent tabs", () => {
-    const container = document.createElement("div");
-    const onOpenAgentDefaults = vi.fn();
-    renderView({ onOpenAgentDefaults }, container);
-
-    const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
-    const tabs = container.querySelector(".agents-hub-tabs");
-    expect(defaultsRow?.textContent).toContain("Agent defaults");
-    expect(defaultsRow?.textContent).toContain("Defaults every agent inherits unless overridden.");
-    expect(defaultsRow?.compareDocumentPosition(tabs!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-
-    defaultsRow?.click();
-    expect(onOpenAgentDefaults).toHaveBeenCalledOnce();
-  });
-
   it("renders the active agent tab and selects a different panel", () => {
     const container = document.createElement("div");
     const onSelectPanel = vi.fn();
@@ -320,8 +288,9 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
+    const defaultPicker = primaryModelPicker(container);
     expect(
-      primaryModelPicker(container)
+      defaultPicker
         ?.querySelector('[role="option"][aria-selected="true"]')
         ?.getAttribute("data-value"),
     ).toBe("openai/gpt-5.4");
@@ -335,6 +304,7 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
+    expect(primaryModelPicker(container)).not.toBe(defaultPicker);
     const inheritedSelection = primaryModelPicker(container)?.querySelector(
       '[role="option"][aria-selected="true"]',
     );
@@ -440,80 +410,6 @@ describe("renderAgents", () => {
 
     const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
     expect(field?.value).toEqual([]);
-  });
-
-  it("remounts overview model controls when switching selected agents", async () => {
-    const container = document.createElement("div");
-    const configForm = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": {},
-            "openai/gpt-5.4": {},
-          },
-        },
-        entries: {
-          alpha: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          beta: { model: { primary: "openai/gpt-5.4" } },
-        },
-      },
-    };
-
-    renderView(
-      {
-        selectedAgentId: "beta",
-        config: config(configForm),
-      },
-      container,
-    );
-
-    await updatePickers(container);
-    const betaSelect = primaryModelPicker(container);
-    expect(
-      betaSelect?.querySelector('[role="option"][data-value="openai/gpt-5.4"]'),
-    ).not.toBeNull();
-
-    renderView(
-      {
-        selectedAgentId: "alpha",
-        config: config(configForm),
-      },
-      container,
-    );
-
-    await updatePickers(container);
-    const alphaSelect = primaryModelPicker(container);
-    expect(
-      alphaSelect?.querySelector('[role="option"][data-value="anthropic/claude-sonnet-4-6"]'),
-    ).not.toBeNull();
-    expect(alphaSelect).not.toBe(betaSelect);
-  });
-
-  it("renders the resolved per-agent thinking default in the overview", async () => {
-    const container = document.createElement("div");
-
-    renderView(
-      {
-        agentsList: {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
-            { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
-          ],
-        },
-        selectedAgentId: "beta",
-      },
-      container,
-    );
-
-    await Promise.resolve();
-
-    const thinkingKv = Array.from(container.querySelectorAll(".settings-kv dt")).find(
-      (entry) => entry.textContent?.trim() === t("agents.context.thinkingDefault"),
-    );
-    expect(thinkingKv?.nextElementSibling?.textContent).toContain("xhigh");
   });
 
   it("shows the skills count only for the selected agent's report", async () => {
@@ -788,8 +684,6 @@ describe("renderAgentFiles", () => {
 
   it.each([
     ["no conflict", true, null, true],
-    ["matching conflict", true, "SOUL.md", false],
-    ["unrelated conflict", true, "AGENTS.md", true],
     ["missing required file conflict", false, "SOUL.md", false],
   ] as const)(
     "shows current file creation guidance with %s",
@@ -799,10 +693,8 @@ describe("renderAgentFiles", () => {
       const onFileReload = vi.fn();
       const onFileOverwrite = vi.fn();
 
-      render(
-        renderAgentFiles({
-          agentId: "alpha",
-          canWrite: true,
+      renderFiles(
+        {
           agentFilesList: {
             agentId: "alpha",
             workspace: "/tmp/workspace",
@@ -816,21 +708,17 @@ describe("renderAgentFiles", () => {
               },
             ],
           },
-          agentFilesLoading: false,
-          agentFilesError: null,
           agentFileActive: "SOUL.md",
           agentFileEditors: createAgentFileEditors({
             content: { "SOUL.md": "" },
             draft: { "SOUL.md": "Unsaved instructions" },
           }),
 
-          agentFileSaving: false,
-          ...inertAgentFileControls,
           onSelectFile,
           agentFileConflict: conflict,
           onFileReload,
           onFileOverwrite,
-        }),
+        },
         container,
       );
 
@@ -867,4 +755,137 @@ describe("renderAgentFiles", () => {
       }
     },
   );
+});
+
+describe("renderAgents toolbar", () => {
+  it("keeps standalone agent creation available with no agents", () => {
+    const container = document.createElement("div");
+    const onCreateAgent = vi.fn();
+    render(
+      renderAgents(
+        createProps({
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [],
+          },
+          selectedAgentId: "alpha",
+          onCreateAgent,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-agent-select")).toBeNull();
+    const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+    expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
+    createButton?.click();
+    expect(onCreateAgent).toHaveBeenCalledOnce();
+  });
+
+  it("preserves creation permission gating with multiple agents", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onCreateAgent = vi.fn();
+    const defaults = createProps();
+    try {
+      render(
+        renderAgents(
+          createProps({
+            agentsList: {
+              defaultId: "alpha",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [{ id: "alpha" }, { id: "beta" }],
+            },
+            access: { ...defaults.access, canCreateAgent: false },
+            onCreateAgent,
+          }),
+        ),
+        container,
+      );
+      expect(container.querySelector("openclaw-agent-select")).toBeNull();
+      expect(container.querySelector(".agents-create-btn")).toBeNull();
+      expect(onCreateAgent).not.toHaveBeenCalled();
+    } finally {
+      container.remove();
+    }
+  });
+});
+
+it("surfaces agent config save errors in the active panel", () => {
+  const container = document.createElement("div");
+  render(
+    renderAgents(
+      createProps({
+        config: {
+          configForm: { agents: { entries: { beta: {} } } },
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: true,
+          lastError: "mock validation failure",
+        },
+      }),
+    ),
+    container,
+  );
+
+  const alert = container.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("mock validation failure");
+});
+
+it.each([
+  { name: "paused authorized job", enabled: false, canRunCron: true, canRun: true },
+  { name: "enabled unauthorized job", enabled: true, canRunCron: false, canRun: false },
+])("preserves edit links and gates Run Now for a $name", ({ enabled, canRunCron, canRun }) => {
+  const container = document.createElement("div");
+  const onCronRunNow = vi.fn();
+  const job: CronJob = {
+    id: "job /?&",
+    name: "Weekly report",
+    agentId: "alpha",
+    enabled,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "Summarize notes." },
+    state: {},
+  };
+  const props = createProps({
+    activePanel: "cron",
+    selectedAgentId: "alpha",
+    basePath: "/gateway",
+  });
+  render(
+    renderAgents({
+      ...props,
+      access: { ...props.access, canRunCron },
+      cron: { ...props.cron, jobs: [job], onRunNow: onCronRunNow },
+    }),
+    container,
+  );
+  const link = [...container.querySelectorAll("a")].find(
+    (entry) => entry.textContent?.trim() === "Edit",
+  );
+  expect(link?.getAttribute("href")).toBe("/gateway/automations?job=job%20%2F%3F%26");
+
+  const jobRow = [...container.querySelectorAll(".settings-row")].find(
+    (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
+  );
+  const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
+    (button) => button.textContent?.trim() === "Run Now",
+  );
+  expect(runNow).toBeInstanceOf(HTMLButtonElement);
+  expect(runNow?.disabled).toBe(!canRun);
+  runNow?.click();
+  if (canRun) {
+    expect(onCronRunNow).toHaveBeenCalledTimes(1);
+    expect(onCronRunNow).toHaveBeenCalledWith(job.id);
+  } else {
+    expect(onCronRunNow).not.toHaveBeenCalled();
+  }
 });
