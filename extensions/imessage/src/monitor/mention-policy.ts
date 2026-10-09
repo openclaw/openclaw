@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeIMessageGuid } from "../message-guid.js";
 import { isKnownFromMeIMessageTarget } from "../monitor-reply-cache.js";
+import { createIMessageGroupActivationResolver } from "./group-activation.js";
 import type { IMessagePayload } from "./types.js";
 
 export async function resolveIMessageInboundMentionPolicy(params: {
@@ -16,6 +17,7 @@ export async function resolveIMessageInboundMentionPolicy(params: {
   isGroup: boolean;
   message: IMessagePayload;
   requireMentionOverride?: boolean;
+  route: { agentId: string; sessionKey: string };
   isKnownFromMeMessageId?: Parameters<
     typeof isKnownFromMeIMessageTarget
   >[0]["isKnownFromMeMessageId"];
@@ -24,12 +26,20 @@ export async function resolveIMessageInboundMentionPolicy(params: {
 > {
   const groups = resolveChannelGroups(params.cfg, "imessage", params.accountId);
   const { "*": defaults, ...scopes } = groups ?? {};
-  const requireMention = resolveScopeRequireMention({
+  const configuredRequireMention = resolveScopeRequireMention({
     tree: { defaults, scopes },
     path: params.groupId ? [params.groupId] : [],
     requireMentionOverride: params.requireMentionOverride,
     overrideOrder: "before-config",
   });
+  const activationOverride = params.isGroup
+    ? await createIMessageGroupActivationResolver(() => undefined)({
+        ...params.route,
+        cfg: params.cfg,
+      })
+    : undefined;
+  const requireMention =
+    activationOverride === "read_failed" ? true : (activationOverride ?? configuredRequireMention);
   const requireMentionInBotThreads =
     (params.groupId ? groups?.[params.groupId]?.requireMentionInBotThreads : undefined) ??
     defaults?.requireMentionInBotThreads;

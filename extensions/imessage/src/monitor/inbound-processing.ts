@@ -699,7 +699,6 @@ export async function resolveIMessageInboundDecision(params: {
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
 
-  const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
   const { requireMention, implicitMentionKinds, enforceMentionRequirement } =
     await resolveIMessageInboundMentionPolicy({
       cfg: params.cfg,
@@ -708,9 +707,9 @@ export async function resolveIMessageInboundDecision(params: {
       isGroup,
       message: params.message,
       requireMentionOverride: params.opts?.requireMention,
+      route: { agentId: route.agentId, sessionKey: route.sessionKey },
       isKnownFromMeMessageId: params.isKnownFromMeMessageId,
     });
-  // An explicit bot-thread requirement remains enforced when patterns are disabled.
   const canDetectMention = mentionRegexes.length > 0 || enforceMentionRequirement;
 
   const commandAuthorized = commandAccess.authorized;
@@ -729,7 +728,7 @@ export async function resolveIMessageInboundDecision(params: {
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention,
-      wasMentioned: mentioned,
+      wasMentioned: isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true,
       hasAnyMention: false,
       implicitMentionKinds,
     },
