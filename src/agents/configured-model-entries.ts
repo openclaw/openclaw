@@ -76,7 +76,7 @@ export function resolveConfiguredModelEntries(
       ]),
     ];
     entry.aliasDisabled =
-      entry.aliasDisabled === true ||
+      entry.aliasDisabled ||
       aliasIndex.disabledKeys?.has(key) === true ||
       aliasIndex.disabledKeys?.has(originalKey) === true;
     entriesByKey.set(key, entry);

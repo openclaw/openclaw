@@ -492,14 +492,12 @@ export async function acquireSimpleCompletionModelWithSelection(
       ...(shorthandModelId ? { shorthandModelIds: [shorthandModelId] } : {}),
     });
   const pluginIdScope = resolvePluginIdScope(tentativeSelection, tentativeRequest.shorthandModelId);
-  const resolveMetadata = (
-    pluginIdScope: ReturnType<typeof createAgentRuntimeMetadataPluginIdScope>,
-  ) =>
+  const resolveMetadata = (scope: ReturnType<typeof createAgentRuntimeMetadataPluginIdScope>) =>
     resolvePluginMetadataSnapshot({
       config: params.cfg,
       env: process.env,
       workspaceDir,
-      pluginIdScope,
+      pluginIdScope: scope,
       allowWorkspaceScopedCurrent: true,
     });
   let metadataSnapshot = resolveMetadata(pluginIdScope);
