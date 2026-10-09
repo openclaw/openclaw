@@ -309,13 +309,11 @@ SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
 [Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
 
-For a bounded, accepted persistence sequence,
-`openOpenClawAgentSqliteWorkerStore` from `openclaw/plugin-sdk/sqlite-runtime`
-accepts `retainExecutionUntilClose: true` in its worker options. The caller must
-close that store when the sequence settles, including on failure. This retains
-the existing executor between commands without holding a writer turn across
-preparation. Each command keeps its own live authority checks. Omit the option
-for cached stores whose lifetime can outlast accepted work.
+First-party bounded persistence sequences retain their original agent executor
+before asynchronous preparation and release it after publication cleanup. The
+private `sqlite-runtime` facade exposes that existing owner and its recorded
+native identity; each worker command keeps its own FIFO turn and live authority
+checks. Native maintenance and private shadow stores keep their existing owners.
 
 First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
 same subpath to admit cold agent storage in its existing executor before

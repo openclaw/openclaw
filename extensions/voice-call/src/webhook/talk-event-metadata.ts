@@ -4,16 +4,18 @@ import type { CallRecord } from "../types.js";
 export function appendRecentTalkEventMetadata(
   metadata: CallRecord["metadata"],
   event: TalkEvent,
+  mode: "streaming" | "realtime",
 ): CallRecord["metadata"] {
   const previous = metadata ?? {};
   const recent = Array.isArray(previous.recentTalkEvents) ? previous.recentTalkEvents : [];
-  return {
-    ...previous,
-    lastTalkEventAt: event.timestamp,
-    lastTalkEventType: event.type,
-    recentTalkEvents: [
-      ...recent,
-      {
+  const streaming = mode === "streaming";
+  const retained = streaming
+    ? recent.filter((entry) => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry))
+    : recent;
+  // The two transports retain their existing history shapes and limits.
+  const next = streaming
+    ? { at: event.timestamp, type: event.type, sessionId: event.sessionId, turnId: event.turnId }
+    : {
         id: event.id,
         brain: event.brain,
         mode: event.mode,
@@ -25,7 +27,11 @@ export function appendRecentTalkEventMetadata(
         type: event.type,
         ...(event.turnId ? { turnId: event.turnId } : {}),
         ...(event.final !== undefined ? { final: event.final } : {}),
-      },
-    ].slice(-12),
+      };
+  return {
+    ...previous,
+    lastTalkEventAt: event.timestamp,
+    lastTalkEventType: event.type,
+    recentTalkEvents: [...retained, next].slice(streaming ? -10 : -12),
   };
 }

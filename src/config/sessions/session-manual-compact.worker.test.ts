@@ -4,13 +4,23 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildConversationIdentity } from "./conversation-identity.js";
 import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
+import {
+  linkSessionConversation,
+  prepareConversationIdentities,
+  upsertConversationIdentities,
+} from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { captureSessionEntryCurrentCheck } from "./session-entry-current-check.js";
 import * as rewrite from "./session-message-rewrite-domain.js";
 import { createManualCompactRecords } from "./transcript-message.test-support.js";
 
@@ -174,6 +184,113 @@ it("rechecks a foreign source changed during the commit grant", async () => {
     expect(f.read()).toEqual(before);
   });
 });
+
+it.each([
+  { boundary: "dispatch", revoked: 0, bothActive: false, succeeds: false },
+  { boundary: "dispatch", revoked: 1, bothActive: false, succeeds: true },
+  { boundary: "commit", revoked: 0, bothActive: false, succeeds: false },
+  { boundary: "commit", revoked: 0, bothActive: true, succeeds: true },
+] as const)(
+  "keeps conversation alternatives live at $boundary (revoked=$revoked, bothActive=$bothActive)",
+  async ({ boundary, revoked, bothActive, succeeds }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = createSessionCompoundWorkerFixture();
+      const records = createManualCompactRecords(f.scope.sessionId);
+      replaceTranscriptEventsSync(f.scope, records);
+      const before = f.read()!;
+      const sourceScope = {
+        ...f.scope,
+        storePath: path.join(path.dirname(f.database.path), "foreign.sqlite"),
+      };
+      replaceSessionEntrySync(sourceScope, before);
+      const sourceOptions = { agentId: sourceScope.agentId, path: sourceScope.storePath };
+      const conversations = ["active", "alternative"].map((peerId) => {
+        const identity = buildConversationIdentity({
+          channel: "reef",
+          accountId: "default",
+          kind: "direct",
+          peerId,
+          deliveryTarget: peerId,
+        });
+        if (!identity) {
+          throw new Error("Expected a valid manual-compaction conversation");
+        }
+        return identity;
+      });
+      const encoded = prepareConversationIdentities(conversations);
+      runOpenClawAgentWriteTransaction((database) => {
+        upsertConversationIdentities(database, encoded, 1);
+        for (const identity of conversations) {
+          linkSessionConversation({
+            database,
+            sessionId: sourceScope.sessionId,
+            conversation: { identity, role: "participant" },
+            updatedAt: 1,
+          });
+        }
+      }, sourceOptions);
+      const current = await captureSessionEntryCurrentCheck({
+        ...sourceScope,
+        alternatives: conversations.map((identity, index) => ({
+          conversations: [{ ...identity, sessionKey: sourceScope.sessionKey }],
+          isActive: () => index === 0 || bothActive,
+        })),
+        errorMessage: "Manual-compaction conversation authority revoked",
+      });
+      let changed = false;
+      const revoke = () => {
+        runOpenClawAgentWriteTransaction((database) => {
+          linkSessionConversation({
+            database,
+            sessionId: sourceScope.sessionId,
+            conversation: { identity: conversations[revoked]!, role: "related" },
+            updatedAt: 2,
+          });
+        }, sourceOptions);
+        changed = true;
+      };
+      if (boundary === "dispatch") {
+        const execute = rewrite.executeSessionMessageRewriteOperation;
+        vi.spyOn(rewrite, "executeSessionMessageRewriteOperation").mockImplementation((...args) => {
+          if (args[2].type === "session.transcript.manualCompact") {
+            revoke();
+          }
+          return execute(...args);
+        });
+      } else {
+        const create = admission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (callback, attachment) =>
+            create((request, grant) => {
+              if (request.stage === "commit") {
+                revoke();
+              }
+              callback(request, grant);
+            }, attachment),
+        );
+      }
+      const compact = trimSessionTranscriptForManualCompact(f.scope, {
+        maxLines: 3,
+        authority: {
+          source: current.assertCurrent,
+          assertHostCurrent() {},
+          expectedLifecycleRevision: before.lifecycleRevision,
+        },
+      });
+      if (succeeds) {
+        await expect(compact).resolves.toEqual({ compacted: true, kept: 3 });
+        expect(f.events()).toHaveLength(3);
+      } else {
+        await expect(compact).rejects.toThrow(
+          /authority revoked|source changed|confirmed native completion/i,
+        );
+        expect(f.events()).toEqual(records);
+        expect(f.read()).toEqual(before);
+      }
+      expect(changed).toBe(true);
+    });
+  },
+);
 
 it("rolls back the native manual trim when accounting cannot be cleared", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

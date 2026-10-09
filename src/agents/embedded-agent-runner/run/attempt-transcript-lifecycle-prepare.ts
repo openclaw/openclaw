@@ -1,6 +1,7 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
   type OwnedSessionTranscriptWriteContext,
@@ -106,11 +107,13 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     sessionTarget: fencedSessionTarget,
     sessionReader: getReplyOperationSessionReader(attempt.replyOperation),
     ...(initialWriter ? { initialWriter } : {}),
-    assertCommitAllowed: () => {
-      attempt.abortSignal?.throwIfAborted();
-      assertAdmittedActive?.();
-      generation?.assertCurrent();
-    },
+    assertCommitAllowed: composeSessionSourceAssertion(
+      [assertAdmittedActive, generation?.assertCurrent],
+      (assertSources) => {
+        attempt.abortSignal?.throwIfAborted();
+        assertSources();
+      },
+    ),
     withTranscriptWrite,
   };
   externalAbortController.arm();

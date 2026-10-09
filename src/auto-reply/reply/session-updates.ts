@@ -12,7 +12,10 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -71,7 +74,7 @@ async function persistSkillSnapshot(params: {
         entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
       return updated ? updates : null;
     },
-    { workerGuard: { source: params.assertCurrent } },
+    sessionEntryCommitGuardOptions(params.assertCurrent),
   );
   params.assertCurrent?.();
   publishReplySessionEntry(params, persistedEntry ?? undefined);

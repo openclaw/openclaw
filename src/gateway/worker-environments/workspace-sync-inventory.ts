@@ -47,7 +47,7 @@ async function writeInventory(
       ),
       onInventoryChunk: async (bytes, context) => {
         context.signal.throwIfAborted();
-        await output.writeFile(bytes);
+        await output.writeFile(bytes, { signal: context.signal });
         context.signal.throwIfAborted();
       },
     });

@@ -323,14 +323,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     `Run "${doctorFixCommand}" to preserve channel account ownership.`,
   );
 
-  const { prepareTailscaleConfigMigration } = await import("./doctor-tailscale.js");
-  applyConfigMutation(
-    await prepareTailscaleConfigMigration({
-      cfg: state.candidate,
-      env: process.env,
-    }),
-    `Run "${doctorFixCommand}" to apply safe Tailscale configuration migrations.`,
-  );
+  const { collectTailscaleConfigWarnings } = await import("./doctor-tailscale.js");
+  const tailscaleWarnings = await collectTailscaleConfigWarnings({
+    cfg: state.candidate,
+    env: process.env,
+  });
+  emitDoctorNotes({ note, warningNotes: tailscaleWarnings });
+  configRepairWarnings.push(...tailscaleWarnings);
 
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
   const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({

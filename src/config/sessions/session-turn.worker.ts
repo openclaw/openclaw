@@ -20,7 +20,7 @@ import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -193,7 +193,7 @@ export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOp
                   context.admit("transaction", {
                     kind: "session-turn-fresh",
                     index,
-                    refusedSource: readRefusedSessionSource(database, append.sources),
+                    sourceValidation: readSessionSourceValidation(database, append.sources),
                   });
                 }
               },

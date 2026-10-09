@@ -27,6 +27,7 @@ import type {
   DiagnosticChildProcessSpawnFields,
   DiagnosticMemoryPressureFields,
   DiagnosticAsyncQueueDroppedFields,
+  DiagnosticRuntimeMeasurementFields,
   DiagnosticWorkerRequestFields,
 } from "./diagnostic-process-types.js";
 import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
@@ -412,17 +413,6 @@ type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
   firstModelCallStarted?: boolean;
 };
 
-type DiagnosticGatewayEventLoopSampleEvent = DiagnosticBaseEvent & {
-  type: "gateway.event_loop.sample";
-  intervalMs: number;
-  delayMaxMs: number;
-};
-
-type DiagnosticGcEvent = DiagnosticBaseEvent & {
-  type: "diagnostic.gc";
-  durationMs: number;
-};
-
 type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -764,6 +754,7 @@ type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticEventPayload =
   | DiagnosticGatewayRpcEvent
+  | (DiagnosticBaseEvent & DiagnosticRuntimeMeasurementFields)
   | (DiagnosticBaseEvent & DiagnosticWorkerRequestFields)
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -790,8 +781,6 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticRunExecutionPhaseEvent
-  | DiagnosticGatewayEventLoopSampleEvent
-  | DiagnosticGcEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -945,6 +934,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "worker.request",
   "diagnostic.gc",
   "gateway.event_loop.sample",
+  "gateway.http.cancelled",
   "gateway.rpc",
   "tool.execution.started",
   "tool.execution.completed",
@@ -1560,7 +1550,15 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
       }
       listener(event);
     },
-    { exclude: ["log.record", "gateway.rpc", "gateway.event_loop.sample", "diagnostic.gc"] },
+    {
+      exclude: [
+        "log.record",
+        "gateway.rpc",
+        "gateway.event_loop.sample",
+        "gateway.http.cancelled",
+        "diagnostic.gc",
+      ],
+    },
   );
 }
 

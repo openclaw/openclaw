@@ -21,10 +21,11 @@ import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
-  type SessionSourcePredicateFacts,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -174,14 +175,12 @@ export async function appendSessionTurnInWorker(
             if (!source) {
               throw new Error("Session turn omitted its fresh-message authority");
             }
+            acceptSessionSourceValidation(
+              source,
+              // SAFETY: The paired worker read these facts in the current transaction.
+              facts.sourceValidation as SessionSourceValidation,
+            );
             source.assertCurrent();
-            if (isRecord(facts.refusedSource) && typeof facts.refusedSource.index === "number") {
-              source.checks[facts.refusedSource.index]?.refuse(
-                // SAFETY: The paired worker read these facts from the current transaction.
-                facts.refusedSource.facts as SessionSourcePredicateFacts,
-              );
-              throw new Error("Session source refusal omitted its prepared assertion");
-            }
             freshCommitGuards.add(source.assertCurrent);
             return true;
           }

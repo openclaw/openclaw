@@ -19,6 +19,10 @@ import { applySessionEntryOperation } from "../../../config/sessions/session-acc
 import type { SessionTranscriptRuntimeScope } from "../../../config/sessions/session-accessor.types.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
 import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
@@ -187,7 +191,7 @@ export function isNoRealConversationCompactionNoop(params: {
 export async function resetNoRealConversationTokenSnapshot(params: {
   sessionTarget: SessionTranscriptRuntimeTarget | undefined;
   sessionPersistence?: RunEmbeddedAgentParams["sessionPersistence"];
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
 }): Promise<void> {
   if (!params.sessionTarget || params.sessionPersistence === "detached") {
     return;
@@ -210,7 +214,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
       {
         skipMaintenance: true,
         takeCacheOwnership: true,
-        assertCommitAllowed: params.assertActive,
+        ...sessionEntryCommitGuardOptions(params.assertActive),
       },
     );
     params.assertActive();

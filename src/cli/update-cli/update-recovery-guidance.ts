@@ -1,7 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import {
+  isUpdateGatewayReadinessPending,
+  isUpdatePostInstallVerificationDeferred,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
@@ -42,6 +45,12 @@ export function resolveUpdateResultNextAction(params: {
   environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
+  if (result.status === "skipped" && result.reason === "gateway-readiness-unverified") {
+    const deferred = result.steps.find(isUpdatePostInstallVerificationDeferred)?.advisory;
+    if (deferred) {
+      return deferred.message;
+    }
+  }
   if (isUpdateGatewayReadinessPending(result)) {
     return `The readiness observation ended without confirmation. Leave the Gateway starting and keep recovery backups; check current progress with \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
   }

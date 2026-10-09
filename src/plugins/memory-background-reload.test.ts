@@ -122,6 +122,123 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
   return { record, instance, runtime };
 }
 
+function registerMemoryWorkspaceWatch(workspace: string) {
+  const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
+  const files: MemoryWorkspaceFiles = {
+    assertCurrent() {},
+    listFiles: listMemoryFiles,
+    inspectFile: buildFileEntry,
+    readFile: readMemoryFile,
+    readForIndexing: async (file) => ({
+      content: await fs.readFile(file, "utf8"),
+      canonicalRelativePath: path.relative(workspace, file),
+    }),
+    buildMultimodalChunk: buildMultimodalChunkForIndexing,
+    watch: async (_request, onChange, watchSignal) => {
+      subscriptions.push({
+        notify: AsyncLocalStorage.bind(() => onChange("change")),
+        signal: watchSignal,
+      });
+      await new Promise<void>((resolve) => {
+        watchSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    },
+  };
+  const unused = async (): Promise<never> => {
+    throw new Error("Unexpected document bridge operation");
+  };
+  const release = registerAgentWorkspaceAccess(workspace, {
+    memoryFiles: files,
+    bridge: { readFile: unused, writeFile: unused, stat: unused },
+  });
+  return { subscriptions, release };
+}
+
+it("retires live watchers and starts successor indexing without a search or turn", async ({
+  signal,
+}) => {
+  const state = await createOpenClawTestState({ label: "memory-watcher-retirement" });
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    memory: {
+      search: {
+        provider: "none",
+        sources: ["memory"],
+        store: { vector: { enabled: false } },
+      },
+    },
+  };
+  const { subscriptions, release } = registerMemoryWorkspaceWatch(state.workspaceDir);
+  const instances: PluginInstance[] = [];
+  let closeInitial: (() => Promise<void>) | undefined;
+  try {
+    const initial = registryHost();
+    const memory = loadMemory(initial, config);
+    instances.push(memory.instance);
+    const opened = await memory.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
+    assert(opened.manager, opened.error ?? "Expected the initial memory manager");
+    const raw = getPluginOriginalValue(opened.manager, memory.instance) ?? opened.manager;
+    const prototype = Object.getPrototypeOf(raw) as RegisteredMemorySearchManager;
+    closeInitial = async () => {
+      await prototype.close?.call(raw);
+    };
+    const sync = prototype.sync;
+    assert(sync);
+    const indexedChunks = createDeferredCore<number | undefined>();
+    const observed = vi.spyOn(prototype, "sync").mockImplementation(function (
+      this: RegisteredMemorySearchManager,
+      params,
+    ) {
+      const work = sync.call(this, params);
+      if (params?.reason === "watch") {
+        indexedChunks.resolve(work.then(() => this.status().chunks));
+      }
+      return work;
+    });
+    expect(subscriptions).toHaveLength(1);
+    await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
+    expect.soft(subscriptions[0]!.signal.aborted, "retired watch subscription").toBe(true);
+
+    const successor = registryHost();
+    const current = loadMemory(successor, config);
+    instances.push(current.instance);
+    const registration = successor.registry.services.find(
+      ({ service }) => service.id === "memory-core-index",
+    );
+    assert(registration, "Memory Core must start its index through the Gateway service lifecycle");
+    const service = registration.service;
+    assert(service.apiVersion !== 2);
+    const context = { config, stateDir: state.stateDir, logger };
+    await service.start(context);
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1]!.signal.aborted).toBe(false);
+    await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(state.workspaceDir, "memory", "after-reload.md"),
+      "Violet cranes nest beside the lagoon.",
+    );
+    subscriptions[0]!.notify();
+    expect(observed).not.toHaveBeenCalled();
+    subscriptions[1]!.notify();
+    expect(await withinTest(indexedChunks.promise, signal)).toBeGreaterThan(0);
+    await service.stop?.(context);
+    expect(subscriptions[1]!.signal.aborted).toBe(true);
+    await service.start(context);
+    expect(subscriptions).toHaveLength(3);
+    await expect(current.instance.dispose()).resolves.toEqual({ errors: [] });
+    expect(subscriptions.every((subscription) => subscription.signal.aborted)).toBe(true);
+  } finally {
+    // Also release the original manager when the pre-fix retirement assertion fails.
+    await closeInitial?.();
+    for (const instance of instances.toReversed()) {
+      await instance.dispose();
+    }
+    release();
+    vi.restoreAllMocks();
+    await state.cleanup();
+  }
+});
+
 it.for([false, true])(
   "syncs detached background work after reload (replace Memory Core: %s)",
   async (replaceMemory, { signal }) => {
@@ -332,34 +449,10 @@ it.for([false, true])(
           path.join(workspace, "MEMORY.md"),
           `Remember the violet ${reason} fact.`,
         );
-        let notify: (() => void) | undefined;
+        let watchedWorkspace: ReturnType<typeof registerMemoryWorkspaceWatch> | undefined;
         if (reason === "watch" || reason === "interval") {
-          const files: MemoryWorkspaceFiles = {
-            assertCurrent() {},
-            listFiles: listMemoryFiles,
-            inspectFile: buildFileEntry,
-            readFile: readMemoryFile,
-            readForIndexing: async (file) => ({
-              content: await fs.readFile(file, "utf8"),
-              canonicalRelativePath: path.relative(workspace, file),
-            }),
-            buildMultimodalChunk: buildMultimodalChunkForIndexing,
-            watch: async (_request, onChange, watchSignal) => {
-              notify = AsyncLocalStorage.bind(() => onChange("change"));
-              await new Promise<void>((resolve) => {
-                watchSignal.addEventListener("abort", () => resolve(), { once: true });
-              });
-            },
-          };
-          const unused = async (): Promise<never> => {
-            throw new Error("Unexpected document bridge operation");
-          };
-          releases.push(
-            registerAgentWorkspaceAccess(workspace, {
-              memoryFiles: files,
-              bridge: { readFile: unused, writeFile: unused, stat: unused },
-            }),
-          );
+          watchedWorkspace = registerMemoryWorkspaceWatch(workspace);
+          releases.push(watchedWorkspace.release);
         }
         if (reason === "session-startup-catchup") {
           await seedSession(agentId);
@@ -385,8 +478,9 @@ it.for([false, true])(
           });
           await vi.advanceTimersByTimeAsync(5_000);
         } else if (reason === "watch") {
-          assert(notify, "Memory manager must subscribe to its workspace host");
-          inTurn(notify);
+          const subscription = watchedWorkspace?.subscriptions.at(-1);
+          assert(subscription, "Memory manager must subscribe to its workspace host");
+          inTurn(subscription.notify);
         } else if (reason === "interval") {
           inTurn(() => enableInterval(rawManager));
           await vi.advanceTimersByTimeAsync(60_000);

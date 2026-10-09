@@ -28,7 +28,7 @@ import type {
   SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 
 /** Connection-bound domains share the executor's transaction and publication grants. */
 export function createSessionWorkerOperationContext(
@@ -101,13 +101,17 @@ export function commitSessionEntryPatch(
         providerReviewMutation: input.providerReviewMutation,
         workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
         assertCommitAllowed: () => {
-          const refusedSource = readRefusedSessionSource(database, input.sources);
+          const validation = readSessionSourceValidation(database, input.sources);
+          const { refusedSource } = validation;
           if (refusedSource) {
             result = { kind: "session-entry-patch", entry: null, refusedSource };
             transferSessionEntryWorkerCandidate(database, admit, result);
             throw new Error("Session source refusal was not rejected");
           }
-          admit("transaction", { kind: "session-entry-patch-validated" });
+          admit("transaction", {
+            kind: "session-entry-patch-validated",
+            sourceValidation: validation,
+          });
         },
       };
       let mutation;

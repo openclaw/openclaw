@@ -441,22 +441,30 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
       const read = withOpenClawAgentDatabaseReadOnly(
         (database) =>
           readWithCanonicalSessionAdmission(database, () => {
-            // Admission failures affect this store; an invalid requested row must not
-            // suppress healthy logical targets after a warm handle was validated.
-            assertCanonicalSqliteSessionKeysCurrent(database);
-            const source = { agentId: database.agentId, path: database.path };
-            const grouped = readExactSessionEntryCandidatesInDatabase(
-              database,
-              group.requests.map((request) => request.sessionKeys),
-              group.projection,
-              { clone: group.clone },
-            );
-            for (const [ordinal, request] of group.requests.entries()) {
-              const result = grouped[ordinal]!;
-              results[request.index] = result;
-              if (result.ok) {
-                scopes[request.index]!.onReadSource?.(source);
+            try {
+              // Admission failures affect this store; an invalid requested row must not
+              // suppress healthy logical targets after a warm handle was validated.
+              assertCanonicalSqliteSessionKeysCurrent(database);
+              const source = { agentId: database.agentId, path: database.path };
+              const grouped = readExactSessionEntryCandidatesInDatabase(
+                database,
+                group.requests.map((request) => request.sessionKeys),
+                group.projection,
+                { clone: group.clone },
+              );
+              for (const [ordinal, request] of group.requests.entries()) {
+                const result = grouped[ordinal]!;
+                results[request.index] = result;
+                if (result.ok) {
+                  scopes[request.index]!.onReadSource?.(source);
+                }
               }
+            } catch (error) {
+              if (sqlitePrimaryResultCode(error) === 1) {
+                // Preserve failed-snapshot schema facts before the admission owner rolls back.
+                throw new SessionEntryDataReadError(error, database.db);
+              }
+              throw error;
             }
           }),
         group.options,
@@ -470,8 +478,13 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
         }
       }
     } catch (error) {
+      let readError = error;
+      if (error instanceof SessionEntryDataReadError) {
+        error.assertSettled();
+        readError = error.readError;
+      }
       for (const { index } of group.requests) {
-        results[index] = err(error);
+        results[index] = err(readError);
       }
     }
   }

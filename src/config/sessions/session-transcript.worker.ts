@@ -21,7 +21,7 @@ import {
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
 import type {
-  SessionTranscriptWorkerInput,
+  SessionTranscriptWorkerRequest,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
@@ -42,7 +42,7 @@ serveOwnedWorkerTasks(
     releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
-    const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
+    const request = input as SessionTranscriptWorkerRequest | UsageCostWorkerInput;
     if (request.kind === "cli-process-history") {
       if (!channel) {
         throw new Error("Process-held history requires its host reader channel");
@@ -625,6 +625,7 @@ serveOwnedWorkerTasks(
                 : `history.${request.request.kind}`
               : request.kind,
             readRequest,
+            request.validation,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

@@ -22,6 +22,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-transcript-reconcile.js";
 import { isSessionCostUsageRefreshRunning } from "../infra/session-cost-usage-cache.sqlite.js";
+import { createIncognitoUsageCostAdapter } from "../infra/session-cost-usage-incognito.js";
 import { resolveUsageCostPricingFingerprint } from "../infra/session-cost-usage-pricing-context.js";
 import {
   loadSessionCostSummary,
@@ -519,6 +520,44 @@ it("reads explicit retained usage windows and preserves their discovery", async 
       points: [{ totalTokens: 10 }],
     });
   });
+});
+
+it("cancels a queued usage callback independently of its retained compute scope", async ({
+  signal,
+}) => {
+  const target = await create("callback-abort");
+  const before = await stats(target);
+  const barrier = await hold();
+  const controller = new AbortController();
+  const cancellation = new Error("Usage callback deadline expired");
+  const reading = actor.sessions.withCompute(authority, target, async (compute) => {
+    const adapter = createIncognitoUsageCostAdapter(
+      compute,
+      target,
+      { agentId: actor.agentId, storePath: actor.path },
+      [{ ...target, updatedAtMs: 0 }],
+    );
+    const queued = adapter.read(
+      {
+        kind: "memory-stats",
+        input: [{ agentId: actor.agentId, storePath: actor.path, sessionId: target.sessionId }],
+      },
+      controller.signal,
+    );
+    controller.abort(cancellation);
+    return queued;
+  });
+  const outcome = reading.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    expect(await withinTest(outcome, signal)).toBe(cancellation);
+  } finally {
+    barrier.release.resolve();
+    await Promise.allSettled([barrier.held, reading]);
+  }
+  await expect(stats(target)).resolves.toEqual(before);
 });
 
 it("observes a pending actor append before usage inventory, stats and rollup publication", async () => {

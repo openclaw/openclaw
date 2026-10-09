@@ -75,12 +75,16 @@ import type {
   SqliteSessionEntryPatchOptions,
   SqliteSessionEntrySnapshotPatchParams,
 } from "./session-entry-patch.types.js";
-import { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import { buildInboundSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { patchIncognitoSessionEntry } from "./session-incognito-entry-patch.js";
 import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
   prepareSessionSourceAuthority,
   type PreparedSessionSourceAuthority,
+  type SessionSourceAssertion,
 } from "./session-source-authority.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -450,9 +454,10 @@ async function patchSqliteSessionEntrySnapshot(
     return result.entry;
   }
   let wrote = false;
+  // v2026.9.8 plugin-sdk/session-store-runtime promises opaque commit callbacks
+  // inside a native synchronous transaction. Bundled producers carry workerGuard instead.
   const useWorker =
     isMainThread &&
-    options.workerGuard !== undefined &&
     !options.shouldCommit &&
     !options.assertCommitAllowed &&
     supportsOpenClawAgentDatabaseExecution(databaseOptions);
@@ -616,25 +621,6 @@ async function patchSqliteSessionEntrySnapshot(
   return committed;
 }
 
-function buildInboundSessionCreationStamp(ctx: UpdateSessionLastRouteParams["ctx"]) {
-  const senderId = ctx?.SenderId?.trim();
-  return buildSessionCreationStamp(
-    ctx?.SessionCreation ?? {
-      via: "channel",
-      ...(senderId
-        ? {
-            actor: {
-              type: "human",
-              source: "channel",
-              id: senderId,
-              label: ctx?.SenderName?.trim() || undefined,
-            },
-          }
-        : {}),
-    },
-  );
-}
-
 export async function recordInboundSessionMeta(
   params: RecordInboundSessionMetaParams,
 ): Promise<SessionEntry | null> {
@@ -673,14 +659,18 @@ export async function updateSessionLastRoute(
 ): Promise<SessionEntry | null> {
   return await updateSessionLastRouteInScope(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    params,
+    {
+      ...params,
+      assertCommitAllowed: captureExternalSessionCommitGuard(params.assertCommitAllowed),
+    },
   );
 }
 
 /** Internal callers retain their captured storage owner across route preparation. */
 export async function updateSessionLastRouteInScope(
   scope: SessionAccessScope & { databaseAgentId?: string },
-  params: Omit<Parameters<typeof updateSessionLastRoute>[0], "storePath" | "sessionKey"> & {
+  params: Omit<UpdateSessionLastRouteParams, "storePath" | "sessionKey"> & {
+    assertCommitAllowed?: SessionSourceAssertion;
     workerGuard?: SessionEntryPatchGuard;
   },
 ): Promise<SessionEntry | null> {
@@ -688,6 +678,12 @@ export async function updateSessionLastRouteInScope(
     normalizeInternalTurnContext(params.ctx);
   }
   const createIfMissing = params.createIfMissing ?? true;
+  const { source, ...routeGuard } = params.workerGuard ?? {};
+  const commitGuard = sessionEntryCommitGuardOptions(
+    source
+      ? composeSessionSourceAssertion([source, params.assertCommitAllowed])
+      : params.assertCommitAllowed,
+  );
   return await patchSessionEntryInScope(
     scope,
     (_entry, context) => {
@@ -714,8 +710,8 @@ export async function updateSessionLastRouteInScope(
     {
       // Route updates must not refresh activity timestamps (#49515).
       preserveActivity: true,
-      workerGuard: params.workerGuard ?? {},
-      ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+      ...commitGuard,
+      workerGuard: { ...routeGuard, ...commitGuard.workerGuard },
       ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
     },
     scope.databaseAgentId,

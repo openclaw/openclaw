@@ -686,6 +686,10 @@ Shared-state database admission also preserves native SQLite result codes across
 
 ### The state database is busy
 
+Lease renewal and release use nonblocking write admission. A contended attempt
+leaves retry and failure handling to the lease owner without logging a transaction
+lock-wait warning. Ordinary write waits and commit failures retain their diagnostics.
+
 Wait for the other OpenClaw process to finish its database work, then retry the
 command. `state-lifecycle` contention normally clears after startup, a write, or
 maintenance finishes. `gateway-lifecycle` protects a running Gateway's ownership,

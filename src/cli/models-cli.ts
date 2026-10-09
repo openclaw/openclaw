@@ -131,17 +131,9 @@ export function registerModelsCli(program: Command) {
       });
     });
 
-  for (const [name, description, loadCommand] of [
-    [
-      "set",
-      "Set the default model",
-      async () => (await import("../commands/models/set.js")).modelsSetCommand,
-    ],
-    [
-      "set-image",
-      "Set the image model",
-      async () => (await import("../commands/models/set-image.js")).modelsSetImageCommand,
-    ],
+  for (const [name, description, field] of [
+    ["set", "Set the default model", "model"],
+    ["set-image", "Set the image model", "imageModel"],
   ] as const) {
     models
       .command(name)
@@ -149,8 +141,8 @@ export function registerModelsCli(program: Command) {
       .argument("<model>", "Model id or alias")
       .action(async (model: string, _opts: unknown, command: Command) => {
         await withGlobalModelsRuntime(command, name, async ({ defaultRuntime }) => {
-          const run = await loadCommand();
-          await run(model, defaultRuntime);
+          const { modelsSetCommand } = await import("../commands/models/set.js");
+          await modelsSetCommand(model, defaultRuntime, field);
         });
       });
   }

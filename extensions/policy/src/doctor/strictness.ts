@@ -19,17 +19,15 @@ export function isPolicyValueAtLeastAsStrict(
 ): boolean {
   switch (metadata.strictness) {
     case "allowlist-subset":
-      return isPolicyAllowlistSubset(metadata, candidate, baseline);
     case "denylist-superset":
-      return isPolicyDenylistSuperset(metadata, candidate, baseline);
+    case "exact-list":
+      return comparePolicyStringLists(metadata, candidate, baseline);
     case "ordered-string":
       return isPolicyOrderedStringAtLeastAsStrict(metadata, candidate, baseline);
     case "requires-true":
       return baseline !== true || candidate === true;
     case "requires-false":
       return baseline !== false || candidate === false;
-    case "exact-list":
-      return samePolicyStringList(candidate, baseline, metadata);
     case "routing-probes":
       return routingProbesAtLeastAsStrict(candidate, baseline);
   }
@@ -190,7 +188,7 @@ function isPolicyOrderedStringAtLeastAsStrict(
   return candidateIndex >= 0 && baselineIndex >= 0 && candidateIndex >= baselineIndex;
 }
 
-function isPolicyAllowlistSubset(
+function comparePolicyStringLists(
   metadata: PolicyRuleMetadata,
   candidate: unknown,
   baseline: unknown,
@@ -200,44 +198,26 @@ function isPolicyAllowlistSubset(
   if (candidateList === undefined || baselineList === undefined) {
     return false;
   }
-  if (metadata.emptyList === "disabled" && baselineList.length === 0) {
-    return true;
+  if (metadata.strictness === "allowlist-subset") {
+    if (metadata.emptyList === "disabled") {
+      if (baselineList.length === 0) {
+        return true;
+      }
+      if (candidateList.length === 0) {
+        return false;
+      }
+    }
+    const allowed = new Set(baselineList);
+    return candidateList.every((entry) => allowed.has(entry));
   }
-  if (metadata.emptyList === "disabled" && baselineList.length > 0 && candidateList.length === 0) {
-    return false;
-  }
-  const allowed = new Set(baselineList);
-  return candidateList.every((entry) => allowed.has(entry));
-}
-
-function isPolicyDenylistSuperset(
-  metadata: PolicyRuleMetadata,
-  candidate: unknown,
-  baseline: unknown,
-): boolean {
-  const candidateList = policyStringList(candidate, metadata);
-  const baselineList = policyStringList(baseline, metadata);
-  if (candidateList === undefined || baselineList === undefined) {
-    return false;
-  }
-  if (metadata.policyPath.join(".") === "tools.denyTools") {
-    return baselineList
-      .flatMap(expandPolicyToolRequirement)
-      .every((tool) => toolListCoversTool(candidateList, tool));
-  }
-  const denied = new Set(candidateList);
-  return baselineList.every((entry) => denied.has(entry));
-}
-
-function samePolicyStringList(
-  candidate: unknown,
-  baseline: unknown,
-  metadata: PolicyRuleMetadata,
-): boolean {
-  const candidateList = policyStringList(candidate, metadata);
-  const baselineList = policyStringList(baseline, metadata);
-  if (candidateList === undefined || baselineList === undefined) {
-    return false;
+  if (metadata.strictness === "denylist-superset") {
+    if (metadata.policyPath.join(".") === "tools.denyTools") {
+      return baselineList
+        .flatMap(expandPolicyToolRequirement)
+        .every((tool) => toolListCoversTool(candidateList, tool));
+    }
+    const denied = new Set(candidateList);
+    return baselineList.every((entry) => denied.has(entry));
   }
   const candidateSorted = candidateList.toSorted();
   const baselineSorted = baselineList.toSorted();

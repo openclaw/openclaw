@@ -542,7 +542,7 @@ describe("update-cli", () => {
           .filter((listener) => !priorSigintListeners.has(listener));
         expect(listeners.length).toBeGreaterThan(0);
         for (const listener of listeners) {
-          listener();
+          listener("SIGINT");
         }
         throw new Error("interrupted lifecycle");
       }

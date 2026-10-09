@@ -15,12 +15,16 @@ import {
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
+  captureOpenClawAgentDatabaseExecution,
   openSqliteWorkerStore,
   openOpenClawAgentSqliteWorkerStore,
   runSqliteWorkerStoreWrite,
   type OpenClawAgentSqliteWorkerStore,
+  type OpenClawAgentDatabaseExecution,
   type SqliteWorkerStore,
   runQueuedStoreWrite,
+  readOpenClawAgentDatabaseIdentity,
+  supportsOpenClawAgentDatabaseExecution,
   withOpenClawAgentDatabaseWrite,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -84,7 +88,6 @@ export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
-  private publicationGenerationActive = false;
   private schemaAdmission?: Promise<void>;
   private shadow?: {
     path: string;
@@ -302,10 +305,7 @@ export class MemoryIndexDatabase {
           store: await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
             this.writeOptions,
             this.db,
-            {
-              ...worker,
-              retainExecutionUntilClose: this.publicationGenerationActive ? true : undefined,
-            },
+            worker,
           ),
           busyTimeoutMs: pragmas.busy_timeout,
         };
@@ -627,39 +627,41 @@ export class MemoryIndexDatabase {
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
-    try {
-      // This store only retains the canonical executor; concrete publication
-      // stores still own their connection policy and cleanup.
-      const execution = this.writeOptions
-        ? await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
-            this.writeOptions,
-            this.db,
-            {
-              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
-              input: undefined,
-              retainExecutionUntilClose: true,
-            },
-          )
-        : undefined;
-      this.publicationGenerationActive = true;
-      const failures: unknown[] = [];
-      for (const settle of [run, () => execution?.close()]) {
-        try {
-          await settle();
-        } catch (error) {
-          failures.push(error);
-        }
+    let execution: OpenClawAgentDatabaseExecution | undefined;
+    if (
+      this.writeOptions &&
+      !this.readOnly &&
+      supportsOpenClawAgentDatabaseExecution(this.writeOptions)
+    ) {
+      const source = readOpenClawAgentDatabaseIdentity({ db: this.db });
+      if (this.closed || !this.db.isOpen || typeof source.identity !== "string") {
+        throw new Error("Memory publication requires its live file owner");
       }
-      if (failures.length === 1) {
-        throw failures[0];
+      // Retain across fallback preparation; a no-op generation never opens a native worker.
+      execution = captureOpenClawAgentDatabaseExecution(this.writeOptions, {
+        expectedIdentity: {
+          kind: "file",
+          physicalIdentity: source.identity,
+          nativeLocation: source.filename,
+          birthtime: source.birthtime,
+        },
+      });
+    }
+    const failures: unknown[] = [];
+    for (const settle of [run, () => execution?.release()]) {
+      try {
+        await settle();
+      } catch (error) {
+        failures.push(error);
       }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
-          cause: failures[0],
-        });
-      }
-    } finally {
-      this.publicationGenerationActive = false;
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
+        cause: failures[0],
+      });
     }
   }
 

@@ -215,19 +215,12 @@ function extractProviderFromModelRef(modelRef: string): string | undefined {
 
 function collectLegacyConfigAuthProfileProviderHints(
   cfg: OpenClawConfig,
-): ReadonlyMap<string, string> {
-  const hints = new Map<string, string>();
-  const conflicted = new Set<string>();
+): ReadonlyMap<string, string | null> {
+  const hints = new Map<string, string | null>();
   const addHint = (profileId: string, provider: string): void => {
     const existing = hints.get(profileId);
-    if (existing && existing !== provider) {
-      hints.delete(profileId);
-      conflicted.add(profileId);
-      return;
-    }
-    if (!conflicted.has(profileId)) {
-      hints.set(profileId, provider);
-    }
+    // Ambiguous evidence stays ambiguous even if a later reference repeats one provider.
+    hints.set(profileId, existing === undefined || existing === provider ? provider : null);
   };
   const addModelHints = (models: unknown): void => {
     if (!isRecord(models)) {

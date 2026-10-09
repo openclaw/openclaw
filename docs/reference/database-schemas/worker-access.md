@@ -16,6 +16,44 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Ordinary durable entry patches use the existing agent writer by default. Reply
+settings, compaction accounting, titles, voice sessions, and bundled lifecycle
+producers carry source predicates through preparation into that writer. The worker
+rereads authoritative rows and owns entry normalization, conversation identity,
+and provenance in the synchronous transaction. Host grants retain live caller
+authority at transaction and commit; acknowledged publications and accepted-write
+settlement remain with the existing entry owner. Incognito routing is unchanged.
+Confirmed entry receipts publish exact membership and category facts instead of
+forcing a new membership read. Delivery rechecks synchronous listener writes;
+unknown outcomes, moved membership, and superseded metadata still invalidate.
+Committed entry metadata preserves an active trajectory-retention sweep through
+its existing owner. Foreign commits and unknown local writes still invalidate
+the sweep; rollback publishes no acknowledgment.
+The v2026.9.8 `plugin-sdk/session-store-runtime` entry and last-route contracts
+retain their opaque `assertCommitAllowed` callbacks inside the native transaction.
+Released model-selection validators and Stop currentness callbacks likewise keep
+their native adapter; bundled controls carry prepared source checks instead. Cross-store sources
+also retain native atomicity while the released synchronous transcript SDK can
+bypass async queues; revisit that compatibility path at the next SDK major.
+Schemas, retained bytes, durability, and update behavior are unchanged.
+
+Bundled plugins obtain prepared currentness checks and compose entry commit guards
+through the existing private `session-binding-runtime` facade. Its async capture
+retains the selected session generation and optional conversation alternatives;
+the writer checks all alternatives in one batched conversation read and publishes
+the matching branches through its existing transaction grant. Host callbacks
+recheck live channel/run facts among those matches through commit, so a finishing
+publisher can yield to a recorded parent without losing a valid title update.
+Ordinary wrappers preserve that source carrier. Public SDK callbacks keep their
+released synchronous contract and existing incognito callback route without new
+public exports.
+
+History readers can borrow existing physical and canonical admission without an
+open host reader. The receiving scope checks its actual file and the live receipt;
+current policy, pending canonical validation, and foreign-commit freshness remain
+with the reader. When physical admission is already known, the first canonical
+read enters its snapshot before policy reads, avoiding discarded probes.
+
 ## Committed facts and completeness
 
 Synchronous compatibility writers and workers share the existing postcommit
@@ -1612,16 +1650,16 @@ snapshot, including both MCP reconstruction passes. Process-held incognito
 databases retain their native owner. There is no synchronous fallback when the
 worker is busy and no retained summary cache.
 
-Audited internal session-entry patches use the agent executor for snapshot reads,
+Bundled session-entry patches use the agent executor for snapshot reads,
 CAS validation, mutation, and COMMIT. Usage accounting, compaction
 accounting, restart cleanup, activity recaps, and the entry owner's prepared
-upsert, replacement, and route-metadata operations select this path explicitly.
+upsert, replacement, and route-metadata operations share this default path.
 The host runs each updater once and retains live authority. Recap transcript
 predicates run inside the write transaction before CAS. Bounded provisional
 result transfers precede the final grant; a compact native receipt certifies the
 exact committed result. Publication, committed callbacks, and identity observers
 settle before the physical database FIFO is released. Unknown writes never replay.
-Incognito, maintenance, opaque plugin callbacks, and unclassified internal guards
+Incognito, maintenance, and released opaque plugin callbacks
 retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
@@ -2085,10 +2123,11 @@ Store close rejects new publications, joins accepted work and lease release, the
 releases its database borrow. Normal idle retirement and per-command authority
 checks remain unchanged; updates need no schema or state migration.
 
-An accepted Memory sync generation retains a lazy executor borrow through its
-final publication and worker cleanup. Its publication adapter selects
-`retainExecutionUntilClose` only within that generation, so shutdown cache reads,
-cache writes, and index publication share native admission. Each command still
+An accepted Memory sync generation retains its original physical executor before
+asynchronous preparation, through final publication and worker cleanup. Capture
+is SQL-free and leaves native opening lazy, so a no-op generation does not read
+connection pragmas or open a worker. Shutdown cache reads, cache writes, and index
+publication share native admission. Each command still
 acquires its own FIFO turn and checks current transaction and commit authority.
 Cached publication stores outside a sync generation keep the ordinary shutdown
 release behavior; settled leases do not wait for unrelated cleanup. This changes
@@ -3696,6 +3735,8 @@ until host promotion finishes; a second acknowledged commit releases that marker
 before scheduling its wake. Restoration reads fresh complete rows through the
 existing state read worker and continues only the same recorded cohort, without
 repeating its first write or treating a persisted flag as a completed handoff.
+Pending startup inspection defers activation through the same source-bound retry;
+runs stay unresumed until admission completes, and other failures still propagate.
 Retired episodes preserve known or uncertain native outcomes and refuse further
 writes until canonical reconciliation can establish a current owner.
 
