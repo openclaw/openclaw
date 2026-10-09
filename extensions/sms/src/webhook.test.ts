@@ -271,6 +271,27 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
   });
 
+  it("does not acknowledge a delivery callback until durable persistence succeeds", async () => {
+    const payload = createSignedDeliveryPayload({
+      messageSid: createMessageSid(21),
+      status: "sent",
+    });
+    const delivery = createSmsTestDeliveryRecorder(
+      vi.fn<SmsDeliveryRecorder["record"]>(async () => {
+        throw new Error("sqlite unavailable");
+      }),
+    );
+    const handler = createHandler({ delivery });
+    const res = createResponse();
+
+    await expect(handler(createRequest(payload.body, payload.signature), res)).rejects.toThrow(
+      "sqlite unavailable",
+    );
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
   it("waits for the durable delivery commit before returning HTTP 200", async () => {
     const account = createSmsTestAccount();
     const payload = createSignedDeliveryPayload({

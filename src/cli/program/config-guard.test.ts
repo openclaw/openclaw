@@ -430,6 +430,25 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("preserves protocol-owned stdout for MCP serve", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "mcp", "serve"];
+    try {
+      await ensureConfigReady({
+        runtime,
+        commandPath: ["mcp", "serve"],
+        suppressDoctorStdout: true,
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps invalid Nix config on the manual recovery path", async () => {
     setInvalidSnapshot();
     setTestEnvValue("OPENCLAW_NIX_MODE", "1");

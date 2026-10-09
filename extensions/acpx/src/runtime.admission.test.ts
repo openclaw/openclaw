@@ -440,6 +440,20 @@ describe("AcpxRuntime reset generation custody", () => {
     }
   });
 
+  it("preserves persisted session ownership after close persistence fails", async () => {
+    const { runtime, target, baseStore, ensure } = makeManagedRuntime();
+    const handle = await ensure();
+    baseStore.save.mockRejectedValueOnce(new Error("close failed"));
+    await expect(runtime.close({ handle, reason: "closed" })).rejects.toThrow("close failed");
+    expect((await baseStore.load()).closed).toBe(false);
+    const next = await ensure();
+    expect(next.sessionKey).toBe(target.sessionKey);
+    expect(next.agentId).toBe(target.agentId);
+    expect(next.backendSessionId).toBe(handle.backendSessionId);
+    await runtime.close({ handle: next, reason: "closed" });
+    await runtime.shutdown();
+  });
+
   it("keeps successor persistence when overlapping post-reset closes settle", async () => {
     const fixture = makeManagedRuntime();
     const { runtime, target, baseStore, ensure } = fixture;

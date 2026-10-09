@@ -737,6 +737,25 @@ describe("SqliteBoardStore behavior", () => {
         .widgets[0],
     ).toMatchObject({ grantState: "granted" });
   });
+  it("rejects a delayed HTML grant after remove and same-name replacement", async () => {
+    const store = createTestBoardStore();
+    const putDeclaredHtml = async (html: string) =>
+      await store.putWidget({
+        ...boardSession,
+        name: "app",
+        content: { kind: "html", html },
+        declared: { tools: ["refresh"] },
+      });
+    const original = await putDeclaredHtml("original");
+    await store.applyOps(boardSession, [{ kind: "widget_remove", name: "app" }]);
+    const replacement = await putDeclaredHtml("replacement");
+
+    expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
+    expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
+    await expect(
+      store.grant(boardSession, "app", "granted", 1, original.widgets[0]?.instanceId),
+    ).rejects.toThrow("instance changed");
+  });
 });
 
 describe("SqliteBoardStore persistence", () => {
