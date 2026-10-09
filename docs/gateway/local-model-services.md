@@ -37,7 +37,8 @@ preset arguments match; relative presets also require the configured working
 directory. It captures matching descendants, sends SIGTERM, waits up to five
 seconds, then uses SIGKILL if needed. Process birth and executable identities are
 rechecked before each signal. Live parents, custom binaries, other state
-directories, and different ports or presets are left alone. A new managed child
+directories, direct-model configurations without a preset, and different ports
+or presets are left alone. A new managed child
 then starts normally, including after a previous Gateway died from SIGHUP,
 SIGKILL, or a crash. This does not change inherited `nohup` signal handling.
 

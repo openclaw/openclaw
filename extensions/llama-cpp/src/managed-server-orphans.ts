@@ -29,13 +29,15 @@ export async function recoverManagedLlamaServer(params: {
   if (!findManagedLlamaServerAsset(params.command)) {
     return;
   }
-  const required = new Map([["--port", String(params.port)]]);
   const preset = params.presetPath ?? readUniqueArgument(params.args ?? [], "--models-preset");
-  if (preset) {
-    required.set("--models-preset", preset);
+  if (!preset) {
+    return;
   }
-  const cwd =
-    preset && !path.isAbsolute(preset) ? path.resolve(params.cwd ?? process.cwd()) : undefined;
+  const required = new Map([
+    ["--port", String(params.port)],
+    ["--models-preset", preset],
+  ]);
+  const cwd = !path.isAbsolute(preset) ? path.resolve(params.cwd ?? process.cwd()) : undefined;
   const host = readUniqueArgument(params.args ?? [], "--host");
   if (host) {
     required.set("--host", host);

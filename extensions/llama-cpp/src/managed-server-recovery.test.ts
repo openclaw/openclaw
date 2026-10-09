@@ -80,6 +80,15 @@ async function createFixture() {
 }
 
 describe("managed llama-server recovery", () => {
+  it("does not recover a router for a direct-model configuration without a preset", async () => {
+    const { model, modelPath, provider } = await createFixture();
+    provider.localService.args = ["--model", modelPath, "--port", "19432"];
+
+    await ensureManagedLlamaServerForChat({ model, provider });
+
+    expect(mocks.reap).not.toHaveBeenCalled();
+  });
+
   it("preserves preparation on released hosts without the recovery capability", async () => {
     const { command, model, presetPath, provider } = await createFixture();
     mocks.supportsRecovery = false;
