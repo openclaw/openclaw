@@ -412,7 +412,9 @@ describe("Provider model discovery auth preparation", () => {
           version: expect.any(String),
         },
       ]);
-      expect(outcomes).toEqual([{ provider: "openai", status: "ready" }]);
+      expect(outcomes).toEqual([
+        { provider: "openai", status: "ready", listedModelIds: ["gpt-5.5"] },
+      ]);
       const provider = readPlannedProvider(plan, "openai");
       expect(provider).toMatchObject({
         api: "openai-chatgpt-responses",
