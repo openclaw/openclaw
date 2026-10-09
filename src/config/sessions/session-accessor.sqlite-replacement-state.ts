@@ -34,6 +34,7 @@ import type {
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
@@ -128,6 +129,7 @@ export function prepareSessionEntryReplacementPublication(
     });
   return {
     kind: "session-entry-replacements",
+    transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
     sharingUnchangedKeys: [...current].flatMap(([key, entry]) =>

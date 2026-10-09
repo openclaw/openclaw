@@ -1,5 +1,5 @@
-import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { DatabaseSync } from "node:sqlite";
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { expect, it } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
@@ -15,26 +15,78 @@ import {
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import {
-  readPreparedSessionEntryChange,
-  retainSessionEntryWorkerPublication,
-} from "./session-accessor.sqlite-entry-cache-publication.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   projectSessionSharingEntry,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+it.each(["native", "worker"] as const)(
+  "publishes %s category changes to retained authority before observers",
+  async (writer) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:category-authority",
+      };
+      const entry = { sessionId: "category-authority", updatedAt: 1, category: "before" };
+      replaceSessionEntrySync(scope, entry);
+      const source = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof source.identity !== "string") {
+        throw new Error("Expected durable category fixture");
+      }
+      const sharing = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${source.identity}`,
+        sessionKey: scope.sessionKey,
+        entry,
+        membership: new Set(),
+      });
+      const read = () => {
+        const current = sharing.readCurrent()?.entry;
+        return { sessionId: current?.sessionId, category: current?.category };
+      };
+      const observed: Array<ReturnType<typeof read>> = [];
+      const stop = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          observed.push(read());
+        }
+      });
+      try {
+        if (writer === "native") {
+          replaceSessionEntrySync(scope, { ...entry, category: "after" });
+        } else {
+          expect(await updateSessionGroupCategoriesInWorker({ scope, from: "before" })).toBe(1);
+        }
+        const expected = writer === "native" ? "after" : undefined;
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.category).toBe(expected);
+        expect(read()).toEqual({ sessionId: entry.sessionId, category: expected });
+        expect(observed.length).toBeGreaterThan(0);
+        for (const snapshot of observed) {
+          expect(snapshot).toEqual({ sessionId: entry.sessionId, category: expected });
+        }
+      } finally {
+        stop();
+        sharing.release();
+      }
+    });
+  },
+);
 
 it("fences every retained reader after a native installer fails, including older pending receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -96,95 +148,100 @@ it("fences every retained reader after a native installer fails, including older
   });
 });
 
-it("withholds a watermark receipt after a synchronous transcript append publishes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:late-watermark",
-      sessionId: "late-watermark",
-    };
-    replaceSessionEntrySync(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      activitySummary: {
-        version: 1,
-        text: "Empty transcript",
-        updatedAt: 1,
-        sessionId: scope.sessionId,
-        generation: null,
-        maxSeq: null,
-        leafEntryId: null,
-        coveredMessages: 0,
-        totalMessages: 0,
-        omittedContent: false,
-      },
-    });
-    const source = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof source.identity !== "string") {
-      throw new Error("Expected durable sharing fixture");
-    }
-    const sharing = retainPreparedSessionSharingFacts({
-      databaseIdentity: `file:${source.identity}`,
-      sessionKey: scope.sessionKey,
-      entry: projectSessionSharingEntry(
-        readExactSessionEntryRow(database, scope.sessionKey)!.entry,
-      ),
-      membership: new Set(),
-    });
-    const acquiring = retainPreparedSessionSharingFacts({
-      databaseIdentity: `file:${source.identity}`,
-      sessionKey: scope.sessionKey,
-      acquiring: true,
-    });
-    const sharingSnapshot = sharing.readCurrent();
-    if (!sharingSnapshot) {
-      throw new Error("Expected prepared sharing snapshot");
-    }
-    let published: ReturnType<typeof readPreparedSessionEntryChange>;
-    const stop = sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-        published = readPreparedSessionEntryChange(change, scope.sessionKey) ?? published;
-      }
-    });
-    delivery.afterResult = (result) => {
-      const receipt = (result as { publication: SessionEntryReplacementPublication }).publication;
-      expect(receipt.projection?.get(scope.sessionKey)?.activitySummaryWatermark).toEqual({
-        generation: null,
-        maxSeq: null,
-      });
-      expect(appendTranscriptEventSync(scope, { type: "proof", id: "late-event" }).ok).toBe(true);
-      emitSessionTranscriptUpdate({ target: scope });
-    };
-    try {
-      await applySessionEntryExactReplacements({
+it.each([false, true])(
+  "withholds a watermark receipt after a native append (notification=%s)",
+  async (notify) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
         storePath: database.path,
-        sessionKeys: [scope.sessionKey],
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
-          ],
-        }),
+        sessionKey: "agent:main:late-watermark",
+        sessionId: "late-watermark",
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        activitySummary: {
+          version: 1,
+          text: "Empty transcript",
+          updatedAt: 1,
+          sessionId: scope.sessionId,
+          generation: null,
+          maxSeq: null,
+          leafEntryId: null,
+          coveredMessages: 0,
+          totalMessages: 0,
+          omittedContent: false,
+        },
       });
-      expect(published?.entry?.label).toBe("committed");
-      expect(published?.projection).toBeUndefined();
-      expect(sharing.readCurrent()).toMatchObject({
-        entry: { sessionId: scope.sessionId },
+      const source = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof source.identity !== "string") {
+        throw new Error("Expected durable sharing fixture");
+      }
+      const sharing = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${source.identity}`,
+        sessionKey: scope.sessionKey,
+        entry: projectSessionSharingEntry(
+          readExactSessionEntryRow(database, scope.sessionKey)!.entry,
+        ),
         membership: new Set(),
       });
-      acquiring.initialize(sharingSnapshot);
-      expect(acquiring.readCurrent()).toEqual(sharing.readCurrent());
-      expect(readSessionTranscriptWatermarkInDatabase(database, scope.sessionId).maxSeq).toBe(0);
-    } finally {
-      delivery.afterResult = undefined;
-      sharing.release();
-      acquiring.release();
-      stop();
-    }
-  });
-});
+      const acquiring = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${source.identity}`,
+        sessionKey: scope.sessionKey,
+        acquiring: true,
+      });
+      const sharingSnapshot = sharing.readCurrent();
+      if (!sharingSnapshot) {
+        throw new Error("Expected prepared sharing snapshot");
+      }
+      let published: ReturnType<typeof readPreparedSessionEntryChange>;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          published = readPreparedSessionEntryChange(change, scope.sessionKey) ?? published;
+        }
+      });
+      delivery.afterResult = (result) => {
+        const receipt = (result as { publication: SessionEntryReplacementPublication }).publication;
+        expect(receipt.projection?.get(scope.sessionKey)?.activitySummaryWatermark).toEqual({
+          generation: null,
+          maxSeq: null,
+        });
+        expect(appendTranscriptEventSync(scope, { type: "proof", id: "late-event" }).ok).toBe(true);
+        if (notify) {
+          emitSessionTranscriptUpdate({ target: scope });
+        }
+      };
+      try {
+        await applySessionEntryExactReplacements({
+          storePath: database.path,
+          sessionKeys: [scope.sessionKey],
+          update: ([row]) => ({
+            result: undefined,
+            replacements: [
+              { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
+            ],
+          }),
+        });
+        expect(published?.entry?.label).toBe("committed");
+        expect(published?.projection).toBeUndefined();
+        expect(sharing.readCurrent()).toMatchObject({
+          entry: { sessionId: scope.sessionId },
+          membership: new Set(),
+        });
+        acquiring.initialize(sharingSnapshot);
+        expect(acquiring.readCurrent()).toEqual(sharing.readCurrent());
+        expect(readSessionTranscriptWatermarkInDatabase(database, scope.sessionId).maxSeq).toBe(0);
+      } finally {
+        delivery.afterResult = undefined;
+        sharing.release();
+        acquiring.release();
+        stop();
+      }
+    });
+  },
+);
 
 it.each(["before preparation", "before settlement"] as const)(
   "publishes revocation before observers with a member write %s",

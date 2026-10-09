@@ -53,6 +53,10 @@ import {
 import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 import {
+  publishUnchangedSessionTranscriptAuthority,
+  readStagedSessionTranscriptAuthority,
+} from "./session-transcript-authority.js";
+import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
   selectSessionTranscriptFtsRows,
@@ -532,6 +536,9 @@ export function mutateSessionColdTranscriptInWorker(
             database.db,
             db.deleteFrom("session_transcript_index_state").where("session_id", "=", sessionId),
           );
+          if (fresh.sessionKey) {
+            publishUnchangedSessionTranscriptAuthority(database, fresh.sessionKey);
+          }
           result.archivedTranscripts++;
         }
         if (archivedIds.length > 0) {
@@ -676,6 +683,10 @@ export function mutateSessionColdTranscriptInWorker(
             .where("session_id", "=", session_id),
         )?.session_key;
       }
+      if (result.restored && result.sessionKey) {
+        publishUnchangedSessionTranscriptAuthority(database, result.sessionKey);
+      }
+      result.transcriptPublication = readStagedSessionTranscriptAuthority(database);
       onCommit(database);
       sourceGuard?.assertForeign();
       return result;

@@ -6,13 +6,17 @@ import type {
   SessionMetadataWorkerOperations,
   SessionManagerIncognitoDatabase,
 } from "../../config/sessions/session-manager-write-contract.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  type InitialSessionTranscriptWriter,
+} from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -20,6 +24,7 @@ import type {
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
+import { createSessionManagerPublicationHooks } from "./session-manager-publication.js";
 
 const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionManagerMetadata);
 const log = createSubsystemLogger("agents/session-metadata");
@@ -30,12 +35,25 @@ export async function withSessionMetadataWorker<T>(
   database: OpenClawAgentDatabase | IncognitoSessionActor | SessionManagerIncognitoDatabase,
   assertCurrent: () => void,
   operation: (scope: Pick<SqliteWorkerStore<SessionMetadataOperations>, "execute">) => Promise<T>,
-  controls?: { beforeFreshMessageCommit?: () => void },
+  controls?: {
+    beforeFreshMessageCommit?: () => void;
+    initialWriter?: InitialSessionTranscriptWriter;
+  },
 ): Promise<T> {
   if ("withMetadata" in database) {
     return await database.withMetadata(assertCurrent, operation, controls);
   }
   const admission = captureSessionMessageAdmission(assertCurrent, controls);
+  const physical = "db" in database ? readOpenClawAgentDatabaseIdentity(database) : undefined;
+  const transcriptPublication =
+    physical && typeof physical.identity === "string"
+      ? createSessionManagerPublicationHooks({
+          agentId: database.agentId,
+          storePath: database.path,
+          databaseIdentity: physical.identity,
+          initialWriter: controls?.initialWriter,
+        })
+      : undefined;
   const worker =
     "sessions" in database
       ? {
@@ -118,7 +136,10 @@ export async function withSessionMetadataWorker<T>(
           {
             moduleUrl,
             input: undefined,
-            assertAdmission: admission.assertAdmission,
+            assertAdmission: (request) =>
+              admission.assertAdmission(transcriptPublication?.unwrap(request) ?? request),
+            onAdmitted: transcriptPublication?.onAdmitted,
+            observeAdmission: transcriptPublication?.observeAdmission,
           },
         );
   let result: Result<T, unknown>;

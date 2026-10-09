@@ -1,5 +1,10 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readSqliteNativeMutationRevision,
+  registerSqliteSchemaMutationListener,
+} from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
@@ -18,6 +23,7 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryCreatedEntry } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -29,6 +35,7 @@ import type {
   SessionEntryCreationOperation,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
+import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
@@ -380,6 +387,7 @@ async function prepareSessionGenerationLease(
         }
       }
       let source: { path: string; identity: string } | undefined;
+      let assertNativeCurrent: (entry: SessionGenerationEntry | null) => void = () => {};
       while (!retained) {
         assertActive();
         const before = publications;
@@ -443,6 +451,58 @@ async function prepareSessionGenerationLease(
               entry: entry ? projectSessionSharingEntry(entry) : undefined,
             });
             releases.push(prepared.release);
+            const nativeOptions = { ...read!.database, path: source.path };
+            let native = getOpenClawAgentDatabaseIfOpen(nativeOptions);
+            let nativeRevision = native && readSqliteNativeMutationRevision(native.db);
+            const schemaChanged = () => {
+              invalidated = true;
+            };
+            if (native) {
+              releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+            }
+            assertNativeCurrent = (current) => {
+              const opened = getOpenClawAgentDatabaseIfOpen(nativeOptions);
+              if (!native && opened) {
+                native = opened;
+                nativeRevision = undefined;
+                releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              } else if (opened !== native) {
+                invalidated = true;
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              if (!native) {
+                return;
+              }
+              const revision = readSqliteNativeMutationRevision(native.db);
+              if (revision === undefined) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              if (revision === nativeRevision) {
+                return;
+              }
+              if (native.db.isTransaction) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              // Raw same-handle commits do not advance data_version or publish entry facts.
+              // Keep their final native guard until managed raw settlement is complete.
+              try {
+                const observed = checkEntry(
+                  readSessionEntryGenerationInDatabase(native, generation.sessionKey) ?? null,
+                );
+                if (
+                  observed?.permissionMode !== current?.permissionMode ||
+                  !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides) ||
+                  readSqliteNativeMutationRevision(native.db) !== revision
+                ) {
+                  throw new SessionDeliveryGenerationUnavailableError();
+                }
+                assertActive();
+                nativeRevision = revision;
+              } catch (error) {
+                invalidated = true;
+                throw error;
+              }
+            };
             return prepared;
           },
         );
@@ -457,7 +517,9 @@ async function prepareSessionGenerationLease(
       };
       readCurrent = () => {
         assertSourceCurrent();
-        return checkEntry(retained?.readCurrent());
+        const entry = checkEntry(retained?.readCurrent());
+        assertNativeCurrent(entry);
+        return entry;
       };
       prepareRead = () => {
         assertSourceCurrent();

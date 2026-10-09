@@ -3,6 +3,7 @@ import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-
 import type { SqliteExpectedSessionTranscriptTurnResult } from "./session-turn.types.js";
 
 export type SessionColdMutationResult = {
+  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   archivedTranscripts: number;
   externalizedTranscripts: number;
   restored: boolean;
