@@ -4,6 +4,9 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
+/** Gateway port for the `dev` profile, irrespective of `--dev` or `OPENCLAW_PROFILE=dev`. */
+export const DEV_PROFILE_GATEWAY_PORT = 19001;
+
 export function isValidProfileName(value: string): boolean {
   return PROFILE_NAME_RE.test(value);
 }
