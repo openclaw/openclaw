@@ -24,6 +24,7 @@ import type {
 } from "../../infra/system-agent-approvals.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
+import type { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -196,6 +197,11 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Instance-owned startup observation; never lends preparation or write authority. */
+  agentDatabaseStartup?: Pick<
+    NonNullable<ReturnType<typeof getAgentDatabaseStartupAdmission>>,
+    "hasPendingAgents" | "waitForAgentPreparation"
+  >;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
