@@ -501,12 +501,10 @@ export class ModelRegistry {
               isProviderAvailable: (providerId) =>
                 this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
                 hasUsableCustomProviderApiKey(this.config, providerId) ||
-                Boolean(
-                  resolveManagedSecretRefRuntimeProviderAuth({
-                    cfg: this.config,
-                    provider: providerId,
-                  }),
-                ),
+                resolveManagedSecretRefRuntimeProviderAuth({
+                  cfg: this.config,
+                  provider: providerId,
+                }) !== undefined,
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: parsed.providers,
@@ -575,18 +573,13 @@ export class ModelRegistry {
     config: ProviderModelCatalog,
     source: "catalog" | "registration",
   ): void {
-    const hasProviderApi = source === "catalog" && Boolean(config.api);
     const models = config.models ?? [];
-    if (models.length === 0) {
-      return;
-    }
-    if (!config.baseUrl) {
+    if (models.length > 0 && !config.baseUrl) {
       const subject = source === "catalog" ? "custom models" : "models";
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining ${subject}.`);
     }
     for (const model of models) {
-      const hasApi = source === "catalog" ? hasProviderApi || model.api : model.api || config.api;
-      if (!hasApi) {
+      if (!model.api && !config.api) {
         const guidance = source === "catalog" ? " Set at provider or model level." : "";
         throw new Error(
           `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`,
