@@ -286,7 +286,8 @@
   line-height: 1;
 }
 
-.chat-reaction-chip[aria-pressed="true"] {
+.chat-reaction-chip[aria-pressed="true"],
+.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
   border-color: var(--accent);
   background: var(--accent-subtle);
   color: var(--accent);
@@ -296,12 +297,6 @@
   border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 .chat-reaction-chip:focus-visible {
@@ -479,9 +474,9 @@
   white-space: nowrap;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
 .chat-group-footer .chat-send-status__action,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
 .chat-comment-preview__actions button {
   background: none;
   border: none;
@@ -514,20 +509,14 @@
 }
 
 .chat-group:hover
-  .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-.chat-group:hover
-  .chat-message-actions-row
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
   :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
 
 .chat-group.user.chat-group--peer
-  .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-.chat-group.user.chat-group--peer
-  .chat-group-footer-actions
+  :is(.chat-message-actions-row, .chat-group-footer-actions)
   :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
   opacity: 0;
   pointer-events: none;
@@ -603,10 +592,7 @@
 
 @media (hover: hover) {
   .chat-group:focus-within
-    .chat-group-footer-actions
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-  .chat-group:focus-within
-    .chat-message-actions-row
+    :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
     opacity: 0.6;
     pointer-events: auto;
@@ -629,16 +615,17 @@
   pointer-events: none;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
 .chat-comment-preview__actions button:hover {
   opacity: 1 !important;
   background: transparent;
   color: var(--accent);
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) svg,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) svg,
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
+  svg,
 .chat-comment-preview__actions button svg {
   width: 14px;
   height: 14px;
