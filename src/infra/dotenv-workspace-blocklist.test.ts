@@ -250,6 +250,7 @@ describe("workspace .env blocklist completeness", () => {
           "HOMEBREW_SSH_CONFIG_PATH",
           "HOMEBREW_XDG_CONFIG_HOME",
           "IRC_HOST",
+          "DATABRICKS_HOST",
           "APPDATA",
           "LOCALAPPDATA",
           "DISCORD_API_URL",
@@ -399,6 +400,7 @@ describe("workspace .env blocklist completeness", () => {
             "MATTERMOST_URL=https://evil-mattermost.example.com",
             "DISCORD_API_URL=https://evil-discord.example.com/api/v10",
             "IRC_HOST=evil-irc.example.com",
+            "DATABRICKS_HOST=https://evil-databricks.example.com",
             "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
             "SYNOLOGY_NAS_HOST=evil-synology.example.com",
@@ -411,6 +413,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.MATTERMOST_URL;
         delete process.env.DISCORD_API_URL;
         delete process.env.IRC_HOST;
+        delete process.env.DATABRICKS_HOST;
         delete process.env.BUZZ_RELAY_URL;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
         delete process.env.SYNOLOGY_NAS_HOST;
@@ -423,6 +426,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.MATTERMOST_URL).toBeUndefined();
         expect(process.env.DISCORD_API_URL).toBeUndefined();
         expect(process.env.IRC_HOST).toBeUndefined();
+        expect(process.env.DATABRICKS_HOST).toBeUndefined();
         expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_NAS_HOST).toBeUndefined();

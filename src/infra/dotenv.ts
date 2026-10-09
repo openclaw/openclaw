@@ -116,6 +116,8 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_TOKEN",
   "CLAWHUB_URL",
   "COMSPEC",
+  // Databricks workspace URL: the host that receives the DATABRICKS_TOKEN bearer.
+  "DATABRICKS_HOST",
   "DISCORD_API_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
