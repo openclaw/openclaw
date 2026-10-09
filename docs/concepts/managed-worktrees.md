@@ -409,6 +409,8 @@ Run-end cleanup records its outcome on the worktree record: lossless removal, re
 
 If checkout deletion fails or is interrupted, OpenClaw preserves the completed capture at `refs/openclaw/removals/<id>`. A later removal refuses to replace that capture with files from a possibly partial checkout. Preserve the remaining files, recorded branch, snapshot refs, and shared-state database for recovery. Inspect the original removal error and Git worktree registration before attempting cleanup; do not repeatedly force removal or prune registrations. A normal completed removal, successful restore, or snapshot expiry clears this recovery ref. A failure after checkout removal can leave its branch retained and require operator reconciliation before restore can recreate that branch.
 
+Snapshot expiry retires the snapshot and its associated recovery refs in one Git transaction. If Git cannot lock a ref or an observed snapshot or restore receipt has changed, the transaction preserves all of those refs and cleanup reports the failure for a later retry. Existing snapshots use this behavior after an update without a migration.
+
 For an interrupted **ordinary clean snapshot** removal, use the exact pending commit:
 
 ```bash
