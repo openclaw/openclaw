@@ -2,11 +2,13 @@
 // state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
+  describePreparedImageWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
   transcribeAudioFile,
@@ -496,6 +498,110 @@ describe("media-understanding runtime", () => {
       expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
     );
   });
+
+  it("discards a file result if the caller cancels while its cache is being cleaned up", async () => {
+    const controller = new AbortController();
+    const reason = new Error("file request stopped during cleanup");
+    const cleaning = createDeferred();
+    const released = createDeferred();
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.wav", mime: "audio/wav" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [{ kind: "audio.transcription", text: "late transcript", attachmentIndex: 0 }],
+      decision: { capability: "audio", outcome: "success", attachments: [] },
+    });
+    mocks.cleanup.mockImplementationOnce(async () => {
+      cleaning.resolve();
+      await released.promise;
+    });
+    const operation = runMediaUnderstandingFile({
+      capability: "audio",
+      filePath: "/tmp/sample.wav",
+      cfg: {},
+      signal: controller.signal,
+    });
+    try {
+      await awaitGateBeforeSettlement(cleaning.promise, operation, "cache cleanup did not start");
+      controller.abort(reason);
+      released.resolve();
+      await expect(operation).rejects.toBe(reason);
+    } finally {
+      released.resolve();
+      await operation.catch(() => {});
+    }
+  });
+
+  it.each(["image", "structured"] as const)(
+    "passes cancellation to direct %s providers and discards late results",
+    async (capability) => {
+      const controller = new AbortController();
+      const reason = new Error("direct media request stopped");
+      const started = createDeferred<AbortSignal | undefined>();
+      const released = createDeferred();
+      const provider = {
+        id: "vision-plugin",
+        capabilities: ["image" as const],
+        describeImage: async (
+          request: Parameters<NonNullable<MediaUnderstandingProvider["describeImage"]>>[0],
+        ) => {
+          started.resolve(request.signal);
+          await released.promise;
+          return { text: "late image description", model: "vision" };
+        },
+        extractStructured: async (
+          request: Parameters<NonNullable<MediaUnderstandingProvider["extractStructured"]>>[0],
+        ) => {
+          started.resolve(request.signal);
+          await released.promise;
+          return {
+            text: "{}",
+            parsed: {},
+            model: "vision",
+            provider: "vision-plugin",
+            contentType: "json" as const,
+          };
+        },
+      };
+      mocks.buildProviderRegistry.mockReturnValue(new Map([["vision-plugin", provider]]));
+      mocks.normalizeMediaProviderId.mockReturnValue("vision-plugin");
+      mocks.getMediaUnderstandingProvider.mockReturnValue(provider);
+      const image = { buffer: Buffer.from("image"), mime: "image/png", fileName: "photo.png" };
+      const common = {
+        provider: "vision-plugin",
+        model: "vision",
+        cfg: {},
+        signal: controller.signal,
+      };
+      const operation =
+        capability === "image"
+          ? describePreparedImageWithModel({
+              ...common,
+              image,
+              prompt: "Describe it",
+              agentDir: "/tmp/agent",
+            })
+          : extractStructuredWithModel({
+              ...common,
+              input: [{ type: "image", ...image }],
+              instructions: "Return JSON",
+            });
+      try {
+        const receivedSignal = await awaitGateBeforeSettlement(
+          started.promise,
+          operation,
+          "direct provider did not start",
+        );
+        controller.abort(reason);
+        released.resolve();
+        await expect(operation).rejects.toBe(reason);
+        expect(receivedSignal).toBe(controller.signal);
+      } finally {
+        released.resolve();
+        await operation.catch(() => {});
+      }
+    },
+  );
 
   it("caps explicit structured extraction timeouts before provider execution", async () => {
     const extractStructured = vi.fn<NonNullable<MediaUnderstandingProvider["extractStructured"]>>(

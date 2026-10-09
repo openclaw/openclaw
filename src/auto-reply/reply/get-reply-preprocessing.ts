@@ -9,7 +9,8 @@ import type { ApplyMediaUnderstandingResult } from "../../media-understanding/ap
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import { hasInboundAudio, hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
@@ -31,27 +32,37 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
-  processingMode?: "audio-only" | "files-only" | "audio-and-files";
+  modelSelectionLocked?: boolean;
   selfServeLocalPaths?: boolean;
+  signal?: AbortSignal;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
   }
   try {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
-    return await applyMediaUnderstanding(params);
+    assertReplyPreprocessingActive(params.signal);
+    const { modelSelectionLocked, ...mediaParams } = params;
+    const audio = params.cfg.tools?.media?.audio;
+    return await applyMediaUnderstanding({
+      ...mediaParams,
+      ...(modelSelectionLocked
+        ? {
+            processingMode:
+              hasInboundAudio(params.ctx) && audio !== undefined && audio.enabled !== false
+                ? "audio-and-files"
+                : "files-only",
+          }
+        : {}),
+    });
   } catch (err) {
+    assertReplyPreprocessingActive(params.signal);
     mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
-}
-
-export function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
-  const audio = cfg.tools?.media?.audio;
-  return audio !== undefined && audio.enabled !== false;
 }
 
 export async function applyLinkUnderstandingIfNeeded(params: {

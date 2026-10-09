@@ -28,7 +28,9 @@ export async function sendTranscriptEcho(params: {
   format?: string;
   logSuccess?: boolean;
   failureLogPrefix?: string;
+  signal?: AbortSignal;
 }): Promise<void> {
+  params.signal?.throwIfAborted();
   const { ctx, cfg, transcript } = params;
   const channel = ctx.Provider ?? ctx.Surface ?? "";
   const to = ctx.OriginatingTo ?? ctx.From ?? "";
@@ -54,6 +56,7 @@ export async function sendTranscriptEcho(params: {
 
   try {
     const { sendDurableMessageBatchCore } = await loadMessageRuntime();
+    params.signal?.throwIfAborted();
     const send = await sendDurableMessageBatchCore({
       cfg,
       channel: normalizedChannel,
@@ -63,7 +66,9 @@ export async function sendTranscriptEcho(params: {
       payloads: [{ text }],
       bestEffort: true,
       durability: "best_effort",
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     if (send.status === "failed") {
       throw send.error;
     }
@@ -71,6 +76,7 @@ export async function sendTranscriptEcho(params: {
       logVerbose(`media: echo-transcript sent to ${normalizedChannel}/${to}`);
     }
   } catch (err) {
+    params.signal?.throwIfAborted();
     const prefix = params.failureLogPrefix ?? "media: echo-transcript delivery failed";
     logVerbose(`${prefix}: ${String(err)}`);
   }

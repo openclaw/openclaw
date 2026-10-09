@@ -4,11 +4,14 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 
@@ -133,8 +136,119 @@ describe("media understanding attachment cache", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.mocked(resolvePreferredOpenClawTmpDir).mockReset();
     readRemoteMediaBufferMock.mockReset();
+  });
+
+  it("passes cancellation through the guarded download without retrying", async () => {
+    const controller = new AbortController();
+    const reason = new Error("reply stopped");
+    const actual = await vi.importActual<typeof import("../media/fetch.js")>("../media/fetch.js");
+    readRemoteMediaBufferMock.mockImplementation(actual.readRemoteMediaBuffer);
+    let requestSignal: AbortSignal | null | undefined;
+    const fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      return new Response(
+        new ReadableStream({
+          pull(stream) {
+            controller.abort(reason);
+            stream.error(new DOMException("download aborted", "AbortError"));
+          },
+        }),
+        { headers: { "content-type": "text/plain" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+    const cache = new MediaAttachmentCache([{ index: 0, url: "http://127.0.0.1/notes.txt" }], {
+      signal: controller.signal,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    await expect(
+      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).rejects.toBe(reason);
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+    await cache.cleanup();
+  });
+
+  it.each(["getBuffer", "getPath"] as const)(
+    "refuses canceled %s even when the attachment was already cached",
+    async (method) => {
+      const controller = new AbortController();
+      const reason = new Error("reply stopped");
+      readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
+      const cache = new MediaAttachmentCache([{ index: 0, url: "https://example.com/photo.png" }], {
+        signal: controller.signal,
+      });
+      const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 };
+      await cache.getBuffer(request);
+      controller.abort(reason);
+      try {
+        await expect(cache[method](request)).rejects.toBe(reason);
+        expect(readRemoteMediaBufferMock).toHaveBeenCalledOnce();
+      } finally {
+        await cache.cleanup();
+      }
+    },
+  );
+
+  it("closes a local handle canceled during validation without trying the remote fallback", async () => {
+    const base = tempDirs.make("openclaw-media-cache-abort-local-");
+    const localPath = path.join(base, "note.txt");
+    await fs.writeFile(localPath, "local text");
+    const controller = new AbortController();
+    const reason = new Error("reply stopped");
+    const open = fsSafe.openLocalFileSafely;
+    const closed = vi.fn();
+    vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementationOnce(async (params) => {
+      const opened = await open(params);
+      const close = opened.handle.close.bind(opened.handle);
+      vi.spyOn(opened.handle, "close").mockImplementation(async () => {
+        closed();
+        await close();
+      });
+      controller.abort(reason);
+      return opened;
+    });
+    const cache = new MediaAttachmentCache(
+      [{ index: 0, path: localPath, url: "https://example.com/note.txt" }],
+      { localPathRoots: [base], includeDefaultLocalPathRoots: false, signal: controller.signal },
+    );
+
+    await expect(
+      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).rejects.toBe(reason);
+
+    expect(closed).toHaveBeenCalledOnce();
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("retains an aborted staging write until the cache owner cleans it up", async () => {
+    const base = tempDirs.make("openclaw-media-cache-abort-stage-");
+    vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
+    readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
+    const controller = new AbortController();
+    const reason = new Error("reply stopped");
+    const write = fs.writeFile.bind(fs);
+    vi.spyOn(fs, "writeFile").mockImplementationOnce(async (...args) => {
+      await write(...args);
+      controller.abort(reason);
+    });
+    const cache = new MediaAttachmentCache([{ index: 0, url: "https://example.com/photo.png" }], {
+      signal: controller.signal,
+    });
+    try {
+      await expect(
+        cache.getPath({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+      ).rejects.toBe(reason);
+      expect(await fs.readdir(base)).toHaveLength(1);
+    } finally {
+      await cache.cleanup();
+    }
+    expect(await fs.readdir(base)).toEqual([]);
   });
 
   it.each<{

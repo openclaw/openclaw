@@ -1,14 +1,85 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { prepareAttachment } from "../media/attachment-processor.runtime.js";
+import * as inputFiles from "../media/input-files.js";
 import { renderInboundDocumentContext } from "./file-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("renderInboundDocumentContext", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["success", "failure"] as const)(
+    "propagates cancellation after extraction %s without rendering or reading the next file",
+    async (outcome) => {
+      const workspaceDir = tempDirs.make("openclaw-document-abort-");
+      const firstPath = path.join(workspaceDir, "first.txt");
+      const secondPath = path.join(workspaceDir, "second.txt");
+      await fs.writeFile(firstPath, "first document");
+      await fs.writeFile(secondPath, "second document");
+      const controller = new AbortController();
+      const reason = new Error("reply stopped");
+      let extractionSignal: AbortSignal | undefined;
+      const extract = vi
+        .spyOn(inputFiles, "extractFileContentFromBuffer")
+        .mockImplementationOnce(async (params) => {
+          extractionSignal = params.signal;
+          controller.abort(reason);
+          if (outcome === "failure") {
+            throw reason;
+          }
+          return { text: "late extracted text", filename: params.filename ?? "first.txt" };
+        });
+      const ctx: MsgContext = { media: [{ path: firstPath }, { path: secondPath }] };
+
+      await expect(
+        renderInboundDocumentContext({
+          ctx,
+          cfg: {},
+          workspaceDir,
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+
+      expect(extractionSignal).toBe(controller.signal);
+      expect(extract).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("stops a canceled document read before extracting or advancing to another attachment", async () => {
+    const workspaceDir = tempDirs.make("openclaw-document-read-abort-");
+    const firstPath = path.join(workspaceDir, "first.txt");
+    const secondPath = path.join(workspaceDir, "second.txt");
+    await fs.writeFile(firstPath, "first document");
+    await fs.writeFile(secondPath, "second document");
+    const controller = new AbortController();
+    const reason = new Error("reply stopped");
+    const extract = vi.spyOn(inputFiles, "extractFileContentFromBuffer");
+    const open = fs.open.bind(fs);
+    const openedPaths: unknown[] = [];
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      openedPaths.push(args[0]);
+      const handle = await open(...args);
+      controller.abort(reason);
+      return handle;
+    });
+
+    await expect(
+      renderInboundDocumentContext({
+        ctx: { media: [{ path: firstPath }, { path: secondPath }] },
+        cfg: {},
+        workspaceDir,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(openedPaths).toHaveLength(1);
+    expect(extract).not.toHaveBeenCalled();
+  });
+
   it.each(["", "application/octet-stream"])(
     "retains inferred legacy encoding through prepared content type %j",
     async (mime) => {

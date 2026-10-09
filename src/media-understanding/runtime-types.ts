@@ -23,6 +23,7 @@ export type RunMediaUnderstandingFileParams = {
   prompt?: string;
   timeoutMs?: number;
   scopeContext?: MediaUnderstandingScopeContext;
+  signal?: AbortSignal;
 };
 
 type MediaUnderstandingScopeContext = {
@@ -55,7 +56,7 @@ export type PreparedImageDescriptionInput = ImagesDescriptionInput;
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
-  "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs"
+  "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs" | "signal"
 >;
 
 export type DescribePreparedImageWithModelParams = Omit<
@@ -71,7 +72,7 @@ type DescribeImageFileWithModelResult = Awaited<
 
 export type ExtractStructuredWithModelParams = Omit<
   StructuredExtractionRequest,
-  "input" | "agentDir" | "signal" | "timeoutMs"
+  "input" | "agentDir" | "timeoutMs"
 > & {
   /** At least one image input is required; text inputs provide supplemental context. */
   input: StructuredExtractionRequest["input"];
