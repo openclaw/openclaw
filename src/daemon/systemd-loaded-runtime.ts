@@ -18,15 +18,17 @@ import type {
 } from "./service-types.js";
 import {
   decodeSystemdBusProperties,
+  isSystemdManagerUid,
+  readSystemdBusCall,
   readSystemdBusOwner,
   readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
 } from "./systemd-bus-query.js";
 import { execBusctlSystem, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
 const MANAGER = "org.freedesktop.systemd1";
-const BUS = "org.freedesktop.DBus";
 const isUint32 = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
 const isInt32 = (value: unknown): value is number =>
@@ -106,21 +108,12 @@ export async function readLoadedSystemdServiceRuntime(
   try {
     // Address every unit query to the observed unique bus owner, never a newly started manager.
     const owner = await readOwner();
-    const [credentials] = binding
-      ? [[binding.managerUid]]
-      : await query(
-          ["call", BUS, "/org/freedesktop/DBus", BUS, "GetConnectionUnixUser", "s", owner],
-          ["u"],
-        );
-    if (
-      !Array.isArray(credentials) ||
-      credentials.length !== 1 ||
-      !isUint32(credentials[0]) ||
-      credentials[0] === 0xffffffff
-    ) {
+    const managerUid = binding
+      ? binding.managerUid
+      : await readSystemdBusCall(query, "GetConnectionUnixUser", ["s", owner], "u", unavailable);
+    if (!isSystemdManagerUid(managerUid)) {
       throw unavailable();
     }
-    const managerUid = credentials[0];
     if (
       (scope === "system" && managerUid !== 0) ||
       (inspection && managerUid !== inspection.managerUid)
@@ -128,15 +121,7 @@ export async function readLoadedSystemdServiceRuntime(
       throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }
     const [unit] = await query(
-      [
-        "call",
-        owner,
-        "/org/freedesktop/systemd1",
-        `${MANAGER}.Manager`,
-        inspection ? "LoadUnit" : "GetUnit",
-        "s",
-        unitName,
-      ],
+      systemdUnitCallArgs(owner, unitName, inspection ? "LoadUnit" : "GetUnit"),
       ["o"],
     );
     const unitPath = readSystemdUnitObjectPath(unit, unavailable);
@@ -229,15 +214,7 @@ export async function readLoadedSystemdServiceRuntime(
       const [processes] = await query(
         inspection
           ? ["call", owner, unitPath, `${MANAGER}.Service`, "GetProcesses"]
-          : [
-              "call",
-              owner,
-              "/org/freedesktop/systemd1",
-              `${MANAGER}.Manager`,
-              "GetUnitProcesses",
-              "s",
-              unitName,
-            ],
+          : systemdUnitCallArgs(owner, unitName, "GetUnitProcesses"),
         ["a(sus)"],
       );
       drained =

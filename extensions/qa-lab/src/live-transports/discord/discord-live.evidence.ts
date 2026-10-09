@@ -114,17 +114,15 @@ export function collectSeenReactionSequence(
   expectedSequence: readonly string[],
 ) {
   const seen = new Set<string>();
-  const sequence: string[] = [];
   for (const snapshot of snapshots) {
     const snapshotEmojis = new Set(snapshot.reactions.map((reaction) => reaction.emoji));
     for (const emoji of expectedSequence) {
-      if (snapshotEmojis.has(emoji) && !seen.has(emoji)) {
+      if (snapshotEmojis.has(emoji)) {
         seen.add(emoji);
-        sequence.push(emoji);
       }
     }
   }
-  return sequence;
+  return [...seen];
 }
 
 export function renderDiscordStatusReactionHtml(params: {

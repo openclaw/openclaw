@@ -364,10 +364,7 @@ export function createNativeWorkerResource(
         }
         throw error;
       }
-      if (
-        (request.mode === "staging-create" || request.mode === "staging-create-legacy") &&
-        typeof result === "string"
-      ) {
+      if (allocating && typeof result === "string") {
         const owned = {
           preparationId: request.preparationId,
           session,

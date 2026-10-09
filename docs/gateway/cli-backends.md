@@ -181,6 +181,13 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
+Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
+standalone tool-protocol markup outside a code example, OpenClaw discards that
+partial reply instead of saving it in conversation history. Completed replies keep
+their existing validation, including support for discussing incomplete markup.
+Stopping a turn does not let the Gateway save a buffered copy of a partial reply
+that the CLI runner rejected.
+
 The bundled Anthropic plugin communicates directly with the installed Claude Code
 executable over its structured stdio protocol. Claude Code owns its existing local login and
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
@@ -219,6 +226,12 @@ rebuilds that snapshot when a process resumes, so workspace edits or commits
 would otherwise invalidate cached conversation history. Git tools and workspace
 instructions remain available. This does not prevent cache misses after prompt
 changes, compaction, model or thinking changes, or cache expiry.
+
+OpenClaw disables Claude Code's saved system-prompt snapshots so resumed turns
+receive the current appended instructions, including per-turn plugin context.
+Unchanged prompts keep the warm process and stable prefix; changed prompts restart
+the process and resume the same conversation without rewriting its history.
+Changing prompt bytes can invalidate the cached prefix where they change.
 
 OpenClaw always launches Claude Code with its default permission mode.
 OpenClaw's permission responses and `PreToolUse` hook keep native tools under

@@ -7,6 +7,7 @@ import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -225,6 +226,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           compact: Boolean(compactRequest),
           stream: config.streamRequest,
           lifecycle: requestLifecycle,
+          // The SDK replaces the fetch signal; retain the watchdog caller signal.
+          onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
         });
         const client = config.createClient(model, apiKey, httpHeaders, fetchOverride);
         const nativeAstra =

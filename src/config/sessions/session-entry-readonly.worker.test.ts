@@ -3,11 +3,14 @@ import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
+  isSessionNodePayloadSelect,
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   invalidateRegisteredAgentDatabasesMemo,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
@@ -29,13 +32,14 @@ import { captureCanonicalSessionReaderContinuation } from "./session-canonical-k
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
+import { readSessionEntryList } from "./session-entry-list.worker.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
 import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 function createEntryFixture(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -50,6 +54,102 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   };
   return { database, scope };
 }
+
+it("reuses listing revisions without payload scans and invalidates foreign edits and reopened readers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:catalog-revision";
+    writeSessionEntry(database, sessionKey, {
+      sessionId: "catalog-session",
+      updatedAt: 1,
+      category: "Team",
+    });
+    const target = { agentId: database.agentId, path: database.path };
+    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(target.path);
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    const read = (ifRevision?: string) =>
+      readSessionEntryList({
+        kind: "session-entry-list",
+        database: target,
+        scope: {
+          agentId: target.agentId,
+          storePath: target.path,
+          env,
+          projection: "list",
+          includeParticipants: false,
+        },
+        ifRevision,
+      });
+    try {
+      const originalRevision = retained.run(target, () => {
+        const first = read();
+        expect(first.entries).toMatchObject([
+          { sessionKey, entry: { updatedAt: 1, category: "Team" } },
+        ]);
+        expect(first.revision).toBeTypeOf("string");
+        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
+        if (!opened.found) {
+          throw new Error("Expected the retained catalog database");
+        }
+        const payloads = trackSqliteStatementExecutions(opened.value.db, ["entries"], (sql) =>
+          isSessionNodePayloadSelect(sql) ||
+          (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
+            ? "entries"
+            : null,
+        );
+        try {
+          expect(read(first.revision)).toMatchObject({
+            entries: [],
+            unchanged: true,
+            revision: first.revision,
+            source: first.source,
+          });
+          expect(payloads.counts.entries).toBe(0);
+          peer.exec("BEGIN IMMEDIATE");
+          try {
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.category', 'Private') WHERE session_key = ?",
+              )
+              .run(sessionKey);
+            // This category-only edit preserves the writer-validated identity and lineage.
+            peer
+              .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+              .run(sessionKey);
+            peer.exec("COMMIT");
+          } catch (error) {
+            peer.exec("ROLLBACK");
+            throw error;
+          }
+          const changed = read(first.revision);
+          expect(changed.entries).toMatchObject([
+            { sessionKey, entry: { updatedAt: 1, category: "Private" } },
+          ]);
+          expect(changed.revision).not.toBe(first.revision);
+          expect(changed.unchanged).toBeUndefined();
+          expect(payloads.counts.entries).toBeGreaterThan(0);
+          return first.revision;
+        } finally {
+          payloads.restore();
+        }
+      });
+      retained.close();
+      retained.run(target, () => {
+        // A new connection can reuse the original SQLite counters, but never its revision.
+        const reopened = read(originalRevision);
+        expect(reopened.revision).not.toBe(originalRevision);
+        expect(reopened.unchanged).toBeUndefined();
+        expect(reopened.entries).toMatchObject([
+          { sessionKey, entry: { updatedAt: 1, category: "Private" } },
+        ]);
+      });
+    } finally {
+      retained.close();
+      peer.close();
+    }
+  });
+});
 
 it("resolves runtime targets through one fresh admitted reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -278,7 +378,7 @@ it("keeps source refusal outside the ordinary row-error result", async () => {
 it("propagates raw worker failure without calling the optional-data consumer", async () => {
   await withOpenClawTestState({ label: "readonly-entry-transport" }, async ({ env, path }) => {
     const failure = new Error("worker could not start");
-    const run = vi.spyOn(projectionLane.pool, "run").mockRejectedValueOnce(failure);
+    const run = vi.spyOn(targetDiscoveryLane.pool, "run").mockRejectedValueOnce(failure);
     const consume = vi.fn(async () => undefined);
     try {
       await expect(
@@ -320,7 +420,7 @@ it.each(["consumer", "cleanup"] as const)(
         const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
         writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
       }
-      const pool = projectionLane.pool;
+      const pool = targetDiscoveryLane.pool;
       const rotate = pool.rotate.bind(pool);
       const closeResources = pool.closeResources.bind(pool);
       let cleanupCalled = false;

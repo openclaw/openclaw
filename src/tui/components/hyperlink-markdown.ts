@@ -1,9 +1,4 @@
-import type {
-  Component,
-  DefaultTextStyle,
-  MarkdownOptions,
-  MarkdownTheme,
-} from "@earendil-works/pi-tui";
+import type { DefaultTextStyle, MarkdownOptions, MarkdownTheme } from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
 import { isolateRtlRenderedLine, sanitizeTerminalControlsAndBinary } from "../tui-formatters.js";
@@ -20,8 +15,7 @@ function sanitizeMarkdownDisplayText(text: string): string {
  * hyperlinks to rendered output, making URLs clickable even when broken
  * across multiple lines by word wrapping.
  */
-export class HyperlinkMarkdown implements Component {
-  private inner: Markdown;
+export class HyperlinkMarkdown extends Markdown {
   private urls: ReadonlySet<string>;
   private cachedRender?: { width: number; lines: string[] };
 
@@ -34,30 +28,27 @@ export class HyperlinkMarkdown implements Component {
     options?: MarkdownOptions,
   ) {
     const displayText = sanitizeMarkdownDisplayText(text);
-    this.inner = new Markdown(displayText, paddingX, paddingY, theme, defaultTextStyle, options);
+    super(displayText, paddingX, paddingY, theme, defaultTextStyle, options);
     this.urls = extractUrls(displayText);
   }
 
-  render(width: number): string[] {
+  override render(width: number): string[] {
     if (this.cachedRender?.width === width) {
       return this.cachedRender.lines;
     }
-    const lines = addOsc8Hyperlinks(this.inner.render(width), this.urls).map(
-      isolateRtlRenderedLine,
-    );
+    const lines = addOsc8Hyperlinks(super.render(width), this.urls).map(isolateRtlRenderedLine);
     this.cachedRender = { width, lines };
     return lines;
   }
 
-  setText(text: string): void {
+  override setText(text: string): void {
     const displayText = sanitizeMarkdownDisplayText(text);
-    this.inner.setText(displayText);
+    super.setText(displayText);
     this.urls = extractUrls(displayText);
-    this.cachedRender = undefined;
   }
 
-  invalidate(): void {
-    this.inner.invalidate();
+  override invalidate(): void {
+    super.invalidate();
     this.cachedRender = undefined;
   }
 }

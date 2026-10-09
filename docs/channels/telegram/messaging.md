@@ -199,6 +199,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     `off` disables implicit reply threading only; explicit `[[reply_to_*]]` tags are still honored.
 
+    In partial streaming mode, a final reply that targets a different message replaces the preview instead of editing it in place. Telegram does not allow edits to change a message's reply target.
+
   </Accordion>
 
   <Accordion title="Ack reactions">

@@ -1,12 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import {
-  projectSubagentStatus,
-  resolveChatSubagentWait,
-  type ChatSubagentWait,
-} from "./chat-subagent-wait.ts";
+import { projectSubagentStatus, type ChatSubagentWait } from "./chat-subagent-wait.ts";
 import { renderChatWorkingIndicator } from "./components/chat-working-indicator.ts";
+
+function resolveChatSubagentWait(input: Parameters<typeof projectSubagentStatus>[0]) {
+  return projectSubagentStatus(input, false).wait;
+}
 
 const parent: GatewaySessionRow = {
   key: "agent:main:parent",

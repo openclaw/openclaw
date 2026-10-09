@@ -9,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   renderAttachmentCardHeader,
   renderCompactAttachmentCard,
+  type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
@@ -374,22 +375,20 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, this.cancelPendingResume);
       const playback = media.play();
+      const failed = () => {
+        releaseChatAudioPlayback(media);
+        this.playing = false;
+      };
       if (!this.playRequest) {
         // Invoke play in the click task so strict browser media policies retain user activation.
         this.playRequest = playback
           .then(() => this.prepareWaveformAudio().catch(() => undefined))
-          .catch(() => {
-            releaseChatAudioPlayback(media);
-            this.playing = false;
-          })
+          .catch(failed)
           .finally(() => {
             this.playRequest = null;
           });
       } else {
-        void playback.catch(() => {
-          releaseChatAudioPlayback(media);
-          this.playing = false;
-        });
+        void playback.catch(failed);
       }
     } else {
       media.pause();
@@ -518,16 +517,17 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         </div>
       </div>`;
     }
+    const card: AttachmentCardHeaderOptions = {
+      kind: "audio",
+      label: this.label,
+      mimeType: this.mimeType,
+      sizeBytes: this.sizeBytes,
+      downloadHref,
+      onExpand: this.onExpand,
+      voiceNote: this.voiceNote,
+    };
     if (failed) {
-      return renderCompactAttachmentCard({
-        kind: "audio",
-        label: this.label,
-        mimeType: this.mimeType,
-        sizeBytes: this.sizeBytes,
-        downloadHref,
-        onExpand: this.onExpand,
-        voiceNote: this.voiceNote,
-      });
+      return renderCompactAttachmentCard(card);
     }
     const timeLabel = `${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`;
     return html`
@@ -541,14 +541,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           this.voiceNote
             ? nothing
             : renderAttachmentCardHeader({
-                kind: "audio",
-                label: this.label,
-                mimeType: this.mimeType,
-                sizeBytes: this.sizeBytes,
-                downloadHref,
-                onExpand: this.onExpand,
+                ...card,
                 visualMode: "preview-with-favicon",
-                voiceNote: this.voiceNote,
               })
         }
         ${

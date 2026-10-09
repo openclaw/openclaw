@@ -25,11 +25,6 @@ import {
   noteStateIntegrity as noteStateIntegrityRaw,
   stateIntegrityIssueToHealthFinding,
   stateIntegrityIssueToRepairEffect,
-  detectMacCloudSyncedStateDir,
-  detectWindowsCloudSyncedStateDir,
-  formatWindowsCloudSyncedStateDirWarning,
-  detectLinuxSdBackedStateDir,
-  formatLinuxSdBackedStateDirWarning,
 } from "./doctor-state-integrity.js";
 import {
   doctorChangesText,
@@ -42,6 +37,13 @@ import {
   withMainAgentRoster,
   writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
+import {
+  detectLinuxSdBackedStateDir,
+  detectMacCloudSyncedStateDir,
+  detectWindowsCloudSyncedStateDir,
+  formatLinuxSdBackedStateDirWarning,
+  formatWindowsCloudSyncedStateDirWarning,
+} from "./doctor-state-storage-platform.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],

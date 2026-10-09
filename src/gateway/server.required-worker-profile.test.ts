@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  installSessionPlacementAdmissionProvider,
+  withRequiredSessionPlacement,
+} from "../agents/session-placement-admission.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
@@ -11,14 +15,22 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { canonicalSessionValidationQuery } from "../config/sessions/session-canonical-key.js";
+import { validateCanonicalSessionRow } from "../config/sessions/session-canonical-row.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
+import {
+  createGatewayWorkerDispatchAdmission,
+  withGatewayWorkerSessionAdmission,
+} from "./server-worker-placement-dispatch-admission.js";
 import { createRequiredWorkerSessionPreparation as createRequiredPreparation } from "./server-worker-required-profile.js";
 import * as sessionWorktreePreparation from "./session-worktree-preparation.js";
 import { testState } from "./test-helpers.js";
@@ -265,6 +277,156 @@ test("required preparation awaits rejection of a missing repository workspace be
   );
   expect(dispatch).not.toHaveBeenCalled();
 });
+
+test.each(["unchanged", "caller", "runtime"] as const)(
+  "required workspace commit fences %s authority after preparation",
+  async (change) => {
+    const { dir } = await createSessionStoreDir();
+    const storePath = path.join(dir, "sessions.sqlite");
+    testState.sessionStorePath = storePath;
+    const config = await getGatewayConfigModule();
+    await config.writeConfigFile({
+      cloudWorkers: {
+        requiredProfile: "dedicated-native",
+        profiles: {
+          "dedicated-native": { provider: "device", settings: { device: "test-node" } },
+        },
+      },
+    });
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:required-commit",
+      sessionId: "required-commit",
+    };
+    const caller = {
+      agentId: "main",
+      sessionKey: "agent:main:required-caller",
+      sessionId: "required-caller",
+    };
+    await upsertSessionEntryCore(
+      { ...identity, storePath },
+      { sessionId: identity.sessionId, updatedAt: 1 },
+    );
+    await upsertSessionEntryCore(
+      { ...caller, storePath },
+      { sessionId: caller.sessionId, updatedAt: 1, thinkingLevel: "high" },
+    );
+    const reachedDispatch = new Error("Reached required worker dispatch");
+    const dispatch = vi.fn<WorkerPlacementDispatchService["dispatch"]>(async () => {
+      throw reachedDispatch;
+    });
+    const prepare = createRequiredWorkerSessionPreparation({
+      getConfig: config.getRuntimeConfig,
+      placements: createWorkerSessionPlacementStore(),
+      environments: { get: () => undefined } as never,
+      warn: vi.fn(),
+      redispatchPlacement: vi.fn(),
+      dispatch: { dispatch, waitForInitialPlacement: vi.fn() } as never,
+    });
+    const uninstall = installSessionPlacementAdmissionProvider({
+      withRequiredSession: prepare,
+      assertCompactionSuccessorAllowed() {},
+      executeLocalTurn: async (_claim, run) => await run(),
+      executeTurn: async (_claim, _params, run) => await run(),
+    });
+    const prepareWorktree = sessionWorktreePreparation.prepareSessionWorktree;
+    let preparedWorktreePath: string | undefined;
+    vi.spyOn(sessionWorktreePreparation, "prepareSessionWorktree").mockImplementation(
+      async (params) => {
+        const result = await prepareWorktree(params);
+        if (!result.ok) {
+          return result;
+        }
+        preparedWorktreePath = result.value.sessionRoot;
+        expect(preparedWorktreePath).toEqual(expect.any(String));
+        // A separate connection cannot publish into either admitted source's host projection.
+        if (change !== "unchanged") {
+          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath);
+          try {
+            const sessionKey = change === "caller" ? caller.sessionKey : identity.sessionKey;
+            const database = { agentId: "main", db: foreign };
+            runSqliteImmediateTransactionSync(foreign, () => {
+              const update = foreign
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                )
+                .run(
+                  change === "caller" ? "$.thinkingLevel" : "$.execNode",
+                  change === "caller" ? "off" : "other-node",
+                  sessionKey,
+                );
+              expect(update.changes).toBe(1);
+              const row = executeSqliteQueryTakeFirstSync(
+                foreign,
+                canonicalSessionValidationQuery(database).where(
+                  "session_nodes.session_key",
+                  "=",
+                  sessionKey,
+                ),
+              );
+              if (!row) {
+                throw new Error("Foreign entry mutation lost its existing row");
+              }
+              // Validate the synthetic external writer's stored bytes; publish no host authority.
+              validateCanonicalSessionRow(row, "read");
+              foreign
+                .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+                .run(sessionKey);
+            });
+          } finally {
+            foreign.close();
+          }
+        }
+        return result;
+      },
+    );
+    try {
+      const pending = withGatewayWorkerSessionAdmission(
+        {
+          identity: caller,
+          getConfig: config.getRuntimeConfig,
+          retainEntryFields: ["thinkingLevel"],
+        },
+        async (source) =>
+          await withRequiredSessionPlacement(
+            identity,
+            { config: config.getRuntimeConfig(), assertCurrent: source.assertCurrent },
+            async () => {
+              throw new Error("A worker turn cannot run before provider dispatch");
+            },
+          ),
+      );
+      if (change === "unchanged") {
+        await expect(pending).rejects.toBe(reachedDispatch);
+        expect(dispatch).toHaveBeenCalledOnce();
+        const worktree = (await managedWorktrees.findLiveByOwner("session", identity.sessionKey))!;
+        expect(loadSessionEntry({ ...identity, storePath })).toMatchObject({
+          worktree: { id: worktree.id },
+          sessionRoot: worktree.path,
+          spawnedCwd: worktree.path,
+        });
+      } else {
+        await expect(pending).rejects.toThrow("Session changed during worker admission");
+        expect(dispatch).not.toHaveBeenCalled();
+        const entry = loadSessionEntry({ ...identity, storePath });
+        expect(entry).not.toHaveProperty("worktree");
+        expect(entry).not.toHaveProperty("sessionRoot");
+        expect(entry).not.toHaveProperty("spawnedCwd");
+        expect(
+          await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
+        ).toBeUndefined();
+        expect(preparedWorktreePath).toBeDefined();
+        await expect(fs.stat(preparedWorktreePath!)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      uninstall();
+      const worktree = await managedWorktrees.findLiveByOwner("session", identity.sessionKey);
+      if (worktree) {
+        ownedWorktrees.add(worktree.id);
+      }
+    }
+  },
+);
 
 test.each(["unallocated", "missing", "different", "matching"] as const)(
   "required retry respects a failed placement with %s recorded environment",

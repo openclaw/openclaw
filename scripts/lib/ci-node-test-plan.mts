@@ -795,7 +795,6 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/claws/package-update.test.ts", 4.164],
   ["src/cli/update-cli.git-service.test.ts", 24.578],
   ["src/flows/doctor-health.fleet-preflight.test.ts", 8.648],
-  ["src/agents/embedded-agent-runner/run/attempt-prompt-submit.retention.test.ts", 6.452],
   ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],

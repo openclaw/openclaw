@@ -50,6 +50,7 @@ import type {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
+import { createPausedDeadline } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -112,61 +113,30 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const timeoutError = new Error(params.message);
-  let remainingMs = timeoutMs;
-  let segmentStartedAt = Date.now();
-  let paused = false;
-  let timer: NodeJS.Timeout | null = null;
-  let rejectTimeout!: (error: Error) => void;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    rejectTimeout = reject;
-  });
-  const armWatchdog = () => {
-    segmentStartedAt = Date.now();
-    timer = setTimeout(() => {
-      timer = null;
-      rejectTimeout(timeoutError);
+  const timeout = createDeferred<never>();
+  const deadline = createPausedDeadline({
+    kind: "embedding",
+    timeoutMs,
+    signal,
+    control: params.deadlineControl,
+    expire: () => {
+      timeout.reject(timeoutError);
       controller.abort(timeoutError);
-    }, remainingMs);
-  };
-  const unsubscribe = params.deadlineControl?.subscribe((action) => {
-    if (action === "pause") {
-      paused = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      remainingMs = Math.max(0, remainingMs - (Date.now() - segmentStartedAt));
-      if (remainingMs === 0) {
-        // Budget already consumed before the owned phase; do not let the
-        // exemption extend work that had no time left.
-        rejectTimeout(timeoutError);
-        controller.abort(timeoutError);
-      }
-      return;
-    }
-    paused = false;
-    if (!signal.aborted) {
-      armWatchdog();
-    }
+    },
   });
-  if (!paused) {
-    armWatchdog();
-  }
+  deadline.start();
   try {
     const operation = params.run(signal);
-    const result = await Promise.race([operation, timeoutPromise]);
+    const result = await Promise.race([operation, timeout.promise]);
     params.signal?.throwIfAborted();
     // An overdue watchdog can run after provider success following an event-loop stall.
-    if (!paused && Date.now() - segmentStartedAt >= remainingMs) {
+    if (deadline.isExpired()) {
       controller.abort(timeoutError);
       throw timeoutError;
     }
     return result;
   } finally {
-    unsubscribe?.();
-    if (timer) {
-      clearTimeout(timer);
-    }
+    deadline.close();
   }
 }
 
@@ -355,7 +325,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       );
     }
     for (const [index, item] of missing.entries()) {
-      embeddings[item.index] = batchEmbeddings[index] ?? [];
+      embeddings[item] = batchEmbeddings[index] ?? [];
     }
     return embeddings;
   }
@@ -549,19 +519,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     provider: string;
     run: () => Promise<number[][] | null>;
   }): Promise<MemoryBatchRetryResult> {
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      if (!/timed out|timeout/i.test(formatErrorMessage(error))) {
-        return { kind: "failure", error, attempts: 1 };
+    let attempts: 1 | 2 = 1;
+    while (true) {
+      try {
+        return { kind: "success", value: await params.run() };
+      } catch (error) {
+        if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
+          return { kind: "failure", error, attempts };
+        }
       }
-    }
-
-    log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      return { kind: "failure", error, attempts: 2 };
+      log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
+      attempts = 2;
     }
   }
 

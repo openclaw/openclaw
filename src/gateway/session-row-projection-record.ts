@@ -212,18 +212,17 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }
 }
 
-/** Expire both accepted facts and worker replies still waiting to enter this row. */
-export function invalidateDatabaseFacts(row: Row) {
+/** Expire accepted facts and pending replies, retaining only independently certified facets. */
+export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;
-  row.retainedDatabaseFacts = undefined;
-  row.preparedAcpMeta = undefined;
+  row.retainedDatabaseFacts = retained;
+  row.preparedAcpMeta = retained?.acpMeta;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -659,13 +658,14 @@ export function acquireSessionRowEntry(params: {
       row.entry.lifecycleRevision === entry.lifecycleRevision)
       ? row.generation
       : Symbol("row");
+  const retainedDatabaseFacts =
+    row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined;
   let next: Row = {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    retainedDatabaseFacts:
-      row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined,
-    databaseFactsRevision: row.databaseFactsRevision + 1,
+    retainedDatabaseFacts,
+    databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
     ...lineage,
     sharingEntry: storedEntry,
     generation,

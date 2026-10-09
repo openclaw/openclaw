@@ -1097,6 +1097,7 @@ export function startGatewayConfigReloader(
       }
       if (
         !enteredReload &&
+        leaseRetryDelayMs < LEASE_RETRY_MAX_DELAY_MS &&
         error instanceof OpenClawStateLeaseAcquisitionError &&
         error.outcome.kind === "store-unavailable" &&
         (error.outcome.reason === "lifecycle-busy" || error.outcome.reason === "sqlite-busy")
@@ -1108,6 +1109,14 @@ export function startGatewayConfigReloader(
         );
         opts.log.warn(`config reload retry in ${leaseRetryDelayMs}ms: ${String(error)}`);
       } else {
+        if (!enteredReload) {
+          // The maximum-backoff attempt exhausts admission. Retain writer intent
+          // for a later observation, but release its waiting RPC.
+          pendingInProcessConfig?.application?.settle("failed");
+          retryWriteCandidate?.application?.settle("failed");
+          pending = false;
+          clearReloadTimer();
+        }
         leaseRetryDelayMs = 0;
         opts.log.error(`config reload failed: ${String(error)}`);
       }

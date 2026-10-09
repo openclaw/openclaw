@@ -43,6 +43,10 @@ export function bindAgentsApiTranscriptAuthority(
               source.assertCurrent();
               signal.throwIfAborted();
             },
+            assertPreparedCurrent: () => {
+              (source.assertPreparedCurrent ?? source.assertCurrent)();
+              signal.throwIfAborted();
+            },
           };
         },
       })
@@ -211,7 +215,7 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
     config: params.config,
     runId: params.runId,
     message,
-    beforeFreshMessageCommit: assertCurrent,
+    preparation: { source: assertCurrent },
   });
   await assertTranscriptCurrent(assertCurrent);
   if (append.kind !== "result") {

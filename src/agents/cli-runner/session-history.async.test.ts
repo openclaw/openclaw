@@ -10,8 +10,9 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -65,7 +66,12 @@ it("reads CLI presence after an earlier admitted transcript write settles", asyn
     const writing = admit({ agentId: target.agentId, path: target.storePath }, async () => {
       entered.resolve();
       await withinTest(resume.promise, signal);
-      await createRecorder(target, "Earlier admitted user turn").persistApproved();
+      const appended = appendTranscriptMessageSync(target, {
+        eventId: "earlier-admitted-user-turn",
+        parentId: null,
+        message: { role: "user", content: "Earlier admitted user turn" },
+      });
+      expect(appended.ok).toBe(true);
     });
     let reading: Promise<boolean> | undefined;
     let restore = () => {};
@@ -190,22 +196,24 @@ it.each(["run", "read-resource"] as const)(
       };
       const interceptNext = () => {
         if (kind === "read-resource") {
-          const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-            spy.mockRestore();
-            let pause = false;
-            return historyLane.pool
-              .run(async () => {
-                const request = typeof input === "function" ? await input() : input;
-                pause = request.kind === "transcript-hydration";
-                if (pause) {
-                  pausedKind = request.kind;
-                } else {
-                  interceptNext();
-                }
-                return request;
-              }, options)
-              .then((reply) => (pause ? pauseReply(reply) : reply));
-          });
+          const spy = vi
+            .spyOn(targetDiscoveryLane.pool, "run")
+            .mockImplementationOnce((input, options) => {
+              spy.mockRestore();
+              let pause = false;
+              return targetDiscoveryLane.pool
+                .run(async () => {
+                  const request = typeof input === "function" ? await input() : input;
+                  pause = request.kind === "transcript-hydration";
+                  if (pause) {
+                    pausedKind = request.kind;
+                  } else {
+                    interceptNext();
+                  }
+                  return request;
+                }, options)
+                .then((reply) => (pause ? pauseReply(reply) : reply));
+            });
           restoreSpy = () => spy.mockRestore();
           return;
         }

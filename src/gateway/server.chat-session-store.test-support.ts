@@ -8,10 +8,46 @@ import {
   releaseSessionTestDirectories,
   removeChatTestDirectory,
 } from "./session-test-directories.test-support.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { connectOk, testState, writeSessionStore } from "./test-helpers.js";
 import { resetPersistentGatewaySessionStore } from "./test/persistent-session-store.test-support.js";
 
 export type ChatSessionDirectoryOptions = { fresh?: boolean };
+export type StoredChatSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
+
+export async function writeStoredMainSession(entry: StoredChatSessionEntry = {}) {
+  await writeSessionStore({
+    entries: {
+      main: {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+        ...entry,
+      },
+    },
+  });
+}
+
+export function futureFixtureUpdatedAt(): number {
+  return Date.now() + 60_000;
+}
+
+export async function writeMainSessionStore(sessionId = "sess-main") {
+  await writeStoredMainSession({
+    sessionId,
+    updatedAt: futureFixtureUpdatedAt(),
+  });
+}
+
+export async function prepareMainHistoryHarness(params: {
+  ws: Parameters<typeof connectOk>[0];
+  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
+  freshStore?: boolean;
+  sessionId?: string;
+}) {
+  await connectOk(params.ws);
+  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
+  await writeMainSessionStore(params.sessionId);
+  return sessionDir;
+}
 
 function createPersistentChatSessionStore() {
   const directories = createTempDirTracker();
@@ -25,7 +61,6 @@ function createPersistentChatSessionStore() {
     },
     async reset(this: void) {
       await resetPersistentGatewaySessionStore(directory);
-      testState.sessionStorePath = undefined;
     },
     async dispose(this: void) {
       await releaseSessionTestDirectories(directories.dirs);

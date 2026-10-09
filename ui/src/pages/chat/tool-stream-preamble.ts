@@ -6,27 +6,6 @@ import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { acceptsToolStreamSession } from "./tool-stream-status.ts";
 
-function readPreambleProgressEvent(
-  payload: AgentEventPayload,
-): { text: string; itemId?: string } | null {
-  if (payload.stream !== "item") {
-    return null;
-  }
-  const data = payload.data ?? {};
-  if (data.kind !== "preamble") {
-    return null;
-  }
-  const itemId = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.id);
-  const progressText = normalizePreambleProgressText(data.progressText);
-  if (!progressText && !itemId) {
-    return null;
-  }
-  return {
-    text: progressText,
-    ...(itemId ? { itemId } : {}),
-  };
-}
-
 function normalizePreambleProgressText(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -39,14 +18,22 @@ function normalizePreambleProgressText(value: unknown): string {
 }
 
 export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  const progress = readPreambleProgressEvent(payload);
-  if (!progress) {
+  if (payload.stream !== "item") {
+    return false;
+  }
+  const data = payload.data ?? {};
+  if (data.kind !== "preamble") {
+    return false;
+  }
+  const reportedItemId = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.id);
+  const text = normalizePreambleProgressText(data.progressText);
+  if (!text && !reportedItemId) {
     return false;
   }
   if (
     !isCompleteAgentPreamble({
       phase: typeof payload.data.phase === "string" ? payload.data.phase : undefined,
-      progressText: progress.text,
+      progressText: text,
     })
   ) {
     return true;
@@ -56,12 +43,12 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   if (!acceptsToolStreamSession(host, payload)) {
     return true;
   }
-  if (progress.text) {
+  if (text) {
     reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
   // An unkeyed preamble owns its event, independently of cumulative chat text.
   const itemId =
-    progress.itemId ?? JSON.stringify(["openclaw-ui-preamble", payload.runId, payload.seq]);
+    reportedItemId ?? JSON.stringify(["openclaw-ui-preamble", payload.runId, payload.seq]);
   const existing = host.chatStreamSegments.find(
     (segment) => segment.itemId === itemId && segment.runId === payload.runId,
   );
@@ -69,7 +56,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
     const identity = readAssistantStreamSegmentIdentity(message);
     return identity?.itemId === itemId && identity?.runId === payload.runId;
   });
-  if (persisted || !progress.text.trim()) {
+  if (persisted || !text.trim()) {
     // Durable or empty commentary retires only its matching keyed live copy.
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== itemId || segment.runId !== payload.runId,
@@ -81,7 +68,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       segment === existing
         ? {
             ...segment,
-            text: progress.text,
+            text,
           }
         : segment,
     );
@@ -90,7 +77,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   host.chatStreamSegments = [
     ...host.chatStreamSegments,
     {
-      text: progress.text,
+      text,
       ts: payload.ts,
       runId: payload.runId,
       itemId,

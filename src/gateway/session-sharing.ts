@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -23,13 +22,16 @@ import type { SessionMutationAuthorization } from "./server-methods/types.js";
 import { isSessionCreatorProfile } from "./session-creator.js";
 import {
   isAgentRunStartMethod,
+  isSessionArchiveMutation,
   isRequiredSessionTargetMethod,
   isSessionProfileDependentMethod,
+  mayCreateSessionTarget,
 } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   expectedSessionMutationTargetError,
+  createSessionCreationAuthorizationRecorder,
   assertSessionMutationProjectionCurrent,
   createSessionSharingLookupCaches,
   prepareAuthorizedSessionMutationFacts,
@@ -130,13 +132,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
   const authorizesRead =
     resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
-  const patch =
-    params.method === "sessions.patchMany" && isRecord(params.requestParams)
-      ? params.requestParams.patch
-      : params.method === "sessions.patch"
-        ? params.requestParams
-        : undefined;
-  const requiresArchiveOwnership = isRecord(patch) && typeof patch.archived === "boolean";
+  const requiresArchiveOwnership = isSessionArchiveMutation(params.method, params.requestParams);
   // Progress belongs to the current conversation, not merely its stable session ID.
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
   const bindsProgressLifecycle =
@@ -384,15 +380,19 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
       ...(!target &&
-      ["chat.send", "sessions.send", "sessions.create", "sessions.patch"].includes(params.method)
+      (mayCreateSessionTarget(params.method) || (talkSessionTarget && authorizesAgentRun))
         ? {
-            absentTarget: consuming.sharing
-              ? consuming.sharing.storageTarget
-              : resolveGatewaySessionStoreTarget({
-                  cfg: getCfg(),
-                  key: targetRef.sessionKey,
-                  agentId: targetRef.agentId,
-                }),
+            absentTarget: {
+              ...(consuming.sharing
+                ? consuming.sharing.storageTarget
+                : (talkSessionTarget ??
+                  resolveGatewaySessionStoreTarget({
+                    cfg: getCfg(),
+                    key: targetRef.sessionKey,
+                    agentId: targetRef.agentId,
+                  }))),
+              readSource: resolved.preparedReadSource,
+            },
           }
         : {}),
       ...(bindsProgressLifecycle || bindsOwnProfile
@@ -419,15 +419,20 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         currentLookupCaches?: SessionSharingLookupCaches,
         ensuredSessionId?: string,
         prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
+        currentTalkTarget?: PreparedTalkSessionTarget,
       ) => {
         if (!prepared && expected?.absentTarget && !expected.created) {
           const currentRoute = consuming.sharing
             ? consuming.sharing.storageTarget
-            : resolveGatewaySessionStoreTarget({
-                cfg: currentCfg,
-                key: targetRef.sessionKey,
-                agentId: targetRef.agentId,
-              });
+            : currentTalkTarget &&
+                currentTalkTarget.agentId === targetRef.agentId &&
+                currentTalkTarget.canonicalKey === targetRef.sessionKey
+              ? currentTalkTarget
+              : resolveGatewaySessionStoreTarget({
+                  cfg: currentCfg,
+                  key: targetRef.sessionKey,
+                  agentId: targetRef.agentId,
+                });
           // Absence is bound to its original store too. Checking the creation
           // notification would discover a redirected write only after COMMIT.
           if (
@@ -442,7 +447,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           targetChanged(targetRef.sessionKey),
         );
         const projected =
-          !prepared && expected?.projection
+          !prepared && !consuming.sharing && expected?.projection
             ? readProjectedSessionMutationTarget(targetRef, currentCfg, expected.projection)
             : undefined;
         if (expected?.projection && projected?.status === "unavailable") {
@@ -543,15 +548,25 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           throw new SessionMutationAuthorizationChangedError(error);
         }
       };
-      let createdSessionRecorded = false;
       const authorization: SessionMutationAuthorization = {
-        ...(params.method === "sessions.move" || params.method === "sessions.dispatch"
+        ...(params.method === "sessions.move" ||
+        params.method === "sessions.dispatch" ||
+        ((params.method === "talk.client.create" ||
+          params.method === "talk.client.toolCall" ||
+          params.method === "talk.session.create") &&
+          !authorizedTargets.some((target) => isIncognitoSessionKey(target.sessionKey)))
           ? {
-              prepareWorkerGrant: () =>
+              prepareWorkerGrant: (transactionSource) =>
                 prepareSessionSharingWorkerGrant({
                   targets: authorizedTargets,
                   request: params,
                   sourceConfig: getCfg(),
+                  authorizesAgentRun,
+                  transactionFacts:
+                    params.method === "talk.client.create" ||
+                    params.method === "talk.client.toolCall" ||
+                    params.method === "talk.session.create",
+                  transactionSource,
                   consume: (expected, cfg, prepared, profiles) =>
                     consumeSharing(
                       prepared,
@@ -585,6 +600,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                       return consume();
                     });
                   },
+                  params.preparedSharing?.selection,
                 );
               },
               withPreparedCurrent: <T>(
@@ -632,42 +648,11 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
               }),
             }
           : {}),
-        recordCreatedSession: (created) => {
-          // Only the creation owner's COMMIT notification may replace an absent snapshot.
-          // Never adopt a response/reload result, or a later incarnation of the same key.
-          if (createdSessionRecorded) {
-            return;
-          }
-          let expected = authorizedTargets.find(
-            (target) =>
-              target.sessionId === null &&
-              target.absentTarget?.agentId === created.agentId &&
-              target.absentTarget.canonicalKey === created.sessionKey &&
-              target.absentTarget.storePath === created.storePath,
-          );
-          if (!expected && permitsGeneratedSession) {
-            expected = {
-              sessionKey: created.sessionKey,
-              agentId: created.agentId,
-              resolved: null,
-              sessionId: null,
-            };
-            authorizedTargets.push(expected);
-          }
-          if (!expected) {
-            return;
-          }
-          createdSessionRecorded = true;
-          expected.resolved = {
-            agentId: created.agentId,
-            canonicalKey: created.sessionKey,
-            storeKey: created.sessionKey,
-            storePath: created.storePath,
-          };
-          expected.sessionId = created.sessionId;
-          expected.lifecycleRevision = created.lifecycleRevision;
-          expected.created = true;
-        },
+        recordCreatedSession: createSessionCreationAuthorizationRecorder({
+          targets: authorizedTargets,
+          talkSessionTarget,
+          permitsGeneratedSession,
+        }),
         assertCurrent: withPreparedSessionSharingSource({
           targets: authorizedTargets,
           sourceConfig: getCfg(),
@@ -699,24 +684,24 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
               target.sessionKey === normalizedTarget.sessionKey &&
               target.agentId === normalizedTarget.agentId,
           );
-          assertTalkTargetCurrent(currentCfg);
+          const currentTalkTarget = assertTalkTargetCurrent(currentCfg);
           assertTargetCurrent(
             normalizedTarget,
             expected,
             currentCfg,
             undefined,
             targetRef.ensuredSessionId,
+            undefined,
+            currentTalkTarget,
           );
         },
       };
-      // Native Incognito custody retains its process-local identity and live permission guard.
-      if (!authorizedTargets.some((target) => isIncognitoSessionKey(target.sessionKey))) {
-        authorization.admittedInputAuthority = createSessionSharingInputAuthority(
-          params,
-          authorization,
-          () => consuming.sharing!,
-        );
-      }
+      authorization.admittedInputAuthority = createSessionSharingInputAuthority(
+        params,
+        authorization,
+        () => consuming.sharing!,
+        authorizedTargets,
+      );
       return authorization;
     })(),
   };

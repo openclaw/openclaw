@@ -419,11 +419,6 @@ function createTelegramTransportAttempts(params: {
   return attempts;
 }
 
-async function destroyOwnedDispatchers(dispatchers: Iterable<TelegramDispatcher>): Promise<void> {
-  // Destroy abandoned sockets immediately; already-destroyed dispatchers may reject.
-  await Promise.allSettled([...dispatchers].map(async (dispatcher) => dispatcher.destroy()));
-}
-
 export function resolveTelegramTransport(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
@@ -457,9 +452,8 @@ export function resolveTelegramTransport(
       : undefined;
   const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = resolvedExplicitProxyUrl
-    ? undiciSourceFetch
-    : effectiveProxyFetch
+  const sourceFetch =
+    !resolvedExplicitProxyUrl && effectiveProxyFetch
       ? resolveWrappedFetch(effectiveProxyFetch)
       : undiciSourceFetch;
   if (effectiveProxyFetch && !explicitProxyUrl) {
@@ -610,6 +604,7 @@ export function resolveTelegramTransport(
     const method = extractTelegramApiMethod(input);
     const freshConnection = method === "sendmessage" || method === "sendrichmessage";
     const shouldRetryRequest = (error: unknown) =>
+      !closed &&
       shouldRetryTelegramTransportFallback(error) &&
       (!freshConnection || isSafeToRetrySendError(error));
     const requestFetch = bindTelegramTransportAuthority(
@@ -647,10 +642,10 @@ export function resolveTelegramTransport(
         requestBody: init?.body ?? null,
         response,
         flowId: randomUUID(),
-        meta:
-          fallbackAttempt === undefined
-            ? { subsystem: "telegram-fetch" }
-            : { subsystem: "telegram-fetch", fallbackAttempt },
+        meta: {
+          subsystem: "telegram-fetch",
+          ...(fallbackAttempt === undefined ? {} : { fallbackAttempt }),
+        },
       }).catch(() => {});
     };
 
@@ -733,7 +728,8 @@ export function resolveTelegramTransport(
       closed = true;
       const toDestroy = [...ownedDispatchers];
       ownedDispatchers.clear();
-      await destroyOwnedDispatchers(toDestroy);
+      // Destroy abandoned sockets immediately; already-destroyed dispatchers may reject.
+      await Promise.allSettled(toDestroy.map(async (dispatcher) => dispatcher.destroy()));
     },
   };
 }

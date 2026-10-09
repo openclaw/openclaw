@@ -16,6 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -205,58 +206,53 @@ describe("personal publication session lifecycle", () => {
     let receiptAdmitted = false;
     let nativeAbsent = false;
     const held = holdReceiptDeletion();
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((nativeRequest, grant) => {
-          const facts = nativeRequest.facts;
-          if (
-            !injected &&
-            receiptAdmitted &&
-            nativeRequest.stage === "commit" &&
-            (facts === undefined ||
-              (isRecord(facts) &&
-                facts.kind === "session-entry-current" &&
-                facts.domainFacts === undefined &&
-                isRecord(facts.source) &&
-                facts.source.sessionKey === SESSION_KEY))
-          ) {
-            nativeAbsent = isRecord(facts) && facts.entry === undefined;
-            admit(nativeRequest, () => {
-              expect(
-                peer
-                  .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-                  .get(SESSION_KEY),
-              ).toBeUndefined();
-              peer.exec("BEGIN IMMEDIATE");
-              try {
-                peer
-                  .prepare(
-                    "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-                  )
-                  .run(
-                    SESSION_KEY,
-                    successor.sessionId,
-                    JSON.stringify(successor),
-                    successor.updatedAt,
-                  );
-                peer
-                  .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-                  .run(SESSION_KEY);
-                peer.exec("COMMIT");
-              } catch (error) {
-                peer.exec("ROLLBACK");
-                throw error;
-              }
-              injected = true;
-              return grant();
-            });
-            return;
+    const admission = probe.admission(operationAdmission, (nativeRequest, grant, admit) => {
+      const facts = nativeRequest.facts;
+      if (
+        !injected &&
+        receiptAdmitted &&
+        nativeRequest.stage === "commit" &&
+        (facts === undefined ||
+          (isRecord(facts) &&
+            facts.kind === "session-entry-current" &&
+            facts.domainFacts === undefined &&
+            isRecord(facts.source) &&
+            facts.source.sessionKey === SESSION_KEY))
+      ) {
+        nativeAbsent = isRecord(facts) && facts.entry === undefined;
+        admit(nativeRequest, () => {
+          expect(
+            peer
+              .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+              .get(SESSION_KEY),
+          ).toBeUndefined();
+          peer.exec("BEGIN IMMEDIATE");
+          try {
+            peer
+              .prepare(
+                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+              )
+              .run(
+                SESSION_KEY,
+                successor.sessionId,
+                JSON.stringify(successor),
+                successor.updatedAt,
+              );
+            peer
+              .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+              .run(SESSION_KEY);
+            peer.exec("COMMIT");
+          } catch (error) {
+            peer.exec("ROLLBACK");
+            throw error;
           }
-          admit(nativeRequest, grant);
-        }, attachment),
-      );
+          injected = true;
+          return grant();
+        });
+        return;
+      }
+      admit(nativeRequest, grant);
+    });
     const deletion = applySessionEntryLifecycleMutation({
       agentId: "main",
       storePath: session.storePath,

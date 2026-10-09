@@ -272,7 +272,13 @@ a process exit code (for example, `exit 1 (EACCES; Permission denied)`). Arbitra
 log text stays private; steps without a recognized diagnostic show only their exit.
 
 Recoverable maintenance failures appear as recorded warnings even when the update
-succeeds. Each warning names the skipped work, the cause, and a repair command.
+succeeds. The final console summary, saved Markdown report, and human
+`update status` show every recorded warning. Successful runs put warnings before
+informational diagnostics,
+including disabled automatic database restoration and local changes that were
+preserved but not reapplied, with their recorded recovery paths. Short chat
+summaries remain size-limited. Each maintenance warning names the skipped work,
+the cause, and a repair command.
 Doctor also shows warnings from the latest run as historical observations: a later
 repair may already have resolved them. The existing report and history size limits
 still apply.

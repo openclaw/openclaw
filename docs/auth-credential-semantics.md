@@ -112,6 +112,9 @@ lease; they do not borrow ordinary worker authority.
 Model-catalog workers use their request's native auth-write scope, pinned to the
 captured state root. The request waits for claimed OAuth refreshes to settle before
 closing that scope; retained callbacks cannot write after it closes.
+Each catalog request carries the Gateway's committed shared-store ownership. A
+reused worker installs that fact before reading credentials, so the first login's
+empty-store relocation cannot leave discovery attached to the legacy location.
 Temporary probe stores wait for their database work and shared-registry removal
 before deleting credential files. If disposal fails, cleanup retains the directory
 and reports its location.

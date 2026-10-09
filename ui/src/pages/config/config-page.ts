@@ -64,7 +64,6 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
@@ -112,11 +111,10 @@ type SessionObserverModelsResult = {
 };
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
-function createMediaDeviceState(): {
-  devices: RealtimeTalkInputDevice[];
-  permissionRequired: boolean;
-  loading: boolean;
-  error: string | null;
+function createMediaDeviceState(): Omit<
+  NonNullable<ConfigProps["microphone"]>,
+  "selectedDeviceId"
+> & {
   loaded: boolean;
   requestsPermission: boolean;
 } {

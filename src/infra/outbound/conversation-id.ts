@@ -31,12 +31,9 @@ export function resolveConversationIdFromTargets(params: {
       // prefixes above are safe to collapse into a portable conversation id.
       continue;
     }
-    const mentionMatch = target.match(/^<#(\d+)>$/);
-    if (mentionMatch?.[1]) {
-      return mentionMatch[1];
-    }
-    if (/^\d{6,}$/.test(target)) {
-      return target;
+    const numericIdMatch = /^(?:<#(\d+)>|(\d{6,}))$/.exec(target);
+    if (numericIdMatch) {
+      return numericIdMatch[1] ?? numericIdMatch[2];
     }
   }
 
