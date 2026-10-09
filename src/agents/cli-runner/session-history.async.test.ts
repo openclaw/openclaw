@@ -11,6 +11,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -188,27 +189,43 @@ it.each(["run", "read-resource"] as const)(
         return reply;
       };
       const interceptNext = () => {
+        if (kind === "read-resource") {
+          const spy = vi
+            .spyOn(targetDiscoveryLane.pool, "run")
+            .mockImplementationOnce((input, options) => {
+              spy.mockRestore();
+              let pause = false;
+              return targetDiscoveryLane.pool
+                .run(async () => {
+                  const request = typeof input === "function" ? await input() : input;
+                  pause = request.kind === "transcript-hydration";
+                  if (pause) {
+                    pausedKind = request.kind;
+                  } else {
+                    interceptNext();
+                  }
+                  return request;
+                }, options)
+                .then((reply) => (pause ? pauseReply(reply) : reply));
+            });
+          restoreSpy = () => spy.mockRestore();
+          return;
+        }
         const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
           this: WorkerTaskPool<unknown, unknown>,
           input,
           options,
         ) {
           spy.mockRestore();
-          let pause = false;
           return this.run(async () => {
             const request = typeof input === "function" ? await input() : input;
             const requestKind =
               request && typeof request === "object" && "kind" in request
                 ? request.kind
                 : undefined;
-            pause = kind === "run" || requestKind === "transcript-hydration";
-            if (pause) {
-              pausedKind = requestKind;
-            } else {
-              interceptNext();
-            }
+            pausedKind = requestKind;
             return request;
-          }, options).then((reply) => (pause ? pauseReply(reply) : reply));
+          }, options).then(pauseReply);
         });
         restoreSpy = () => spy.mockRestore();
       };
