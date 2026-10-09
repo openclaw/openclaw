@@ -70,7 +70,7 @@ export async function persistSessionUsageUpdate(params: {
 > {
   const { agentId, storePath, sessionKey, sessionStore, authorize } = params;
   if (!storePath || !sessionKey) {
-    return;
+    return undefined;
   }
   const expectedSession = params.expectedSession
     ? { ...params.expectedSession, lifecycleRevision: params.expectedSession.lifecycleRevision }
@@ -99,7 +99,7 @@ export async function persistSessionUsageUpdate(params: {
     hasCurrentContextSnapshot ||
     Boolean(modelSelection.model || params.contextTokensUsed);
   if (!hasBilling && !hasContextUpdate) {
-    return;
+    return undefined;
   }
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const update: SessionEntryUsageUpdate = {
