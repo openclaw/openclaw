@@ -110,6 +110,8 @@ import { handleAgentEvent } from "./tool-stream.ts";
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
+const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
+
 function asChatPageHost(host: TestChatHost): ChatPageHost {
   return host as ChatPageHost;
 }
@@ -3873,6 +3875,7 @@ describe("handleSendChat", () => {
         sessionKey: target.sessionKey,
         ...(target.sessionKey === "global" ? { agentId: "work" } : {}),
         limit: 1000,
+        toolResultMaxChars: 2_000,
         inputRunIds: ["accepted-source"],
       },
       { timeoutMs: 30_000 },
@@ -4180,8 +4183,7 @@ describe("handleSendChat", () => {
         "chat.history",
         {
           sessionKey: "agent:main",
-          limit: 80,
-          maxBytes: 256 * 1024,
+          ...historyBudget,
           inputRunIds: [
             findRequestPayload(host.request, "chat.send", "rejected send").idempotencyKey,
           ],
@@ -4274,8 +4276,7 @@ describe("handleSendChat", () => {
       {
         sessionKey: "global",
         agentId: "work",
-        limit: 80,
-        maxBytes: 256 * 1024,
+        ...historyBudget,
       },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
@@ -4321,8 +4322,7 @@ describe("handleSendChat", () => {
         "chat.history",
         {
           sessionKey: sourceSessionKey,
-          limit: 80,
-          maxBytes: 256 * 1024,
+          ...historyBudget,
         },
         { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       ),

@@ -76,6 +76,7 @@ export async function advanceSessionPlacementDraft(params: {
     const history = await params.client
       .request<ChatHistoryResult>("chat.history", {
         sessionKey: recovery.sessionKey,
+        toolResultMaxChars: 2_000,
         ...(isUiGlobalSessionKey(recovery.sessionKey) ? { agentId: recovery.agentId } : {}),
         limit: 1000,
         ...(recovery.messageId.length <= CHAT_INPUT_RUN_ID_MAX_CHARS

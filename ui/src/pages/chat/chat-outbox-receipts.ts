@@ -282,6 +282,7 @@ export async function readCurrentStoredChatHistory(
     let pendingBefore: number | undefined;
     const request = {
       sessionKey: outbox.sessionKey,
+      toolResultMaxChars: 2_000,
       ...(isUiGlobalSessionKey(outbox.sessionKey) && outbox.agentId
         ? { agentId: outbox.agentId }
         : {}),
