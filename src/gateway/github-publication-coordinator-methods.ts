@@ -8,7 +8,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
-import { stageGitHubPublicationRow } from "../state/github-publication-receipts.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   openOpenClawStateDatabase,
@@ -541,7 +541,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
               .returningAll(),
           ).rows;
           for (const row of changed) {
-            stageGitHubPublicationRow(db, "shared", row);
+            githubPublicationReceipts.stageRow(db, "shared", row);
           }
         },
         undefined,

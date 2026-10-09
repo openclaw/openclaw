@@ -4,7 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { stageGitHubPublicationRow } from "../state/github-publication-receipts.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -114,7 +114,7 @@ export function insertPersonalGitHubPublication(
         requestId: row.request_id,
         lifecycleRevision,
       });
-      stageGitHubPublicationRow(db, "personal", row);
+      githubPublicationReceipts.stageRow(db, "personal", row);
       return row;
     },
     undefined,
@@ -153,7 +153,7 @@ export function claimPersonalGitHubPublication(
       if (!updated) {
         throw new Error("My GitHub publication execution changed.");
       }
-      stageGitHubPublicationRow(db, "personal", updated);
+      githubPublicationReceipts.stageRow(db, "personal", updated);
       return {
         ...updated,
         status: "publishing",
@@ -214,7 +214,7 @@ export function claimPersonalGitHubPublication(
         if (!updated) {
           throw new Error("My GitHub publication execution is no longer current.");
         }
-        stageGitHubPublicationRow(db, "personal", updated);
+        githubPublicationReceipts.stageRow(db, "personal", updated);
         return updated;
       },
       undefined,
@@ -249,7 +249,7 @@ export function requirePersonalGitHubPublicationConfirmation(instanceId: string)
           .returningAll(),
       ).rows;
       for (const row of changed) {
-        stageGitHubPublicationRow(db, "personal", row);
+        githubPublicationReceipts.stageRow(db, "personal", row);
       }
     },
     undefined,

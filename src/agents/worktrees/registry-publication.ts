@@ -202,9 +202,15 @@ export function readWorktreeRegistryWorkerReceipt(value: unknown): WorkerReceipt
       keys: [...receipt.facts.keys()],
     }) ||
     ![...receipt.facts].every(([key, fact]) => {
-      if (typeof key !== "string") return false;
-      if (fact.kind === "absent") return true;
-      if (fact.kind !== "postimage" || !isRecord(fact.value)) return false;
+      if (typeof key !== "string") {
+        return false;
+      }
+      if (fact.kind === "absent") {
+        return true;
+      }
+      if (fact.kind !== "postimage" || !isRecord(fact.value)) {
+        return false;
+      }
       const row = fact.value;
       return typeof row.id === "string"
         ? keyFor({ id: row.id }) === key
@@ -231,7 +237,9 @@ export function withWorktreeRegistryPublication(
     let unknown = false;
     let received = false;
     const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
-      if (installing) return;
+      if (installing) {
+        return;
+      }
       if (change.kind === "committed" && change.receipt.source.identity === identity()) {
         change.receipt.facts.forEach((_fact, key) => superseded.add(key));
       } else if (change.kind === "unknown" && change.identity === identity()) {
@@ -262,11 +270,15 @@ export function withWorktreeRegistryPublication(
     }
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       const committed = readWorktreeRegistryWorkerReceipt(facts);
-      if (!committed) throw new Error("Worktree registry receipt is invalid");
+      if (!committed) {
+        throw new Error("Worktree registry receipt is invalid");
+      }
       (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
       const receipt = committed.publication;
       const source = "kind" in receipt ? receipt.identity : receipt.source.identity;
-      if (source !== identity()) throw new Error("Worktree registry receipt changed owner");
+      if (source !== identity()) {
+        throw new Error("Worktree registry receipt changed owner");
+      }
       installing = true;
       try {
         if ("kind" in receipt) {

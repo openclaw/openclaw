@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import {
   onSessionLifecycleEvent,
@@ -47,18 +47,18 @@ const expectedEvent = { sessionKey: SESSION_KEY, agentId: "main", reason: "githu
 describe("shared publication committed notifications", () => {
   it("installs the entire request/lifecycle batch before observers can reuse execution authority", () => {
     const facts = new Map<string, SqliteCommittedFact<unknown>>();
-    using _facts = {
-      [Symbol.dispose]: githubPublicationReceipts.subscribeFacts((change) => {
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
         if (change.kind === "committed") {
           for (const [key, value] of change.receipt.facts) {
             facts.set(key, value);
           }
         }
       }),
-    };
+    );
     const observations: unknown[] = [];
-    using _events = {
-      [Symbol.dispose]: onSessionLifecycleEvent(() => {
+    onTestFinished(
+      onSessionLifecycleEvent(() => {
         observations.push({
           first: facts.get(JSON.stringify(["shared", "first"])),
           second: facts.get(JSON.stringify(["shared", "second"])),
@@ -66,7 +66,7 @@ describe("shared publication committed notifications", () => {
           canPublish: isGitHubPublicationExecutionOwner("first", "instance"),
         });
       }),
-    };
+    );
     runOpenClawStateWriteTransaction(() => {
       insertSharedWorktreeReceipt("first");
       claimGitHubPublicationExecution("first", "instance");
@@ -293,8 +293,8 @@ describe("shared publication committed notifications", () => {
     const workspace = await sharedRepositoryWorkspace();
     const observer = vi.fn();
     const receiptRows: unknown[] = [];
-    using _facts = {
-      [Symbol.dispose]: githubPublicationReceipts.subscribeFacts((change) => {
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
         if (change.kind === "committed") {
           for (const fact of change.receipt.facts.values()) {
             if (fact.kind === "postimage") {
@@ -303,7 +303,7 @@ describe("shared publication committed notifications", () => {
           }
         }
       }),
-    };
+    );
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     const row = insertRepositoryGitHubPublication(
       repositoryReceipt(workspace, {

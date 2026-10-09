@@ -13,8 +13,8 @@ import type {
   GitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
 import {
+  githubPublicationReceipts,
   sharedGitHubPublicationAuthorityColumns,
-  stageGitHubPublicationRow,
 } from "../state/github-publication-receipts.js";
 import {
   decodeGitHubPublicationRequester,
@@ -196,7 +196,7 @@ export function claimGitHubPublicationExecution(
       if (!claimed) {
         throw new Error("GitHub publication execution ownership changed.");
       }
-      stageGitHubPublicationRow(db, "shared", claimed);
+      githubPublicationReceipts.stageRow(db, "shared", claimed);
       deferSharedGitHubPublicationChanged(db, claimed);
       return claimed;
     },
@@ -320,7 +320,7 @@ export function insertGitHubPublicationRequest(
   }
   input.assertCurrent();
   if (inserted.numAffectedRows === 1n) {
-    stageGitHubPublicationRow(db, "shared", stored);
+    githubPublicationReceipts.stageRow(db, "shared", stored);
     deferSharedGitHubPublicationChanged(db, stored);
   }
   return stored;
@@ -359,7 +359,7 @@ export function createGitHubPublicationExecutionStore(instanceId: string) {
         if (!updated) {
           throw new Error(errors[transition]);
         }
-        stageGitHubPublicationRow(db, "shared", updated);
+        githubPublicationReceipts.stageRow(db, "shared", updated);
         deferSharedGitHubPublicationChanged(db, updated);
         return updated;
       },
@@ -461,7 +461,7 @@ export function deferGitHubPublicationRequests(requestIds: string[]): void {
             .returning(sharedGitHubPublicationAuthorityColumns),
         ).rows;
         for (const row of changed) {
-          stageGitHubPublicationRow(db, "shared", row);
+          githubPublicationReceipts.stageRow(db, "shared", row);
           deferSharedGitHubPublicationChanged(db, row);
         }
       }
@@ -510,7 +510,7 @@ export function markGitHubPublicationReported(
           .returningAll(),
       ).rows;
       for (const row of changed) {
-        stageGitHubPublicationRow(db, kind, row);
+        githubPublicationReceipts.stageRow(db, kind, row);
       }
     },
     undefined,

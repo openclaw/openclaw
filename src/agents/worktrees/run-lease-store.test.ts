@@ -54,7 +54,9 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
   const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
     if (change.kind === "committed") {
       for (const [key, fact] of change.receipt.facts) {
-        if (fact.kind === "absent") deleted.push(key);
+        if (fact.kind === "absent") {
+          deleted.push(key);
+        }
       }
     }
   });

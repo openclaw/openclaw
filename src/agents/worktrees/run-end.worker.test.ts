@@ -375,7 +375,9 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
   const facts = new Map();
   const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
     if (change.kind === "committed") {
-      for (const [key, fact] of change.receipt.facts) facts.set(key, fact);
+      for (const [key, fact] of change.receipt.facts) {
+        facts.set(key, fact);
+      }
     }
   });
   const lostReply = interceptWorktreeWorkerOperation(

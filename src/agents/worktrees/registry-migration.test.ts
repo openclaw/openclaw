@@ -128,7 +128,9 @@ describe("native worktree migration ownership", () => {
     const facts = new Map();
     const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
       if (change.kind === "committed") {
-        for (const [key, fact] of change.receipt.facts) facts.set(key, fact);
+        for (const [key, fact] of change.receipt.facts) {
+          facts.set(key, fact);
+        }
       }
     });
     const migrate = () => {

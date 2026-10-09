@@ -36,7 +36,9 @@ it("installs the whole committed registry batch before observers and discards sa
   const observed: string[][] = [];
   const unsubscribeFacts = worktreeRegistryPublication.subscribeFacts((change) => {
     if (change.kind === "committed") {
-      for (const [key, fact] of change.receipt.facts) installed.set(key, fact);
+      for (const [key, fact] of change.receipt.facts) {
+        installed.set(key, fact);
+      }
     }
   });
   const observe = () =>

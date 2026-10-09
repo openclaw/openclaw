@@ -9,7 +9,7 @@ import type {
   RepositoryGitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
 } from "../state/github-publication-read.types.js";
-import { stageGitHubPublicationRow } from "../state/github-publication-receipts.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import {
   decodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
@@ -49,7 +49,7 @@ function changed(
   row: RepositoryGitHubPublicationRow,
 ) {
   checked(row);
-  stageGitHubPublicationRow(db, "repository", row);
+  githubPublicationReceipts.stageRow(db, "repository", row);
   deferSharedGitHubPublicationChanged(db, row);
   return row;
 }
@@ -213,7 +213,7 @@ export function insertRepositoryGitHubPublication(
       checked(stored);
       assertCurrent();
       if (inserted.numAffectedRows === 1n) {
-        stageGitHubPublicationRow(db, "repository", stored);
+        githubPublicationReceipts.stageRow(db, "repository", stored);
         deferSharedGitHubPublicationChanged(db, stored);
       }
       return stored;

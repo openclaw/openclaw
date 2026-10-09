@@ -109,6 +109,7 @@ function publication(receipt: Receipt) {
 
 /** Exact owner writes only: arbitrary raw SQL remains outside this coverage. */
 export const githubPublicationReceipts = {
+  stageRow: stageGitHubPublicationRow,
   subscribeFacts: (listener: (change: Change) => void) => registerListener(state.facts, listener),
 };
 
@@ -147,7 +148,7 @@ export function deferGitHubPublicationDeletionReceipt(
   );
 }
 
-export function stageGitHubPublicationRow<Kind extends keyof Rows>(
+function stageGitHubPublicationRow<Kind extends keyof Rows>(
   db: DatabaseSync,
   kind: Kind,
   row: Rows[Kind] & Partial<Record<PresentationColumn, string | null>>,

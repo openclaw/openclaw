@@ -7,7 +7,7 @@ import {
 } from "./github-publication.test-support.js";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
@@ -401,15 +401,15 @@ describe("personal publication session lifecycle", () => {
   it("retains logical-session receipts across archive and reset, then removes them through permanent deletion", async () => {
     const { owner, generation, placements } = fixture;
     const installed = new Map<string, unknown>();
-    using _facts = {
-      [Symbol.dispose]: githubPublicationReceipts.subscribeFacts((change) => {
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
         if (change.kind === "committed") {
           for (const [key, fact] of change.receipt.facts) {
             installed.set(key, fact);
           }
         }
       }),
-    };
+    );
     const {
       session,
       published: result,
@@ -446,11 +446,11 @@ describe("personal publication session lifecycle", () => {
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
     expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(originalLifecycle);
     const lostReply = probe.command(stateWorker, async (command, options, scope) => {
-      const result = await scope.execute(command, options);
+      const outcome = await scope.execute(command, options);
       if (command.type === "githubPublication.deleteSessionReceipts") {
         throw new Error("committed receipt cleanup reply lost");
       }
-      return result;
+      return outcome;
     });
     await expect(
       deleteSessionEntryLifecycle({
