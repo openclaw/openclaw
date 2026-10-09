@@ -173,7 +173,7 @@ describe("sessions_search tool", () => {
         warning: [
           ...(state.indexing
             ? [
-                "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
+                "Search completeness could not be confirmed; results may be incomplete. Retry sessions_search shortly.",
               ]
             : []),
           ...(state.archivedTranscriptsExcluded

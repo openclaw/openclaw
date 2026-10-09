@@ -63,8 +63,8 @@ Groups do not grant access to private conversations or include incognito or
 archived sessions in active search.
 
 Search returns a bounded set of the best matches. More matches than the result limit is
-normal, not an incomplete-index warning; refine the query to narrow the results. Genuine
-indexing work and cold archived transcripts excluded from search have separate status
+normal, not a search-completeness warning; refine the query to narrow the results. Unconfirmed
+search completeness and cold archived transcripts excluded from search have separate status
 messages. Cold transcript history becomes searchable again when its session is opened
 and the history is restored. Search does not restore archived history automatically.
 
@@ -77,8 +77,13 @@ Only the transcript's active branch is searchable.
 
 Transcripts that predate the index (for example, sessions imported by `openclaw doctor`) and
 sessions whose active branch was rewound are reindexed by a background reconciliation that starts
-with the next search. A response with `indexing: true` can therefore be incomplete; retry after
-indexing finishes. Deleting a session removes its index entries in the same transaction.
+with the next search. Deleting a session removes its index entries in the same transaction.
+
+A response with `indexing: true` means search completeness could not be confirmed, not necessarily
+that indexing is running. The flag also covers a database change during the search or an
+unavailable index-status check. Returned matches remain usable, but results may be incomplete;
+retry shortly. A search limited to one session can still receive this flag after an unrelated
+write to the same agent database.
 
 Search uses SQLite's Unicode word tokenizer with diacritic removal.
 

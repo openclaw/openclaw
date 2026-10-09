@@ -98,7 +98,7 @@ describe("sessions transcript search view", () => {
     expect(result?.textContent).toContain("Assistant");
     expect(result?.textContent).toContain("The <launch code> is ready.");
     expect(result?.querySelector("launch")).toBeNull();
-    expect(container.textContent).toContain("The transcript index is still updating");
+    expect(container.textContent).toContain("Results may be incomplete");
     expect(container.textContent).toContain("Showing the first 25 matches.");
 
     result?.click();

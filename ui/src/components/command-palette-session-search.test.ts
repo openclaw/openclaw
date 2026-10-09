@@ -38,7 +38,7 @@ describe("CommandPalette session search", () => {
     {
       name: "indexing",
       response: { indexing: true },
-      notice: "Indexing older messages — search again shortly.",
+      notice: "Results may be incomplete — search again shortly.",
     },
     { name: "truncated", response: { truncated: true } },
     {

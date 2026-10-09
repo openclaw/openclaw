@@ -47,7 +47,7 @@ const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
 const SESSIONS_SEARCH_INDEXING_WARNING =
-  "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
+  "Search completeness could not be confirmed; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
   user: requesterProfileSchema(),

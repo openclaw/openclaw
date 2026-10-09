@@ -26,7 +26,7 @@ const enCommandPalette = {
     searchFailed: "Chat search failed — check the gateway logs and retry",
     modelSearchFailed: "Model search unavailable. Change your search to retry.",
     searchPartial: "Transcript search unavailable — showing chat titles and metadata",
-    searchIndexing: "Indexing older messages — search again shortly.",
+    searchIndexing: "Results may be incomplete — search again shortly.",
     categories: {
       search: "Search",
       navigation: en.palette.categories.navigation,
@@ -65,8 +65,7 @@ const enCommandPalette = {
     transcriptSearchSearching: "Searching transcripts…",
     transcriptSearchUnavailable: "Transcript search requires a newer Gateway.",
     transcriptSearchError: "Transcript search failed",
-    transcriptSearchIndexing:
-      "The transcript index is still updating. Retry to include recent messages.",
+    transcriptSearchIndexing: "Results may be incomplete — search again shortly.",
     transcriptSearchArchivedExcluded:
       "{count} archived transcripts excluded; open a session to restore its searchable history.",
     transcriptSearchEmpty: "No transcript messages match that search.",

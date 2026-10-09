@@ -428,10 +428,11 @@ describeControlUiE2e("Control UI session transcript search", () => {
     expect(await page.getByText("stale result must stay hidden", { exact: true }).count()).toBe(0);
     await input.press("Enter");
     await page
-      .getByText("The transcript index is still updating. Retry to include recent messages.")
+      .getByText("Results may be incomplete — search again shortly.")
       .waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
+    await captureUiProof("04-search-completeness-warning.png");
 
     await gateway.setMethodResponse("sessions.search", { results: [] });
     await page.getByRole("button", { name: "Retry" }).click();
@@ -439,11 +440,9 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await page
       .getByText("No transcript messages match that search.", { exact: true })
       .waitFor({ state: "visible", timeout: 10_000 });
-    expect(
-      await page
-        .getByText("The transcript index is still updating. Retry to include recent messages.")
-        .count(),
-    ).toBe(0);
+    expect(await page.getByText("Results may be incomplete — search again shortly.").count()).toBe(
+      0,
+    );
 
     await gateway.deferNext("sessions.search");
     await submit.click();

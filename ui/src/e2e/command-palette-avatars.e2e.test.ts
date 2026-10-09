@@ -161,7 +161,10 @@ suite.define(() => {
         await expect.poll(() => results.getByRole("option").count()).toBe(3);
         expect(await page.getByText("Search notices", { exact: false }).count()).toBe(0);
         expect(
-          await page.getByRole("status").filter({ hasText: "Indexing older messages" }).isVisible(),
+          await page
+            .getByRole("status")
+            .filter({ hasText: "Results may be incomplete" })
+            .isVisible(),
         ).toBe(true);
         expect(await input.isVisible()).toBe(true);
         await gateway.setMethodResponse("sessions.search", {
@@ -186,9 +189,7 @@ suite.define(() => {
         expect(
           await page.locator(".cmd-palette__search").getByRole("status").allTextContents(),
         ).toEqual([]);
-        expect(
-          await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
-        ).toBe(0);
+        expect(await page.getByText(/Search notices|may be incomplete/).count()).toBe(0);
         await page.locator(".cmd-palette").screenshot({
           animations: "disabled",
           path: path.join(suite.artifactDir, "palette-limited-" + width + "-" + mode + ".png"),

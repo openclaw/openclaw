@@ -326,7 +326,7 @@ describe("CommandPalette pending searches", () => {
     {
       name: "indexing",
       result: { indexing: true },
-      notice: "Indexing older messages — search again shortly.",
+      notice: "Results may be incomplete — search again shortly.",
     },
     { name: "archived", result: { archivedTranscriptsExcluded: 2 }, notice: "archived" },
   ])(
