@@ -18,6 +18,38 @@ const model: Model = {
 };
 
 describe("compaction summary format propagation", () => {
+  it("does not repeat an unchanged request after a reasoning-only length stop", async () => {
+    const requests: Array<{ modelId: string; maxTokens: number | undefined }> = [];
+    const streamFn: StreamFn = (selectedModel, _context, options) => {
+      requests.push({ modelId: selectedModel.id, maxTokens: options?.maxTokens });
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "length",
+        message: makeAgentAssistantMessage({
+          content: [{ type: "thinking", thinking: "reasoning filled the output budget" }],
+          stopReason: "length",
+        }),
+      });
+      stream.end();
+      return stream;
+    };
+
+    await expect(
+      summarizeInStages({
+        messages: [{ role: "user", content: "Preserve the deployment decision.", timestamp: 1 }],
+        model: { ...model, reasoning: true },
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: new AbortController().signal,
+        reserveTokens: 1_000,
+        maxChunkTokens: 1_000,
+        contextWindow: 2_000,
+        streamFn,
+      }),
+    ).rejects.toThrow("summary output budget (800 tokens) was exhausted");
+    expect(requests).toEqual([{ modelId: model.id, maxTokens: 800 }]);
+  });
+
   it.each([
     {
       kind: "custom",

@@ -3,7 +3,6 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -11,7 +10,7 @@ import {
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
 import {
-  createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitle,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -34,21 +33,45 @@ function parseNodeParams(paramsJSON?: string | null): unknown {
   return paramsJSON ? JSON.parse(paramsJSON) : undefined;
 }
 
-function sharedEntries(api: OpenClawPluginApi) {
+function sharedEntries(
+  api: OpenClawPluginApi,
+  selected?: readonly { agentId: string; storePath: string; sessionKey: string }[],
+) {
   const config = api.runtime.config.current();
   const groups = new Set(sessionShareGroups(config));
   if (groups.size === 0) {
     return [];
   }
   return listAgentIds(config)
+    .filter(
+      (agentId) => selected === undefined || selected.some((entry) => entry.agentId === agentId),
+    )
     .toSorted()
     .flatMap((agentId) => {
       const storePath = api.runtime.agent.session.resolveStorePath(config.session?.store, {
         agentId,
       });
+      const sessionKeys = selected
+        ?.filter((entry) => entry.agentId === agentId && entry.storePath === storePath)
+        .map((entry) => entry.sessionKey);
+      if (sessionKeys?.length === 0) {
+        return [];
+      }
+      let assertSourceCurrent: () => void = () => {
+        throw new Error("Session source was not captured");
+      };
       return api.runtime.agent.session
-        .listSessionEntries({ agentId, storePath, readOnly: true })
-        .map((session) => Object.assign({}, session, { agentId, storePath }));
+        .listSessionEntries({
+          agentId,
+          storePath,
+          readOnly: true,
+          includeParticipants: false,
+          ...(sessionKeys ? { sessionKeys } : {}),
+          captureSource: (assertCurrent) => {
+            assertSourceCurrent = assertCurrent;
+          },
+        })
+        .map((session) => Object.assign({}, session, { agentId, storePath, assertSourceCurrent }));
     })
     .filter(
       ({ sessionKey, entry }) =>
@@ -82,8 +105,12 @@ export function createSessionShareNodeCommands(
         const offset = sessionCatalogPaging.decodeCursor(params.cursor);
         const search = params.searchTerm?.toLowerCase();
         const sessions = [];
-        for (const { agentId, sessionKey, storePath, entry } of sharedEntries(api)) {
-          const name = readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry });
+        for (const { agentId, sessionKey, storePath, entry, assertSourceCurrent } of sharedEntries(
+          api,
+        )) {
+          const name = search
+            ? readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry })
+            : undefined;
           if (
             search &&
             !name?.toLowerCase().includes(search) &&
@@ -92,9 +119,12 @@ export function createSessionShareNodeCommands(
             continue;
           }
           sessions.push({
+            agentId,
+            storePath,
             threadId: sessionKey,
             name,
             entry,
+            assertSourceCurrent,
             recencyAt: Math.max(
               entry.updatedAt,
               entry.lastInteractionAt ?? 0,
@@ -107,10 +137,45 @@ export function createSessionShareNodeCommands(
             right.recencyAt - left.recencyAt || left.threadId.localeCompare(right.threadId),
         );
         const selected = sessions.slice(offset, offset + params.limit);
-        const projectCreator = createSessionCatalogSourceActorProjector({
+        if (!search) {
+          for (const session of selected) {
+            session.name = readSessionTranscriptCatalogTitle({
+              agentId: session.agentId,
+              sessionKey: session.threadId,
+              storePath: session.storePath,
+              entry: session.entry,
+            });
+          }
+        }
+        const sourceAssertions = new Set(selected.map((session) => session.assertSourceCurrent));
+        sourceAssertions.forEach((assertCurrent) => assertCurrent());
+        const projectCreator = await prepareSessionCatalogSourceActorProjector({
           ...source,
           actors: selected.map(({ entry }) => entry.createdActor),
         });
+        sourceAssertions.forEach((assertCurrent) => assertCurrent());
+        const current = sharedEntries(
+          api,
+          selected.map((session) => ({
+            agentId: session.agentId,
+            storePath: session.storePath,
+            sessionKey: session.threadId,
+          })),
+        );
+        if (
+          selected.some(
+            (session) =>
+              !current.some(
+                ({ agentId, sessionKey, storePath, entry }) =>
+                  agentId === session.agentId &&
+                  sessionKey === session.threadId &&
+                  storePath === session.storePath &&
+                  entry.sessionId === session.entry.sessionId,
+              ),
+          )
+        ) {
+          throw new Error("Session is no longer shared. Refresh the session catalog.");
+        }
         const page = selected.map(({ threadId, name, entry, recencyAt }): SessionCatalogSession => {
           const archived = entry.archivedAt !== undefined;
           const cwd =
@@ -165,6 +230,7 @@ export function createSessionShareNodeCommands(
             "Session is not shared. The source operator must select its group and keep it non-draft.",
           );
         }
+        session.assertSourceCurrent();
         const page = await readSessionTranscriptCatalogPage({
           ...source,
           agentId: session.agentId,
@@ -173,9 +239,10 @@ export function createSessionShareNodeCommands(
           limit: params.limit,
           cursor: params.cursor,
         });
+        session.assertSourceCurrent();
         // Group, store, and session changes revoke an in-flight read before publication.
         if (
-          !sharedEntries(api).some(
+          !sharedEntries(api, [session]).some(
             ({ agentId, sessionKey, storePath, entry }) =>
               agentId === session.agentId &&
               sessionKey === session.sessionKey &&
@@ -187,16 +254,6 @@ export function createSessionShareNodeCommands(
         }
         return JSON.stringify({ threadId: session.sessionKey, ...page });
       },
-    },
-  ];
-}
-
-export function createSessionShareNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: SESSION_SHARE_COMMANDS,
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
     },
   ];
 }

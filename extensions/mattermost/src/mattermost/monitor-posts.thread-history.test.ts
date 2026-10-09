@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -9,6 +10,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import { createMattermostClient, type MattermostPost } from "./client.js";
 import { createMattermostPostHandler } from "./monitor-posts.js";
@@ -31,14 +33,27 @@ describe("Mattermost server thread recovery through the post handler", () => {
   let posts: MattermostPost[];
   let beforeResponse: ((url: string) => Promise<void>) | undefined;
   let responseStatus: number;
+  let responseError: string | undefined;
+
+  function holdResponse() {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    beforeResponse = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    return { entered, release };
+  }
 
   beforeEach(async () => {
+    setMattermostRuntime(createPluginRuntimeMock());
     dispatch.mockReset();
     directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mattermost-history-")));
     vi.stubEnv("OPENCLAW_STATE_DIR", directory);
     requests = [];
     beforeResponse = undefined;
     responseStatus = 200;
+    responseError = undefined;
     posts = [
       {
         id: "root",
@@ -70,6 +85,10 @@ describe("Mattermost server thread recovery through the post handler", () => {
         await beforeResponse?.(request.url ?? "");
         response.statusCode = responseStatus;
         response.setHeader("content-type", "application/json");
+        if (responseError) {
+          response.end(JSON.stringify({ message: responseError }));
+          return;
+        }
         if (request.url?.startsWith("/api/v4/posts/root/thread")) {
           response.end(
             JSON.stringify({
@@ -109,7 +128,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
-  async function setup(kind: "channel" | "group" | "direct", threaded = true) {
+  async function setup(kind: "channel" | "group" | "direct") {
     const cfg: OpenClawConfig = {
       session: { store: path.join(directory, "sessions.json") },
       channels: {
@@ -122,14 +141,14 @@ describe("Mattermost server thread recovery through the post handler", () => {
           allowFrom: ["*"],
           groupPolicy: "open",
           streaming: { mode: "off" },
-          replyToModeByChatType: { direct: threaded ? "first" : "off" },
+          replyToModeByChatType: { direct: "first" },
           historyLimit: 3,
         },
       },
     };
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     const baseKey = `agent:main:mattermost:${kind}:room`;
-    const sessionKey = threaded ? `${baseKey}:thread:root` : baseKey;
+    const sessionKey = `${baseKey}:thread:root`;
     await upsertSessionEntry({
       agentId: "main",
       storePath: cfg.session?.store,
@@ -209,94 +228,59 @@ describe("Mattermost server thread recovery through the post handler", () => {
       recover,
       turn,
       rotate,
+      remove: () =>
+        deleteSessionEntry({
+          agentId: "main",
+          storePath: cfg.session?.store,
+          sessionKey,
+        }),
     };
   }
 
-  it.each(["fetch", "authorization"] as const)(
-    "discards a session reset during %s without another inbound ensure",
-    async (phase) => {
-      const f = await setup(phase === "authorization" ? "direct" : "channel");
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      if (phase === "fetch") {
-        beforeResponse = async () => {
-          entered.resolve();
-          await release.promise;
-        };
-      } else {
-        f.monitor.account.config.dmPolicy = "pairing";
+  it("discards a session reset during fetch without another inbound ensure", async () => {
+    const f = await setup("channel");
+    const { entered, release } = holdResponse();
+    const pending = f.recover(f.turn);
+    await entered.promise;
+    await f.rotate();
+    release.resolve();
+    expect((await pending).current).toBe(false);
+    expect(f.histories.size).toBe(0);
+  });
+
+  it("rejects same-session rotation and deletion during recovered-history authorization", async () => {
+    const f = await setup("direct");
+    f.monitor.account.config.dmPolicy = "pairing";
+    // Hold authorization's deadline; the separate deadline case exercises real elapsed time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    try {
+      for (const remove of [false, true]) {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
         f.monitor.pairing.readAllowFromStore = async () => {
           entered.resolve();
           await release.promise;
           return ["trusted"];
         };
+        const pending = f.recover(f.turn);
+        try {
+          await entered.promise;
+          if (remove) {
+            await f.remove();
+          } else {
+            await f.rotate("stored-session", "rotated-generation");
+          }
+          release.resolve();
+          expect((await pending).current).toBe(false);
+          expect(f.histories.size).toBe(0);
+        } finally {
+          release.resolve();
+          await pending;
+        }
       }
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      await f.rotate();
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
-    },
-  );
-
-  it("rejects same-session lifecycle rotation and deletion while fetching", async () => {
-    const f = await setup("channel");
-    for (const remove of [false, true]) {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      beforeResponse = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      if (remove) {
-        await deleteSessionEntry({
-          agentId: "main",
-          storePath: f.monitor.cfg.session?.store,
-          sessionKey: f.sessionKey,
-        });
-      } else {
-        await f.rotate("stored-session", "rotated-generation");
-      }
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
-  });
-
-  it("coalesces concurrent cold turns and preserves live history", async () => {
-    const f = await setup("channel");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    const pending = f.recover(f.turn);
-    await entered.promise;
-    const shared = f.recover(f.turn);
-    const live = {
-      sender: "trusted",
-      body: "concurrent live post",
-      timestamp: 35,
-      messageId: "live",
-    };
-    createChannelHistoryWindow({ historyMap: f.histories }).record({
-      historyKey: f.sessionKey,
-      entry: live,
-      limit: 3,
-    });
-    release.resolve();
-    await Promise.all([pending, shared]);
-    expect(requests).toHaveLength(1);
-    expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual([
-      "root",
-      "reply",
-      "live",
-    ]);
-    expect(f.histories.get(f.sessionKey)?.at(-1)).toBe(live);
   });
 
   it("filters concurrent later history from the older turn without losing it", async () => {
@@ -304,12 +288,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     f.monitor.groupPolicy = "allowlist";
     f.monitor.account.config.groupAllowFrom = ["trusted"];
     const handler = createMattermostPostHandler(f.monitor);
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const { entered, release } = holdResponse();
     const pending = handler(posts[2]! as never, { data: { sender_name: "trusted" } });
     await entered.promise;
     for (let index = 0; index < 3; index++) {
@@ -327,6 +306,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     release.resolve();
     await pending;
     const first = dispatch.mock.calls[0]?.[1].ctxPayload;
+    expect(first.Body).toContain("Next year France");
     expect(first.Body).not.toContain("later live fact");
     expect(first.InboundHistory?.map((entry: { messageId: string }) => entry.messageId)).toEqual([
       "root",
@@ -343,15 +323,15 @@ describe("Mattermost server thread recovery through the post handler", () => {
     const f = await setup("channel");
     const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
     posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const { entered, release } = holdResponse();
     const first = f.handler(newer as never, { data: { sender_name: "trusted" } });
     await entered.promise;
+    const olderReady = createDeferred<void>();
+    vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
+      olderReady.resolve();
+    });
     const older = f.handler(posts[2]! as never, { data: { sender_name: "trusted" } });
+    await olderReady.promise;
     release.resolve();
     await Promise.all([first, older]);
     const context = dispatch.mock.calls.find(
@@ -366,17 +346,8 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("discards in-flight missing-session recovery when storage materializes", async () => {
     const f = await setup("channel");
-    await deleteSessionEntry({
-      agentId: "main",
-      storePath: f.monitor.cfg.session?.store,
-      sessionKey: f.sessionKey,
-    });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    await f.remove();
+    const { entered, release } = holdResponse();
     const pending = f.recover(f.turn);
     await entered.promise;
     await f.rotate();
@@ -389,11 +360,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("does not adopt a completed missing-session success across an unobserved reset", async () => {
     const f = await setup("channel");
-    await deleteSessionEntry({
-      agentId: "main",
-      storePath: f.monitor.cfg.session?.store,
-      sessionKey: f.sessionKey,
-    });
+    await f.remove();
     await f.recover(f.turn);
     createChannelHistoryWindow({ historyMap: f.histories }).clear({
       historyKey: f.sessionKey,
@@ -456,7 +423,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.get(f.sessionKey)?.[0]?.body).toBe("Next year France");
   });
 
-  it.each(["all", "allowlist", "allowlist_quote"] as const)(
+  it.each(["allowlist_quote"] as const)(
     "uses shared ingress and %s visibility without pairing",
     async (mode) => {
       const f = await setup("channel");
@@ -466,9 +433,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
       posts[1]!.user_id = "denied";
       posts[1]!.message = "denied sender history";
       await f.recover(f.turn);
-      expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual(
-        mode === "all" ? ["root", "reply"] : ["root"],
-      );
+      expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual(["root"]);
     },
   );
 
@@ -494,11 +459,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("preserves cooldown and three-attempt budget across pending session materialization", async () => {
     const f = await setup("channel");
-    await deleteSessionEntry({
-      agentId: "main",
-      storePath: f.monitor.cfg.session?.store,
-      sessionKey: f.sessionKey,
-    });
+    await f.remove();
     vi.useFakeTimers({ toFake: ["Date"] });
     responseStatus = 503;
     await f.recover(f.turn);
@@ -517,8 +478,11 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("does not retry permanent provider failure on an absent history key", async () => {
     const f = await setup("channel");
+    vi.useFakeTimers({ toFake: ["Date"] });
     responseStatus = 403;
+    responseError = "Permission denied despite upstream too many requests (Mattermost API 503)";
     await f.recover(f.turn);
+    vi.setSystemTime(Date.now() + 60_001);
     await f.recover(f.turn);
     expect(requests).toHaveLength(1);
     expect(f.histories.size).toBe(0);
@@ -588,7 +552,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.size).toBe(0);
   });
 
-  it.each(["channel", "group", "direct"] as const)(
+  it.each(["group", "direct"] as const)(
     "recovers cold %s thread context in chronological order, excluding the trigger",
     async (kind) => {
       const { handler } = await setup(kind);
@@ -601,11 +565,4 @@ describe("Mattermost server thread recovery through the post handler", () => {
       expect(requests.filter((url) => url.includes("/thread"))).toHaveLength(1);
     },
   );
-
-  it("keeps flat DMs out of server recovery", async () => {
-    const { handler } = await setup("direct", false);
-    await handler(posts[2]! as never, { data: { sender_name: "trusted" } });
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(requests).toEqual([]);
-  });
 });

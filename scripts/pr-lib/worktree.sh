@@ -7,6 +7,8 @@ source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
 # Shell-local operation state, never inherited freshness from the environment.
 unset PR_MAIN_SHA
 PR_MAIN_SHA=""
+unset PR_GH_WRITER_LOGIN PR_GH_WRITER_CONTEXT PR_OBSERVATION PR_HEAD_OBSERVATION
+unset PR_REPOSITORY_URL PR_REPOSITORY_SELECTOR PR_REPOSITORY_HOST
 
 repo_root() {
   # The entrypoint freezes this identity before a linked wrapper can delete
@@ -31,7 +33,17 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  pr_gh_writer_login >/dev/null || return 1
+  local context login
+  # Keep credential selection in non-exported process memory; never record it in artifacts.
+  printf -v context '%s\037' "${OPENCLAW_GH_BIN:-}" "${GH_HOST:-}" "${GH_CONFIG_DIR:-}" \
+    "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" "${GH_ENTERPRISE_TOKEN:-}" "${GITHUB_ENTERPRISE_TOKEN:-}"
+  if [ -n "${PR_GH_WRITER_LOGIN:-}" ] && [ "${PR_GH_WRITER_CONTEXT:-}" = "$context" ]; then
+    return 0
+  fi
+  PR_GH_WRITER_LOGIN=""
+  login=$(pr_gh_writer_login) || return 1
+  PR_GH_WRITER_CONTEXT="$context"
+  PR_GH_WRITER_LOGIN="$login"
 }
 
 ensure_full_pr_worktree_checkout() {
@@ -124,19 +136,38 @@ write_review_transition_journal() {
   local target="$3"
   local mode="$4"
   local branch="$5"
+  local binding="${6:-}"
   mkdir -p .local
   local journal=.local/review-transition.json
   local pending
   pending=$(mktemp "$journal.XXXXXX") || return 1
   if jq -cn --argjson pr "$pr" --arg source "$source" --arg target "$target" \
-    --arg mode "$mode" --arg branch "$branch" \
-    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" then $branch else null end)}' \
+    --arg mode "$mode" --arg branch "$branch" --arg binding "$binding" \
+    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" or $mode == "prep" then $branch else null end)} +
+      (if $mode == "prep" then {binding:$binding} else {} end)' \
     >"$pending" && mv "$pending" "$journal"
   then
     return 0
   fi
   rm -f "$pending"
   return 1
+}
+
+validate_prep_baseline_transition() {
+  local command="$1" pr="$2" source="$3" target="$4" branch="$5"
+  local root observation incoming head_ref
+  root=$(repo_root) || return 1
+  if [ "$command" = install-transition ]; then
+    observation=$(cat .local/pr-meta.json) || return 1
+    incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
+    head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
+    revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+  fi
+  pr_operation_lock_owner_is_current "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
+    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  pr_operation_lock_owner_is_current "$root" \
+    "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
 }
 
 recover_review_transition() {
@@ -146,10 +177,12 @@ recover_review_transition() {
 
   local fields source target mode branch
   fields=$(jq -er --argjson pr "$pr" '
-    select(type == "object" and (keys | sort) == ["branch","mode","pr","source","target","version"])
+    select(type == "object" and
+      (if .mode == "prep" then (keys | sort) == ["binding","branch","mode","pr","source","target","version"] and (.binding | type == "string")
+       else (keys | sort) == ["branch","mode","pr","source","target","version"] end))
     | select(.version == 1 and .pr == $pr)
     | select((.source | type == "string" and test("^[0-9a-f]{40}$")) and (.target | type == "string" and test("^[0-9a-f]{40}$")))
-    | select((.mode == "detached" and .branch == null) or (.mode == "branch" and (.branch | type == "string")))
+    | select((.mode == "detached" and .branch == null) or ((.mode == "branch" or .mode == "prep") and (.branch | type == "string")))
     | [.source,.target,.mode,(.branch // "")] | @tsv
   ' "$journal" 2>/dev/null) || {
     refuse_review_transition "$pr" "the transition journal is invalid."
@@ -158,13 +191,18 @@ recover_review_transition() {
   IFS=$'\t' read -r source target mode branch <<<"$fields"
   if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$source^{commit}" 2>/dev/null ||
     ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$target^{commit}" 2>/dev/null ||
-    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
+    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; } ||
+    { [ "$mode" = "prep" ] && [ "$branch" != "pr-$pr-prep" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
     return 1
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
+  if [ "$mode" = prep ]; then
+    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
+    validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   # Restore can write files before committing its index. Rebuild the validated
   # source index so replay also owns source-only files left after index deletion.
   pr_git read-tree "$source" || return 1
@@ -177,7 +215,12 @@ recover_review_transition() {
     refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
     return 1
   fi
-  if [ "$mode" = "branch" ]; then
+  if [ "$mode" = prep ]; then
+    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
+    if [ "$(pr_git rev-parse "refs/heads/$branch")" = "$source" ]; then
+      pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
+    fi
+  elif [ "$mode" = "branch" ]; then
     pr_git checkout -B "$branch" "$target" || return 1
   else
     pr_git checkout --detach "$target" || return 1
@@ -187,6 +230,7 @@ recover_review_transition() {
   actual_branch=$(pr_git branch --show-current)
   if [ "$(pr_git rev-parse HEAD)" != "$target" ] || ! pr_git diff --quiet || ! pr_git diff --cached --quiet ||
     { [ "$mode" = "branch" ] && [ "$actual_branch" != "$branch" ]; } ||
+    { [ "$mode" = "prep" ] && [ "$actual_branch" != "$branch" ]; } ||
     { [ "$mode" = "detached" ] && [ -n "$actual_branch" ]; } ||
     ! require_no_foreign_untracked "$pr"
   then
@@ -260,32 +304,52 @@ fetch_pr_head() {
     *) echo "Invalid PR head acquisition destination for #$pr: $destination" >&2; return 1 ;;
   esac
 
-  local fields=headRefName,headRefOid,headRepository,headRepositoryOwner
   local before after observed_sha before_identity after_identity refspec fetched_sha
-  before=$(read_pr_view_json "$pr" "$fields") || return 1
+  before="${4:-}"
+  [ -n "$before" ] || before=$(read_pr_observation "$pr") || return 1
+  use_pr_observation "$pr" "$before" || return 1
   observed_sha=$(pr_view_string_field "$before" headRefOid "$pr") || return 1
   pr_view_string_field "$before" headRefName "$pr" >/dev/null || return 1
   if [ "$observed_sha" != "$expected_sha" ]; then
     echo "PR head changed before acquisition (expected $expected_sha, live $observed_sha). Re-run review-init." >&2
     return 1
   fi
-  before_identity=$(printf '%s\n' "$before" | jq -cS '{headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
+  before_identity=$(printf '%s\n' "$before" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   refspec="$expected_sha"
   [ -z "$destination" ] || refspec="+$expected_sha:$destination"
-  # GitHub's pull/head projection can lag live PR metadata and the branch.
-  # Fetch immutable source bytes without overwriting the operation's main checkpoint.
-  fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  local reused=false local_ref="" visibility_status=0
+  if [ -n "$destination" ]; then
+    pr_git config --get-regexp '^(fetch|transfer)\.hiderefs$' >/dev/null 2>&1 || visibility_status=$?
+    if [ "$visibility_status" -eq 1 ]; then
+      local_ref=$(GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch for-each-ref \
+        --format='%(refname) %(objectname) %(objecttype) %(symref)' "$destination" 2>/dev/null) || local_ref=""
+      if [ "$local_ref" = "$destination $expected_sha commit " ]; then
+        # A dangling commit can need objects that fetch repairs. Reuse only the
+        # already-bound ref, retaining Git's checked-out/rebasing branch refusal.
+        GIT_NO_LAZY_FETCH=1 pr_git branch --force --no-track \
+          "${destination#refs/heads/}" "$expected_sha" || return 1
+        reused=true
+      fi
+    fi
+  fi
+  if [ "$reused" = false ]; then
+    # GitHub's pull/head projection can lag live PR metadata and the branch.
+    # Preserve canonical filtering and errors when source acquisition is needed.
+    fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
+  fi
   fetched_sha=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "${destination:-$expected_sha}^{commit}") || return 1
   if [ "$fetched_sha" != "$expected_sha" ]; then
     echo "PR head changed while fetching it (expected $expected_sha, fetched $fetched_sha)." >&2
     return 1
   fi
-  after=$(read_pr_view_json "$pr" "$fields") || return 1
-  after_identity=$(printf '%s\n' "$after" | jq -cS '{headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
+  after=$(read_pr_observation "$pr") || return 1
+  after_identity=$(printf '%s\n' "$after" | jq -cS '{number,url,baseRepository,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner}') || return 1
   if [ "$after_identity" != "$before_identity" ]; then
     echo "PR head changed during acquisition for #$pr. Re-run review-init." >&2
     return 1
   fi
+  use_pr_observation "$pr" "$after" || return 1
+  PR_HEAD_OBSERVATION="$after"
 }
 
 refresh_main_snapshot() {
@@ -316,7 +380,7 @@ provision_pr_worktree() {
 enter_worktree() {
   # OR-list callers disable errexit throughout this function; guard required steps explicitly.
   local pr="$1"
-  local reset_to_main="${2:-false}"
+  local reset_to_main="${2:-false}" existing_only="${3:-false}"
   local invoke_cwd
   invoke_cwd="$PWD"
   local root
@@ -328,8 +392,11 @@ enter_worktree() {
 
   cd "$root" || return 1
   ensure_gh_api_auth || { PR_MAIN_SHA=""; return 1; }
-  # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
-  mark_pr_operation_side_effects_started || return 1
+  # Existing-only entry is validation. Fetch/transition-capable entry retains
+  # the normal sticky ownership contract before any possible mutation.
+  if [ "$existing_only" != true ]; then
+    mark_pr_operation_side_effects_started || return 1
+  fi
 
   local dir="$root/.worktrees/pr-$pr"
   local resolved_parent resolved_dir state registration initialized_sha=""
@@ -339,6 +406,10 @@ enter_worktree() {
 
   if [ "$registration" != registered ] ||
     ! printf '%s\n' "$state" | jq -e '.present' >/dev/null; then
+    if [ "$existing_only" = true ]; then
+      echo "Publisher resume requires the retained registered PR worktree; no checkout was created." >&2
+      return 1
+    fi
     if [ "$registration" = registered ] ||
       printf '%s\n' "$state" | jq -e '.present or .admin != ""' >/dev/null; then
       echo "Removing exact stale PR worktree .worktrees/pr-$pr"
@@ -375,6 +446,10 @@ enter_worktree() {
     return 1
   fi
 
+  # Resume consumes retained publication authority only. It must not provision,
+  # refresh main, complete a review transition, or change the prepared checkout.
+  [ "$existing_only" != true ] || return 0
+
   [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   recover_review_transition "$pr" || return 1
   ensure_full_pr_worktree_checkout || return 1
@@ -387,11 +462,34 @@ enter_worktree() {
   mkdir -p .local
 }
 
+verify_pr_metadata_identity() {
+  local pr="$1" before="$2" after="$3" before_identity after_identity head_before head_after
+  head_before=$(pr_view_string_field "$before" headRefOid "$pr") || return 1
+  head_after=$(pr_view_string_field "$after" headRefOid "$pr") || return 1
+  if [ "$head_before" != "$head_after" ]; then
+    echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
+    return 1
+  fi
+  local identity_filter='
+    select(.number == $pr and (.url | type == "string") and
+      all(.baseRefOid,.headRefOid; type == "string" and test("^[0-9a-f]{40}$")) and
+      all(.baseRefName,.headRefName; type == "string" and length > 0)) |
+    {number,url,baseRefOid,headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner}'
+  before_identity=$(printf '%s\n' "$before" | jq -ceS --argjson pr "$pr" "$identity_filter") || return 1
+  if ! after_identity=$(printf '%s\n' "$after" | jq -ceS --argjson pr "$pr" "$identity_filter") ||
+    [ "$before_identity" != "$after_identity" ]; then
+    echo "PR base/head or repository identity changed or became unavailable while collecting file metadata for #$pr. Retry review initialization." >&2
+    return 1
+  fi
+}
+
 pr_meta_json() {
   local pr="$1"
-  local metadata files expected_file_count actual_file_count head_before head_after head_after_json
-  local repo_json repo_nwo repo_url identity_filter identity_before identity_after
-  repo_json=$(pr_gh_plain repo view --json nameWithOwner,url) || return 1
+  local revalidate="${2:-true}"
+  local metadata files expected_file_count actual_file_count head_before head_after_json
+  local repo_json repo_nwo repo_url identity_filter identity_before
+  metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,url,body,labels,assignees,changedFiles,additions,deletions,files") || return 1
+  repo_json=$(printf '%s\n' "$metadata" | jq -c .baseRepository) || return 1
   if ! repo_nwo=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') ||
     ! repo_url=$(printf '%s\n' "$repo_json" | jq -er --arg repo "$repo_nwo" '.url | select(type == "string" and test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo))'); then
     echo "Invalid base repository identity for PR #$pr." >&2
@@ -404,7 +502,6 @@ pr_meta_json() {
     | select(all(.baseRefOid, .headRefOid; type == "string" and test("^[0-9a-f]{40}$")))
     | select(all(.baseRefName, .headRefName; type == "string" and length > 0))
     | {number,url,baseRefOid,headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner}'
-  metadata=$(GH_REPO="$repo_nwo" read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,files") || return 1
   head_before=$(pr_view_string_field "$metadata" "headRefOid" "$pr" "Retry review initialization.") || return 1
   if ! identity_before=$(printf '%s\n' "$metadata" | jq -ceS --argjson pr "$pr" --arg repo_url "$repo_url" "$identity_filter"); then
     echo "Invalid PR identity for #$pr: expected $repo_url/pull/$pr and complete base/head OIDs and refs." >&2
@@ -429,16 +526,9 @@ pr_meta_json() {
   fi
   files=$(printf '%s\n' "$metadata" | jq -c '.files') || return 1
 
-  head_after_json=$(GH_REPO="$repo_nwo" read_pr_view_json "$pr" "number,url,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner") || return 1
-  head_after=$(pr_view_string_field "$head_after_json" "headRefOid" "$pr" "Retry review initialization.") || return 1
-  if [ "$head_after" != "$head_before" ]; then
-    echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
-    return 1
-  fi
-  if ! identity_after=$(printf '%s\n' "$head_after_json" | jq -ceS --argjson pr "$pr" --arg repo_url "$repo_url" "$identity_filter") ||
-    [ "$identity_after" != "$identity_before" ]; then
-    echo "PR base/head or repository identity changed or became unavailable while collecting file metadata for #$pr. Retry review initialization." >&2
-    return 1
+  if [ "$revalidate" = true ]; then
+    head_after_json=$(GH_REPO="$repo_url" read_pr_observation "$pr") || return 1
+    verify_pr_metadata_identity "$pr" "$metadata" "$head_after_json" || return 1
   fi
 
   if ! actual_file_count=$(

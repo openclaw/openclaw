@@ -1,7 +1,53 @@
 import { describe, expect, it } from "vitest";
-import { validateSessionsPatchParams } from "../index.js";
+import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
+  it.each([
+    [1_800_000_000_000, true],
+    [null, true],
+    [0, false],
+    [-1, false],
+    [1.5, false],
+    ["1800000000000", false],
+  ] as const)("validates snoozedUntil %j for single and batch patches", (snoozedUntil, valid) => {
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", snoozedUntil })).toBe(valid);
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:chat" }],
+        patch: { snoozedUntil },
+      }),
+    ).toBe(valid);
+  });
+
+  it.each(["off", null] as const)(
+    "accepts sandbox mode %s with single and batch CAS",
+    (sandboxMode) => {
+      expect(
+        validateSessionsPatchParams({
+          key: "agent:main:chat",
+          sandboxMode,
+          expectedSandboxMode: null,
+        }),
+      ).toBe(true);
+      expect(
+        validateSessionsPatchManyParams({
+          targets: [{ key: "agent:main:chat", expectedSandboxMode: "off" }],
+          patch: { sandboxMode },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["all", "required", true])("rejects unsupported sandbox mode %s", (sandboxMode) => {
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", sandboxMode })).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:chat",
+        sandboxMode: "off",
+        expectedSandboxMode: sandboxMode,
+      }),
+    ).toBe(false);
+  });
   it("accepts explicit runtime selections and clearing the runtime pin", () => {
     expect(
       validateSessionsPatchParams({

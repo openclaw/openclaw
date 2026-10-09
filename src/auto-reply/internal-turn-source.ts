@@ -42,7 +42,13 @@ function legacyInternalTurnSource(value: string | undefined): MsgContext["Intern
 
 /** Fold shipped SDK source labels at ingress; runtime channels describe transport only. */
 export function normalizeInternalTurnContext(ctx: InternalTurnContext): void {
-  const source = isStringOption(ctx.InternalTurnSource, ["heartbeat", "cron", "exec"] as const)
+  const source = isStringOption(ctx.InternalTurnSource, [
+    "heartbeat",
+    "cron",
+    "exec",
+    "event",
+    "progress-card-refresh",
+  ] as const)
     ? ctx.InternalTurnSource
     : legacyInternalTurnSource(ctx.Provider);
   if (source) {

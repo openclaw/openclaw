@@ -10,8 +10,10 @@ import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
+const fixtureDisposals: Array<() => void> = [];
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
+  fixtureDisposals.splice(0).forEach((dispose) => dispose());
   if (originalExecCommand) {
     Object.defineProperty(document, "execCommand", originalExecCommand);
   } else {
@@ -45,6 +47,12 @@ beforeEach(() => {
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
   const container = document.createElement("div");
   document.body.append(container);
+  let retired = false;
+  fixtureDisposals.push(() => {
+    retired = true;
+    render(nothing, container);
+    container.remove();
+  });
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
@@ -60,6 +68,9 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     onRequestUpdate: () => redraw(),
   });
   function redraw() {
+    if (retired) {
+      return;
+    }
     render(
       kind === "chat"
         ? renderChatComposer({ ...props, draft })
@@ -302,8 +313,8 @@ describe("New Session emoji submission shortcuts", () => {
     expect(f.send).not.toHaveBeenCalled();
   });
   it.each([
-    { requiresModifier: false, ctrlKey: true, shiftKey: false },
-    { requiresModifier: false, metaKey: true, shiftKey: false },
+    { requiresModifier: false, ctrlKey: true, shiftKey: true },
+    { requiresModifier: false, metaKey: true, shiftKey: true },
     { requiresModifier: true, ctrlKey: true, shiftKey: true },
     { requiresModifier: true, metaKey: true, shiftKey: true },
   ])(

@@ -1,5 +1,3 @@
-// Shared data shapes for model-list and model-status output.
-/** Render-ready model-list row. */
 export type ModelRow = {
   key: string;
   name: string;
@@ -11,7 +9,6 @@ export type ModelRow = {
   tags: string[];
 };
 
-/** Provider auth summary shown by `models status`. */
 export type ProviderAuthOverview = {
   provider: string;
   effective: {

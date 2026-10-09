@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
-import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
+import { buildSubagentRunView } from "../../agents/subagents/registry/subagent-run-view.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
@@ -38,120 +38,59 @@ describe("buildThreadingToolContext", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("uses the recipient id for WhatsApp without origin routing metadata", () => {
-    const sessionCtx = {
-      Provider: "whatsapp",
-      From: "123@g.us",
-      To: "+15550001",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("+15550001");
-  });
-
-  it("falls back to To for WhatsApp when From is missing", () => {
-    const sessionCtx = {
-      Provider: "whatsapp",
-      To: "+15550001",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("+15550001");
-  });
-
-  it("uses the recipient id for other channels", () => {
-    const sessionCtx = {
-      Provider: "telegram",
-      From: "user:42",
-      To: "chat:99",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("chat:99");
-  });
-
-  it("uses raw signal direct targets for tool context without provider-specific normalization", () => {
-    const sessionCtx = {
-      Provider: "signal",
-      ChatType: "direct",
-      From: "signal:+15550001",
-      To: "signal:+15550002",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("signal:+15550002");
-  });
-
-  it("keeps raw signal group ids for tool context", () => {
-    const sessionCtx = {
-      Provider: "signal",
-      ChatType: "group",
-      To: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe(
+  it.each([
+    [
+      "uses the recipient id for WhatsApp without origin routing metadata",
+      { Provider: "whatsapp", From: "123@g.us", To: "+15550001" },
+      "+15550001",
+    ],
+    [
+      "falls back to To for WhatsApp when From is missing",
+      { Provider: "whatsapp", To: "+15550001" },
+      "+15550001",
+    ],
+    [
+      "uses the recipient id for other channels",
+      { Provider: "telegram", From: "user:42", To: "chat:99" },
+      "chat:99",
+    ],
+    [
+      "uses raw signal direct targets for tool context without provider-specific normalization",
+      {
+        Provider: "signal",
+        ChatType: "direct",
+        From: "signal:+15550001",
+        To: "signal:+15550002",
+      },
+      "signal:+15550002",
+    ],
+    [
+      "keeps raw signal group ids for tool context",
+      {
+        Provider: "signal",
+        ChatType: "group",
+        To: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      },
       "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
-    );
-  });
-
-  it("uses chat_id for iMessage direct chats without provider-specific normalization", () => {
-    const sessionCtx = {
-      Provider: "imessage",
-      ChatType: "direct",
-      From: "imessage:+15550001",
-      To: "chat_id:12",
-    } as TemplateContext;
-
+    ],
+    [
+      "uses chat_id for iMessage direct chats without provider-specific normalization",
+      { Provider: "imessage", ChatType: "direct", From: "imessage:+15550001", To: "chat_id:12" },
+      "chat_id:12",
+    ],
+    [
+      "uses chat_id for iMessage groups",
+      { Provider: "imessage", ChatType: "group", From: "imessage:group:7", To: "chat_id:7" },
+      "chat_id:7",
+    ],
+  ])("%s", (_name, sessionCtx, expectedChannelId) => {
     const result = buildThreadingToolContext({
-      sessionCtx,
+      sessionCtx: { ...sessionCtx } as TemplateContext,
       config: cfg,
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("chat_id:12");
-  });
-
-  it("uses chat_id for iMessage groups", () => {
-    const sessionCtx = {
-      Provider: "imessage",
-      ChatType: "group",
-      From: "imessage:group:7",
-      To: "chat_id:7",
-    } as TemplateContext;
-
-    const result = buildThreadingToolContext({
-      sessionCtx,
-      config: cfg,
-      hasRepliedRef: undefined,
-    });
-
-    expect(result.currentChannelId).toBe("chat_id:7");
+    expect(result.currentChannelId).toBe(expectedChannelId);
   });
 
   it("uses raw Slack channel ids without implicit thread context", () => {
@@ -475,19 +414,30 @@ describe("subagents utils", () => {
       {
         ...baseRun,
         runId: "run-1",
+        childSessionKey: "agent:main:subagent:run-1",
         createdAt: 1000,
         execution: { status: "running", startedAt: 1000 },
       },
       {
         ...baseRun,
         runId: "run-2",
+        childSessionKey: "agent:main:subagent:run-2",
         createdAt: 1200,
         execution: { status: "running", startedAt: 1200 },
       },
-      { ...baseRun, runId: "run-3", createdAt: 900 },
+      {
+        ...baseRun,
+        runId: "run-3",
+        childSessionKey: "agent:main:subagent:run-3",
+        createdAt: 900,
+      },
     ];
-    const sorted = sortSubagentRuns(runs);
-    expect(sorted.map((run) => run.runId)).toEqual(["run-2", "run-1", "run-3"]);
+    const view = buildSubagentRunView({
+      runs,
+      recentMinutes: 30,
+      countPendingDescendantRuns: () => 0,
+    });
+    expect(view.latest.map((run) => run.runId)).toEqual(["run-2", "run-1", "run-3"]);
   });
 
   it("formats duration compact for seconds and minutes", () => {

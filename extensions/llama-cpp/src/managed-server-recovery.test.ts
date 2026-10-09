@@ -18,6 +18,7 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-install.js")>()),
   ensureLlamaServerInstalled: mocks.install,
 }));
+// mock-isolation: Exercise preparation without initializing the shared provider registry.
 vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
   getEmbeddingProvider: () => ({ create: mocks.genericCreate }),
 }));
@@ -82,6 +83,8 @@ describe("managed llama-server recovery", () => {
     expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
     expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
     expect(provider.localService.command).toBe(command);
+    await ensureManagedLlamaServerForChat({ model, provider });
+    expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
   it("restores the managed executable before creating the embedding transport", async () => {
@@ -139,6 +142,7 @@ describe("managed llama-server recovery", () => {
     await expect(ensureManagedLlamaServerForChat({ model, provider })).rejects.toThrow(
       "archive verification failed",
     );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
     expect(provider.localService.command).toBe(command);
   });
 

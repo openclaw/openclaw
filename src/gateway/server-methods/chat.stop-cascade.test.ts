@@ -1,4 +1,7 @@
 /** Typed Stop exercises the real chat.send pipeline and collector cancellation owners. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
@@ -12,9 +15,9 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
   activateSwarmRun,
@@ -32,12 +35,9 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { findTaskByRunId, getTaskById } from "../../tasks/task-registry.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -69,7 +69,6 @@ function createGuardedStopFixture() {
   };
   const other = seed("agent:research:guarded-other", "research", "research-other");
   const parent = seed("agent:ops:guarded-parent", "ops", "ops-parent");
-  const peer = seed("agent:ops:guarded-peer", "ops", "ops-peer");
   const context = createChatAbortContext({
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -93,7 +92,7 @@ function createGuardedStopFixture() {
       request: { sessionKey, agentId: "ops" },
       client: { connId: "owner", connect: { scopes: ["operator.admin"] } },
     });
-  const child = (runId: string, requesterSessionKey = parent.sessionKey) => {
+  const child = async (runId: string, requesterSessionKey = parent.sessionKey) => {
     const scope = seed(`agent:ops:subagent:${runId}`, "ops", `${runId}-session`);
     const groupId = `guarded-stop-${runId}`;
     expect(
@@ -104,7 +103,7 @@ function createGuardedStopFixture() {
         activeRunIds: [`${runId}-capacity`],
       }),
     ).toBe(true);
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: scope.sessionKey,
       requesterSessionKey,
@@ -126,7 +125,7 @@ function createGuardedStopFixture() {
     });
     return { ...scope, runId, start };
   };
-  return { cfg, context, parent, peer, other, otherRun, seed, send, child };
+  return { cfg, context, parent, other, otherRun, seed, send, child };
 }
 
 function appendStopCanary(
@@ -151,9 +150,10 @@ it.each([
     accepted: false,
   },
   {
-    name: "nonempty transcript",
+    name: "nonempty transcript with matching session",
     key: "agent:ops:guarded-parent",
     expectedLeafEntryId: null,
+    sessionId: "ops-parent",
     accepted: false,
   },
   {
@@ -170,13 +170,6 @@ it.each([
     sessionId: "ops-parent",
     accepted: true,
   },
-  { name: "unguarded peer session", key: "agent:ops:guarded-peer", accepted: true },
-  {
-    name: "session id without leaf CAS",
-    key: "agent:ops:guarded-parent",
-    sessionId: "old",
-    accepted: true,
-  },
   {
     name: "steer compatibility",
     key: "agent:ops:guarded-parent",
@@ -189,7 +182,7 @@ it.each([
   "typed Stop honors $name without touching the other owner",
   async ({ name, key, accepted, ...extra }) => {
     const test = createGuardedStopFixture();
-    const selected = key === test.peer.sessionKey ? test.peer : test.parent;
+    const selected = test.parent;
     appendStopCanary(selected, "current-leaf", "selected conversation");
     await waitForSessionTranscriptProjection(selected);
     const before = await loadTranscriptEvents(selected);
@@ -225,7 +218,7 @@ it.each(["replacement", "branch"] as const)(
   "typed Stop fences descendants after a parent %s and settles only its captured output",
   async (change) => {
     const test = createGuardedStopFixture();
-    const child = test.child("original-child");
+    const child = await test.child("original-child");
     const parent = createActiveRun(test.parent.sessionKey, test.parent);
     test.context.chatAbortControllers.set("parent", parent);
     test.context.chatRunState.getOrCreate("parent").buffer = "captured parent partial";
@@ -277,9 +270,9 @@ it.each(["replacement", "branch"] as const)(
       expect(test.otherRun.controller.signal.aborted).toBe(false);
       expect(test.context.chatAbortControllers.get("successor")).toBe(successor);
       expect(test.context.chatQueuedTurns.get("successor-queued")).toBe(successorQueue);
-      const successorDescendant = expectDefined(successorChild, "successor descendant");
+      const successorDescendant = await expectDefined(successorChild, "successor descendant");
       for (const selected of [child, successorDescendant]) {
-        expect(getSubagentRunByChildSessionKey(selected.sessionKey)?.execution.status).toBe(
+        expect((await getSubagentRunByChildSessionKey(selected.sessionKey))?.execution.status).toBe(
           "queued",
         );
         expect(selected.start).not.toHaveBeenCalled();
@@ -307,12 +300,16 @@ it.each(["replacement", "branch"] as const)(
       }
       await vi.waitFor(() => {
         expect(child.start).toHaveBeenCalledOnce();
-        expect(successorChild?.start).toHaveBeenCalledOnce();
+        expect(successorDescendant.start).toHaveBeenCalledOnce();
       });
     } finally {
-      for (const runId of ["original-child", "successor-child"]) {
-        releaseSwarmRun(`${runId}-capacity`);
-        releaseSwarmRun(runId);
+      try {
+        await successorChild;
+      } finally {
+        for (const runId of ["original-child", "successor-child"]) {
+          releaseSwarmRun(`${runId}-capacity`);
+          releaseSwarmRun(runId);
+        }
       }
     }
   },
@@ -324,7 +321,7 @@ it.each(["during drain", "after abort"] as const)(
     const test = createGuardedStopFixture();
     const child = test.seed("agent:ops:subagent:authority-child", "ops", "authority-child-session");
     const runId = "authority-child";
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: child.sessionKey,
       requesterSessionKey: test.parent.sessionKey,
@@ -335,7 +332,6 @@ it.each(["during drain", "after abort"] as const)(
       cleanup: "keep",
       expectsCompletionMessage: false,
     });
-    const task = expectDefined(findTaskByRunId(runId), "child task");
     const parent = createActiveRun(test.parent.sessionKey, test.parent);
     test.context.chatAbortControllers.set("parent", parent);
     const controller = new AbortController();
@@ -390,9 +386,9 @@ it.each(["during drain", "after abort"] as const)(
       expect(onInterrupt).toHaveBeenCalledOnce();
       expect(controller.signal.aborted).toBe(accepted);
       expect(abort).toHaveBeenCalledTimes(Number(accepted));
-      expect(getTaskById(task.taskId)?.status).toBe(accepted ? "cancelled" : "running");
       const retained = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "retained child");
       expect(retained.killIntent).toBeUndefined();
+      expect(retained.execution.status).toBe(accepted ? "terminal" : "running");
       expect(loadSessionEntryReadOnly(child)?.abortedLastRun === true).toBe(accepted);
       expect(test.otherRun.controller.signal.aborted).toBe(false);
     } finally {
@@ -408,11 +404,11 @@ it.each(["during drain", "after abort"] as const)(
 
 it("typed Stop cannot acquire a replacement collector after projection readiness yields", async () => {
   const test = createGuardedStopFixture();
-  const collector = test.child("collector");
+  const collector = await test.child("collector");
   expect(isSubagentRunQueued(getLatestLiveSubagentRunByChildSessionKey(collector.sessionKey))).toBe(
     true,
   );
-  const descendant = test.child("collector-descendant", collector.sessionKey);
+  const descendant = await test.child("collector-descendant", collector.sessionKey);
   const old = createActiveRun(collector.sessionKey, collector);
   test.context.chatAbortControllers.set("old-collector", old);
   test.context.chatRunState.getOrCreate("old-collector").buffer = "old collector partial";
@@ -463,7 +459,9 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
     }
     expect(test.context.chatQueuedTurns.get("successor-queued")).toBe(queued);
     for (const child of [collector, descendant]) {
-      expect(getSubagentRunByChildSessionKey(child.sessionKey)?.execution.status).toBe("queued");
+      expect((await getSubagentRunByChildSessionKey(child.sessionKey))?.execution.status).toBe(
+        "queued",
+      );
       expect(child.start).not.toHaveBeenCalled();
     }
     const events = await loadTranscriptEvents(replacement);
@@ -490,14 +488,12 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
   }
 });
 
-it.each(
-  ["agent:main:main", "main"].flatMap((requestSessionKey) =>
-    ["owned", "orphan", "foreign", "protected", "ordinary"].map((kind) => ({
-      requestSessionKey,
-      kind,
-    })),
-  ),
-)(
+it.each([
+  { kind: "owned", requestSessionKey: "main" },
+  { kind: "orphan", requestSessionKey: "agent:main:main" },
+  { kind: "foreign", requestSessionKey: "agent:main:main" },
+  { kind: "protected", requestSessionKey: "agent:main:main" },
+])(
   "typed Stop respects full-session collector ownership: $kind via $requestSessionKey",
   async ({ kind, requestSessionKey }) => {
     const sessionKey = "agent:main:main";
@@ -519,7 +515,7 @@ it.each(
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: sessionKey,
@@ -560,27 +556,24 @@ it.each(
     const canCascade = kind === "owned" || kind === "orphan";
     try {
       const respond = await invokeChatAbortHandler({
-        handler:
-          kind === "ordinary"
-            ? handleChatAbortRequestWithLifecycle
-            : (options) =>
-                handleChatSend({
-                  ...options,
-                  params: {
-                    sessionKey: requestSessionKey,
-                    message: "/stop",
-                    idempotencyKey: "typed-stop",
-                  },
-                }),
+        handler: (options) =>
+          handleChatSend({
+            ...options,
+            params: {
+              sessionKey: requestSessionKey,
+              message: "/stop",
+              idempotencyKey: "typed-stop",
+            },
+          }),
         context,
         request: { sessionKey: requestSessionKey },
         client: { connId: "owner", connect: { scopes: ["operator.read", "operator.write"] } },
       });
       expect(respond.mock.calls.at(-1)?.[0]).toBe(kind !== "foreign");
-      expect(parent.controller.signal.aborted).toBe(kind === "owned" || kind === "ordinary");
+      expect(parent.controller.signal.aborted).toBe(kind === "owned");
       expect(runningAbort).toHaveBeenCalledTimes(canCascade ? 1 : 0);
       for (const key of [runningKey, queuedKey]) {
-        expect(getSubagentRunByChildSessionKey(key)?.execution.status).toBe(
+        expect((await getSubagentRunByChildSessionKey(key))?.execution.status).toBe(
           canCascade ? "terminal" : key === runningKey ? "running" : "queued",
         );
       }

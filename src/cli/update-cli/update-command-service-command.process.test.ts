@@ -1,7 +1,12 @@
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
+import { updateServiceRuntimeEntrypoints } from "./update-command-legacy-finalize-entrypoint.test-support.js";
+
+const serviceCommand = resolveRuntimeWorkerUrl(updateServiceRuntimeEntrypoints.command);
+const sourceArgs = serviceCommand.pathname.endsWith(".ts") ? ["--import", "./scripts/tsx.mjs"] : [];
 
 it.each([
   "restart",
@@ -34,32 +39,33 @@ it.each([
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");
           const release = path.join(root, "release");
-          const owner = ${JSON.stringify(new URL("./update-command-service-command.ts", import.meta.url).href)};
+          const owner = ${JSON.stringify(serviceCommand.href)};
+          const moduleUrl = (specifier) => new URL(
+            owner.endsWith(".ts") ? specifier.replace(/\.js$/, ".ts") : specifier,
+            owner,
+          ).href;
           await fs.mkdir(dist, { recursive: true });
 
           // A split build can emit a separate namespace facade even when other
-          // imports have already loaded the underlying implementation. Keep the
-          // actual helpers cached, then replace only the owner's facade files.
-          const facades = new Map();
-          for (const specifier of [
-            "./shared.js",
-            "./update-command-service-recovery.js",
-            "../daemon-cli/install.runtime.js",
-            "../daemon-cli/install.js",
-          ]) {
-            const source = new URL(specifier.replace(/\.js$/, ".ts"), owner).href;
-            await import(source);
-            const facade = path.join(dist, "old-" + facades.size + ".mjs");
-            await fs.writeFile(facade, "export * from " + JSON.stringify(source) + ";\n");
-            facades.set(specifier, pathToFileURL(facade).href);
-          }
+          // imports have already loaded its implementation. Preload only this
+          // dependency: recovery preloads would cache the owner before its hook.
+          const sharedSource = moduleUrl("./shared.js");
+          await import(sharedSource);
+          const facade = pathToFileURL(path.join(dist, "old-shared.mjs"));
+          await fs.writeFile(facade, "export * from " + JSON.stringify(sharedSource) + ";\n");
+          let sharedIntercepted = false;
           registerHooks({
             resolve(specifier, context, nextResolve) {
-              const facade = context.parentURL === owner && facades.get(specifier);
-              return facade ? { url: facade, shortCircuit: true } : nextResolve(specifier, context);
+              const target = context.parentURL === owner ? moduleUrl(specifier) : undefined;
+              if (target === sharedSource) {
+                sharedIntercepted = true;
+                return { url: facade.href, shortCircuit: true };
+              }
+              return nextResolve(specifier, context);
             },
           });
           const { runUpdatedInstallGatewayCommand } = await import(owner);
+          assert.equal(sharedIntercepted, true, "Shared facade was not intercepted before replacement");
 
           await fs.rm(dist, { recursive: true });
           await fs.mkdir(dist);
@@ -154,7 +160,7 @@ it.each([
         `;
       const result = await runCliProcessChild({
         nodeExecutable: resolveTestNodeExecPath(),
-        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        nodeArgs: [...sourceArgs, "--input-type=module", "--eval", script],
         env: {
           PATH: process.env.PATH,
           ...state.envVars,

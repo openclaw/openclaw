@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  discordQaScenarioSupport,
-  discordQaVoiceAutojoinScenario,
-} from "./discord-live.runtime.js";
+import * as testing from "./discord-live.runtime.js";
+import { discordQaVoiceAutojoinScenario } from "./discord-live.runtime.js";
 import { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -74,7 +72,7 @@ describe("Discord QA scenario environment", () => {
 
   it("rejects transcript capture without an explicit destination before discovery or gateway access", async () => {
     const resolveVoiceChannel = vi
-      .spyOn(discordQaScenarioSupport.testing, "resolveDiscordQaVoiceChannel")
+      .spyOn(testing, "resolveDiscordQaVoiceChannel")
       .mockRejectedValue(new Error("must not discover a voice destination"));
     const { call, configureScenario } = await prepareScenario();
 
@@ -94,12 +92,8 @@ describe("Discord QA scenario environment", () => {
     { name: "autojoin discovery", explicit: false, implementation: discordQaVoiceAutojoinScenario },
   ])("configures the selected voice channel for $name", async ({ explicit, implementation }) => {
     const voiceChannel = { id: voiceChannelId, guild_id: guildId, type: 2 };
-    const request = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify(explicit ? voiceChannel : [{ id: textChannelId, type: 0 }, voiceChannel]),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+    const request = vi.fn<typeof fetch>(async () =>
+      Response.json(explicit ? voiceChannel : [{ id: textChannelId, type: 0 }, voiceChannel]),
     );
     vi.stubGlobal("fetch", request);
     const { configureScenario, patches } = await prepareScenario(
@@ -114,10 +108,18 @@ describe("Discord QA scenario environment", () => {
       `https://discord.com/api/v10/${explicit ? `channels/${voiceChannelId}` : `guilds/${guildId}/channels`}`,
     );
     expect(patches).toHaveLength(1);
-    expect(patches[0]?.channels?.discord?.voice?.autoJoin).toEqual(
-      explicit ? [] : [{ guildId, channelId: voiceChannelId }],
-    );
+    expect(patches[0]?.channels?.discord?.voice).toEqual({
+      enabled: true,
+      mode: "stt-tts",
+      autoJoin: explicit ? [] : [{ guildId, channelId: voiceChannelId }],
+    });
     if (explicit) {
+      expect(patches[0]?.tools?.alsoAllow).toContain("transcripts");
+      expect(patches[0]?.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
+      expect(
+        patches[0]?.channels?.discord?.accounts?.sut?.guilds?.[guildId]?.channels?.[textChannelId]
+          ?.users,
+      ).toEqual([driverId]);
       expect(
         patches[0]?.channels?.discord?.accounts?.sut?.guilds?.[guildId]?.channels?.[voiceChannelId]
           ?.users,

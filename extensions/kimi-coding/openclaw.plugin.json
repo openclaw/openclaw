@@ -31,7 +31,7 @@
   },
   "modelCatalog": {
     "modelsDev": {
-      "kimi": "kimi-for-coding"
+      "kimi": "kimi-code-plan-cn"
     },
     "providers": {
       "kimi": {
@@ -132,7 +132,7 @@
   "modelPricing": {
     "providers": {
       "kimi": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {
@@ -140,7 +140,7 @@
         }
       },
       "kimi-coding": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {

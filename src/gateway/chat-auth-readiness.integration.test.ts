@@ -15,7 +15,7 @@ import { waitForFast } from "../../ui/src/test-helpers/wait-for.ts";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
+import { applySessionModelSelectionInternal as applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
@@ -130,7 +130,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       await Promise.all(publications);
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
       expect(retained.chatMessage).toBe("Keep this draft");
       expect(retained.chatMessages).toBe(transcript);
     } finally {

@@ -1,8 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   emitAgentActivityEvent,
@@ -12,7 +9,12 @@ import {
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
+import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
+import {
+  missingRequiredParamLabels,
+  REQUIRED_PARAM_GROUPS,
+  type RequiredParamGroup,
+} from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -51,7 +53,7 @@ function reserveQuestionPromptDelivery(
   try {
     const { questions, timeoutSeconds } =
       toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({
+    return reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
       runId,
@@ -59,70 +61,10 @@ function reserveQuestionPromptDelivery(
       questions,
       timeoutSeconds,
     });
-    if (!reservation) {
-      return undefined;
-    }
-    return reservation;
   } catch {
     // Argument validation owns malformed calls; do not deliver an unusable prompt first.
     return undefined;
   }
-}
-
-function getRequiredParamGroupsForTool(
-  toolName: string,
-): readonly RequiredParamGroup[] | undefined {
-  return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
-}
-
-function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
-  const groups = getRequiredParamGroupsForTool(toolName);
-  if (!groups?.length) {
-    return [];
-  }
-  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  if (!record) {
-    return groups.map((group) => group.label ?? group.keys.join(" or "));
-  }
-  return groups
-    .filter((group) => {
-      const satisfied =
-        group.validator?.(record) ??
-        group.keys.some((key) => {
-          const value = record[key];
-          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
-        });
-      return !satisfied;
-    })
-    .map((group) => group.label ?? group.keys.join(" or "));
-}
-
-function buildToolExecutionStartTraceMeta(params: {
-  ctx: ToolHandlerContext;
-  toolName: string;
-  toolCallId: string;
-  args: unknown;
-}): Record<string, unknown> {
-  const args = params.args;
-  const argsType = Array.isArray(args) ? "array" : typeof args;
-  const argsKeys =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? Object.keys(args as Record<string, unknown>).toSorted()
-      : undefined;
-  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
-  return {
-    event: "embedded_tool_execution_start",
-    tags: ["tool_start", "embedded", "trace"],
-    runId: params.ctx.params.runId,
-    toolName: params.toolName,
-    toolCallId: params.toolCallId,
-    argsType,
-    ...(argsKeys?.length ? { argsKeys } : {}),
-    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
-    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
-    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
-    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
-  };
 }
 
 function traceToolExecutionStart(params: {
@@ -134,15 +76,29 @@ function traceToolExecutionStart(params: {
   if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
     return;
   }
-  params.ctx.log.trace(
-    "embedded run tool start",
-    buildToolExecutionStartTraceMeta({
-      ctx: params.ctx,
-      toolName: params.toolName,
-      toolCallId: params.toolCallId,
-      args: params.args,
-    }),
-  );
+  const args = params.args;
+  const argsType = Array.isArray(args) ? "array" : typeof args;
+  const argsKeys =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? Object.keys(args as Record<string, unknown>).toSorted()
+      : undefined;
+  const groups =
+    TRACE_REQUIRED_PARAM_GROUPS[params.toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  const requiredParamsMissing = groups?.length ? missingRequiredParamLabels(record, groups) : [];
+  params.ctx.log.trace("embedded run tool start", {
+    event: "embedded_tool_execution_start",
+    tags: ["tool_start", "embedded", "trace"],
+    runId: params.ctx.params.runId,
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    argsType,
+    ...(argsKeys?.length ? { argsKeys } : {}),
+    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
+    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
+    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
+    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
+  });
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
@@ -173,7 +129,6 @@ export function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
-/** Returns the number of active tool executions tracked for one embedded run. */
 export function countActiveToolExecutions(runId: string): number {
   const prefix = `${runId}:`;
   let count = 0;
@@ -224,16 +179,8 @@ export function buildCommandItemId(toolCallId: string): string {
   return `command:${toolCallId}`;
 }
 
-export function buildPatchItemId(toolCallId: string): string {
-  return `patch:${toolCallId}`;
-}
-
 export function buildCommandItemTitle(toolName: string, meta?: string): string {
   return meta ? `command ${meta}` : `${toolName} command`;
-}
-
-export function buildPatchItemTitle(meta?: string): string {
-  return meta ? `patch ${meta}` : "apply patch";
 }
 
 export function emitTrackedItemEvent(
@@ -263,17 +210,6 @@ export function emitTrackedItemEvent(
   });
 }
 
-function emitExecutionPhaseBestEffort(
-  ctx: ToolHandlerContext,
-  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
-): void {
-  runBestEffortCallback({
-    label: "tool execution phase",
-    log: ctx.log,
-    callback: () => ctx.params.onExecutionPhase?.(info),
-  });
-}
-
 export function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
@@ -298,22 +234,54 @@ export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWi
   emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
 }
 
-function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(toolName);
-  if (normalized !== "exec" && normalized !== "bash") {
-    return meta;
+export function finalizeToolActivity(ctx: ToolHandlerContext): void {
+  const prefix = `${ctx.params.runId}:`;
+  const active = [...toolStartData].flatMap(([key, start]) =>
+    key.startsWith(prefix)
+      ? [
+          {
+            runId: ctx.params.runId,
+            callId: key.slice(prefix.length),
+            parentToolCallId: start.parentToolCallId,
+            activity: undefined,
+          },
+        ]
+      : [],
+  );
+  // Keyed active state cannot represent overlapping duplicate starts. Keep the
+  // original summaries when lifecycle accounting cannot prove a complete graph.
+  if (
+    active.length !== ctx.state.itemActiveIds.size ||
+    ctx.state.itemStartedCount !== ctx.state.itemCompletedCount + active.length ||
+    ctx.state.toolMetas.length !== ctx.state.itemCompletedCount
+  ) {
+    return;
   }
-  if (!args || typeof args !== "object") {
+  const calls = [
+    ...ctx.state.toolMetas.map((meta) => ({
+      runId: ctx.params.runId,
+      callId: meta.toolCallId,
+      parentToolCallId: meta.parentToolCallId,
+      activity: meta.activity,
+    })),
+    ...active,
+  ];
+  for (const call of resolveCompletedActivityWrappers(calls)) {
+    if (call.activity && !call.activity.hideFromChannelProgress) {
+      emitToolActivityEvent(ctx, {
+        stream: "item",
+        data: { ...call.activity, hideFromChannelProgress: true },
+      });
+    }
+  }
+}
+
+function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
+  if (!isExecToolName(toolName) || !args || typeof args !== "object") {
     return meta;
   }
   const record = args as Record<string, unknown>;
-  const flags: string[] = [];
-  if (record.pty === true) {
-    flags.push("pty");
-  }
-  if (record.elevated === true) {
-    flags.push("elevated");
-  }
+  const flags = ["pty", "elevated"].filter((flag) => record[flag] === true);
   if (flags.length === 0) {
     return meta;
   }
@@ -321,7 +289,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-/** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -367,27 +334,24 @@ export function handleToolExecutionStart(
       );
     }
   };
-  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    let onBlockReplyFlushResult: void | Promise<void>;
+  const flushBeforeStart = (
+    flush: () => void | Promise<void>,
+    next: () => void | Promise<void>,
+  ): void | Promise<void> => {
+    let result: void | Promise<void>;
     try {
-      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-        reason: "tool_start",
-        assistantMessageIndex: ctx.state.assistantMessageIndex,
-      });
+      result = flush();
     } catch (error) {
       cancelQuestionPromptReservation();
       throw error;
     }
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
-        (error: unknown) => {
-          cancelQuestionPromptReservation();
-          throw error;
-        },
-      );
+    if (isPromiseLike<void>(result)) {
+      return result.then(next, (error: unknown) => {
+        cancelQuestionPromptReservation();
+        throw error;
+      });
     }
-    return continueToolExecutionStart();
+    return next();
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
@@ -397,11 +361,16 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    emitExecutionPhaseBestEffort(ctx, {
-      phase: "tool_execution_started",
-      tool: toolName,
-      toolCallId,
-      source: "embedded-agent",
+    runBestEffortCallback({
+      label: "tool execution phase",
+      log: ctx.log,
+      callback: () =>
+        ctx.params.onExecutionPhase?.({
+          phase: "tool_execution_started",
+          tool: toolName,
+          toolCallId,
+          source: "embedded-agent",
+        }),
     });
 
     const startedAt = Date.now();
@@ -508,9 +477,8 @@ export function handleToolExecutionStart(
     };
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     emitTrackedItemEvent(ctx, itemData);
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "tool",
+    const createStartEvent = () => ({
+      stream: "tool" as const,
       data: {
         phase: "start",
         name: toolName,
@@ -520,18 +488,9 @@ export function handleToolExecutionStart(
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
+    emitAgentEvent({ runId: ctx.params.runId, ...createStartEvent() });
     // Best-effort typing signal; do not block tool summaries on slow emitters.
-    emitAgentEventCallbackBestEffort(ctx, {
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
-        toolCallId,
-        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
-    });
+    emitAgentEventCallbackBestEffort(ctx, createStartEvent());
 
     if (
       ctx.params.onToolResult &&
@@ -573,21 +532,16 @@ export function handleToolExecutionStart(
   if (evt.lifecycleProvenance === "nested") {
     return continueToolExecutionStart();
   }
-  let flushBlockReplyBufferResult: void | Promise<void>;
-  try {
-    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
-  } catch (error) {
-    cancelQuestionPromptReservation();
-    throw error;
-  }
-  if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(
-      () => continueAfterBlockReplyFlush(),
-      (error: unknown) => {
-        cancelQuestionPromptReservation();
-        throw error;
-      },
-    );
-  }
-  return continueAfterBlockReplyFlush();
+  return flushBeforeStart(
+    () => ctx.flushBlockReplyBuffer(),
+    () =>
+      flushBeforeStart(
+        () =>
+          ctx.params.onBlockReplyFlush?.({
+            reason: "tool_start",
+            assistantMessageIndex: ctx.state.assistantMessageIndex,
+          }),
+        continueToolExecutionStart,
+      ),
+  );
 }

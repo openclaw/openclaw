@@ -2,7 +2,7 @@ use crate::gateway_ws::{
     AgentsListResult, ChatHistoryPage, ChatSendResult, GatewayClient, GatewayGeneration,
 };
 use crate::quickchat_widgets::QuickChatWidgetState;
-use crate::{tray, DesktopState};
+use crate::DesktopState;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -21,6 +21,8 @@ use uuid::Uuid;
 pub const QUICKCHAT_LABEL: &str = "quickchat";
 // Alt+Space is GNOME's window-menu grab; a second X11 grab for it always fails.
 pub const QUICKCHAT_SHORTCUT: &str = "CmdOrCtrl+Shift+Space";
+// The focused dashboard owns this chord; a global Quick Chat binding would steal it.
+const NEW_SESSION_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
 const QUICKCHAT_SHORTCUT_FILE: &str = "quickchat-shortcut";
 const QUICKCHAT_SHORTCUT_DISABLED_MARKER: &str = "quickchat-shortcut-disabled";
 pub(crate) const QUICKCHAT_WIDTH: f64 = 640.0;
@@ -128,19 +130,19 @@ impl QuickChatState {
                 return Ok(current.clone());
             }
         }
-        let idempotency_key = Uuid::new_v4().to_string();
-        *retry = Some(QuickChatRetryIdentity {
+        let identity = QuickChatRetryIdentity {
             message: message.to_string(),
             agent_id: agent_id.to_string(),
             scope: scope.to_string(),
             main_key: main_key.to_string(),
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key: Uuid::new_v4().to_string(),
             gateway_generation,
             attempt: Uuid::new_v4(),
             terminal: None,
             session_id: None,
-        });
-        Ok(retry.as_ref().expect("retry initialized").clone())
+        };
+        *retry = Some(identity.clone());
+        Ok(identity)
     }
 
     fn clear_send_retry(&self, identity: &QuickChatRetryIdentity) {
@@ -225,11 +227,6 @@ impl QuickChatState {
                 )
                 .await?;
             gateway.with_generation(generation, || {
-                if result.gateway_generation != generation
-                    || result.run_id != identity.idempotency_key
-                {
-                    return Err("Gateway acknowledged a different Quick Chat request.".to_string());
-                }
                 if result.status == "ok" {
                     self.update_retry(&identity, |current| {
                         current.terminal = Some(result.clone());
@@ -361,16 +358,12 @@ impl QuickChatState {
         Ok((catalog, agents))
     }
 
-    async fn agents(&self, gateway: &GatewayClient) -> Result<Vec<QuickChatAgent>, String> {
-        self.agent_catalog(gateway).await.map(|(_, agents)| agents)
-    }
-
     async fn selected_agent(
         &self,
         gateway: &GatewayClient,
         on_missing: MissingSelection,
     ) -> Result<(QuickChatAgent, AgentsListResult), String> {
-        // Snapshot the pin before agents() refreshes the cache: a refresh clears a
+        // Snapshot the pin before refreshing the catalog: a refresh clears a
         // stale pin, and the send path must see that the pin existed so it can fail
         // instead of silently rerouting the message to the default agent.
         let pinned = self
@@ -389,7 +382,7 @@ impl QuickChatState {
     ) -> Result<QuickChatAgent, String> {
         let agent_id = agent_id.trim();
         let generation = gateway.generation();
-        let agents = self.agents(gateway).await?;
+        let (_, agents) = self.agent_catalog(gateway).await?;
         let selected = agents
             .iter()
             .find(|agent| agent.id == agent_id)
@@ -423,14 +416,11 @@ impl QuickChatState {
     }
 
     fn shortcut_status(&self) -> Result<QuickChatShortcutStatus, String> {
-        let active = self
-            .active_shortcut
-            .lock()
-            .map_err(|_| "Quick Chat shortcut state is unavailable.".to_string())?;
+        let active = self.active_shortcut()?;
         Ok(QuickChatShortcutStatus {
             supported: self.shortcuts_supported,
             enabled: active.registered,
-            accelerator: active.accelerator.clone(),
+            accelerator: active.accelerator,
         })
     }
 
@@ -665,7 +655,6 @@ fn recovered_reply_messages(messages: &[Value], key: &str) -> Result<Option<Vec<
     }
     let mut recovered = Vec::new();
     let mut identities = HashMap::new();
-    let mut completed = false;
     for (position, message) in &ordered {
         if message.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;
@@ -690,19 +679,16 @@ fn recovered_reply_messages(messages: &[Value], key: &str) -> Result<Option<Vec<
         if message.get("stopReason").and_then(Value::as_str) == Some("error") {
             return Err("Gateway history contains a failed reply.".to_string());
         }
-        {
-            // A projected commentary item and the final row can share the transcript ID.
-            let item = message
-                .get("openclawStreamFallback")
-                .and_then(|fallback| fallback.get("itemId"))
-                .and_then(Value::as_str);
-            let identity = (position.id.to_string(), item.map(str::to_string));
-            if let Some(previous) = identities.insert(identity, message) {
-                if previous != message {
-                    return Err("Gateway history returned conflicting reply records.".to_string());
-                }
-                continue;
+        // A projected commentary item and the final row can share the transcript ID.
+        let identity = (
+            position.id,
+            message["openclawStreamFallback"]["itemId"].as_str(),
+        );
+        if let Some(previous) = identities.insert(identity, message) {
+            if previous != message {
+                return Err("Gateway history returned conflicting reply records.".to_string());
             }
+            continue;
         }
         let content = message.get("content");
         let presentable = content
@@ -721,11 +707,11 @@ fn recovered_reply_messages(messages: &[Value], key: &str) -> Result<Option<Vec<
                 })
             });
         if presentable {
-            completed = is_completed_history_reply(message);
             recovered.push((*message).clone());
         }
     }
-    Ok((completed && !recovered.is_empty()).then_some(recovered))
+    let completed = recovered.last().is_some_and(is_completed_history_reply);
+    Ok(completed.then_some(recovered))
 }
 
 fn resolve_selected_agent(
@@ -789,11 +775,11 @@ fn parse_shortcut(accelerator: &str) -> Result<Shortcut, String> {
 
 fn validate_quickchat_shortcut(accelerator: &str) -> Result<Shortcut, String> {
     let shortcut = parse_shortcut(accelerator)?;
-    let dashboard_shortcut = parse_shortcut(tray::GLOBAL_SHORTCUT)
-        .expect("the built-in dashboard shortcut must be valid");
-    if shortcut == dashboard_shortcut {
+    let new_session_shortcut = parse_shortcut(NEW_SESSION_SHORTCUT)
+        .expect("the built-in New Session shortcut must be valid");
+    if shortcut == new_session_shortcut {
         return Err(format!(
-            "Shortcut \"{accelerator}\" is reserved for Open Dashboard."
+            "Shortcut \"{accelerator}\" is reserved for New Session in the focused dashboard."
         ));
     }
     Ok(shortcut)
@@ -891,19 +877,7 @@ pub(crate) fn persist_quickchat_shortcut_state(app: &AppHandle, registered: bool
     let Some(marker) = quickchat_shortcut_disabled_marker(app) else {
         return;
     };
-    let result = if registered {
-        match fs::remove_file(&marker) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
-    } else {
-        marker
-            .parent()
-            .map(fs::create_dir_all)
-            .transpose()
-            .and_then(|_| fs::write(&marker, b""))
-    };
+    let result = persist_shortcut_preference(&marker, (!registered).then_some(""));
     if let Err(error) = result {
         eprintln!("Could not persist Quick Chat shortcut preference: {error}");
     }
@@ -1066,7 +1040,10 @@ pub async fn quickchat_agents(
     state: State<'_, QuickChatState>,
 ) -> Result<Vec<QuickChatAgent>, String> {
     require_quickchat_webview(&webview)?;
-    state.agents(gateway.inner()).await
+    state
+        .agent_catalog(gateway.inner())
+        .await
+        .map(|(_, agents)| agents)
 }
 
 #[tauri::command]
@@ -1126,7 +1103,7 @@ pub fn quickchat_set_shortcut(
         return state.shortcut_status();
     }
 
-    let configured = accelerator.and_then(|value| non_empty(Some(value)));
+    let configured = non_empty(accelerator);
     let candidate_accelerator = configured
         .clone()
         .unwrap_or_else(|| QUICKCHAT_SHORTCUT.to_string());
@@ -1667,7 +1644,7 @@ mod tests {
                     let refreshing = {
                         let state = state.clone();
                         let gateway = fixture.client.clone();
-                        tokio::spawn(async move { state.agents(&gateway).await })
+                        tokio::spawn(async move { state.agent_catalog(&gateway).await })
                     };
                     fixture
                         .request("agents.list")
@@ -2324,11 +2301,11 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_shortcut_preference_falls_back_to_default() {
+    fn new_session_shortcut_preference_falls_back_to_default() {
         let directory = test_directory("shortcut-reserved");
         fs::create_dir_all(&directory).expect("create test directory");
         let path = directory.join(QUICKCHAT_SHORTCUT_FILE);
-        fs::write(&path, tray::GLOBAL_SHORTCUT).expect("write reserved shortcut");
+        fs::write(&path, "CmdOrCtrl+Shift+O").expect("write reserved shortcut");
 
         let loaded = shortcut_preference_from_path(&path);
         assert_eq!(loaded.accelerator, QUICKCHAT_SHORTCUT);

@@ -1,15 +1,19 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import type { ThemeDefinition, ThemeDescriptor, ThemeMode } from "../theme.js";
+import type { ThemeArtwork, ThemeDefinition, ThemeDescriptor, ThemeMode } from "../theme.js";
 import {
   THEME_LOCAL_ID_MAX_LENGTH,
+  THEME_ARTWORK_ID_PATTERN,
   THEME_NAME_MAX_LENGTH,
   THEME_DESCRIPTION_MAX_LENGTH,
   THEME_TOKEN_MAX_LENGTH,
+  THEME_WORKING_PHRASES_MAX,
+  THEME_WORKING_PHRASE_MAX_LENGTH,
 } from "../theme.js";
 import { closedObject } from "./closed-object.js";
 
 const ThemeValue = Type.String({ minLength: 1, maxLength: THEME_TOKEN_MAX_LENGTH });
+const ThemeArtworkId = Type.String({ pattern: THEME_ARTWORK_ID_PATTERN.source, maxLength: 32 });
 export const ThemePaletteSchema = closedObject({
   background: ThemeValue,
   foreground: ThemeValue,
@@ -36,6 +40,14 @@ export const ThemePaletteSchema = closedObject({
 export const ThemeDefinitionSchema = closedObject({
   name: Type.String({ minLength: 1, maxLength: THEME_NAME_MAX_LENGTH }),
   description: Type.String({ minLength: 1, maxLength: THEME_DESCRIPTION_MAX_LENGTH }),
+  mascot: Type.Optional(Type.Union([Type.Literal("claw"), Type.Literal("none")])),
+  workingPhrases: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: THEME_WORKING_PHRASE_MAX_LENGTH }), {
+      maxItems: THEME_WORKING_PHRASES_MAX,
+    }),
+  ),
+  critters: Type.Optional(Type.Array(ThemeArtworkId, { maxItems: 8 })),
+  avatarHat: Type.Optional(ThemeArtworkId),
   light: Type.Optional(ThemePaletteSchema),
   dark: Type.Optional(ThemePaletteSchema),
 });
@@ -85,6 +97,7 @@ export type ThemesGetResult = {
   current: ThemeSelection;
   theme: ThemeDescriptor;
   definition?: ThemeDefinition;
+  artwork?: ThemeArtwork;
 };
 export type ThemesListResult = ThemesGetResult & { themes: ThemeDescriptor[] };
 export type ThemesMutationResult = ThemesGetResult & { application: "saved" };

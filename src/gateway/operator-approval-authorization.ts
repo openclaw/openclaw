@@ -1,25 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./method-scopes.js";
+import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 type OperatorApprovalAccessBinding = {
   reviewerDeviceIds?: readonly string[] | null;
 };
-
-function normalizeIdentity(value: string | null | undefined): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
-function normalizeIdentities(values: readonly string[] | null | undefined): string[] {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const identity = normalizeIdentity(value);
-    if (identity) {
-      normalized.add(identity);
-    }
-  }
-  return [...normalized];
-}
 
 /** Whether a client may inspect safe approval projections. */
 export function canReviewOperatorApproval(client: GatewayClient | null): boolean {
@@ -64,17 +50,5 @@ export function canAccessOperatorApproval(params: {
     return true;
   }
 
-  const clientDeviceId = normalizeIdentity(params.client?.connect?.device?.id);
-  const reviewerDeviceIds = normalizeIdentities(params.binding.reviewerDeviceIds);
-  if (reviewerDeviceIds.length > 0) {
-    return Boolean(clientDeviceId && reviewerDeviceIds.includes(clientDeviceId));
-  }
-
-  // No explicit reviewer binding: the operator.approvals scope tier is the
-  // access authority, matching the shipped contract where any authorized
-  // approval surface (Telegram buttons, macOS app, control UI) may resolve
-  // any pending approval. Cross-surface first-answer-wins depends on this;
-  // reviewerDeviceIds is the opt-in restriction, and requester identity gates
-  // only the legacy adapters in approval-shared.
-  return true;
+  return matchesOperatorApprovalReviewerBinding(params.binding, params.client?.connect?.device?.id);
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -80,13 +80,20 @@ describe("executeAgentTurn: conversation failures", () => {
   });
 
   it("does not auto-reset role-ordering provider conversation-state errors", async () => {
-    const resetSessionAfterRoleOrderingConflict = vi.fn(async () => true);
+    const followupRun = createFollowupRun();
+    const sessionEntry = {
+      sessionId: followupRun.run.sessionId,
+      lifecycleRevision: "original-generation",
+      updatedAt: 1,
+    };
+    const sessionSnapshot = { ...sessionEntry };
+    const sessionStore = { main: sessionEntry };
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       commandBody: "hello",
-      followupRun: createFollowupRun(),
+      followupRun,
       sessionCtx: {
         Provider: "telegram",
         ChatId: "chat-1",
@@ -94,17 +101,19 @@ describe("executeAgentTurn: conversation failures", () => {
       opts: {},
       typingSignals: createMockTypingSignaler(),
       ...createAgentTurnExecutionDefaults(),
-      resetSessionAfterRoleOrderingConflict,
+      getActiveSessionEntry: () => sessionStore.main,
+      activeSessionStore: sessionStore,
     });
 
-    expect(resetSessionAfterRoleOrderingConflict).not.toHaveBeenCalled();
+    expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
+    expect(sessionStore.main).toEqual(sessionSnapshot);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);
     }
   });
 
-  it("keeps actionable provider errors on internal control surfaces", async () => {
+  it("shows recovery guidance without provider diagnostics on internal control surfaces", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
     const providerError = "provider failed with actionable details";
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
@@ -125,9 +134,38 @@ describe("executeAgentTurn: conversation failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain(providerError);
+      expect(result.payload.text).toContain("OpenClaw couldn't finish this reply.");
+      expect(result.payload.text).not.toContain(providerError);
       expect(result.payload.text).toContain("openclaw logs --follow");
       expect(result.payload.text).toMatch(/terminal/i);
+    }
+  });
+
+  it("preserves curated execution-node recovery on internal control surfaces", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        "Codex execution node disconnected; start a fresh attempt. (execution node failed: node disconnected (codex.exec-server.stdio.v1))",
+      ),
+    );
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "chat",
+        Surface: "chat",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toMatch(/Codex execution node disconnected.*fresh attempt/iu);
     }
   });
 });

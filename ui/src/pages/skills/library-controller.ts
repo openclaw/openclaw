@@ -1,8 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReactiveControllerHost } from "lit";
 import type {
-  SkillsProposalInspectResult,
-  SkillsProposalApplyResult,
   SkillLibraryEntry,
   SkillLibraryFile,
   SkillsLibraryListResult,
@@ -11,29 +9,47 @@ import type {
   SkillsLibraryMutateParams,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { libraryFileText, readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
+import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
 export type LibraryDraft = {
-  target: "workspace" | "personal";
+  importedFiles?: boolean;
   connection: GatewayConnectionScope;
-  agentId: string | null;
   entry: SkillLibraryEntry | null;
   slug: string;
-  description: string;
   content: string;
   files: SkillLibraryFile[];
+  baseFiles: readonly Readonly<SkillLibraryFile>[];
   revisions: SkillsLibraryReadResult["revisions"];
   selectedFile: string;
   rollbackRevision: string;
   dirty: boolean;
-  proposal: SkillsProposalInspectResult | null;
 };
+
+function libraryDraft(
+  connection: GatewayConnectionScope,
+  read?: SkillsLibraryReadResult,
+): LibraryDraft {
+  return {
+    connection,
+    entry: read ? read.entry : null,
+    slug: read ? read.entry.slug : "",
+    content: read ? read.content : "",
+    files: read ? read.files : [],
+    baseFiles: read ? read.files.map((file) => ({ ...file })) : [],
+    revisions: read ? read.revisions : [],
+    selectedFile: "SKILL.md",
+    rollbackRevision: "",
+    dirty: false,
+  };
+}
 
 export class SkillLibraryController {
   list: SkillsLibraryListResult | null = null;
@@ -54,8 +70,7 @@ export class SkillLibraryController {
   constructor(
     private readonly host: ReactiveControllerHost,
     private readonly gateway: GatewayPageController,
-    private readonly selectedAgent: () => string | null,
-    private readonly refreshWorkspace: () => Promise<void>,
+    private readonly config: () => ApplicationConfigCapability | undefined = () => undefined,
   ) {}
 
   changed() {
@@ -91,6 +106,9 @@ export class SkillLibraryController {
   get showWorkspace() {
     return this.view === null || this.view === "workspace";
   }
+  get uploadsEnabled() {
+    return uploadsEnabled(this.config());
+  }
   get canWrite() {
     return canCallGatewayMethod(this.gateway.snapshot, "skills.library.save", "operator.write", {
       requireAdvertisement: false,
@@ -101,25 +119,8 @@ export class SkillLibraryController {
       requireAdvertisement: false,
     });
   }
-  get createTarget() {
-    if (this.showWorkspace && this.list?.canManageWorkspace) {
-      return "workspace";
-    }
-    return this.list?.profileId ? "personal" : "unavailable";
-  }
   get canCreate() {
-    if (this.loading) {
-      return false;
-    }
-    if (this.createTarget === "workspace") {
-      return canCallGatewayMethod(
-        this.gateway.snapshot,
-        "skills.proposals.create",
-        "operator.admin",
-        { requireAdvertisement: false },
-      );
-    }
-    return this.createTarget === "personal" && this.canWrite;
+    return !this.loading && Boolean(this.list?.profileId) && this.canWrite;
   }
   get canEdit() {
     return this.canWrite && (this.draft?.entry?.canEdit ?? true);
@@ -157,24 +158,10 @@ export class SkillLibraryController {
 
   create() {
     const connection = this.gateway.capture();
-    if (!connection || !this.canCreate || this.createTarget === "unavailable") {
+    if (!connection || !this.canCreate) {
       return;
     }
-    this.draft = {
-      target: this.createTarget,
-      connection,
-      agentId: this.selectedAgent(),
-      entry: null,
-      slug: "",
-      description: "",
-      content: "",
-      files: [],
-      revisions: [],
-      selectedFile: "SKILL.md",
-      rollbackRevision: "",
-      dirty: false,
-      proposal: null,
-    };
+    this.draft = libraryDraft(connection);
     this.clearFeedback();
     this.newFilePath = "";
     this.changed();
@@ -207,21 +194,7 @@ export class SkillLibraryController {
       if (!this.gateway.isCurrent(connection) || sequence !== this.readSequence) {
         return;
       }
-      this.draft = {
-        target: "personal",
-        connection,
-        agentId: null,
-        entry: read.entry,
-        slug: read.entry.slug,
-        description: read.entry.description,
-        content: read.content,
-        files: read.files,
-        revisions: read.revisions,
-        selectedFile: "SKILL.md",
-        rollbackRevision: "",
-        dirty: false,
-        proposal: null,
-      };
+      this.draft = libraryDraft(connection, read);
     });
   }
 
@@ -280,84 +253,49 @@ export class SkillLibraryController {
       if (!this.gateway.isCurrent(draft.connection)) {
         throw new Error(t("skillLibrary.connectionChanged"));
       }
+      if (draft.importedFiles) {
+        assertUploadsEnabled(this.config());
+      }
       const client = draft.connection.client;
-      if (draft.target === "workspace") {
-        if (!draft.agentId) {
-          throw new Error(t("skillLibrary.selectAgent"));
+      const savedFiles = draft.files.map((file) => ({ ...file }));
+      const baseFiles = new Map(draft.baseFiles.map((file) => [file.path, file]));
+      const retainFiles: string[] = [];
+      const files = savedFiles.filter((file) => {
+        const base = draft.entry ? baseFiles.get(file.path) : undefined;
+        if (
+          base &&
+          base.content === file.content &&
+          base.encoding === file.encoding &&
+          base.executable === file.executable
+        ) {
+          retainFiles.push(file.path);
+          return false;
         }
-        const supportFiles = draft.files.map((file) => {
-          const content = libraryFileText(file);
-          if (content === null || file.executable) {
-            throw new Error(t("skillLibrary.workspaceTextOnly"));
-          }
-          return { path: file.path, content };
-        });
-        const proposal = await client.request<SkillsProposalInspectResult>(
-          "skills.proposals.create",
-          {
-            agentId: draft.agentId,
-            name: draft.slug,
-            description: draft.description,
-            content: draft.content,
-            supportFiles,
-          },
-        );
-        if (!this.gateway.isCurrent(draft.connection)) {
-          return;
-        }
-        draft.proposal = proposal;
-        draft.dirty = false;
-        this.notice = t("skillLibrary.pending", { id: proposal.record.id, agent: draft.agentId });
-        return;
+        return true;
+      });
+      if (files.length) {
+        assertUploadsEnabled(this.config());
       }
       const receipt = await client.request<SkillsLibraryReceipt>("skills.library.save", {
         ...(draft.entry ? { skillId: draft.entry.skillId } : {}),
         expectedRevision: draft.entry?.revision ?? null,
         slug: draft.slug,
         content: draft.content,
-        files: draft.files,
+        files,
+        ...(retainFiles.length ? { retainFiles } : {}),
       });
       if (!this.gateway.isCurrent(draft.connection)) {
         return;
       }
       draft.entry = receipt.entry;
+      draft.baseFiles = savedFiles;
+      draft.importedFiles = false;
       draft.dirty = false;
       draft.revisions = [
         { revision: receipt.entry.revision, createdAt: receipt.entry.updatedAt },
         ...draft.revisions.filter((item) => item.revision !== receipt.entry.revision),
       ];
       await this.receipt(receipt);
-    });
-  }
-
-  async applyWorkspace() {
-    const draft = this.draft;
-    const proposal = draft?.proposal;
-    const agentId = draft?.agentId;
-    if (!draft || !proposal || !agentId) {
-      return;
-    }
-    await this.perform(async () => {
-      if (!this.gateway.isCurrent(draft.connection)) {
-        throw new Error(t("skillLibrary.connectionChanged"));
-      }
-      const result = await draft.connection.client.request<SkillsProposalApplyResult>(
-        "skills.proposals.apply",
-        {
-          agentId,
-          proposalId: proposal.record.id,
-          expectedRevisionHash: proposal.revisionHash,
-        },
-      );
-      if (!this.gateway.isCurrent(draft.connection)) {
-        return;
-      }
-      this.draft = null;
-      this.notice = t("skillLibrary.workspaceSaved", {
-        agent: agentId,
-        state: result.record.status,
-      });
-      await this.refreshWorkspace();
     });
   }
 
@@ -394,26 +332,25 @@ export class SkillLibraryController {
       }
       // Record the committed mutation even if the follow-up list or revision read fails.
       await this.receipt(receipt);
-      if (!this.gateway.isCurrent(draft.connection)) {
+      if (!this.gateway.isCurrent(draft.connection) || action === "remove") {
         return;
       }
-      if (action !== "remove") {
-        if (action === "rollback") {
-          const read = await draft.connection.client.request<SkillsLibraryReadResult>(
-            "skills.library.read",
-            { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
-          );
-          if (!this.gateway.isCurrent(draft.connection)) {
-            return;
-          }
-          draft.content = read.content;
-          draft.files = read.files;
-          draft.revisions = read.revisions;
-          draft.selectedFile = "SKILL.md";
-          draft.rollbackRevision = "";
+      if (action === "rollback") {
+        const read = await draft.connection.client.request<SkillsLibraryReadResult>(
+          "skills.library.read",
+          { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
+        );
+        if (!this.gateway.isCurrent(draft.connection)) {
+          return;
         }
-        draft.entry = receipt.entry;
+        draft.content = read.content;
+        draft.files = read.files;
+        draft.baseFiles = read.files.map((file) => ({ ...file }));
+        draft.revisions = read.revisions;
+        draft.selectedFile = "SKILL.md";
+        draft.rollbackRevision = "";
       }
+      draft.entry = receipt.entry;
     });
   }
 
@@ -426,16 +363,18 @@ export class SkillLibraryController {
       return;
     }
     await this.perform(async () => {
+      assertUploadsEnabled(this.config());
       const [file] = files;
       if (file && files.length === 1 && file.name.toLowerCase().endsWith(".zip")) {
-        if (this.createTarget === "workspace") {
-          throw new Error(t("skillLibrary.workspaceTextOnly"));
-        }
         if (!this.list?.profileId) {
           throw new Error(t("skillLibrary.signIn"));
         }
-        const receipt = await uploadLibraryArchive(connection.client, file, this.importSlug, () =>
-          this.gateway.isCurrent(connection),
+        const receipt = await uploadLibraryArchive(
+          connection.client,
+          file,
+          this.importSlug,
+          () => this.gateway.isCurrent(connection),
+          this.config(),
         );
         if (this.gateway.isCurrent(connection)) {
           this.importOpen = false;
@@ -443,13 +382,18 @@ export class SkillLibraryController {
         }
         return;
       }
-      const bundle = await readLibraryFiles(files);
+      const bundle = await readLibraryFiles(files, this.config());
+      assertUploadsEnabled(this.config());
       if (!this.gateway.isCurrent(connection)) {
         return;
       }
       this.create();
       if (this.draft) {
-        Object.assign(this.draft, bundle, { slug: this.importSlug, dirty: true });
+        Object.assign(this.draft, bundle, {
+          slug: this.importSlug,
+          dirty: true,
+          importedFiles: true,
+        });
         this.importOpen = false;
       }
     });

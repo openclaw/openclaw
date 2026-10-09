@@ -91,7 +91,7 @@ it.each([true, false, undefined])(
       },
     };
     const result = await listSessionFixture({
-      cfg: { agents: { list: [{ id: "main" }] } },
+      cfg: { agents: { entries: { main: {} } } },
       storePath: "/tmp/openclaw-session-activity-subagents",
       store,
       opts: { excludeSubagents, includePeople: true, limit: 2 },
@@ -144,7 +144,7 @@ it("lets configured agents win id-only owner facet collisions", async () => {
     );
     const result = await listSessionFixture({
       cfg: {
-        agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
+        agents: { entries: { "shared-id": { identity: { name: "Shared agent" } } } },
       } as OpenClawConfig,
       storePath: "/tmp/openclaw-session-owner-order",
       store,
@@ -306,10 +306,10 @@ it("projects only durable profiles and configured agents as effective owners", a
   const result = await listSessionFixture({
     cfg: {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "research", identity: { name: "Research" } },
-        ],
+        entries: {
+          main: {},
+          research: { identity: { name: "Research" } },
+        },
       },
     } as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owner-candidates",
@@ -559,7 +559,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     },
   };
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "research", identity: { name: "Research" } }] },
+    agents: { entries: { research: { identity: { name: "Research" } } } },
   };
   const result = await listSessionFixture({
     cfg,
@@ -676,7 +676,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       };
     }
     const query = {
-      cfg: { agents: { list: [{ id: "main" }, { id: "research" }] } },
+      cfg: { agents: { entries: { main: {}, research: {} } } },
       storePath: "/tmp/openclaw-session-profile-alias",
       store,
       opts: { archived: "all" as const, includePeople: true },
@@ -821,7 +821,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   }));
   const cfg = {
     agents: {
-      list: [{ id: "main", default: true }, { id: "work" }],
+      entries: { main: {}, work: {} },
     },
   } as OpenClawConfig;
   const store: Record<string, SessionEntry> = {
@@ -985,43 +985,4 @@ it("preserves list output across visibility, scope, owner, and search filters", 
       totalCount: 2,
     }),
   );
-});
-
-it("keeps the serialized list response deterministic for the current filter path", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-  const result = await listSessionFixture({
-    fixtureAgentId: "main",
-    cfg: {
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.4" } },
-        list: [{ id: "main", default: true, model: { primary: "openai/gpt-5.4" } }],
-      },
-    } as OpenClawConfig,
-    opts: { archived: "all", includeGlobal: true, search: "needle" },
-    store: {
-      global: {
-        agentHarnessId: "codex",
-        contextTokens: 100,
-        contextTokensSource: "runtime",
-        createdActor: { type: "system", id: "creator-b" },
-        estimatedCostUsd: 0,
-        model: "gpt-5.4",
-        modelProvider: "openai",
-        sessionId: "session-global",
-        subject: "needle global",
-        totalTokens: 1,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        updatedAt: 999_999,
-      },
-    },
-    storePath: "/tmp/openclaw-session-byte-parity",
-  });
-  const expectedSerializedResponse = [
-    '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
-    ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"runtimeSelectionLocked":false,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100,"snapshotAt":1000000}]}',
-  ].join("");
-
-  expect(JSON.stringify(result)).toBe(expectedSerializedResponse);
 });

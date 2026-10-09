@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
 import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
 import { isLoopbackHost } from "./net.js";
 import { isGatewayHostBrowserOrigin } from "./origin-check.js";
 import type { GatewayWsBrowserOrigin } from "./server/ws-types.js";
@@ -32,7 +34,7 @@ const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
 export class ProviderBrowserSignInUnavailableError extends Error {
   constructor() {
     super(
-      "Browser sign-in needs a secure Gateway address reachable from your browser. Enable Gateway Tailscale Serve, then retry /login; or use the CLI sign-in flow.",
+      "Browser sign-in needs a secure Gateway address reachable from your browser. Open the dashboard on this Gateway's HTTPS address or its local loopback address, then retry; or use the CLI sign-in flow.",
     );
   }
 }
@@ -45,9 +47,14 @@ export function resolveBrowserAuthOrigin(
   if (!browser || browser.origin === published?.origin) {
     return published;
   }
-  if (browser.origin && browser.isLocalClient && isGatewayHostBrowserOrigin(browser)) {
+  if (browser.origin && isGatewayHostBrowserOrigin(browser)) {
     const url = new URL(browser.origin);
-    if ((url.protocol === "http:" || url.protocol === "https:") && isLoopbackHost(url.hostname)) {
+    // The authenticated browser connection already passed Gateway origin policy.
+    // Its served HTTPS origin also covers operator-managed reverse proxies.
+    if (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && browser.isLocalClient && isLoopbackHost(url.hostname))
+    ) {
       return { origin: url.origin, signal };
     }
   }
@@ -185,9 +192,13 @@ function respond(res: ServerResponse, status: number, message: string): void {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
   res.end(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Provider sign-in</title><body><main><h1>${message}</h1><p>Return to OpenClaw for the sign-in result.</p></main></body></html>`,
+    renderOAuthPage({
+      title: "Provider sign-in",
+      heading: message,
+      message: "Return to OpenClaw for the sign-in result.",
+    }),
   );
 }
 

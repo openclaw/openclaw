@@ -25,17 +25,13 @@ type DiscordMessageWithChannelId = Message & {
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
-function resolveDiscordChannelInfoCacheExpiresAt(ttlMs: number, nowMs: number): number | undefined {
-  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
-}
-
 function cacheDiscordChannelInfo(
   channelId: string,
   value: DiscordChannelInfo | null,
   ttlMs: number,
   nowMs: number,
 ): void {
-  const expiresAt = resolveDiscordChannelInfoCacheExpiresAt(ttlMs, nowMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
   if (expiresAt !== undefined) {
     discordChannelInfoCacheState.entries.set(channelId, { value, expiresAt });
     pruneMapToMaxSize(discordChannelInfoCacheState.entries, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
@@ -59,6 +55,19 @@ export function resolveDiscordMessageChannelId(params: {
   );
 }
 
+export function buildDiscordChannelInfo(
+  channel: unknown,
+  options?: { rawTypeFallback?: boolean },
+): DiscordChannelInfo | null {
+  const info = resolveDiscordChannelInfoSafe(channel);
+  const type =
+    (info.type as ChannelType | undefined) ??
+    (options?.rawTypeFallback ? (channel as { type?: ChannelType }).type : undefined);
+  return type === undefined
+    ? null
+    : { type, name: info.name, topic: info.topic, parentId: info.parentId, ownerId: info.ownerId };
+}
+
 export async function resolveDiscordChannelInfo(
   client: DiscordChannelInfoClient,
   channelId: string,
@@ -78,19 +87,10 @@ export async function resolveDiscordChannelInfo(
       cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, rawNow);
       return null;
     }
-    const channelInfo = resolveDiscordChannelInfoSafe(channel);
-    const rawChannel = channel as { type?: ChannelType };
-    const type = (channelInfo.type as ChannelType | undefined) ?? rawChannel.type;
-    if (type === undefined) {
+    const payload = buildDiscordChannelInfo(channel, { rawTypeFallback: true });
+    if (!payload) {
       return null;
     }
-    const payload: DiscordChannelInfo = {
-      type,
-      name: channelInfo.name,
-      topic: channelInfo.topic,
-      parentId: channelInfo.parentId,
-      ownerId: channelInfo.ownerId,
-    };
     cacheDiscordChannelInfo(channelId, payload, DISCORD_CHANNEL_INFO_CACHE_TTL_MS, rawNow);
     return payload;
   } catch (err) {

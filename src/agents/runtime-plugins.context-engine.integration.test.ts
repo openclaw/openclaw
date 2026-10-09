@@ -12,6 +12,7 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import {
   clearActivePluginRegistry,
   disposePluginRegistryInstances,
@@ -27,7 +28,7 @@ import { getSandboxBackendFactory } from "./sandbox/backend.js";
 const SANDBOX_PROBE_ID = "scoped-load-probe";
 afterEach(async () => {
   await clearActivePluginRegistry();
-  resetContextEngineRuntimeQuarantineForTests();
+  await resetContextEngineRuntimeQuarantineForTests();
   resetPluginLoaderTestStateForTest();
 });
 
@@ -61,7 +62,7 @@ it("keeps the configured context engine active in a prepared agent registry", as
     },
   };
 
-  const activeRegistry = loadAndActivateRootPluginRegistry({
+  const activeRegistry = await loadAndActivateRootPluginRegistry({
     cache: false,
     config,
     workspaceDir: makePluginLoaderTempDir(),
@@ -137,7 +138,7 @@ it("selects a full-mode-only context engine on caller-owned handles without full
     },
   };
   const workspaceDir = makePluginLoaderTempDir();
-  const root = loadAndActivateRootPluginRegistry({
+  const root = await loadAndActivateRootPluginRegistry({
     cache: false,
     config,
     onlyPluginIds: ["ce-probe", "sandbox-probe"],
@@ -227,7 +228,7 @@ it("retains the adopted engine through reload, accepted commit and engine dispos
     },
   };
   const load = () => loadAndActivateRootPluginRegistry({ config, cache: false });
-  const root = load();
+  const root = await load();
   const handle = loadAgentRuntimePluginRegistryHandle({
     basePluginIds: [],
     config,
@@ -247,9 +248,16 @@ it("retains the adopted engine through reload, accepted commit and engine dispos
   let nextLease: Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>> | undefined;
   try {
     vi.useFakeTimers();
-    const successor = load();
+    const successor = await load();
     let retired = false;
-    rawRetirement = disposePluginRegistryInstances(root, successor).then(() => {
+    rawRetirement = disposePluginRegistryInstances(root, successor).then(async (result) => {
+      const timeout = result.failures[0]?.error;
+      expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+      if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+        throw new Error("Expected bounded retirement while the engine consumer is retained");
+      }
+      expect(timeout.forcedRetirement?.retainedConsumerCount).toBeGreaterThan(0);
+      await timeout.settled;
       retired = true;
     });
     const observation = await waitForPluginRegistryRetirement(root, { deferConsumers: true });
@@ -344,8 +352,10 @@ it("uses an unchanged adopted instance after its original cache retires", async 
   };
   const originalCache = createPluginCache();
   const currentCache = createPluginCache();
-  const root = withPluginCache(originalCache, () => loadAndActivateRootPluginRegistry({ config }));
-  const successor = withPluginCache(currentCache, () =>
+  const root = await withPluginCache(originalCache, () =>
+    loadAndActivateRootPluginRegistry({ config }),
+  );
+  const successor = await withPluginCache(currentCache, () =>
     loadAndActivateRootPluginRegistry({ config, previousRegistry: root }),
   );
   expect(successor.plugins[0]).toBe(root.plugins[0]);
@@ -392,7 +402,7 @@ it.each(["factory", "contract"] as const)(
         slots: { memory: "none", contextEngine: plugin.id },
       },
     };
-    const root = loadAndActivateRootPluginRegistry({ config, cache: false });
+    const root = await loadAndActivateRootPluginRegistry({ config, cache: false });
     const handle = loadAgentRuntimePluginRegistryHandle({
       basePluginIds: [],
       config,
@@ -470,7 +480,7 @@ it("revokes earlier engine callbacks while its raw disposal remains admitted", a
       slots: { memory: "none", contextEngine: plugin.id },
     },
   };
-  loadAndActivateRootPluginRegistry({ config, cache: false });
+  await loadAndActivateRootPluginRegistry({ config, cache: false });
   const lease = await createContextEngineLogicalTurnLease({
     identity: { runId: "closing-turn", sessionId: "closing-session" },
     config,

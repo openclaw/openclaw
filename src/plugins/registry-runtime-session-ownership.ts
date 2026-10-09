@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -36,8 +37,6 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "send",
   "sessions.abort",
   "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.branches.switch",
   "sessions.rewind",
   "sessions.fork",
@@ -67,13 +66,22 @@ export function createPluginSessionOwnership(
   const { registryParams } = state;
   // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
   const currentSessionConfig = () => registryParams.runtime.config.current() as OpenClawConfig;
-  const resolveHarnessRegistration = (harnessId: unknown) => {
-    const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
-    return normalizedHarnessId
-      ? resolveRegistry().agentHarnesses.find(
-          (entry) => normalizeOptionalAgentRuntimeId(entry.harness.id) === normalizedHarnessId,
-        )
-      : undefined;
+  const requireHarnessRegistration = (value: unknown, action: string) => {
+    const harnessId = normalizeOptionalAgentRuntimeId(value);
+    if (!harnessId) {
+      throw new Error(
+        `Plugin "${pluginId}" must provide a registered agent harness id to ${action}.`,
+      );
+    }
+    const registration = resolveRegistry().agentHarnesses.find(
+      (entry) => normalizeOptionalAgentRuntimeId(entry.harness.id) === harnessId,
+    );
+    if (!registration) {
+      throw new Error(
+        `Plugin "${pluginId}" must register agent harness "${harnessId}" before it can ${action}.`,
+      );
+    }
+    return { harnessId, registration };
   };
   const resolveHarnessRegistrationForSessionKey = (sessionKey: string) =>
     resolveRegistry().agentHarnesses.find((entry) => {
@@ -84,18 +92,10 @@ export function createPluginSessionOwnership(
       );
     });
   const assertOwnedHarness = (harnessId: unknown, action: string): string => {
-    const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
-    if (!normalizedHarnessId) {
-      throw new Error(
-        `Plugin "${pluginId}" must provide a registered agent harness id to ${action}.`,
-      );
-    }
-    const registration = resolveHarnessRegistration(normalizedHarnessId);
-    if (!registration) {
-      throw new Error(
-        `Plugin "${pluginId}" must register agent harness "${normalizedHarnessId}" before it can ${action}.`,
-      );
-    }
+    const { harnessId: normalizedHarnessId, registration } = requireHarnessRegistration(
+      harnessId,
+      action,
+    );
     if (registration.pluginId !== pluginId) {
       throw new Error(
         `Agent harness "${normalizedHarnessId}" is owned by plugin "${registration.pluginId}", not "${pluginId}".`,
@@ -137,18 +137,10 @@ export function createPluginSessionOwnership(
       }
       return { ownerPluginId: pluginOwnerId };
     }
-    const harnessId = resolveSessionPinnedHarnessId(entry);
-    if (!harnessId) {
-      throw new Error(
-        `Plugin "${pluginId}" must provide a registered agent harness id to ${action} locked sessions.`,
-      );
-    }
-    const registration = resolveHarnessRegistration(harnessId);
-    if (!registration) {
-      throw new Error(
-        `Plugin "${pluginId}" must register agent harness "${harnessId}" before it can ${action} locked sessions.`,
-      );
-    }
+    const { harnessId, registration } = requireHarnessRegistration(
+      resolveSessionPinnedHarnessId(entry),
+      `${action} locked sessions`,
+    );
     if (
       isAgentHarnessSessionKey(sessionKey) &&
       !isAgentHarnessSessionKeyOwnedBy(sessionKey, harnessId)
@@ -265,13 +257,7 @@ export function createPluginSessionOwnership(
   }): void => {
     const agentId = normalizeOptionalString(params.agentId);
     const storePath = normalizeOptionalString(params.storePath);
-    const sessionKeys = new Set<string>();
-    for (const value of params.sessionKeys ?? []) {
-      const sessionKey = normalizeOptionalString(value);
-      if (sessionKey) {
-        sessionKeys.add(sessionKey);
-      }
-    }
+    const sessionKeys = new Set(normalizeTrimmedStringList(params.sessionKeys));
     for (const sessionKey of sessionKeys) {
       assertStoredSessionEntryOwned({
         action: params.action,
@@ -281,20 +267,8 @@ export function createPluginSessionOwnership(
       });
     }
 
-    const sessionIds = new Set<string>();
-    for (const value of params.sessionIds ?? []) {
-      const sessionId = normalizeOptionalString(value);
-      if (sessionId) {
-        sessionIds.add(sessionId);
-      }
-    }
-    const sessionFiles = new Set<string>();
-    for (const value of params.sessionFiles ?? []) {
-      const sessionFile = normalizeOptionalString(value);
-      if (sessionFile) {
-        sessionFiles.add(sessionFile);
-      }
-    }
+    const sessionIds = new Set(normalizeTrimmedStringList(params.sessionIds));
+    const sessionFiles = new Set(normalizeTrimmedStringList(params.sessionFiles));
     if (sessionIds.size === 0 && sessionFiles.size === 0) {
       return;
     }
@@ -319,9 +293,7 @@ export function createPluginSessionOwnership(
           });
         }
         const matchedSessionIds = new Set(
-          sessionKeyMatches
-            .map(({ entry }) => normalizeOptionalString(entry.sessionId))
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+          normalizeTrimmedStringList(sessionKeyMatches.map(({ entry }) => entry.sessionId)),
         );
         for (const match of entries) {
           const matchSessionId = normalizeOptionalString(match.entry.sessionId);

@@ -1,10 +1,30 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { systemHandlers } from "./server-methods/system.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
+import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 
 type ConnectionIdReads = { count: number };
 
@@ -43,9 +63,274 @@ function makeClient(
 }
 
 describe("gateway connection state", () => {
+  it("retires tool recipients across reconnects without retiring their active runs", () => {
+    const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "tool-recipient-retirement",
+      cfg: {},
+    });
+    onTestFinished(() => state.mentionInbox.dispose());
+    const context = createGatewayRequestContext(makeContextParams(state));
+    const live = makeClient("live", { count: 0 }).client;
+    state.clients.add(live);
+    state.chatRunState.getOrCreate("active").buffer = "unfinished response";
+    context.registerToolEventRecipient("active", live.connId);
+
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const client = makeClient(`reconnect-${cycle}`, { count: 0 }).client;
+      const connection = new AbortController();
+      client.connectionSignal = connection.signal;
+      state.clients.add(client);
+      context.registerToolEventRecipient("active", client.connId);
+      context.registerToolEventRecipient("recipient-only", client.connId);
+      expect(state.toolEventRecipients.get("active")?.has(client.connId)).toBe(true);
+
+      connection.abort();
+      if (cycle % 2 === 0) {
+        state.clients.delete(client);
+      }
+      context.unsubscribeAllSessionEvents(client.connId);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set([live.connId]));
+      expect(state.chatRunState.runs.has("recipient-only")).toBe(false);
+
+      // Accepted turns can start after the requesting transport has disconnected.
+      context.registerToolEventRecipient("active", client.connId);
+      context.registerToolEventRecipient("late-start", client.connId);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set([live.connId]));
+      expect(state.chatRunState.runs.has("late-start")).toBe(false);
+      state.clients.delete(client);
+    }
+
+    state.clients.delete(live);
+    context.unsubscribeAllSessionEvents(live.connId);
+    expect(state.toolEventRecipients.get("active")).toBeUndefined();
+    expect(state.chatRunState.runs.get("active")?.buffer).toBe("unfinished response");
+    state.chatRunState.clearRun("active");
+    expect(state.chatRunState.runs.size).toBe(0);
+  });
+
+  it("uses committed policy for projected and plain session events through tentative activation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = ensureProfileForEmail("event-policy-reader@example.test");
+      const other = ensureProfileForEmail("event-policy-other@example.test");
+      const config = (others: "none" | "view"): OpenClawConfig => ({
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: {
+                sessions: { others },
+                agents: ["main"],
+                scopes: ["operator.sessions.read"],
+              },
+            },
+          },
+        },
+      });
+      const restricted = config("none");
+      const relaxed = config("view");
+      let runtimeConfig = restricted;
+      let committedConfig = restricted;
+      setRuntimeConfigSnapshot(runtimeConfig);
+      const ownKey = "agent:main:policy-own";
+      const foreignKey = "agent:main:policy-foreign";
+      for (const [sessionKey, profileId] of [
+        [ownKey, reader.id],
+        [foreignKey, other.id],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: profileId },
+          },
+        );
+      }
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "committed-event-policy",
+        cfg: restricted,
+        getRuntimeConfig: () => runtimeConfig,
+      });
+      try {
+        const projection = await createSessionRowProjection({
+          cfg: runtimeConfig,
+          getConfig: () => runtimeConfig,
+          getPolicyConfig: () => committedConfig,
+        });
+        const detach = state.attachSessionRowProjection(projection);
+        try {
+          const peer = makeClient("policy-reader", { count: 0 });
+          peer.client.connect.scopes = ["operator.sessions.read"];
+          peer.client.connect.client = {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "web",
+            mode: "webchat",
+          };
+          peer.client.authenticatedUserProfile = {
+            profileId: reader.id,
+            displayName: "Reader",
+            avatarRevision: "test",
+            hasAvatar: false,
+            updatedAt: reader.updatedAt,
+          };
+          prepareGatewayRecipientProfile(peer.client);
+          state.clients.add(peer.client);
+          const publish = (stage: string, visibleKeys: string[]) => {
+            peer.send.mockClear();
+            for (const sessionKey of [ownKey, foreignKey]) {
+              const scope = { sessionKeys: [sessionKey], agentId: "main" };
+              state.broadcast("sessions.changed", { sessionKey, reason: "metadata" }, scope);
+              state.broadcast(
+                "chat",
+                {
+                  sessionKey,
+                  runId: "policy-run",
+                  seq: 1,
+                  state: "delta",
+                  message: { role: "assistant", content: [{ type: "text", text: sessionKey }] },
+                },
+                scope,
+              );
+            }
+            const frames = peer.send.mock.calls.map(([frame]): unknown => {
+              if (typeof frame !== "string") {
+                throw new Error("expected a serialized Gateway event");
+              }
+              return JSON.parse(frame);
+            });
+            expect.soft(frames, stage).toEqual(
+              visibleKeys.flatMap((sessionKey) => [
+                expect.objectContaining({
+                  event: "sessions.changed",
+                  payload: expect.objectContaining({
+                    sessionKey,
+                    session: expect.objectContaining({ key: sessionKey }),
+                  }),
+                }),
+                expect.objectContaining({
+                  event: "chat",
+                  payload: expect.objectContaining({
+                    sessionKey,
+                    message: { role: "assistant", content: [{ type: "text", text: sessionKey }] },
+                  }),
+                }),
+              ]),
+            );
+          };
+          await projection.ensureMaterialized();
+          publish("serving policy", [ownKey]);
+          runtimeConfig = relaxed;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          publish("tentative relaxation", [ownKey]);
+          runtimeConfig = restricted;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          publish("rollback", [ownKey]);
+          runtimeConfig = relaxed;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          committedConfig = relaxed;
+          publish("committed relaxation without a projection mark", [ownKey, foreignKey]);
+
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: ownKey },
+            { parentSessionKey: foreignKey },
+          );
+          const later = makeClient("later-policy-reader", { count: 0 });
+          later.client.connect = { ...peer.client.connect };
+          later.client.authenticatedUserProfile = peer.client.authenticatedUserProfile;
+          prepareGatewayRecipientProfile(later.client);
+          state.clients.add(later.client);
+          peer.send.mockClear();
+          peer.send.mockImplementationOnce(() => {
+            committedConfig = restricted;
+          });
+          await projection.withPreparedExactRows(
+            () => [{ key: ownKey, agentId: "main" }],
+            (read) => {
+              state.broadcast(
+                "sessions.changed",
+                { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                {
+                  sessionKeys: [ownKey],
+                  agentId: "main",
+                  prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                },
+              );
+            },
+            { includeAncestors: true },
+          );
+          expect(peer.send).toHaveBeenCalledOnce();
+          expect(later.send).toHaveBeenCalledOnce();
+          expect(JSON.parse(peer.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [{ key: foreignKey }],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).not.toHaveProperty(
+            "ancestorSessionRefs",
+          );
+          const replacement = await createSessionRowProjection({
+            cfg: runtimeConfig,
+            getPolicyConfig: () => committedConfig,
+          });
+          let detachReplacement: (() => void) | undefined;
+          try {
+            await replacement.ensureMaterialized();
+            peer.send.mockClear();
+            later.send.mockClear();
+            await projection.withPreparedExactRows(
+              () => [{ key: ownKey, agentId: "main" }],
+              (read) => {
+                detachReplacement = state.attachSessionRowProjection(replacement);
+                state.broadcast(
+                  "sessions.changed",
+                  { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                  {
+                    sessionKeys: [ownKey],
+                    agentId: "main",
+                    prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                  },
+                );
+              },
+              { includeAncestors: true },
+            );
+            expect(peer.send).not.toHaveBeenCalled();
+            expect(later.send).not.toHaveBeenCalled();
+            state.broadcast(
+              "sessions.changed",
+              { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+              { sessionKeys: [ownKey], agentId: "main" },
+            );
+            expect(peer.send).toHaveBeenCalledOnce();
+            expect(later.send).toHaveBeenCalledOnce();
+          } finally {
+            detachReplacement?.();
+            replacement.dispose();
+          }
+        } finally {
+          detach();
+          projection.dispose();
+        }
+      } finally {
+        await state.mentionInbox.dispose();
+      }
+    });
+  });
+
   it("advertises online people only through live operator connections", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
         bootId: "online-recipients",
         cfg: { agents: { entries: { main: {} } } },
       });
@@ -101,8 +386,290 @@ describe("gateway connection state", () => {
     });
   });
 
+  it("broadcasts to 50 members from committed facts while rows are dirty and revokes immediately without SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "broadcast-members",
+        updatedAt: 1,
+        visibility: "suggest",
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      });
+      addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
+      let broadcastDuringPublication: (() => void) | undefined;
+      const stopPublication = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          broadcastDuringPublication?.();
+        }
+      });
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "members",
+        cfg: {},
+      });
+      const detach = state.attachSessionRowProjection(projection);
+      const peers = Array.from({ length: 50 }, (_, index) => {
+        const peer = makeClient(`viewer-${index}`, { count: 0 });
+        peer.client.authenticatedUserProfile = {
+          profileId: "member",
+          displayName: null,
+          avatarRevision: "test",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+        peer.client.preparedSessionProfile = {
+          profileId: "member",
+          aliases: new Set(["member"]),
+          role: null,
+        };
+        state.clients.add(peer.client);
+        return peer;
+      });
+      const targets = new Set(peers.map((peer) => peer.client.connId));
+      const broadcast = () =>
+        state.broadcastToConnIds(
+          "session.suggestion",
+          {
+            sessionKey: scope.sessionKey,
+            agentId: "main",
+            suggestion: { author: { id: "author" } },
+          },
+          targets,
+        );
+      try {
+        await projection.ensureMaterialized();
+        sessionChanges.emit(scope);
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+        const sql = observeHostDataSql();
+        try {
+          broadcast();
+          expect(peers.every((peer) => peer.send.mock.calls.length === 1)).toBe(true);
+          expect(sql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+        } finally {
+          sql.restore();
+        }
+        removeSessionMember(scope, "member");
+        const revokedSql = observeHostDataSql();
+        try {
+          broadcast();
+          expect(peers.every((peer) => peer.send.mock.calls.length === 1)).toBe(true);
+          expect(revokedSql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+        } finally {
+          revokedSql.restore();
+        }
+        addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 2 });
+        broadcast();
+        expect(peers.every((peer) => peer.send.mock.calls.length === 2)).toBe(true);
+        replaceSessionEntrySync(scope, {
+          sessionId: "broadcast-replacement",
+          updatedAt: 2,
+          visibility: "suggest",
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        });
+        const replacementSql = observeHostDataSql();
+        try {
+          broadcast();
+          expect(peers.every((peer) => peer.send.mock.calls.length === 2)).toBe(true);
+          expect(replacementSql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+        } finally {
+          replacementSql.restore();
+        }
+        await projection.ensureMaterialized();
+        expect(
+          projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.membership.size,
+        ).toBe(0);
+        const publicationReads: number[] = [];
+        const publicationDirtyRows: number[] = [];
+        broadcastDuringPublication = () => {
+          const publicationSql = observeHostDataSql();
+          try {
+            publicationDirtyRows.push(projection.dirtyRowCount);
+            state.broadcastToConnIds(
+              "task",
+              { action: "upserted", task: { id: "task" } },
+              targets,
+              {
+                sessionKeys: [scope.sessionKey],
+                agentId: scope.agentId,
+              },
+            );
+            publicationReads.push(
+              publicationSql.calls.reduce((count, call) => count + call.mock.calls.length, 0),
+            );
+          } finally {
+            publicationSql.restore();
+          }
+        };
+        for (const [visibility, deliveries] of [
+          ["draft", 2],
+          ["shared", 3],
+          ["draft", 3],
+        ] as const) {
+          replaceSessionEntrySync(scope, {
+            sessionId: "broadcast-replacement",
+            updatedAt: 3,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "owner" },
+          });
+          expect(peers.every((peer) => peer.send.mock.calls.length === deliveries)).toBe(true);
+        }
+        expect(publicationReads).toEqual([0, 0, 0]);
+        expect(publicationDirtyRows.every((count) => count > 0)).toBe(true);
+      } finally {
+        stopPublication();
+        detach();
+        projection.dispose();
+        await state.mentionInbox.dispose();
+      }
+    });
+  });
+
+  it("serves current presence through broadcasts, RPCs, and hello without SQL while display rows are dirty", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const reader = ensureProfileForEmail("presence-reader@example.test");
+      const sharedKey = "agent:main:presence-shared";
+      const draftKey = "agent:main:presence-draft";
+      const incognitoKey = "agent:main:dashboard:incognito-presence";
+      const missingKey = "agent:main:presence-missing";
+      for (const [sessionKey, visibility] of [
+        [sharedKey, "shared"],
+        [draftKey, "draft"],
+        [incognitoKey, "shared"],
+        ["global", "shared"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", source: "profile", id: "other-owner" },
+            ...(sessionKey === incognitoKey ? { incognito: true } : {}),
+          },
+        );
+      }
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "presence-boundaries",
+        cfg,
+      });
+      const detach = state.attachSessionRowProjection(projection);
+      const peers = ["reader", "admin", "trailing-reader"].map((name) => {
+        const peer = makeClient(`presence-${name}`, { count: 0 });
+        peer.client.connect.scopes = [name === "admin" ? "operator.admin" : "operator.read"];
+        peer.client.authenticatedUserProfile = {
+          profileId: reader.id,
+          displayName: null,
+          avatarRevision: "test",
+          hasAvatar: false,
+          updatedAt: reader.updatedAt,
+        };
+        prepareGatewayRecipientProfile(peer.client);
+        state.clients.add(peer.client);
+        return peer;
+      });
+      const context = createGatewayRequestContext(
+        makeContextParams({
+          clients: state.clients,
+          getSessionRowProjection: state.getSessionRowProjection,
+        }),
+      );
+      const presenceKey = "presence-boundary-watcher";
+      upsertPresence(presenceKey, {
+        text: presenceKey,
+        watchedSessions: [sharedKey, draftKey, incognitoKey, missingKey, "agent:main:global"],
+      });
+      try {
+        await projection.ensureMaterialized();
+        const scope = { agentId: "main", sessionKey: sharedKey };
+        sessionChanges.emit(scope);
+        const verify = (sharedVisible: boolean) => {
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          const sql = observeHostDataSql();
+          try {
+            peers.forEach(({ send }) => send.mockClear());
+            state.broadcast("presence", { presence: listSystemPresence() });
+            for (const [index, peer] of peers.entries()) {
+              const watchedSessions =
+                index === 1
+                  ? [sharedKey, draftKey, incognitoKey, "agent:main:global"]
+                  : [...(sharedVisible ? [sharedKey] : []), "agent:main:global"];
+              const expected = expect.arrayContaining([
+                expect.objectContaining({ text: presenceKey, watchedSessions }),
+              ]);
+              expect(peer.send).toHaveBeenCalledOnce();
+              const frame = peer.send.mock.calls[0]?.[0];
+              expect(typeof frame).toBe("string");
+              expect(JSON.parse(String(frame))).toMatchObject({
+                event: "presence",
+                payload: { presence: expected },
+              });
+              const respond = vi.fn();
+              void systemHandlers["system-presence"]!({
+                req: { type: "req", id: "presence", method: "system-presence" },
+                params: {},
+                client: peer.client,
+                respond,
+                context,
+                isWebchatConnect: () => true,
+              });
+              expect(respond).toHaveBeenCalledExactlyOnceWith(true, expected, undefined);
+              expect(
+                buildGatewaySnapshot({
+                  client: peer.client,
+                  sessionRowProjection: projection,
+                  revisionProjector: context.configRevisionProjector,
+                }).presence,
+              ).toEqual(expected);
+            }
+            expect(sql.queries).toEqual([]);
+          } finally {
+            sql.restore();
+          }
+        };
+        verify(true);
+        replaceSessionEntrySync(scope, {
+          sessionId: sharedKey,
+          updatedAt: 2,
+          visibility: "draft",
+          createdActor: { type: "human", source: "profile", id: "other-owner" },
+        });
+        verify(false);
+        replaceSessionEntrySync(scope, {
+          sessionId: sharedKey,
+          updatedAt: 3,
+          visibility: "shared",
+        });
+        peers[0]!.send.mockImplementationOnce(() => {
+          replaceSessionEntrySync(scope, {
+            sessionId: sharedKey,
+            updatedAt: 4,
+            visibility: "draft",
+          });
+        });
+        state.broadcast("presence", { presence: listSystemPresence() });
+        const trailing = JSON.parse(String(peers[2]!.send.mock.lastCall?.[0]));
+        expect(trailing.payload.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ text: presenceKey, watchedSessions: ["agent:main:global"] }),
+          ]),
+        );
+      } finally {
+        upsertPresence(presenceKey, { watchedSessions: undefined });
+        detach();
+        projection.dispose();
+        await state.mentionInbox.dispose();
+      }
+    });
+  });
+
   it("bounds targeted delivery and connection lookups to the requested connection", () => {
     const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
       bootId: "targeted-delivery",
       cfg: {} as OpenClawConfig,
     });
@@ -131,7 +698,15 @@ describe("gateway connection state", () => {
     expect(state.isConnectionActive("target")).toBe(true);
     expect(reads.count).toBe(0);
 
+    const firstRequest = state.clients.retainRequest(target.client);
+    const secondRequest = state.clients.retainRequest(target.client);
     state.clients.delete(target.client);
+    expect(
+      [...state.clients.authorityClients].filter((client) => client === target.client),
+    ).toHaveLength(1);
+    firstRequest();
+    firstRequest();
+    expect([...state.clients.authorityClients]).toContain(target.client);
     reads.count = 0;
     state.broadcastToConnIds("tick", { ts: 3 }, new Set(["target"]));
 
@@ -140,6 +715,8 @@ describe("gateway connection state", () => {
     expect(state.isConnectionActive("target")).toBe(false);
     expect(reads.count).toBe(0);
 
+    secondRequest();
+    expect([...state.clients.authorityClients]).not.toContain(target.client);
     state.clients.add(target.client);
     state.clients.clear();
     reads.count = 0;
@@ -151,6 +728,7 @@ describe("gateway connection state", () => {
 
   it("preserves connection insertion order for targeted fanout", () => {
     const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
       bootId: "ordered-delivery",
       cfg: {} as OpenClawConfig,
     });

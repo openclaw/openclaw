@@ -1,5 +1,5 @@
 import path from "node:path";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -33,23 +33,71 @@ function findJsonRootSuffix(
   return null;
 }
 
-async function persistPrefixedConfigRecovery(params: {
-  context: ConfigIoContext;
-  originalRaw: string;
-  recoveredRaw: string;
-}): Promise<void> {
-  const { context } = params;
-  const observedAt = new Date().toISOString();
+export function inspectConfigJsonRootSuffixWithContext(
+  context: ConfigIoContext,
+  raw: string,
+  assertRecoveryCandidate?: (config: unknown) => void,
+) {
+  const suffixRecovery = findJsonRootSuffix(raw, context.deps.json5);
+  if (!suffixRecovery) {
+    return null;
+  }
+  assertRecoveryCandidate?.(suffixRecovery.parsed);
+  let resolved: unknown;
+  try {
+    resolved = resolveConfigIncludesForRead(
+      suffixRecovery.parsed,
+      context.configPath,
+      context.deps,
+    );
+  } catch {
+    return null;
+  }
+  const resolution = resolveConfigForRead(
+    resolved,
+    context.deps.env,
+    context.deps.lowerPrecedenceEnv,
+  );
+  assertRecoveryCandidate?.(resolution.resolvedConfigRaw);
+  return { ...suffixRecovery, resolvedConfigRaw: resolution.resolvedConfigRaw };
+}
+
+export async function recoverConfigFromJsonRootSuffixWithContext(
+  context: ConfigIoContext,
+  snapshot: ConfigFileSnapshot,
+  assertRecoveryCandidate?: (config: unknown) => void,
+): Promise<boolean> {
+  if (resolveIsConfigReadOnly(context.deps.env)) {
+    return false;
+  }
+  if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  const suffixRecovery = inspectConfigJsonRootSuffixWithContext(
+    context,
+    snapshot.raw,
+    assertRecoveryCandidate,
+  );
+  if (!suffixRecovery) {
+    return false;
+  }
+  const validated = validateConfigObjectWithPlugins(suffixRecovery.resolvedConfigRaw, {
+    ...context.pathResolution,
+    sourceRaw: suffixRecovery.parsed,
+  });
+  if (!validated.ok) {
+    return false;
+  }
   const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps: context.deps,
     configPath: context.configPath,
-    raw: params.originalRaw,
-    observedAt,
+    raw: snapshot.raw,
+    observedAt: new Date().toISOString(),
   });
   // Recovery must publish by rename; a copy fallback can truncate the live config.
   await replaceFileAtomic({
     filePath: context.configPath,
-    content: params.recoveredRaw,
+    content: suffixRecovery.raw,
     dirMode: 0o700,
     mode: 0o600,
     tempPrefix: path.basename(context.configPath),
@@ -59,48 +107,5 @@ async function persistPrefixedConfigRecovery(params: {
     `Config auto-stripped non-JSON prefix: ${context.configPath}` +
       (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
   );
-}
-
-export async function recoverConfigFromJsonRootSuffixWithContext(
-  context: ConfigIoContext,
-  snapshot: ConfigFileSnapshot,
-): Promise<boolean> {
-  if (resolveIsConfigReadOnly(context.deps.env)) {
-    return false;
-  }
-  if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
-    return false;
-  }
-  const suffixRecovery = findJsonRootSuffix(snapshot.raw, context.deps.json5);
-  if (!suffixRecovery) {
-    return false;
-  }
-  let resolved: unknown;
-  try {
-    resolved = resolveConfigIncludesForRead(
-      suffixRecovery.parsed,
-      context.configPath,
-      context.deps,
-    );
-  } catch {
-    return false;
-  }
-  const resolution = resolveConfigForRead(
-    resolved,
-    context.deps.env,
-    context.deps.lowerPrecedenceEnv,
-  );
-  const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
-    ...context.pathResolution,
-    sourceRaw: suffixRecovery.parsed,
-  });
-  if (!validated.ok) {
-    return false;
-  }
-  await persistPrefixedConfigRecovery({
-    context,
-    originalRaw: snapshot.raw,
-    recoveredRaw: suffixRecovery.raw,
-  });
   return true;
 }

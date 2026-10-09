@@ -10,9 +10,9 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "../lib/workboard/types.ts";
+import { workboardPageTarget } from "../pages/workboard/page-target.ts";
 import { renderColumn } from "../pages/workboard/view-card.ts";
 import type { WorkboardProps } from "../pages/workboard/view-helpers.ts";
-import { workboardPageTarget } from "../pages/workboard/workboard-page.ts";
 import type { WorkboardWidgetModel } from "./runtime.ts";
 
 function renderAvailability(model: WorkboardWidgetModel): TemplateResult | null {
@@ -193,7 +193,7 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
     agentsList: null,
     sessions: [],
     onOpenSession: model.host.sessions.open,
-    onRequestUpdate: () => model.syncFromHost(),
+    onRequestUpdate: () => model.runtime.notify(),
   };
   const workboardPath = model.host.navigation.pageHref(workboardPageTarget(boardId));
 

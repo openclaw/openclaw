@@ -5,9 +5,9 @@ import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
   buildSlackNativeDataAccessibilityText,
-  appendSlackNativeDataPlainTextFallback,
   createSlackNativeDataBaseTextConsumer,
   hasSlackNativeDataBlock,
+  renderSlackNativeDataPlainTextBlock,
   SLACK_MALFORMED_NATIVE_DATA_FALLBACK,
   stripSlackNativeDataBlocks,
 } from "./native-data-blocks.js";
@@ -20,12 +20,6 @@ export type SlackFormattingDisabledMessage = {
   text: string;
   blocks?: (Block | KnownBlock)[];
   mrkdwn: false;
-};
-
-type SlackNativeDataDeliveryPlan = {
-  accessibilityText: string;
-  fallbackMessages: SlackFormattingDisabledMessage[];
-  skipOriginalBlocks: boolean;
 };
 
 type OrderedFallbackBlock = {
@@ -63,13 +57,6 @@ function buildPlainTextBlocks(text: string, textLimit: number): OrderedFallbackB
   );
 }
 
-function renderNativeDataPlainText(block: unknown): string {
-  return (
-    appendSlackNativeDataPlainTextFallback("", [block]).trim() ||
-    SLACK_MALFORMED_NATIVE_DATA_FALLBACK
-  );
-}
-
 function buildOrderedFallbackBlocks(params: {
   baseText: string;
   blocks: readonly (Block | KnownBlock)[];
@@ -82,7 +69,8 @@ function buildOrderedFallbackBlocks(params: {
   }
   for (const block of params.blocks) {
     if (hasSlackNativeDataBlock([block])) {
-      const nativeText = renderNativeDataPlainText(block);
+      const nativeText =
+        renderSlackNativeDataPlainTextBlock(block)?.trim() || SLACK_MALFORMED_NATIVE_DATA_FALLBACK;
       if (!consumeFromBase(nativeText)) {
         entries.push(...buildPlainTextBlocks(nativeText, params.textLimit));
       }
@@ -120,16 +108,15 @@ function buildOrderedBlockMessages(entries: readonly OrderedFallbackBlock[], tex
 
   for (const entry of entries) {
     const separator = text && entry.text && !entry.continuesText ? "\n\n" : "";
-    const nextText = entry.text ? `${text}${separator}${entry.text}` : text;
+    let nextText = entry.text ? `${text}${separator}${entry.text}` : text;
     if (blocks.length >= SLACK_MAX_BLOCKS || nextText.length > textLimit) {
       flush();
+      nextText = entry.text ?? "";
     }
-    const freshSeparator = text && entry.text && !entry.continuesText ? "\n\n" : "";
-    const freshText = entry.text ? `${text}${freshSeparator}${entry.text}` : text;
     // Native controls are indivisible. Their derived summary is bounded above;
     // authored fallback sections are split before they enter this batch.
     blocks.push(entry.block);
-    text = freshText;
+    text = nextText;
   }
   flush();
   return messages;
@@ -140,7 +127,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
   baseText?: string;
   blocks: readonly (Block | KnownBlock)[];
   textLimit?: number;
-}): SlackNativeDataDeliveryPlan {
+}) {
   const baseText = params.baseText?.trim() ?? "";
   const textLimit = Math.min(
     SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
@@ -152,7 +139,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
     buildSlackNativeDataAccessibilityText(baseText, params.blocks) ||
     (hasNativeData ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : SLACK_EMPTY_BLOCK_FALLBACK);
   const survivorBlocks = stripSlackNativeDataBlocks(params.blocks);
-  const fallbackMessages =
+  const fallbackMessages: SlackFormattingDisabledMessage[] =
     survivorBlocks.length === 0
       ? chunkSlackTextAtHardLimit(accessibilityText, textLimit).map((text) => ({
           text,

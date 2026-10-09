@@ -35,7 +35,8 @@ vi.mock("../../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
 }));
-vi.mock("../../infra/kysely-sync.js", () => ({
+vi.mock("../../infra/kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/kysely-sync.js")>()),
   getNodeSqliteKysely: edge.forbidden,
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
@@ -74,7 +75,6 @@ vi.mock("./session-change-event.js", () => ({ emitSessionsChanged: edge.emit }))
 vi.mock("./session-goal-request.js", () => ({
   fingerprintSessionGoalRequest: () => "fingerprint",
 }));
-vi.mock("./validation.js", () => ({ assertValidParams: () => true }));
 
 function invoke() {
   const respond = vi.fn();
@@ -155,7 +155,11 @@ describe("Goal RPC event custody", () => {
       event.resolve();
       await pending;
       expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0]).toBe(!broadcastFails);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { operationId: "operation-id", status: "updated" },
+        undefined,
+      );
       expect(edge.record).toHaveBeenCalledOnce();
     },
   );

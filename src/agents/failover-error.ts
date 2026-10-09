@@ -4,11 +4,12 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -26,15 +27,19 @@ import {
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
+import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import {
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import {
   isSessionPlacementSettlementClosedError,
   isAgentRunSupersededAbortReason,
 } from "./run-termination.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "./sessions/transcript-turn-error.js";
 
 export {
   FailoverError,
@@ -49,22 +54,20 @@ const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
+  "CodexNodeExecServerDisconnectedError",
   "GatewayDrainingError",
+  "NodeRunnerUpdateRequiredError",
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+  "SqliteWorkerError",
 ]);
 
-// Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
-// Keep the fact weakly keyed to the original error, never inferred from display text.
-const modelFallbackStops = resolveGlobalSingleton(
-  Symbol.for("openclaw.modelFallbackStops"),
-  () => new WeakSet<Error>(),
-);
+export { recordModelFallbackStop } from "./model-fallback-stop.js";
 
-export function recordModelFallbackStop(error: Error): void {
-  modelFallbackStops.add(error);
+export function hasRecordedModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(isRecordedModelFallbackStop);
 }
 
 export function hasModelFallbackStop(error: unknown): boolean {
@@ -73,7 +76,8 @@ export function hasModelFallbackStop(error: unknown): boolean {
     isAgentRunSupersededAbortReason(error) ||
     collectErrorGraphCandidates(error, resolveNestedErrors).some(
       (candidate) =>
-        (candidate instanceof Error && modelFallbackStops.has(candidate)) ||
+        isRecordedModelFallbackStop(candidate) ||
+        isSessionTranscriptTurnMismatchErrorMessage(readDirectErrorMessage(candidate)) ||
         (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
     )
   );
@@ -317,8 +321,16 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)),
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) =>
+      RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
+      resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
+  );
+}
+
+function hasPreparedModelRuntimeOwnerNotPublished(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) => candidate instanceof PreparedModelRuntimeOwnerNotPublishedError,
   );
 }
 
@@ -413,6 +425,13 @@ function resolveFailoverClassificationFromErrorInternal(
     seen.add(err);
   }
   if (isFailoverError(err)) {
+    const classification = classifyFailoverSignal({
+      ...normalizeErrorSignal(err, providerHint),
+      message: err.rawError ?? err.message,
+    });
+    if (classification?.kind === "reason" && classification.sameModelRetry === false) {
+      return { kind: "reason", reason: err.reason, sameModelRetry: false };
+    }
     return {
       kind: "reason",
       reason: err.reason,
@@ -466,13 +485,17 @@ function resolveFailoverClassificationFromErrorInternal(
   return null;
 }
 
-function resolveFailoverClassificationFromError(
+export function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
   if (isAgentHarnessPreflightError(err)) {
+    return null;
+  }
+  // Local coordination codes such as SQLite "overloaded" are not provider signals.
+  if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
@@ -517,23 +540,13 @@ export function buildProviderReauthCommand(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string | undefined {
   const trimmed = provider.trim();
-  if (!trimmed || hasControlCharacter(trimmed)) {
+  if (!trimmed || containsAsciiControlCharacter(trimmed)) {
     return undefined;
   }
   return formatCliCommand(
     `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`,
     env,
   );
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Convert a failover or raw error into structured fields for logs/UI. */
@@ -668,7 +681,15 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
-  if (err instanceof AgentHarnessSessionSupersededError) {
+  if (
+    err instanceof AgentHarnessSessionSupersededError ||
+    isSqliteTranscriptMutationConflict(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  // Prepared-owner publication is an OpenClaw runtime fact, not a provider
+  // failure. Changing models cannot republish the current owner (#156975).
+  if (hasPreparedModelRuntimeOwnerNotPublished(err)) {
     return { kind: "coordination", error: err };
   }
   // Gateway admission can fail before any provider turn starts. Preserve that

@@ -9,6 +9,7 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeScope } from "../config/sessions/session-accessor.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -18,19 +19,7 @@ import {
   resolveExistingSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
 } from "./command/session.js";
-
-/** Identifies a run transcript target without naming the current storage artifact. */
-export type AgentRunSessionTarget = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-  threadId?: string | number;
-  /** Internal admission fence paired with sessionId for run-owned transcript writes. */
-  expectedLifecycleRevision?: string;
-  /** Internal durable writer claim installed after session-lane admission. */
-  expectedWriterRunId?: string;
-};
+import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 
 /** Canonical SQLite target resolved from the storage-neutral run identity. */
 type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
@@ -45,15 +34,21 @@ class AgentRunSessionTargetResolutionError extends Error {
 }
 
 /** Resolves the active runtime target used by current run/session internals. */
-export async function resolveAgentRunSessionTarget(params: {
-  agentId?: string;
-  config?: OpenClawConfig;
-  missingSessionKey: "create" | "resolve-existing";
-  sessionId: string;
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: AgentRunSessionTarget;
-}): Promise<ResolvedAgentRunSessionTarget> {
+export async function resolveAgentRunSessionTarget(
+  params: {
+    agentId?: string;
+    config?: OpenClawConfig;
+    missingSessionKey: "create" | "resolve-existing";
+    sessionId: string;
+    sessionFile?: string;
+    sessionKey?: string;
+    sessionTarget?: AgentRunSessionTarget;
+  },
+  prepareTarget?: (scope: SessionTranscriptRuntimeScope) => Promise<{
+    target: SessionTranscriptRuntimeTarget;
+    assertCurrent: () => void;
+  }>,
+): Promise<ResolvedAgentRunSessionTarget> {
   const config = params.config ?? getRuntimeConfig();
   const sessionTarget = params.sessionTarget;
   const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
@@ -250,16 +245,16 @@ export async function resolveAgentRunSessionTarget(params: {
     targetStorePath ??
     legacyMarker?.storePath ??
     resolveSessionStorePathCore(config.session?.store, { agentId: effectiveAgentId });
-  const target = await resolveSessionTranscriptRuntimeTarget({
+  const scope = {
     ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
     sessionId,
     sessionKey,
     storePath,
     ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
-  });
-  const { restoreSessionColdTranscript } =
-    await import("../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(target);
+  };
+  const prepared = prepareTarget ? await prepareTarget(scope) : undefined;
+  const target = prepared?.target ?? (await resolveSessionTranscriptRuntimeTarget(scope));
+  prepared?.assertCurrent();
   return target;
 }
 

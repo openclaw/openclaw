@@ -44,7 +44,6 @@ import type {
   TalkAgentConsultRequest,
   TalkAgentConsultSource,
   TalkRequesterFinalBinding,
-  TalkRequesterFinalRegistration,
 } from "./client-agent-consult.types.js";
 import {
   resolveTalkAgentConsultAuthority,
@@ -63,6 +62,8 @@ const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
     prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
   };
 });
+
+type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
 
 function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
@@ -290,7 +291,7 @@ export function createTalkClientAgentConsultRunner(params: {
     const getAdditionalSystemPrompt = () => confirmationRetryContext;
     const runtime = owner
       ? createOwnedAgentRuntime(owner, assertCurrent, getAdditionalSystemPrompt)
-      : assertCurrent || source === "native-delegation"
+      : assertCurrent || source === "native-delegation" || confirmationGrant
         ? createTalkClientAgentRuntime({
             config: params.config,
             ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
@@ -350,13 +351,11 @@ export function createTalkClientAgentConsultRunner(params: {
                 config: params.config,
               });
             }
-            if (source === "native-delegation") {
-              confirmationObservation = observeClientVoiceConfirmationRun({
-                agentId,
-                voiceSessionId,
-                runId,
-              });
-            }
+            confirmationObservation = observeClientVoiceConfirmationRun({
+              agentId,
+              voiceSessionId,
+              runId,
+            });
             if (owner) {
               assertCurrent?.();
               owner.identity = { runId, sessionId };
@@ -380,8 +379,7 @@ export function createTalkClientAgentConsultRunner(params: {
             }
             if (
               confirmationGrant &&
-              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId }) &&
-              source === "native-delegation"
+              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId })
             ) {
               confirmationRetryContext = confirmationGrant.retryContext;
             }
@@ -429,7 +427,9 @@ export function createTalkClientAgentConsultRunner(params: {
       )
       .then((result) => {
         yielded = result.yielded === true;
-        const confirmationReply = confirmationObservation?.readReply();
+        const confirmationReply = confirmationObservation?.readReply({
+          includeConfirmationId: source === "tool-call",
+        });
         return confirmationReply ? { ...result, text: confirmationReply } : result;
       })
       .finally(() => {
@@ -530,7 +530,9 @@ export function createTalkClientAgentConsultRunner(params: {
       runTarget: {
         runId: identity.runId,
         signal: ownerSignal,
-        isCurrent: (sessionId) => isOwnerCurrent(owner, sessionId),
+        isCurrent: (sessionId) =>
+          isOwnerCurrent(owner, sessionId) &&
+          completionClaim.resolveCurrentRegistration() !== undefined,
       },
       getToolAuthorityOverlay: () => {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
@@ -540,16 +542,23 @@ export function createTalkClientAgentConsultRunner(params: {
         if (!registration) {
           throw new Error("The active Talk consult backend is no longer current");
         }
-        const overlay = prepareTalkClientControlAuthority({
+        return prepareTalkClientControlAuthority({
           config: params.config,
           sessionTarget: params.sessionTarget,
           authority,
           source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
-        const projected = registration.toolAuthority.project(overlay);
+      },
+      prepareToolAuthorityOverlay: async (overlay) => {
+        const registration = completionClaim.resolveCurrentRegistration();
+        if (!registration) {
+          throw new Error("The active Talk consult backend is no longer current");
+        }
+        const projected = await registration.toolAuthority.projectAsync(overlay);
         if (
           !projected ||
+          !isOwnerCurrent(owner, identity.sessionId) ||
           completionClaim.resolveCurrentRegistration()?.toolAuthority !== registration.toolAuthority
         ) {
           throw new Error("The active Talk consult caller authority no longer matches");
@@ -563,10 +572,25 @@ export function createTalkClientAgentConsultRunner(params: {
             confirmationRetryContext = grant.retryContext;
           }
         }
-        return overlay;
       },
       text: prompt,
       getSteeringContext: () => confirmationRetryContext,
+      createUserTurnTranscriptRecorder:
+        owner.source === "native-delegation"
+          ? (text) =>
+              createUserTurnTranscriptRecorder({
+                input: { text, display: false },
+                target: {
+                  agentId,
+                  sessionId: identity.sessionId,
+                  sessionKey: canonicalKey,
+                  storePath,
+                  expectedSessionId: identity.sessionId,
+                  sessionEntry: undefined,
+                  config: params.config,
+                },
+              })
+          : undefined,
       mode: "steer",
     });
     if (!result.ok || result.queued !== true || !isOwnerCurrent(owner, identity.sessionId)) {

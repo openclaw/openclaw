@@ -8,26 +8,14 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates, type ControlUiAuthSource } from "./control-ui-auth.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
-type ApplicationConfigAuthSource = {
-  hello?: { auth?: { deviceToken?: string | null } | null } | null;
-  settings?: { token?: string | null } | null;
-  password?: string | null;
-};
-
 type ApplicationConfig = {
-  assistantIdentity: {
-    agentId: string | null;
-    name: string;
-    avatar: string | null;
-    avatarSource: string | null;
-    avatarStatus: "none" | "local" | "remote" | "data" | null;
-    avatarReason: string | null;
-  };
+  assistantIdentity: ReturnType<typeof normalizeAssistantIdentity>;
   serverVersion: string | null;
   serverBuildId?: string | null;
   devGitBranch: string | null;
@@ -36,20 +24,16 @@ type ApplicationConfig = {
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
+  /** Null until the serving Gateway publishes its bootstrap policy. */
+  newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
+  uploadsEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
-export type ApplicationConfigCapability = {
-  readonly current: ApplicationConfig;
-  refresh: (options?: {
-    skipWithoutAuthCandidate?: boolean;
-    signal?: AbortSignal;
-  }) => Promise<ApplicationConfig | null>;
-  subscribe: (listener: (config: ApplicationConfig) => void) => () => void;
-};
+export type ApplicationConfigCapability = ReturnType<typeof createApplicationConfigCapability>;
 
 function readDocumentTerminalEnabled(): boolean | null {
   if (typeof document === "undefined") {
@@ -69,7 +53,9 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
   communityInvite: false,
+  newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  uploadsEnabled: true,
   cliAgentsEnabled: false,
   pluginAssetsRequireAuth: true,
   pluginFrameGrants: [],
@@ -115,7 +101,9 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
+    newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
+    uploadsEnabled: parsed.uploadsEnabled !== false,
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
     pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
@@ -174,8 +162,8 @@ async function loadApplicationConfig(params: {
 
 export function createApplicationConfigCapability(params: {
   resourceBasePath: string;
-  getAuth?: () => ApplicationConfigAuthSource;
-}): ApplicationConfigCapability {
+  getAuth?: () => ControlUiAuthSource;
+}) {
   let current = DEFAULT_APPLICATION_CONFIG;
   let authVersion = 0;
   let refreshVersion = 0;
@@ -202,7 +190,7 @@ export function createApplicationConfigCapability(params: {
     get current() {
       return current;
     },
-    async refresh(options) {
+    async refresh(options?: { skipWithoutAuthCandidate?: boolean; signal?: AbortSignal }) {
       // Queued bootstrap work cannot own credentials: plugin activation may
       // request its asset grant before that queue reaches the config refresh.
       const candidates = resolveAuth();
@@ -278,9 +266,7 @@ export function createApplicationConfigCapability(params: {
         }
       }
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: (config: ApplicationConfig) => void) =>
+      registerListener(listeners, listener),
   };
 }

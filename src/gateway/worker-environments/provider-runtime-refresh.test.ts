@@ -5,8 +5,10 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
-import { createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -18,41 +20,46 @@ describe("worker environment runtime upgrades", () => {
   const currentReceipt = {
     ...support.BOOTSTRAP_RECEIPT,
     bundleHash: "b".repeat(64),
-    openclawVersion: "2026.7.3",
+    openclawVersion: "2026.9.27",
     protocolFeatures: [
       WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
       WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
     ],
   };
 
-  function setupUpgrade(
+  async function setupUpgrade(
     transport: "node" | "ssh",
     state: "ready" | "idle" | "attached" = "attached",
     bootstrapReceipt: WorkerAdmissionHandshake = support.BOOTSTRAP_RECEIPT,
+    targetReceipt: WorkerAdmissionHandshake = currentReceipt,
   ) {
     const environmentId = "worker-runtime-upgrade";
-    support.testState.store.createIntent({
+    await support.testState.store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "development",
       profileSnapshot: { settings: { region: "test", desktop: true } },
       provisionOperationId: `provision:${environmentId}`,
     });
-    support.testState.store.transition({ environmentId, from: "requested", to: "provisioning" });
+    await support.testState.store.transition({
+      environmentId,
+      from: "requested",
+      to: "provisioning",
+    });
     if (transport === "ssh") {
-      support.testState.store.transition({
+      await support.testState.store.transition({
         environmentId,
         from: "provisioning",
         to: "bootstrapping",
         patch: { leaseId: `lease:${environmentId}`, sshEndpoint: support.SSH_ENDPOINT },
       });
     }
-    const ready = support.testState.store.transition({
+    const ready = await support.testState.store.transition({
       environmentId,
       from: transport === "node" ? "provisioning" : "bootstrapping",
       to: "ready",
       patch: {
-        ...support.readyPatch(environmentId, bootstrapReceipt),
+        ...support.readyPatch(environmentId, { ...bootstrapReceipt, installKind: "bundle" }),
         desktop: support.DESKTOP,
         ...(transport === "node"
           ? { leaseId: `lease:${environmentId}`, nodeDeviceId: `node:${environmentId}` }
@@ -62,7 +69,7 @@ describe("worker environment runtime upgrades", () => {
     const environment =
       state === "ready"
         ? ready
-        : support.testState.store.transition({
+        : await support.testState.store.transition({
             environmentId,
             from: "ready",
             to: state,
@@ -76,7 +83,7 @@ describe("worker environment runtime upgrades", () => {
     });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, {
+        ? await seedActivePlacement(placements, {
             environmentId,
             ownerEpoch: environment.ownerEpoch,
             executionMode: transport === "node" ? "worker-turn" : "remote-exec",
@@ -93,14 +100,14 @@ describe("worker environment runtime upgrades", () => {
       expect(events.at(-1)).toBe("stopped");
       expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
       events.push("installed");
-      return currentReceipt;
+      return targetReceipt;
     });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      ...currentReceipt,
+      ...targetReceipt,
     }));
     support.testState.bootstrapWorker = vi.fn(async ({ installation, sshEndpoint }) => {
-      expect(installation.bundleHash).toBe(currentReceipt.bundleHash);
+      expect(installation.bundleHash).toBe(targetReceipt.bundleHash);
       expect(sshEndpoint).toEqual(environment.sshEndpoint);
       return install();
     });
@@ -113,16 +120,44 @@ describe("worker environment runtime upgrades", () => {
         >[0],
       ) => {
         expect(params.deviceId).toBe(environment.nodeDeviceId);
-        expect(params.artifact.bundleHash).toBe(currentReceipt.bundleHash);
+        expect(params.artifact.bundleHash).toBe(targetReceipt.bundleHash);
         params.assertCurrent?.();
         return install();
       },
     );
-    const service = support.createService(support.createProvider({ provision, destroy }), {
-      tunnelManager,
-      placementStore: createWorkerSessionPlacementGate(placements),
-      ensureNodeWorkerBundle,
-    });
+    const nodeTunnelManager: NonNullable<
+      support.WorkerEnvironmentServiceOptions["nodeTunnelManager"]
+    > = {
+      status: () => "stopped",
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
+      start: vi.fn(async () => {
+        throw new Error("Node workspace transport was not configured");
+      }),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    };
+    const bindService = (store: typeof placements, restarting = false) => {
+      const gate = createWorkerSessionPlacementGate(store, {
+        rejectExistingWorkerClaims: restarting,
+      });
+      const service = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          provision,
+          destroy,
+        }),
+        {
+          tunnelManager,
+          nodeTunnelManager,
+          placementStore: gate,
+          ensureNodeWorkerBundle,
+        },
+      );
+      return { gate, service };
+    };
+    const { service } = bindService(placements);
     return {
       environment,
       placement,
@@ -135,6 +170,18 @@ describe("worker environment runtime upgrades", () => {
       destroy,
       ensureNodeWorkerBundle,
       service,
+      tunnelManager,
+      nodeTunnelManager,
+      restart: async () => {
+        await support.reopenWorkerEnvironmentStore();
+        const restarted = createWorkerSessionPlacementStore({
+          database: support.testState.stateDb,
+          now: () => support.testState.nowMs,
+        });
+        await restarted.recoverWorkerSessionToolOperationsAfterRestart();
+        restarted.clearLocalTurnClaimsAfterRestart();
+        return { placements: restarted, ...bindService(restarted, true) };
+      },
     };
   }
 
@@ -146,7 +193,7 @@ describe("worker environment runtime upgrades", () => {
   ] as const)(
     "upgrades the %s %s runtime while retaining its machine and workspace",
     async (transport, state) => {
-      const h = setupUpgrade(transport, state);
+      const h = await setupUpgrade(transport, state);
       await h.service.reconcileOnce();
       expect(h.events).toEqual(["stopped", "installed"]);
       expect(h.stop).toHaveBeenCalledWith(h.environment.environmentId, h.environment.ownerEpoch);
@@ -185,7 +232,7 @@ describe("worker environment runtime upgrades", () => {
   it.each(["node", "ssh"] as const)(
     "retains the %s machine after an interrupted install and retries its runtime",
     async (transport) => {
-      const h = setupUpgrade(transport);
+      const h = await setupUpgrade(transport);
       h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));
       await h.service.reconcileOnce();
       expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
@@ -216,8 +263,76 @@ describe("worker environment runtime upgrades", () => {
     },
   );
 
+  it("exposes an in-flight node refresh and isolates progress listeners until it settles", async () => {
+    const h = await setupUpgrade("node");
+    const installing = createDeferred<() => void>();
+    const installed = createDeferred<typeof currentReceipt>();
+    h.ensureNodeWorkerBundle.mockImplementationOnce(async (params) => {
+      params.assertCurrent?.();
+      installing.resolve(() => params.onProgress?.());
+      return installed.promise;
+    });
+    const recovery = h.service.reconcileOnce();
+    const reportProgress = await installing.promise;
+    const refresh = h.service.readRuntimeRefresh(h.environment.environmentId);
+    const listener = vi.fn();
+    let unsubscribe: (() => void) | undefined;
+    let unsubscribeThrowing: (() => void) | undefined;
+    try {
+      expect(refresh).toBeDefined();
+      unsubscribeThrowing = refresh!.onProgress(() => {
+        throw new Error("progress listener failed");
+      });
+      unsubscribe = refresh!.onProgress(listener);
+      expect(() => reportProgress()).not.toThrow();
+      expect(listener).toHaveBeenCalledOnce();
+      unsubscribe();
+      reportProgress();
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe?.();
+      unsubscribeThrowing?.();
+      installed.resolve(currentReceipt);
+      await recovery;
+    }
+    await expect(refresh!.settled).resolves.toBeUndefined();
+    expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
+      lastError: null,
+    });
+    expect(h.placements.get(REQUEST.sessionId)?.workerBundleHash).toBe(currentReceipt.bundleHash);
+  });
+
+  it("settles and clears a failed node refresh while retaining its existing error recovery", async () => {
+    const h = await setupUpgrade("node");
+    const installing = createDeferred();
+    const installed = createDeferred<typeof currentReceipt>();
+    h.install.mockImplementationOnce(async () => {
+      installing.resolve();
+      return installed.promise;
+    });
+    const recovery = h.service.reconcileOnce();
+    await installing.promise;
+    const refresh = h.service.readRuntimeRefresh(h.environment.environmentId);
+    try {
+      expect(refresh).toBeDefined();
+    } finally {
+      installed.reject(new Error("runtime download interrupted"));
+      await recovery;
+    }
+    await expect(refresh!.settled).resolves.toBeUndefined();
+    expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      state: "attached",
+      bootstrapReceipt: h.environment.bootstrapReceipt,
+      lastError: "runtime download interrupted",
+    });
+    expect(h.placements.get(REQUEST.sessionId)).toEqual(h.placement);
+  });
+
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
-    const h = setupUpgrade("ssh", "attached", {
+    const h = await setupUpgrade("ssh", "attached", {
       ...support.BOOTSTRAP_RECEIPT,
       protocolFeatures: [
         WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
@@ -259,10 +374,162 @@ describe("worker environment runtime upgrades", () => {
     });
   });
 
+  it.each(["unchanged build", "same-version build"] as const)(
+    "recovers published Gateway Stop state after restart with %s",
+    async (change) => {
+      // v2026.9.6 placement-reclaim persists these shapes; current admission owns the schema.
+      const releasedReceipt = {
+        ...currentReceipt,
+        ...support.BOOTSTRAP_RECEIPT,
+        openclawVersion: "2026.9.6",
+        protocolFeatures: currentReceipt.protocolFeatures,
+      };
+      const unchanged = change === "unchanged build";
+      const targetReceipt = unchanged
+        ? releasedReceipt
+        : { ...currentReceipt, openclawVersion: releasedReceipt.openclawVersion };
+      const h = await setupUpgrade(
+        unchanged ? "node" : "ssh",
+        "attached",
+        releasedReceipt,
+        targetReceipt,
+      );
+      await h.placements.startDrain({
+        sessionId: REQUEST.sessionId,
+        environmentId: h.environment.environmentId,
+        ownerEpoch: h.environment.ownerEpoch,
+        expectedGeneration: h.placement!.generation,
+      });
+      if (!unchanged) {
+        await h.placements.claimReclaimWorkspaceResult({
+          ...REQUEST,
+          claimId: "reclaim-runtime-upgrade",
+          runId: "reclaim-runtime-upgrade",
+          owner: {
+            kind: "local",
+            environmentId: h.environment.environmentId,
+            ownerEpoch: h.environment.ownerEpoch,
+          },
+        });
+      }
+      const restarted = await h.restart();
+      expect(restarted.placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "draining",
+        turnClaim: null,
+      });
+      expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual(
+        unchanged
+          ? []
+          : [
+              expect.objectContaining({
+                environmentId: h.environment.environmentId,
+                ownerEpoch: h.environment.ownerEpoch,
+                gatewayInstanceId: h.placements.workspaceResultInstanceId(),
+                workspaceAcceptedAtMs: null,
+                stagedResultRef: null,
+              }),
+            ],
+      );
+      const fixture = createHarness(support.testState.stateDb, restarted.placements, {
+        workspacePath: support.testState.root,
+      });
+      const openWorkspace = async () => {
+        expect(h.events).toEqual(unchanged ? [] : ["stopped", "installed"]);
+        return {
+          ...fixture.tunnelHandle(h.environment.ownerEpoch),
+          environmentId: h.environment.environmentId,
+        };
+      };
+      vi.spyOn(h.tunnelManager, "start").mockImplementation(openWorkspace);
+      vi.mocked(h.nodeTunnelManager.start).mockImplementation(openWorkspace);
+      h.destroy.mockImplementation(async () => {
+        expect(fixture.log).toContain("workspace:verify-local");
+        expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+          { workspaceAcceptedAtMs: expect.any(Number) },
+        ]);
+        fixture.log.push("provider:release");
+      });
+      const publicationAuthority: boolean[] = [];
+      const unsubscribe = sessionChanges.subscribeFacts(() => {
+        const placement = restarted.placements.get(REQUEST.sessionId);
+        const claim = placement && projectWorkerSessionTurnClaim(placement);
+        if (claim) {
+          publicationAuthority.push(restarted.gate.validateWorkerTurn(claim));
+        }
+      });
+      const reconcileEnvironment = restarted.service.reconcileEnvironment;
+      vi.spyOn(restarted.service, "reconcileEnvironment").mockImplementation(
+        async (environmentId) => {
+          if (unchanged) {
+            const placement = restarted.placements.get(REQUEST.sessionId)!;
+            const claim = projectWorkerSessionTurnClaim(placement)!;
+            expect(restarted.placements.validateWorkspaceResultClaim(claim)).toBe(true);
+            expect(restarted.gate.validateWorkerTurn(claim)).toBe(false);
+            const before = support.testState.store.getCredential(environmentId);
+            await expect(restarted.service.acquireTurnCredential(claim)).rejects.toThrow(
+              "not authoritative",
+            );
+            expect(support.testState.store.getCredential(environmentId)).toEqual(before);
+            if (!before) {
+              throw new Error("Released-state fixture lost its retained credential");
+            }
+            const identity = {
+              ...before,
+              credentialExpiresAtMs: before.expiresAtMs,
+              protocolFeatures: releasedReceipt.protocolFeatures,
+              runId: claim.runId,
+              turnClaim: claim,
+            };
+            expect(restarted.service.validateWorkerConnection(identity)).toBe("placement-mismatch");
+            await expect(
+              restarted.service.commitTranscript(
+                identity,
+                support.transcriptRequest(identity, "recovery cannot execute"),
+              ),
+            ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+            await expect(
+              restarted.service.pushLiveEvent(
+                identity,
+                support.assistantEvent(identity, "recovery cannot execute"),
+              ),
+            ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+            fixture.log.push("worker-authority:denied-before-io");
+          }
+          await reconcileEnvironment(environmentId);
+        },
+      );
+      const recovery = createHarness(support.testState.stateDb, restarted.placements, {
+        workspacePath: support.testState.root,
+        environmentService: restarted.service,
+      });
+      try {
+        await recovery.service.reconcile("startup");
+        if (unchanged) {
+          expect(publicationAuthority).toContain(false);
+          expect(publicationAuthority).not.toContain(true);
+        }
+        expect(h.install).toHaveBeenCalledTimes(unchanged ? 0 : 1);
+        expect(h.destroy).toHaveBeenCalledOnce();
+        expect(h.provision).not.toHaveBeenCalled();
+        expect(restarted.placements.get(REQUEST.sessionId)).toMatchObject({
+          state: "reclaimed",
+          turnClaim: null,
+          workspaceBaseManifestRef: fixture.reconciledManifestRef,
+        });
+        expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+        console.info(
+          `[stop-recovery-proof] published-state=v2026.9.6 case=${change} reopened=draining events=${fixture.log.join(",")} final=reclaimed`,
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it.each(["shutdown", "destroy", "move", "live turn"] as const)(
     "rejects a finished installation after %s closes its authority",
     async (race) => {
-      const h = setupUpgrade("node");
+      const h = await setupUpgrade("node");
       const started = createDeferred();
       const installed = createDeferred<typeof currentReceipt>();
       h.install.mockImplementationOnce(async () => {
@@ -275,12 +542,12 @@ describe("worker environment runtime upgrades", () => {
       if (race === "shutdown") {
         stopping = h.service.stop();
       } else if (race === "destroy") {
-        support.testState.store.requestDestroy({
+        await support.testState.store.requestDestroy({
           environmentId: h.environment.environmentId,
           state: "attached",
         });
       } else if (race === "move") {
-        h.placements.beginPlacementMove({
+        await h.placements.beginPlacementMove({
           sessionId: REQUEST.sessionId,
           source: {
             generation: h.placement!.generation,
@@ -290,7 +557,7 @@ describe("worker environment runtime upgrades", () => {
           target: { kind: "gateway" },
         });
       } else {
-        h.placements.claimTurn({
+        await h.placements.claimTurn({
           ...REQUEST,
           claimId: "new-live-claim",
           runId: "new-live-run",

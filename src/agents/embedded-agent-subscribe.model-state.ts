@@ -142,6 +142,12 @@ export function createEmbeddedModelState(
       });
     }
   };
+  const recordContextAccounting = (message: AssistantMessage, successful: boolean) =>
+    params.onContextAccountingEvent?.({
+      kind: "model",
+      contextTokens: deriveSessionTotalTokens({ lastCallUsage: normalizeUsage(message.usage) }),
+      successful,
+    });
 
   return {
     captureModelEvent: (evt: AgentSessionEvent): void => {
@@ -172,10 +178,15 @@ export function createEmbeddedModelState(
       publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
         case "turn_end":
-          // Async tool fragments emit message_end before the provider response finishes.
-          successfulModelResponse ||=
+          // message_end may describe an async tool fragment, not a completed provider response.
+          if (
+            !successfulModelResponse &&
             (message.stopReason === "stop" || message.stopReason === "toolUse") &&
-            !isProviderRefusalAssistantError(message);
+            !isProviderRefusalAssistantError(message)
+          ) {
+            successfulModelResponse = true;
+            recordContextAccounting(message, true);
+          }
           return;
         case "message_start":
           pending = undefined;
@@ -203,12 +214,7 @@ export function createEmbeddedModelState(
           completed = applyAssistantDeliveryDirectives(structuredClone(message));
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
-          params.onContextAccountingEvent?.({
-            kind: "model",
-            contextTokens: deriveSessionTotalTokens({
-              lastCallUsage: normalizeUsage(message.usage),
-            }),
-          });
+          recordContextAccounting(message, false);
       }
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),

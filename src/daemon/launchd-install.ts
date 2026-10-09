@@ -84,48 +84,32 @@ function createLaunchAgentRemovalError(error: unknown): Error {
     `LaunchAgent removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
   );
 }
-async function currentGatewayLaunchAgentLabel(
-  targetEnv: Record<string, string | undefined>,
-): Promise<string | undefined> {
-  const configuredCurrentLabel = process.env.OPENCLAW_LAUNCHD_LABEL?.trim();
-  const candidates = new Set([
-    resolveLaunchAgentLabel(targetEnv),
-    ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
-  ]);
-  for (const label of candidates) {
-    if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
-      return label;
-    }
-  }
-  return undefined;
-}
-
 async function assertExternalLaunchAgentMutation(
   env: Record<string, string | undefined>,
   action: "install" | "uninstall",
 ): Promise<void> {
-  const currentLabel = await currentGatewayLaunchAgentLabel(env);
-  if (!currentLabel) {
-    return;
+  const configuredCurrentLabel = process.env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const candidates = new Set([
+    resolveLaunchAgentLabel(env),
+    ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
+  ]);
+  for (const label of candidates) {
+    if (await isCurrentProcessInsideLaunchdService(label)) {
+      throw new Error(
+        `Refusing to ${action} LaunchAgent ${resolveLaunchAgentLabel(env)} from inside ${label}; run this command from an external shell.`,
+      );
+    }
   }
-  throw new Error(
-    `Refusing to ${action} LaunchAgent ${resolveLaunchAgentLabel(env)} from inside ${currentLabel}; run this command from an external shell.`,
-  );
 }
 
-export async function stageLaunchAgent({
-  stdout,
-  ...args
-}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
-  const { plistPath, stdoutPath } = await writeLaunchAgentPlist({ ...args, stdout });
-  writeFormattedLines(
-    stdout,
-    [
-      { label: "Staged LaunchAgent", value: plistPath },
-      { label: "Logs", value: stdoutPath },
-    ],
-    { leadingBlankLine: true },
-  );
+export async function stageLaunchAgent(
+  args: GatewayServiceInstallArgs,
+): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  writeFormattedLines(args.stdout, [
+    { label: "Staged LaunchAgent", value: plistPath },
+    { label: "Logs", value: stdoutPath },
+  ]);
   return { plistPath };
 }
 
@@ -169,9 +153,6 @@ async function deactivateLaunchAgentDefinition(domain: string, plistPath: string
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
-  if (args.beforeLoad) {
-    throw new Error("Deferred native service load is not supported on this platform.");
-  }
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
@@ -269,13 +250,9 @@ export async function installLaunchAgent(
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
-  writeFormattedLines(
-    args.stdout,
-    [
-      { label: "Installed LaunchAgent", value: plistPath },
-      { label: "Logs", value: stdoutPath },
-    ],
-    { leadingBlankLine: true },
-  );
+  writeFormattedLines(args.stdout, [
+    { label: "Installed LaunchAgent", value: plistPath },
+    { label: "Logs", value: stdoutPath },
+  ]);
   return { plistPath };
 }

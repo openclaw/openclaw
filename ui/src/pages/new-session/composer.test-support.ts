@@ -19,6 +19,7 @@ export function composerContext(snapshot: { client: GatewayBrowserClient | null 
     config: { current: {} },
     sessions: { state: { result: null } },
     theme: {
+      branding: { mascot: "claw", critters: [] },
       settings: { lobsterPetVisits: true, lobsterPetSounds: false },
       refresh: vi.fn(),
     },
@@ -129,7 +130,7 @@ export function renderComposer(
 
 export function resetComposerTestFixtures() {
   for (const attachmentDraft of attachmentDrafts) {
-    attachmentDraft.reset({ release: true });
+    attachmentDraft.reset();
   }
   attachmentDrafts.length = 0;
   for (const textareaController of textareaControllers) {

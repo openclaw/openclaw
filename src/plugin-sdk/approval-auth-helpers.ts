@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveApprovalApprovers } from "./approval-approvers.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 
 type ApproverInput = string | number;
 type ApprovalApproverInputs = {
@@ -70,6 +70,25 @@ export function isImplicitSameChatApprovalAuthorization(
   );
 }
 
+function authorizeResolvedApprover(
+  approvers: string[],
+  senderId: string | undefined,
+  approvalKind: ChannelApprovalKind,
+  channelLabel: string,
+) {
+  if (approvers.length === 0) {
+    // Empty approver sets authorize only the same-chat fallback, not an approver bypass.
+    return markImplicitSameChatApprovalAuthorization({ authorized: true });
+  }
+  if (senderId && approvers.includes(senderId)) {
+    return { authorized: true } as const;
+  }
+  return {
+    authorized: false,
+    reason: `❌ You are not authorized to approve ${approvalKind} requests on ${channelLabel}.`,
+  } as const;
+}
+
 /**
  * Builds the approval authorization adapter shared by channels that resolve
  * approvers from account-scoped config.
@@ -103,18 +122,15 @@ export function createResolvedApproverActionAuthAdapter(params: {
       approvalKind: ChannelApprovalKind;
     }) {
       const approvers = params.resolveApprovers({ cfg, accountId });
-      if (approvers.length === 0) {
-        // Empty approver sets are implicit same-chat fallback, not explicit approver bypass.
-        return markImplicitSameChatApprovalAuthorization({ authorized: true });
-      }
-      const normalizedSenderId = senderId ? normalizeSenderId(senderId) : undefined;
-      if (normalizedSenderId && approvers.includes(normalizedSenderId)) {
-        return { authorized: true } as const;
-      }
-      return {
-        authorized: false,
-        reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
-      } as const;
+      // Preserve the empty-list path without invoking a channel normalizer.
+      const normalizedSenderId =
+        approvers.length > 0 && senderId ? normalizeSenderId(senderId) : undefined;
+      return authorizeResolvedApprover(
+        approvers,
+        normalizedSenderId,
+        approvalKind,
+        params.channelLabel,
+      );
     },
   };
 }
@@ -135,21 +151,17 @@ export function createChannelApprovalAuth(params: {
 }): ChannelApprovalAuth {
   const normalizeSenderId =
     params.normalizeSenderId ?? ((value: string) => params.normalizeApprover(value));
-  const resolveApprovers = (context: ApprovalContext): string[] => {
-    const inputs = params.resolveInputs(context);
-    return resolveApprovalApprovers({
+  const resolveInputApprovers = (inputs: ApprovalApproverInputs) =>
+    resolveApprovalApprovers({
       ...inputs,
       normalizeApprover: params.normalizeApprover,
       normalizeDefaultTo: params.normalizeDefaultTo,
     });
-  };
+  const resolveApprovers = (context: ApprovalContext): string[] =>
+    resolveInputApprovers(params.resolveInputs(context));
   const isAuthorizedSender = (context: ApprovalActorContext): boolean => {
     const inputs = params.resolveInputs(context);
-    const approvers = resolveApprovalApprovers({
-      ...inputs,
-      normalizeApprover: params.normalizeApprover,
-      normalizeDefaultTo: params.normalizeDefaultTo,
-    });
+    const approvers = resolveInputApprovers(inputs);
     const senderId = context.senderId ? normalizeSenderId(context.senderId) : undefined;
     if (
       params.isWildcardAuthorized?.({ purpose: "sender", senderId, inputs, approvers }) === true
@@ -170,28 +182,19 @@ export function createChannelApprovalAuth(params: {
         approvalKind: ChannelApprovalKind;
       }) {
         const inputs = params.resolveInputs(input);
-        const approvers = resolveApprovalApprovers({
-          ...inputs,
-          normalizeApprover: params.normalizeApprover,
-          normalizeDefaultTo: params.normalizeDefaultTo,
-        });
+        const approvers = resolveInputApprovers(inputs);
         const senderId = input.senderId ? normalizeSenderId(input.senderId) : undefined;
         if (
           params.isWildcardAuthorized?.({ purpose: "action", senderId, inputs, approvers }) === true
         ) {
           return { authorized: true } as const;
         }
-        if (approvers.length === 0) {
-          // Empty approver sets are implicit same-chat fallback, not explicit approver bypass.
-          return markImplicitSameChatApprovalAuthorization({ authorized: true });
-        }
-        if (senderId && approvers.includes(senderId)) {
-          return { authorized: true } as const;
-        }
-        return {
-          authorized: false,
-          reason: `❌ You are not authorized to approve ${input.approvalKind} requests on ${params.channelLabel}.`,
-        } as const;
+        return authorizeResolvedApprover(
+          approvers,
+          senderId,
+          input.approvalKind,
+          params.channelLabel,
+        );
       },
     },
   };

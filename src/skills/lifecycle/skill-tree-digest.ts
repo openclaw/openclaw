@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
 import { sha256File, sha256Hex } from "../../infra/crypto-digest.js";
 
 const EXCLUDED_METADATA_DIRS = new Set([".clawhub", ".clawdhub"]);
@@ -10,25 +11,22 @@ type SkillTreeEntry = {
   type: "directory" | "file";
 };
 
-async function collectEntries(root: string, relativeDir = ""): Promise<SkillTreeEntry[]> {
-  const absoluteDir = path.join(root, relativeDir);
-  const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
+/** Digests every installed skill file except OpenClaw's own provenance metadata. */
+export async function digestClawHubSkillTree(skillDir: string): Promise<string> {
+  const scoped = await root(skillDir);
   const collected: SkillTreeEntry[] = [];
-  for (const entry of entries.toSorted((left, right) =>
-    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-  )) {
-    if (!relativeDir && EXCLUDED_METADATA_DIRS.has(entry.name)) {
-      continue;
-    }
-    const relativePath = path.join(relativeDir, entry.name);
-    const portablePath = relativePath.split(path.sep).join("/");
-    const stat = await fs.lstat(path.join(root, relativePath));
+  for await (const entry of scoped.walk("", {
+    symlinkPolicy: "include",
+    entryFilter: ({ relativePath }) =>
+      EXCLUDED_METADATA_DIRS.has(relativePath) ? "skip-subtree" : "include",
+  })) {
+    const portablePath = entry.relativePath;
+    const stat = await fs.lstat(path.join(skillDir, portablePath));
     if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
       throw new Error(`Skill tree contains unsupported entry ${JSON.stringify(portablePath)}.`);
     }
     if (stat.isDirectory()) {
       collected.push({ path: portablePath, type: "directory" });
-      collected.push(...(await collectEntries(root, relativePath)));
       continue;
     }
     if (stat.nlink > 1) {
@@ -40,16 +38,10 @@ async function collectEntries(root: string, relativeDir = ""): Promise<SkillTree
     collected.push({
       path: portablePath,
       type: "file",
-      sha256: await sha256File(path.join(root, relativePath), end),
+      sha256: await sha256File(path.join(skillDir, portablePath), end),
     });
   }
-  return collected;
-}
-
-/** Digests every installed skill file except OpenClaw's own provenance metadata. */
-export async function digestClawHubSkillTree(skillDir: string): Promise<string> {
-  const entries = await collectEntries(skillDir);
-  return `sha256:${sha256Hex(JSON.stringify(entries))}`;
+  return `sha256:${sha256Hex(JSON.stringify(collected))}`;
 }
 
 /** File fingerprints captured before a ClawHub update or removal. */

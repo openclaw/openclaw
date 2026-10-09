@@ -2,13 +2,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
+  assertSqliteSchemaContains,
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
+  readSqliteSchemaCookie,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { hasLegacyCronRunLogs } from "../infra/state-migrations.cron-run-logs.js";
+import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -17,25 +21,31 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import {
-  getOpenClawStateRuntimeSchema,
   isOpenClawStateStartupRepairableSchemaIssue,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
-export function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolean {
+export function needsOpenClawStateDatabaseSchemaRepair(
+  pathname: string,
+  scope: "automatic" | "doctor" = "automatic",
+): boolean {
   let database: DatabaseSync | undefined;
   try {
     database = openNodeSqliteDatabase(pathname, { readOnly: true });
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
-      readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
       hasLegacyCronRunLogs(database) ||
       detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
+      if (scope === "doctor") {
+        assertSqliteIntegrity(database, pathname);
+      }
     }
     return needsRepair;
   } catch {
@@ -53,6 +63,13 @@ export function assertCurrentStateRuntimeSchema(
 ): void {
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
+  assertSqliteSchemaContains(
+    database,
+    pathname,
+    OPENCLAW_STATE_SCHEMA_SQL,
+    STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+    readTable,
+  );
 }
 
 /** Catalog presence is enough to refuse retired history without reading or rewriting its rows. */
@@ -65,26 +82,43 @@ export function assertNoLegacyStateRuntimeRepair(database: DatabaseSync, pathnam
 export function isOpenClawStateSchemaFastPathEligible(
   database: DatabaseSync,
   pathname: string,
+  integrity?: OpenClawStateIntegrityAdmission,
 ): boolean {
-  return runSqliteDeferredTransactionSync(database, () => {
-    assertSupportedStateSchemaVersion(database, pathname);
-    if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
-      return false;
-    }
-    assertSqliteIntegrity(database, pathname);
-    // Both policies see this read transaction; repair must collect fresh facts after it ends.
-    const readTable = createSqliteTableContractReader(database);
-    assertCurrentStateRuntimeSchema(database, pathname, readTable);
-    const startupRepairRequired = collectSqliteSchemaIssues(
-      database,
-      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-      readTable,
-    ).some(isOpenClawStateStartupRepairableSchemaIssue);
-    if (startupRepairRequired) {
-      return false;
-    }
-    assertNoLegacyStateRuntimeRepair(database, pathname);
-    return true;
-  });
+  let publishIntegrity: (() => void) | undefined;
+  const eligible = runSqliteDeferredTransactionSync(
+    database,
+    () => {
+      const userVersion = assertSupportedStateSchemaVersion(database, pathname);
+      if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+        return false;
+      }
+      const schemaVersion = readSqliteSchemaCookie(database);
+      if (typeof schemaVersion !== "number") {
+        throw new Error(`Shared-state database ${pathname} schema version is unavailable.`);
+      }
+      publishIntegrity = assertOpenClawStateRuntimeIntegrity(
+        database,
+        pathname,
+        { schemaVersion, userVersion },
+        integrity,
+      );
+      // Both policies see this read transaction; repair must collect fresh facts after it ends.
+      const readTable = createSqliteTableContractReader(database);
+      assertCurrentStateRuntimeSchema(database, pathname, readTable);
+      const startupRepairRequired = collectSqliteSchemaIssues(
+        database,
+        OPENCLAW_STATE_SCHEMA_SQL,
+        STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+        readTable,
+      ).some(isOpenClawStateStartupRepairableSchemaIssue);
+      if (startupRepairRequired) {
+        return false;
+      }
+      assertNoLegacyStateRuntimeRepair(database, pathname);
+      return true;
+    },
+    { operationLabel: "state.admission.fast-path" },
+  );
+  publishIntegrity?.();
+  return eligible;
 }

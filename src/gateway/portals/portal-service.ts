@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import type { TlsOptions } from "node:tls";
 import type {
@@ -16,6 +20,8 @@ import type { GatewayPortalIngressConfig } from "../../config/types.gateway.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -35,6 +41,7 @@ type PortalEntry = {
   path?: string;
   origin?: string;
   target: PortalTarget;
+  resourceOwnerKey?: string;
   token: string;
   cookieNamespace: string;
   listenPort: number;
@@ -49,10 +56,10 @@ type PortalRuntimeEntry = {
   upgradedSockets: Set<Duplex>;
   onClose?: () => Promise<void> | void;
   claim?: TailscaleRouteClaim;
-  detachIngressOwner?: () => void;
+  detachOwner?: () => void;
   ingressSignal?: AbortSignal;
   revoked?: boolean;
-  responses: Set<import("node:http").ServerResponse>;
+  responses: Set<ServerResponse>;
 };
 
 type GatewayPortalOpenParams = {
@@ -60,6 +67,10 @@ type GatewayPortalOpenParams = {
   target?: PortalTarget;
   /** Revalidated before metadata mutation or publication after asynchronous listener startup. */
   assertCurrent?: () => void;
+  /** Resource lifetime, independent of the operation or actor that created the link. */
+  ownerSignal?: AbortSignal;
+  /** Internal resource identity; scoped resources must not adopt a global portal's lifetime. */
+  resourceOwnerKey?: string;
   /** Ownership transfers to open; unused targets are released even when it rejects or reuses a portal. */
   onClose?: () => Promise<void> | void;
   origin?: string;
@@ -68,14 +79,96 @@ type GatewayPortalOpenParams = {
   path?: string;
 };
 
-export type GatewayPortalService = {
-  open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
-  list: () => PortalSummary[];
-  listWorkerPortals: (environmentId: string, ownerEpoch: number) => PortalSummary[];
-  close: (id: string, assertCurrent?: () => void) => Promise<void>;
-  closeWorkerPortals: (environmentId: string, ownerEpoch?: number) => Promise<void>;
-  closeAll: () => Promise<void>;
+export type GatewayPortalService = Omit<
+  ReturnType<typeof createGatewayPortalService>,
+  "startIngress"
+>;
+
+type PortalOperationOwner = {
+  environmentId: string;
+  ownerEpoch: number;
+  resourceOwnerKey?: string;
+  assertCurrent(): void;
+  ownershipError: string;
+  prepareTarget(port: number): Promise<{
+    connect: () => Promise<Duplex>;
+    close: () => Promise<void> | void;
+    assertCurrent?: () => void;
+    ownerSignal?: AbortSignal;
+    origin?: string;
+  }>;
 };
+
+/** Callers retain admission and resource authority; the portal owner settles target custody. */
+export function createPortalOperations(
+  service: GatewayPortalService,
+  owner?: PortalOperationOwner,
+  onChanged?: () => void,
+) {
+  const list = () => {
+    owner?.assertCurrent();
+    const portals = owner
+      ? service.listWorkerPortals(owner.environmentId, owner.ownerEpoch, owner.resourceOwnerKey)
+      : service.list();
+    owner?.assertCurrent();
+    return { portals };
+  };
+  return {
+    list,
+    async close(id: string) {
+      if (owner && !list().portals.some((portal) => portal.id === id)) {
+        throw new Error(owner.ownershipError);
+      }
+      await service.close(id, owner?.assertCurrent.bind(owner));
+      onChanged?.();
+      owner?.assertCurrent();
+      return { closed: true };
+    },
+    async open(request: { port: number; title?: string; description?: string; path?: string }) {
+      owner?.assertCurrent();
+      const connection = await owner?.prepareTarget(request.port);
+      try {
+        owner?.assertCurrent();
+        connection?.assertCurrent?.();
+        connection?.ownerSignal?.throwIfAborted();
+      } catch (error) {
+        await connection?.close();
+        throw error;
+      }
+      const opened = await service.open({
+        targetPort: request.port,
+        ...(owner && connection
+          ? {
+              target: {
+                kind: "worker" as const,
+                environmentId: owner.environmentId,
+                ownerEpoch: owner.ownerEpoch,
+                remotePort: request.port,
+                connect: connection.connect,
+              },
+              assertCurrent: owner.assertCurrent.bind(owner),
+              onClose: connection.close,
+              resourceOwnerKey: owner.resourceOwnerKey,
+              ownerSignal: connection.ownerSignal,
+              origin: connection.origin,
+            }
+          : {}),
+        ...(request.title !== undefined ? { title: request.title } : {}),
+        ...(request.description !== undefined ? { description: request.description } : {}),
+        ...(request.path !== undefined ? { path: request.path } : {}),
+      });
+      // Publication transfers custody; an ended invocation only loses access to its result.
+      onChanged?.();
+      owner?.assertCurrent();
+      return opened;
+    },
+  };
+}
+
+export function redactPortalSummary(summary: PortalSummary): PortalSummary {
+  const { tokenQuery: _tokenQuery, url: _url, ...redacted } = summary;
+  return redacted;
+}
 
 function removeServers(shared: HttpServer[], owned: readonly HttpServer[]): void {
   for (const server of owned) {
@@ -113,6 +206,45 @@ async function formatPortalHost(host: string): Promise<string> {
   return openableHost.includes(":") ? `[${openableHost}]` : openableHost;
 }
 
+function createPortalProxyHandlers(
+  resolveRuntime: (req: IncomingMessage) => PortalRuntimeEntry | undefined,
+  tls: boolean,
+) {
+  return {
+    request: (req: IncomingMessage, res: ServerResponse) => {
+      const runtime = resolveRuntime(req);
+      if (!runtime) {
+        res.writeHead(404);
+        res.end("Unknown portal");
+        return;
+      }
+      runtime.responses.add(res);
+      res.once("close", () => runtime.responses.delete(res));
+      handlePortalProxyRequest({ req, res, target: runtime.portal, tls });
+    },
+    upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const runtime = resolveRuntime(req);
+      if (!runtime) {
+        // HTTP relinquishes upgraded sockets; own errors while the 404 flushes.
+        socket.once("error", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, {
+          status: 404,
+          body: { contentType: "text/plain; charset=utf-8", text: "Unknown portal" },
+        });
+        return;
+      }
+      handlePortalProxyUpgrade({
+        req,
+        socket,
+        head,
+        target: runtime.portal,
+        upgradedSockets: runtime.upgradedSockets,
+        tls,
+      });
+    },
+  };
+}
+
 /** Creates the gateway-lifetime registry and per-portal transport listeners. */
 export function createGatewayPortalService(params: {
   httpBindHosts: readonly string[];
@@ -121,7 +253,7 @@ export function createGatewayPortalService(params: {
   ingress?: GatewayPortalIngressConfig;
   managedTailscale?: boolean;
   gatewayOrigins?: readonly string[];
-}): GatewayPortalService & { startIngress: () => Promise<void> } {
+}) {
   const entries = new Map<string, PortalRuntimeEntry>();
   const operations = new Map<string, Promise<void>>();
   let closed = false;
@@ -159,32 +291,7 @@ export function createGatewayPortalService(params: {
     ? createPortalIngress({
         port: params.ingress.port,
         httpServers: params.httpServers,
-        request: (req, res) => {
-          const runtime = lookupIngress(req.headers.host);
-          if (!runtime) {
-            res.writeHead(404);
-            res.end("Unknown portal");
-            return;
-          }
-          runtime.responses.add(res);
-          res.once("close", () => runtime.responses.delete(res));
-          handlePortalProxyRequest({ req, res, target: runtime.portal, tls: true });
-        },
-        upgrade: (req, socket, head) => {
-          const runtime = lookupIngress(req.headers.host);
-          if (!runtime) {
-            socket.destroy();
-            return;
-          }
-          handlePortalProxyUpgrade({
-            req,
-            socket,
-            head,
-            target: runtime.portal,
-            upgradedSockets: runtime.upgradedSockets,
-            tls: true,
-          });
-        },
+        ...createPortalProxyHandlers((req) => lookupIngress(req.headers.host), true),
       })
     : undefined;
 
@@ -208,22 +315,8 @@ export function createGatewayPortalService(params: {
     };
   };
 
-  const serialize = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
-    const previous = operations.get(id) ?? Promise.resolve();
-    const result = previous.then(operation, operation);
-    const completion = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    operations.set(id, completion);
-    try {
-      return await result;
-    } finally {
-      if (operations.get(id) === completion) {
-        operations.delete(id);
-      }
-    }
-  };
+  const serialize = <T>(id: string, operation: () => Promise<T>): Promise<T> =>
+    enqueueKeyedTask({ tails: operations, key: id, task: operation });
 
   const closeEntry = async (id: string): Promise<void> => {
     const runtime = entries.get(id);
@@ -241,7 +334,7 @@ export function createGatewayPortalService(params: {
       response.destroy();
     }
     runtime.responses.clear();
-    runtime.detachIngressOwner?.();
+    runtime.detachOwner?.();
     // Release every owned resource even if a route owner reports a teardown error.
     const cleanup = await Promise.allSettled([
       closeServers(runtime.servers),
@@ -266,13 +359,17 @@ export function createGatewayPortalService(params: {
     startIngress: async () => {
       await ingress?.start();
     },
-    open: async (input) => {
+    open: async (input: GatewayPortalOpenParams) => {
       const target: PortalTarget = input.target ?? { kind: "local", port: input.targetPort };
       const targetPort = target.kind === "local" ? target.port : target.remotePort;
+      const resourceOwnerSuffix =
+        input.resourceOwnerKey === undefined
+          ? ""
+          : `-owner-${sha256HexPrefixCore(input.resourceOwnerKey, 32)}`;
       const id =
         target.kind === "local"
           ? `p${targetPort}`
-          : `p${targetPort}-worker-${sha256HexPrefixCore(target.environmentId, 32)}-${target.ownerEpoch}`;
+          : `p${targetPort}${resourceOwnerSuffix}-worker-${sha256HexPrefixCore(target.environmentId, 32)}-${target.ownerEpoch}`;
       return await serialize(id, async () => {
         let releaseTarget = input.onClose;
         try {
@@ -280,10 +377,12 @@ export function createGatewayPortalService(params: {
             throw new Error("portals unavailable");
           }
           input.assertCurrent?.();
+          input.ownerSignal?.throwIfAborted();
           let existing = entries.get(id);
           if (existing && !isAvailable(existing)) {
             await closeEntry(id);
             input.assertCurrent?.();
+            input.ownerSignal?.throwIfAborted();
             if (closed) {
               throw new Error("portals unavailable");
             }
@@ -291,14 +390,10 @@ export function createGatewayPortalService(params: {
           }
           if (existing) {
             existing.portal.title = input.title?.trim() || existing.portal.title;
-            if (input.description !== undefined) {
-              existing.portal.description = input.description;
-            }
-            if (input.path !== undefined) {
-              existing.portal.path = input.path;
-            }
-            if (input.origin !== undefined) {
-              existing.portal.origin = input.origin;
+            for (const key of ["description", "path", "origin"] as const) {
+              if (input[key] !== undefined) {
+                existing.portal[key] = input[key];
+              }
             }
             return summarize(existing.portal);
           }
@@ -325,6 +420,9 @@ export function createGatewayPortalService(params: {
           const tlsOptions = managed ? undefined : params.tlsOptions;
           const portal: PortalEntry = {
             id,
+            ...(input.resourceOwnerKey !== undefined
+              ? { resourceOwnerKey: input.resourceOwnerKey }
+              : {}),
             title: input.title?.trim() || `Port ${targetPort}`,
             ...(input.description ? { description: input.description } : {}),
             ...(input.path ? { path: input.path } : {}),
@@ -339,47 +437,21 @@ export function createGatewayPortalService(params: {
             partitionedCookies: Boolean(ingress || managed || tlsOptions),
           };
           const upgradedSockets = new Set<Duplex>();
-          const responses = new Set<import("node:http").ServerResponse>();
-          const handler = (
-            req: import("node:http").IncomingMessage,
-            res: import("node:http").ServerResponse,
-          ) => {
-            const runtime = entries.get(id);
-            if (!runtime || runtime.portal !== portal || !isAvailable(runtime)) {
-              res.writeHead(404);
-              res.end("Unknown portal");
-              return;
-            }
-            responses.add(res);
-            res.once("close", () => responses.delete(res));
-            handlePortalProxyRequest({
-              req,
-              res,
-              target: portal,
-              tls: Boolean(managed || tlsOptions),
-            });
-          };
+          const responses = new Set<ServerResponse>();
+          const { request, upgrade } = createPortalProxyHandlers(
+            () => {
+              const runtime = entries.get(id);
+              return runtime?.portal === portal && isAvailable(runtime) ? runtime : undefined;
+            },
+            Boolean(managed || tlsOptions),
+          );
           const servers = ingress
             ? []
             : bindHosts.map(() =>
-                tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler),
+                tlsOptions ? createHttpsServer(tlsOptions, request) : createHttpServer(request),
               );
           for (const server of servers) {
-            server.on("upgrade", (req, socket, head) => {
-              const runtime = entries.get(id);
-              if (!runtime || runtime.portal !== portal || !isAvailable(runtime)) {
-                socket.destroy();
-                return;
-              }
-              handlePortalProxyUpgrade({
-                req,
-                socket,
-                head,
-                target: portal,
-                upgradedSockets,
-                tls: Boolean(managed || tlsOptions),
-              });
-            });
+            server.on("upgrade", upgrade);
           }
           // Registration precedes every bind so whole-gateway cleanup owns partial startup.
           params.httpServers.push(...servers);
@@ -406,7 +478,7 @@ export function createGatewayPortalService(params: {
                   serviceName: "portal",
                   endpointScheme: tlsOptions ? "https" : "http",
                 });
-                const address = primaryServer.address() as AddressInfo | null;
+                const address = primaryServer.address();
                 if (!address || typeof address === "string") {
                   throw new Error("Portal listener failed to resolve its port");
                 }
@@ -478,6 +550,7 @@ export function createGatewayPortalService(params: {
             }
             // A queued successor must not discover a portal created by a now-revoked turn.
             input.assertCurrent?.();
+            input.ownerSignal?.throwIfAborted();
             if (managed && (managed.signal.aborted || !claim?.isActive())) {
               throw new Error("Private portal ingress lost before publication");
             }
@@ -499,7 +572,10 @@ export function createGatewayPortalService(params: {
             ingressSignal: managed?.signal,
           };
           entries.set(id, runtime);
-          if (claim && managed) {
+          const ownerSignals = [input.ownerSignal, managed?.signal].filter(
+            (signal): signal is AbortSignal => signal !== undefined,
+          );
+          if (claim || ownerSignals.length) {
             const retire = () => {
               // Capture this exact lifetime: an old claim must never close a reopened portal.
               if (entries.get(id) === runtime) {
@@ -511,9 +587,17 @@ export function createGatewayPortalService(params: {
                 }).catch(() => undefined);
               }
             };
-            managed.signal.addEventListener("abort", retire, { once: true });
-            runtime.detachIngressOwner = () => managed.signal.removeEventListener("abort", retire);
-            void claim.exited.then(retire, retire);
+            for (const signal of ownerSignals) {
+              signal.addEventListener("abort", retire, { once: true });
+            }
+            runtime.detachOwner = () => {
+              for (const signal of ownerSignals) {
+                signal.removeEventListener("abort", retire);
+              }
+            };
+            if (claim) {
+              void claim.exited.then(retire, retire);
+            }
           }
           releaseTarget = undefined;
           return summarize(portal);
@@ -523,22 +607,23 @@ export function createGatewayPortalService(params: {
       });
     },
     list: () => summarizeEntries(entries.values()),
-    listWorkerPortals: (environmentId, ownerEpoch) =>
+    listWorkerPortals: (environmentId: string, ownerEpoch: number, resourceOwnerKey?: string) =>
       summarizeEntries(
         [...entries.values()].filter(
           ({ portal }) =>
             portal.target.kind === "worker" &&
             portal.target.environmentId === environmentId &&
-            portal.target.ownerEpoch === ownerEpoch,
+            portal.target.ownerEpoch === ownerEpoch &&
+            (resourceOwnerKey === undefined || portal.resourceOwnerKey === resourceOwnerKey),
         ),
       ),
-    close: async (id, assertCurrent) => {
+    close: async (id: string, assertCurrent?: () => void) => {
       await serialize(id, () => {
         assertCurrent?.();
         return closeEntry(id);
       });
     },
-    closeWorkerPortals: async (environmentId, ownerEpoch) => {
+    closeWorkerPortals: async (environmentId: string, ownerEpoch?: number) => {
       const environmentSuffix = `-worker-${sha256HexPrefixCore(environmentId, 32)}-`;
       // Include in-flight opens so teardown fences a listener still awaiting its bind.
       const ids = [...new Set([...entries.keys(), ...operations.keys()])].filter((id) => {

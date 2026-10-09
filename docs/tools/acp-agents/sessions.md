@@ -59,6 +59,10 @@ Two ways to start an ACP session:
 
 ### `sessions_spawn` parameters
 
+<ParamField path="user" type="string">
+  The person's requester_profile.id, required when several people have steered this turn.
+</ParamField>
+
 <ParamField path="task" type="string" required>
   Initial prompt sent to the ACP session.
 </ParamField>
@@ -66,7 +70,12 @@ Two ways to start an ACP session:
   Must be `"acp"` for ACP sessions.
 </ParamField>
 <ParamField path="agentId" type="string">
-  ACP target harness id. Falls back to `acp.defaultAgent` if set.
+  ACP target harness id or configured ACP agent alias. Falls back to
+  `acp.defaultAgent` if set. Raw harnesses create children under the requesting
+  OpenClaw agent; configured aliases own their children. The harness remains
+  the ACP runtime identity in either case.
+  For cross-agent aliases, thread binding and inline delivery use the owner's bound channel account.
+  A raw harness keeps the requesting agent's active inbound account.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   Request thread binding flow where supported.
@@ -78,7 +87,7 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="cwd" type="string">
   Requested runtime working directory (validated by backend/runtime policy).
-  If omitted, ACP spawn inherits the target agent workspace when configured;
+  If omitted, ACP spawn inherits the OpenClaw owner's workspace when configured;
   missing inherited paths fall back to backend defaults, while real access
   errors are returned.
 </ParamField>
@@ -88,7 +97,12 @@ Two ways to start an ACP session:
 <ParamField path="resumeSessionId" type="string">
   Resume an existing ACP session instead of creating a new one. The agent
   replays its conversation history via `session/load`. Requires
-  `runtime: "acp"`.
+  `runtime: "acp"`. The ID must be recorded for the selected backend and harness and belong
+  to the requester (the requester itself or a session it spawned or parented).
+  Unknown IDs are rejected without enumerating the agent's sessions.
+  Historical harness-owned records remain eligible under the same checks;
+  spawning does not move or rewrite their histories. OpenClaw checks ownership
+  again before initializing the resumed runtime.
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   `"parent"` streams initial ACP run progress summaries back to the requester
@@ -111,9 +125,11 @@ config-the-default error).
   normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup config
   before `session/new`; slash forms such as `openai/gpt-5.4/high` also set
   Codex ACP reasoning effort. When omitted, `sessions_spawn({ runtime: "acp" })`
-  uses existing subagent model defaults (`agents.defaults.subagents.model` or
-  `agents.entries.*.subagents.model`) when configured; otherwise it lets the ACP
-  harness use its own default model. Other harnesses must advertise ACP model
+  uses the target agent's `subagents.model`, then `agents.defaults.subagents.model`,
+  then the target agent's explicit `model.primary`. If none is configured, it lets
+  the ACP harness use its own default model. Native subagent spawns do not inherit
+  an ACP agent's harness primary; they use native subagent settings or the native
+  default instead. Other harnesses must advertise ACP model
   controls for an explicit selection. Without those controls, an explicit
   selection fails; an inherited default may be omitted so the harness can use
   its own default.

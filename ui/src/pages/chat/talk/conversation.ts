@@ -9,6 +9,7 @@ export type RealtimeTalkConversationEntry = {
   text: string;
   isStreaming: boolean;
   order?: number;
+  transcriptId?: string;
 };
 
 export type RealtimeTalkConversationState = {
@@ -52,6 +53,26 @@ export function continueRealtimeTalkConversation(
 }
 
 export function updateRealtimeTalkConversation(
+  state: RealtimeTalkConversationState,
+  update: RealtimeTalkTranscriptUpdate,
+): RealtimeTalkConversationState {
+  const next = applyRealtimeTalkTranscript(state, update);
+  if (!update.transcriptId || next === state) {
+    return next;
+  }
+  const entryIndex =
+    update.itemId !== undefined
+      ? next.entries.findIndex((entry) => entry.id === `item-${update.itemId}`)
+      : next.entries.findLastIndex((entry) => entry.role === update.role);
+  if (entryIndex < 0) {
+    return next;
+  }
+  const entries = next.entries.slice();
+  entries[entryIndex] = { ...entries[entryIndex]!, transcriptId: update.transcriptId };
+  return { ...next, entries };
+}
+
+function applyRealtimeTalkTranscript(
   state: RealtimeTalkConversationState,
   update: RealtimeTalkTranscriptUpdate,
 ): RealtimeTalkConversationState {
@@ -144,7 +165,10 @@ function upsertRealtimeConversationEntry(
   isFinal: boolean,
   textMode?: RealtimeTalkTranscript["textMode"],
 ): RealtimeTalkConversationState {
-  if (entryId === null) {
+  const targetIndex =
+    entryId === null ? -1 : state.entries.findIndex((entry) => entry.id === entryId);
+  const entry = state.entries[targetIndex];
+  if (!entry) {
     const id = `rt-${state.nextEntryId}`;
     const entries = [
       ...state.entries,
@@ -163,11 +187,6 @@ function upsertRealtimeConversationEntry(
     );
   }
 
-  const targetIndex = state.entries.findIndex((entry) => entry.id === entryId);
-  const entry = state.entries[targetIndex];
-  if (!entry) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, textMode);
-  }
   const mergedText =
     textMode === "snapshot"
       ? text
@@ -185,7 +204,7 @@ function upsertRealtimeConversationEntry(
             ? { ...candidate, text: updatedText, isStreaming: !isFinal }
             : candidate,
         );
-  return rememberRealtimeConversationEntry({ ...state, entries }, role, entryId, isFinal);
+  return rememberRealtimeConversationEntry({ ...state, entries }, role, entry.id, isFinal);
 }
 
 function rememberRealtimeConversationEntry(
@@ -277,16 +296,13 @@ function mergeAssistantTranscriptText(
   if (existing.trim() === "") {
     return incoming.trimStart();
   }
-  if (!isFinal) {
-    return `${existing}${incoming}`;
-  }
   // Final shape differs by provider: OpenAI-style finals carry the full
   // transcript (replace), Google Live finals carry only the last fragment
   // (append). Replace only when incoming restates what already streamed.
-  if (incoming === existing || incoming.startsWith(existing)) {
-    return incoming;
-  }
-  if (looksLikeTranscriptReplacement(existing, incoming)) {
+  if (
+    isFinal &&
+    (incoming.startsWith(existing) || looksLikeTranscriptReplacement(existing, incoming))
+  ) {
     return incoming;
   }
   return `${existing}${incoming}`;
@@ -296,10 +312,7 @@ function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal
   if (existing.trim() === "") {
     return incoming.trimStart();
   }
-  if (incoming === "") {
-    return existing;
-  }
-  if (incoming === existing || existing.endsWith(incoming)) {
+  if (existing.endsWith(incoming)) {
     return existing;
   }
   if (incoming.startsWith(existing)) {

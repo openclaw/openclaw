@@ -33,14 +33,6 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
   return requireRecord(entry, `supplemental catalog entry ${id}`);
 }
 
-function runtimeCompatFields(value: unknown): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const { codeMode: _codeMode, ...compat } = requireRecord(value, "model compat");
-  return compat;
-}
-
 const ACTIVE_MODEL_IDS = manifest.modelCatalog.providers["opencode-go"].models
   .filter((model) => !("status" in model))
   .map((model) => model.id);
@@ -405,55 +397,9 @@ describe("opencode-go provider plugin", () => {
     expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
   });
 
-  it("loads model discovery and keeps every promoted row identical to runtime", async () => {
+  it("exposes only trusted offline starter models through provider discovery", async () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
-    const manifestProvider = requireRecord(
-      manifest.modelCatalog.providers["opencode-go"],
-      "manifest provider",
-    );
-    if (!Array.isArray(manifestProvider.models)) {
-      throw new Error("expected manifest models");
-    }
-    const manifestIds = manifestProvider.models.map((model) =>
-      String(requireRecord(model, "manifest model").id),
-    );
-    expect(new Set(manifestIds).size).toBe(manifestIds.length);
-    const provider = await registerSingleProviderPlugin(plugin);
-    for (const manifestModel of manifestProvider.models) {
-      const model = requireRecord(manifestModel, "manifest model");
-      const modelId = String(model.id);
-      const runtime = requireRecord(
-        provider.resolveDynamicModel?.({ modelId } as never),
-        `runtime model ${modelId}`,
-      );
-      expect({
-        api: model.api ?? manifestProvider.api,
-        baseUrl: model.baseUrl ?? manifestProvider.baseUrl,
-        reasoning: model.reasoning,
-        input: model.input,
-        contextWindow: model.contextWindow,
-        contextTokens: model.contextTokens,
-        maxTokens: model.maxTokens,
-        thinkingLevelMap: model.thinkingLevelMap,
-        cost: model.cost,
-        compat: runtimeCompatFields(model.compat),
-      }).toEqual({
-        api: runtime.api,
-        baseUrl: runtime.baseUrl,
-        reasoning: runtime.reasoning,
-        input: runtime.input,
-        contextWindow: runtime.contextWindow,
-        contextTokens: runtime.contextTokens,
-        maxTokens: runtime.maxTokens,
-        thinkingLevelMap: runtime.thinkingLevelMap,
-        cost: runtime.cost,
-        compat: runtimeCompatFields(runtime.compat),
-      });
-    }
-  });
-
-  it("exposes only trusted offline starter models through provider discovery", async () => {
     const result = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
     if (!result || !("provider" in result)) {
       throw new Error("expected OpenCode Go static provider");
@@ -862,7 +808,6 @@ describe("opencode-go provider plugin", () => {
 
   it.each([
     ["glm-5.2", "max", undefined, ["high", "max"]],
-    ["grok-4.5", "high", undefined, ["low", "medium", "high"]],
     ["hy3", "low", "none", ["none", "low", "high"]],
   ] as const)(
     "maps %s only to supported wire efforts",

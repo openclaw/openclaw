@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { createPluginPrereleaseTestPlan } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import {
@@ -45,12 +46,16 @@ type MatrixEntry = {
   id?: string;
   label?: string;
   profiles?: string;
+  docker_lanes?: string;
+  published_upgrade_survivor_baselines?: string;
+  shard_id?: string;
   providers?: string;
   suite_group?: string;
   suite_id?: string;
 };
 
 type WorkflowJob = {
+  "timeout-minutes"?: string | number;
   env: Record<string, string>;
   if?: string;
   needs: string[];
@@ -75,6 +80,10 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "runner_group",
+  "package_sha256",
+  "prepublish_plugin_registry_manifest_sha256",
+  "shared_image_archive_sha256",
   "published_upgrade_survivor_baseline_scope",
   "prepare_only",
   "emit_candidate_evidence",
@@ -107,9 +116,24 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
 
 const PACKAGE_UPDATE_CHUNKS = [
   "package-update-openai",
+  "package-update-restart-auth",
   "package-update-onboarding",
   "package-update-migrations",
-  "package-update-self-upgrade",
+];
+
+const FULL_DOCKER_CHUNKS = [
+  "core",
+  ...PACKAGE_UPDATE_CHUNKS,
+  "plugins-runtime-plugins",
+  "plugins-runtime-services",
+  "plugins-runtime-install-a",
+  "plugins-runtime-install-b",
+  "plugins-runtime-install-c",
+  "plugins-runtime-install-d",
+  "plugins-runtime-install-e",
+  "plugins-runtime-install-f",
+  "plugins-runtime-install-g",
+  "plugins-runtime-install-h",
 ];
 
 const PROFILE_EXPECTATIONS = [
@@ -125,38 +149,12 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "stable",
-    dockerE2eChunks: [
-      "core",
-      ...PACKAGE_UPDATE_CHUNKS,
-      "plugins-runtime-plugins",
-      "plugins-runtime-services",
-      "plugins-runtime-install-a",
-      "plugins-runtime-install-b",
-      "plugins-runtime-install-c",
-      "plugins-runtime-install-d",
-      "plugins-runtime-install-e",
-      "plugins-runtime-install-f",
-      "plugins-runtime-install-g",
-      "plugins-runtime-install-h",
-    ],
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
   {
     profile: "full",
-    dockerE2eChunks: [
-      "core",
-      ...PACKAGE_UPDATE_CHUNKS,
-      "plugins-runtime-plugins",
-      "plugins-runtime-services",
-      "plugins-runtime-install-a",
-      "plugins-runtime-install-b",
-      "plugins-runtime-install-c",
-      "plugins-runtime-install-d",
-      "plugins-runtime-install-e",
-      "plugins-runtime-install-f",
-      "plugins-runtime-install-g",
-      "plugins-runtime-install-h",
-    ],
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: [
       "anthropic",
       "google",
@@ -590,14 +588,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(definition.on.workflow_call.inputs).toHaveProperty(input);
       expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
     }
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
-      definition.on.workflow_call.inputs.live_advisory,
-    );
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
-      default: false,
-      required: false,
-      type: "boolean",
-    });
     expect(definition.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual(
       definition.on.workflow_call.inputs.allow_unreleased_changelog,
     );
@@ -632,6 +622,16 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
         dockerE2eChunks,
       );
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
+        ),
+      ).toMatchObject({ timeout_minutes: 60 });
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
+        ),
+      ).toMatchObject({ timeout_minutes: 55 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );
@@ -640,7 +640,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         includeReleasePathSuites: true,
         releaseProfile: profile,
       });
-      expect(admission.docker.map((entry: { chunk?: string }) => entry.chunk)).toEqual(
+      expect(admission.docker.map((entry) => ("chunk" in entry ? entry.chunk : undefined))).toEqual(
         dockerE2eChunks,
       );
       expect(admission.codexSuites).toEqual(
@@ -650,6 +650,53 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       );
     },
   );
+
+  it("isolates migration baselines without duplicating or dropping upgrade coverage", () => {
+    const options = {
+      includeReleasePathSuites: true,
+      releaseProfile: "beta",
+      upgradeSurvivorBaselines: "2026.6.34 2026.8.35 2026.9.7 2026.9.8 2026.9.8",
+    };
+    const rows: MatrixEntry[] = createReleaseWorkflowMatrixPlan(
+      options,
+    ).dockerE2e.matrix.include.filter(
+      (row: MatrixEntry) => row.chunk_id === "package-update-migrations",
+    );
+    expect(rows).toHaveLength(5);
+    expect(new Set(rows.map((row) => row.shard_id)).size).toBe(5);
+    const selection = createReleaseSourceSelection(options).docker.filter(
+      (entry) => "chunk" in entry && entry.chunk === "package-update-migrations",
+    );
+    const plans = selection.map(
+      (entry) =>
+        resolveDockerE2ePlan({
+          includeOpenWebUI: false,
+          liveMode: "all",
+          orderLanes: (lanes) => lanes,
+          planReleaseAll: false,
+          profile: "release-path",
+          releaseChunk: "package-update-migrations",
+          releaseProfile: "beta",
+          selectedLaneNames: entry.lanes ?? [],
+          upgradeSurvivorBaselines: entry.baselines,
+        }).plan,
+    );
+    expect(plans.map((plan) => plan.lanes.length)).toEqual([1, 1, 1, 1, 1]);
+    expect(plans.flatMap((plan) => plan.lanes.map((lane) => lane.name)).toSorted()).toEqual([
+      "published-upgrade-survivor-2026.6.34",
+      "published-upgrade-survivor-2026.8.35",
+      "published-upgrade-survivor-2026.9.7",
+      "published-upgrade-survivor-2026.9.8",
+      "update-channel-switch",
+    ]);
+    expect(plans.every((plan) => plan.lanes.every((lane) => lane.weight === 3))).toBe(true);
+    expect(rows.map((row) => row.docker_lanes)).toEqual(
+      selection.map((entry) => expectDefined(entry.lanes, "migration lane selectors").join(" ")),
+    );
+    expect(rows.map((row) => row.published_upgrade_survivor_baselines)).toEqual(
+      selection.map((entry) => entry.baselines),
+    );
+  });
 
   it("reports omitted lanes for release jobs excluded by the selected profile", () => {
     const plan = createReleaseWorkflowMatrixPlan({
@@ -673,6 +720,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         "inputs.release_test_profile": releaseProfile,
         "inputs.include_openwebui": "false",
         "matrix.chunk_id": "core",
+        "matrix.docker_lanes": "",
         "steps.plan.outputs.needs_package": "1",
         "steps.plan.outputs.needs_live_image": "0",
         "needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id": "",
@@ -736,30 +784,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
-  it("keeps stable release jobs broad enough for stable-required lanes", () => {
-    const plan = createReleaseWorkflowMatrixPlan({
-      includeLiveSuites: true,
-      includeReleasePathSuites: true,
-      releaseProfile: "stable",
-    });
-
-    expect(plan.dockerE2e.count).toBe(15);
-    expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual([
-      "anthropic",
-      "google",
-      "minimax",
-      "openai",
-    ]);
-    expect(plan.liveModels.omitted.map((entry: MatrixEntry) => entry.id)).toEqual([
-      "moonshot",
-      "opencode-go",
-      "openrouter",
-      "xai",
-      "zai",
-      "fireworks",
-    ]);
-  });
-
   it("limits MiniMax Docker live-model coverage to the stable M3 pair", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
@@ -776,7 +800,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
   });
 
-  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+  it("keeps stable and full Anthropic Docker proof blocking", () => {
     const jobs = workflow().jobs;
     const dockerLiveJob = expectDefined(
       jobs.validate_live_docker_provider_suites,
@@ -804,8 +828,8 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         suiteId: "live-gateway-anthropic-docker",
       },
       {
-        advisory: true,
-        label: "Docker live gateway Anthropic (full advisory)",
+        advisory: undefined,
+        label: "Docker live gateway Anthropic (full)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },
@@ -864,6 +888,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       liveImage.steps.find((step) => step.name === "Resolve shared live-test image tag")?.env
         ?.LIVE_IMAGE_EXTENSIONS,
     ).toBe("${{ needs.plan_release_workflow_matrices.outputs.live_image_extensions }}");
+    expect(dockerE2e["timeout-minutes"]).toBe("${{ matrix.timeout_minutes }}");
     expect(dockerE2e.needs).toContain("plan_release_workflow_matrices");
     expect(liveModels.needs).toContain("plan_release_workflow_matrices");
     expect(liveDocker.needs).toContain("plan_release_workflow_matrices");

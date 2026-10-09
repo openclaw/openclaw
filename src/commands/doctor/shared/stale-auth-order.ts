@@ -57,10 +57,6 @@ const AUTH_PROFILE_MODES = new Set(["api_key", "aws-sdk", "oauth", "token"]);
 const INVALID_SQLITE_STORE_WARNING =
   "- Skipped auth.order repair because a SQLite auth profile store is unreadable, unavailable, or contains invalid credentials; repair or re-import that agent's auth store, then rerun doctor.";
 
-function isProfileIdList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((profileId) => typeof profileId === "string");
-}
-
 function readValidConfiguredAuthOrder(cfg: OpenClawConfig): Record<string, string[]> | undefined {
   const order: unknown = cfg.auth?.order;
   if (!isRecord(order)) {
@@ -68,7 +64,7 @@ function readValidConfiguredAuthOrder(cfg: OpenClawConfig): Record<string, strin
   }
   const result: Record<string, string[]> = {};
   for (const [provider, profileIds] of Object.entries(order)) {
-    if (!isProfileIdList(profileIds)) {
+    if (!Array.isArray(profileIds) || !profileIds.every((id) => typeof id === "string")) {
       return undefined;
     }
     result[provider] = profileIds;
@@ -242,19 +238,14 @@ function loadConfiguredAgentAuthStores(
     }
     const owner =
       availability === "present" ? inspectOpenClawAgentDatabaseOwner(databasePath) : undefined;
-    if (owner) {
-      if (
-        owner.status === "unreadable" ||
-        (expectedAgentIds && owner.status === "owned" && !expectedAgentIds.has(owner.agentId))
-      ) {
-        return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
-      }
-    }
-    const loaded = loadCompletePersistedStore(agentDir);
-    if (loaded.status === "invalid") {
+    if (
+      owner?.status === "unreadable" ||
+      (expectedAgentIds && owner?.status === "owned" && !expectedAgentIds.has(owner.agentId))
+    ) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
-    if (owner?.status === "unowned" && loaded.hasAuthTables) {
+    const loaded = loadCompletePersistedStore(agentDir);
+    if (loaded.status === "invalid" || (owner?.status === "unowned" && loaded.hasAuthTables)) {
       return { status: "blocked", warnings: [INVALID_SQLITE_STORE_WARNING] };
     }
     entries.push({ agentDir, databasePath, store: loaded.store, isShared: false });
@@ -528,16 +519,14 @@ function scanStaleConfiguredAuthOrders(params: {
     const fallbackStores = params.activeStores ?? params.stores;
     const hasAutomaticFallback =
       fallbackStores.length > 0 &&
-      fallbackStores.every((store) => {
-        const selectionStore = structuredClone(store);
-        return (
+      fallbackStores.every(
+        (store) =>
           resolveAuthProfileOrder({
             cfg: cfgWithoutStaleOrder,
-            store: selectionStore,
+            store: structuredClone(store),
             provider: canonicalProvider,
-          }).length > 0
-        );
-      });
+          }).length > 0,
+      );
     if (hasAutomaticFallback) {
       hits.push(...staleEntries);
     }
@@ -546,12 +535,9 @@ function scanStaleConfiguredAuthOrders(params: {
 }
 
 /** Remove provably stale config orders and restore per-agent automatic selection. */
-function repairStaleConfiguredAuthOrders(params: {
-  cfg: OpenClawConfig;
-  stores: readonly AuthProfileStore[];
-  activeStores?: readonly AuthProfileStore[];
-  runtimeProfileIds?: ReadonlySet<string>;
-}): { config: OpenClawConfig; changes: string[] } {
+function repairStaleConfiguredAuthOrders(
+  params: Parameters<typeof scanStaleConfiguredAuthOrders>[0],
+): { config: OpenClawConfig; changes: string[] } {
   const hits = scanStaleConfiguredAuthOrders(params);
   if (hits.length === 0) {
     return { config: params.cfg, changes: [] };

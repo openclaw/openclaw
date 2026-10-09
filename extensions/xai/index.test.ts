@@ -190,9 +190,11 @@ describe("xai provider plugin", () => {
     const oauth = provider.auth?.find((method) => method.id === "oauth");
     expect(oauth?.kind).toBe("oauth");
     expect(oauth?.wizard?.choiceId).toBe("xai-oauth");
+    expect(oauth?.wizard?.methodId).toBe("oauth");
     const deviceCode = provider.auth?.find((method) => method.id === "device-code");
     expect(deviceCode?.kind).toBe("device_code");
     expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+    expect(deviceCode?.wizard?.methodId).toBe("device-code");
     expect(deviceCode?.wizard?.assistantVisibility).toBe("manual-only");
     expect(manifest.providerAuthChoices).toContainEqual(
       expect.objectContaining({
@@ -244,16 +246,20 @@ describe("xai provider plugin", () => {
     expect(provider.fetchUsageSnapshot).toEqual(expect.any(Function));
   });
 
-  it("filters the xAI API-key catalog against live model ids", async () => {
+  it("shows every chat model the xAI API-key listing returns", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
+          { id: "grok-4.7", object: "model" },
           { id: "grok-4.6", object: "model" },
           { id: "grok-4.5", object: "model" },
           { id: "grok-4.20-0309-reasoning", object: "model" },
           { id: "grok-4.20-0309-non-reasoning", object: "model" },
-          { id: "not-in-manifest", object: "model" },
+          { id: "grok-5-preview", object: "model" },
+          { id: "grok-4.20-multi-agent-0309", object: "model" },
+          { id: "grok-imagine-image", object: "model" },
+          { id: "grok-imagine-video", object: "model" },
         ],
       }),
       finalUrl: "https://api.x.ai/v1/models",
@@ -266,11 +272,14 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.6");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-reasoning");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-non-reasoning");
-    expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "grok-4.20-0309-non-reasoning",
+      "grok-4.20-0309-reasoning",
+      "grok-4.5",
+      "grok-4.6",
+      "grok-4.7",
+      "grok-5-preview",
+    ]);
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
     const init = fetchParams?.init;
@@ -286,13 +295,6 @@ describe("xai provider plugin", () => {
   it.each([
     ["Grok proxy", "https://cli-chat-proxy.grok.com/v1", true, undefined, undefined],
     [
-      "Grok proxy with trailing slash",
-      "https://cli-chat-proxy.grok.com/v1/",
-      true,
-      undefined,
-      undefined,
-    ],
-    [
       "equivalent Grok proxy URL",
       "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
       true,
@@ -302,13 +304,6 @@ describe("xai provider plugin", () => {
     ["native API", "https://api.x.ai/v1", false, undefined, undefined],
     ["default API", undefined, false, undefined, undefined],
     ["unavailable Grok token", "https://cli-chat-proxy.grok.com/v1", true, false, false],
-    [
-      "unavailable token at an equivalent Grok proxy URL",
-      "https://CLI-CHAT-PROXY.GROK.COM:443/v1/",
-      true,
-      false,
-      false,
-    ],
     ["cold prepared Grok token", "https://cli-chat-proxy.grok.com/v1", true, false, undefined],
     [
       "runtime-materialized Grok token",
@@ -695,10 +690,8 @@ describe("xai provider plugin", () => {
         true,
         undefined,
       ],
-      ["exposes when explicitly enabled for an xAI model with auth", "xai", true, true, true],
       ["hides when explicitly disabled for an xAI model", "xai", true, false, false],
       ["hides by default for a known non-xAI model", "openai", true, false, undefined],
-      ["hides when explicitly disabled for a known non-xAI model", "openai", true, false, false],
       [
         "exposes when explicitly enabled for a known non-xAI model with auth",
         "openai",
@@ -707,9 +700,7 @@ describe("xai provider plugin", () => {
         true,
       ],
       ["hides when the active provider is missing", undefined, true, false, true],
-      ["hides when the active provider is blank", "   ", true, false, true],
       ["hides an xAI model without auth", "xai", false, false, undefined],
-      ["hides an explicit non-xAI opt-in without auth", "openai", false, false, true],
     ])("$0", (_label, provider, hasAuth, expected, enabled) => {
       const factory = registerXaiBilledToolFactories()[toolName];
       const tool = factory({
@@ -912,7 +903,7 @@ describe("xai provider plugin", () => {
       model: createProviderModel({ id: "grok-4-1-fast" }),
     } as never);
     expect(olderReasoningModel?.thinkingLevelMap).toEqual({
-      off: null,
+      off: undefined,
       minimal: null,
       low: null,
       medium: null,

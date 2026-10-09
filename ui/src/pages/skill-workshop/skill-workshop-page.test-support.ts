@@ -1,23 +1,12 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
-import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
 
 export type SkillWorkshopPageTestElement = HTMLElement & {
   context: ApplicationContext;
-  data?: SkillWorkshopRouteData;
-  state?: SkillWorkshopState;
-  handleRevisionRequest: (
-    instructions: string,
-    proposal: SkillWorkshopProposal,
-    proposalAgentId: string,
-    expectedRevisionHash?: string,
-  ) => Promise<SkillWorkshopRevisionAdmissionOutcome>;
   updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
+  requestUpdate(): void;
 };
 
 export function createRuntimeConfigStub(options?: {
@@ -42,11 +31,8 @@ export function createRuntimeConfigStub(options?: {
 export function createContext(
   request: ReturnType<typeof vi.fn>,
   options?: {
-    gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
-    agentSelectionSubscribe?: (listener: () => void) => () => void;
     methods?: string[];
     scopes?: string[];
-    sessions?: ApplicationContext["sessions"];
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
   },
 ): ApplicationContext {
@@ -65,29 +51,30 @@ export function createContext(
   const subscribe = () => () => undefined;
   return {
     basePath: "",
-    gateway: {
-      snapshot,
-      subscribe: options?.gatewaySubscribe ?? subscribe,
-    },
+    gateway: { snapshot, subscribe },
     config: {
       current: { assistantIdentity: { name: "OpenClaw" } },
       subscribe,
     },
-    agents: {
-      state: { agentsList: null },
-      subscribe,
-    },
-    agentSelection: {
-      state: { selectedId: "research" },
-      subscribe: options?.agentSelectionSubscribe ?? subscribe,
-    },
+    agents: { state: { agentsList: null }, subscribe },
+    agentSelection: { state: { selectedId: "research" }, subscribe },
     agentIdentity: {
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,
     },
-    sessions: options?.sessions ?? { state: { result: null, loading: false } },
+    sessions: { state: { result: null, loading: false } },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
+}
+
+/** Simulates the operator connecting the same application context to another Gateway. */
+export function reconnectGateway(context: ApplicationContext, request: ReturnType<typeof vi.fn>) {
+  Object.assign(context.gateway, {
+    snapshot: {
+      ...context.gateway.snapshot,
+      client: createContext(request).gateway.snapshot.client,
+    },
+  });
 }

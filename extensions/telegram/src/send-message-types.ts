@@ -1,11 +1,15 @@
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
 import type { TelegramApiOverride } from "./send-context.js";
-import type { OpenClawConfig } from "./send.runtime.js";
 
 export type TelegramSendOpts = {
   cfg: OpenClawConfig;
@@ -23,6 +27,8 @@ export type TelegramSendOpts = {
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
   tableMode?: MarkdownTableMode;
+  textLimit?: number;
+  chunkMode?: ChunkMode;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
   /** Send video as video note instead of regular video. Defaults to false. */

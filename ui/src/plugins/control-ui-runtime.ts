@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import type {
   PluginControlUiDiagnostic,
   PluginControlUiModule,
@@ -38,6 +39,19 @@ export type ControlUiPluginOwner = {
   host: ControlUiHost;
 };
 
+const UI_CAPABILITY_BY_CONTRIBUTION = {
+  pages: "page",
+  navigation: "navigation",
+  panels: "panel",
+  actions: "action",
+  accessories: "accessory",
+  widgets: "widget",
+  replacements: "replacement",
+} as const satisfies Record<
+  keyof ControlUiContributions,
+  import("../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts").PluginUiCapability
+>;
+
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
@@ -58,7 +72,23 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   constructor(private readonly getContext: () => ApplicationContext) {}
 
   get errors(): readonly PluginControlUiDiagnostic[] {
-    return this.diagnostics;
+    // Warnings belong to live registrations, so ordinary catalog refreshes retain
+    // them and retiring a contribution removes them without hiding activation errors.
+    const warnings = [...this.owners.values(), ...this.loadingOwners].flatMap((owner) =>
+      // SAFETY: the canonical mapping satisfies exactly the contribution registry keys.
+      (Object.keys(UI_CAPABILITY_BY_CONTRIBUTION) as (keyof ControlUiContributions)[])
+        .filter(
+          (kind) =>
+            owner.contributions[kind].size > 0 &&
+            owner.descriptor.uiCapabilities &&
+            !owner.descriptor.uiCapabilities.includes(UI_CAPABILITY_BY_CONTRIBUTION[kind]),
+        )
+        .map((kind) => ({
+          pluginId: owner.descriptor.pluginId,
+          message: `Registered UI capability "${UI_CAPABILITY_BY_CONTRIBUTION[kind]}" is missing from uiCapabilities in openclaw.plugin.json.`,
+        })),
+    );
+    return [...this.diagnostics, ...warnings];
   }
 
   get hasPlugins(): boolean {
@@ -286,7 +316,6 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       selections: new Map<ControlUiSurface, string | null>(),
     };
     this.loadingOwners.add(owner);
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const styles: HTMLLinkElement[] = [];
       const initialize = async (): Promise<ControlUiPluginOwner | undefined> => {
@@ -295,25 +324,19 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           this.disposeOwner(owner),
         );
       };
-      const complete = await Promise.race([
-        initialize(),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "Plugin UI initialization timed out. Check the plugin and reload its UI.",
-                ),
-              ),
-            ACTIVATION_TIMEOUT_MS,
+      const complete = await raceWithTimeout(
+        racePromiseWithAbortSignal(
+          initialize(),
+          abort.signal,
+          () => new Error("Plugin UI activation ended."),
+        ),
+        ACTIVATION_TIMEOUT_MS,
+        () => {
+          throw new Error(
+            "Plugin UI initialization timed out. Check the plugin and reload its UI.",
           );
-          abort.signal.addEventListener(
-            "abort",
-            () => reject(new Error("Plugin UI activation ended.")),
-            { once: true },
-          );
-        }),
-      ]);
+        },
+      );
       if (!complete || !current() || abort.signal.aborted) {
         this.disposeOwner(owner);
         return;
@@ -381,7 +404,6 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         await this.reportActivation(descriptor, client, current, "failed", error);
       }
     } finally {
-      clearTimeout(timer);
       this.loadingOwners.delete(owner);
     }
   }

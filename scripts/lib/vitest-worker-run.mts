@@ -135,6 +135,7 @@ export function createVitestWorkerRun(
   }
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
+    prepare,
     borrow<T>(
       child: ChildProcess,
       completion: Promise<T>,
@@ -228,7 +229,8 @@ export function createVitestWorkerRun(
             );
           } else if (!parent) {
             // Large generations must not block signal delivery during final cleanup.
-            await fs.promises.rm(directory, { recursive: true, force: true });
+            // Desktop metadata can arrive between child deletion and the final rmdir.
+            await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 3 });
           }
         }
       })());

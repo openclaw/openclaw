@@ -32,6 +32,10 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import {
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
+import {
   readDebugOverlayMode,
   shouldCloseDebugOverlay,
   type DebugOverlayElement,
@@ -124,6 +128,9 @@ export class ShellChromeOwner {
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
+    for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
+      host.addEventListener(type, () => host.requestUpdate(), options);
+    }
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
       signal: this.listeners.signal,
@@ -233,15 +240,17 @@ export class ShellChromeOwner {
 
   readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
+    // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
+    const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.closed();
     }
     restoreToastFromNavDrawer(host);
-    const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
+    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
-    if (options.restoreFocus) {
+    if (restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };
@@ -610,9 +619,6 @@ export class ShellChromeOwner {
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
-
-  readonly openApprovals = (): void =>
-    void window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
 
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;

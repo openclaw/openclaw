@@ -12,19 +12,33 @@ const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(
-    (): Array<{ role: "user" | "assistant"; text: string; at: number }> => [],
-  ),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
-vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
+// mock-isolation: Keep audit persistence local while testing hosted session ownership and disposal.
+vi.mock("../../system-agent/transcript-store.js", () => ({
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
+}));
+// mock-isolation: Keep greeting discovery and provider inference outside session-lifecycle tests.
 vi.mock("../../system-agent/greeting.js", () => ({
+  createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
   loadSystemAgentGreetingFacts: vi.fn(() => ({
@@ -133,9 +147,9 @@ beforeEach(() => {
     ok: true,
     binding: {},
   });
-  transcriptStoreMocks.appendTranscriptReset.mockReset();
-  transcriptStoreMocks.appendTranscriptTurn.mockReset();
-  transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+  transcriptStoreMocks.appendReset.mockReset();
+  transcriptStoreMocks.appendTurn.mockReset();
+  transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -179,6 +193,7 @@ describe("openclaw.chat session lifecycle", () => {
       step: liveStep,
     }));
     const session = seededSession({ engine });
+    session.optionalWelcome = true;
     (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
       id: "welcome-q",
       header: "Welcome",
@@ -194,6 +209,7 @@ describe("openclaw.chat session lifecycle", () => {
     expect(call.payload).toMatchObject({
       sessionId: "s1",
       sensitive: true,
+      optionalWelcome: false,
       wizardInputPending: true,
       question: liveQuestion,
       step: liveStep,
@@ -242,6 +258,35 @@ describe("openclaw.chat session lifecycle", () => {
     expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
   });
 
+  it("disposes the unpublished engine when requester authority changes during eviction", async () => {
+    let current = true;
+    const oldest = seededSession({ lastUsedAt: 0 });
+    oldest.engine.dispose = vi.fn(async () => {
+      current = false;
+    });
+    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    const respond = vi.fn();
+    const pending = expectDefined(
+      systemAgentHandlers["openclaw.chat"],
+      "chat handler",
+    )({
+      params: { sessionId: "unpublished" },
+      client: defaultClient,
+      context: makeContext(sessions),
+      respond,
+      hasCurrentClientAuthority: () => current,
+    } as never);
+
+    await expect(pending).rejects.toThrow("Gateway requester authority changed");
+    expect(oldest.engine.dispose).toHaveBeenCalledOnce();
+    expect(createdEngines[0]?.dispose).toHaveBeenCalledOnce();
+    expect(sessions.has("unpublished")).toBe(false);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("resets a session on request", async () => {
     const engine = makeEngine();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
@@ -253,12 +298,12 @@ describe("openclaw.chat session lifecycle", () => {
     expect(engine.dispose).toHaveBeenCalledOnce();
     expect(sessions.get("s1")?.engine).not.toBe(engine);
     expect(reset.ok).toBe(true);
-    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
+    expect(transcriptStoreMocks.appendReset).toHaveBeenCalledOnce();
     expect(
       expectDefined(createdEngines[0], "replacement engine").seedHistory,
     ).not.toHaveBeenCalled();
 
-    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+    transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([
       { role: "user", text: "After reset", at: 3 },
       { role: "assistant", text: "Fresh answer", at: 4 },
     ]);
@@ -270,7 +315,7 @@ describe("openclaw.chat session lifecycle", () => {
       { role: "user", text: "After reset" },
       { role: "assistant", text: "Fresh answer" },
     ]);
-    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenLastCalledWith(30, {
+    expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenLastCalledWith(30, {
       afterLastReset: true,
     });
   });

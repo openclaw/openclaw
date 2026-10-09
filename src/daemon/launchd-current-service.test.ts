@@ -1,6 +1,9 @@
 // Launchd current service tests cover resolving active macOS service labels.
-import { describe, expect, it } from "vitest";
-import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isCurrentProcessInsideLaunchdService,
+  isCurrentProcessLaunchdServiceLabel,
+} from "./launchd-current-service.js";
 
 describe("isCurrentProcessLaunchdServiceLabel", () => {
   it("matches launchd-provided service labels", () => {
@@ -39,4 +42,47 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
       }),
     ).toBe(false);
   });
+});
+
+const probe = vi.hoisted(() => vi.fn());
+vi.mock("./service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: () => "outside",
+}));
+const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
+vi.mock("../infra/restart-stale-pids.js", () => ({ getSelfAndAncestorPidsSync: ancestors }));
+vi.mock("./launchd-runtime.js", () => ({
+  probeLaunchAgentState: probe,
+  resolveLaunchAgentGuiDomain: () => "gui/501",
+}));
+
+describe("launchd membership with unavailable process evidence", () => {
+  beforeEach(() => {
+    probe.mockReset();
+    ancestors.mockReset();
+  });
+  it.each([
+    { pids: [900, 901], inside: undefined },
+    { pids: [900, 901, 1], inside: false },
+    { pids: [900, 901, 4242], inside: true },
+  ])("keeps partial ancestry conservative: $pids", async ({ pids, inside }) => {
+    probe.mockResolvedValue({ state: "running", runtime: { pid: 4242 } });
+    ancestors.mockReturnValue(new Set(pids));
+    const inspection = isCurrentProcessInsideLaunchdService("ai.openclaw.gateway");
+    if (inside === undefined) {
+      await expect(inspection).rejects.toMatchObject({ reason: "service-ancestry-unverified" });
+    } else {
+      await expect(inspection).resolves.toBe(inside);
+    }
+  });
+  it.each([{ state: "unknown" }, { state: "running", runtime: {} }])(
+    "preserves managed-wrapper protection when launchd reports %j",
+    async (result) => {
+      probe.mockResolvedValue(result);
+      await expect(
+        isCurrentProcessInsideLaunchdService("ai.openclaw.gateway"),
+      ).rejects.toMatchObject({
+        reason: "service-membership-unverified",
+      });
+    },
+  );
 });

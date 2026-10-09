@@ -13,7 +13,7 @@ import type {
   AgentToolGatewayRequestCaller,
   InProcessGatewayCaller,
 } from "./in-process-gateway.js";
-import { createPortalTool } from "./portal-tool.js";
+import { createAvailablePortalTools } from "./portal-tool.js";
 
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
@@ -32,10 +32,10 @@ function recorder() {
   const calls: Array<[string, unknown]> = [];
   const requestScopes: Array<[string, readonly string[] | undefined]> = [];
   const reply = (method: string) => {
-    if (method === "portal.list") {
+    if (method === "portal.list" || method === "portal.session.list") {
       return { portals: [portal] } as PortalListResult;
     }
-    if (method === "portal.close") {
+    if (method === "portal.close" || method === "portal.session.close") {
       return { closed: true } as PortalCloseResult;
     }
     return portal;
@@ -58,8 +58,52 @@ function recorder() {
 }
 
 describe("portal tool", () => {
+  it("keeps a restricted tool on its captured worker and refuses host or alternate target selection", async () => {
+    const recorded = recorder();
+    let current = true;
+    const target = {
+      sessionKey: "agent:main:preview",
+      agentId: "main",
+      environmentId: "worker:preview",
+      assertCurrent() {
+        if (!current) {
+          throw new Error("retired target");
+        }
+      },
+    };
+    const tool = createAvailablePortalTools({
+      ...recorded,
+      senderIsOwner: false,
+      sessionPortalTarget: target,
+    })[0]!;
+    expect(Value.Check(tool.parameters, { action: "open", port: 3000 })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, { action: "open", port: 3000, environmentId: "other" }),
+    ).toBe(false);
+    for (const action of ["open", "list", "close"]) {
+      await tool.execute(action, { action, port: 3000, id: "p3000" });
+    }
+    const bound = {
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      environmentId: target.environmentId,
+    };
+    expect(recorded.calls).toEqual([
+      ["portal.session.open", { ...bound, port: 3000 }],
+      ["portal.session.list", bound],
+      ["portal.session.close", { ...bound, id: "p3000" }],
+    ]);
+    await expect(
+      tool.execute("host", { action: "open", port: 3000, environmentId: "other" }),
+    ).rejects.toThrow("bound");
+    current = false;
+    await expect(tool.execute("stale", { action: "open", port: 3000 })).rejects.toThrow(
+      "retired target",
+    );
+    expect(recorded.calls).toHaveLength(3);
+  });
   it("uses a flat closed action schema and owner-only security gate", () => {
-    const tool = createPortalTool();
+    const tool = createAvailablePortalTools()[0]!;
     expect(tool.parameters).toMatchObject({
       additionalProperties: false,
       properties: { action: { enum: ["open", "list", "close"] } },
@@ -74,10 +118,10 @@ describe("portal tool", () => {
 
   it("maps open, list, and close through the in-process gateway caller", async () => {
     const recorded = recorder();
-    const tool = createPortalTool({
+    const tool = createAvailablePortalTools({
       callGateway: recorded.callGateway,
       callGatewayRequest: recorded.callGatewayRequest,
-    });
+    })[0]!;
     const opened = await tool.execute("open", {
       action: "open",
       port: 3000,
@@ -111,7 +155,7 @@ describe("portal tool", () => {
 
   it("keeps attached-environment portal operations on the selected machine", async () => {
     const recorded = recorder();
-    const tool = createPortalTool(recorded);
+    const tool = createAvailablePortalTools(recorded)[0]!;
     await tool.execute("open", { action: "open", port: 3000, environmentId: "worker:preview" });
     await tool.execute("list", { action: "list", environmentId: "worker:preview" });
     await tool.execute("close", {
@@ -128,10 +172,10 @@ describe("portal tool", () => {
 
   it("rejects action-specific missing and malformed fields before RPC", async () => {
     const recorded = recorder();
-    const tool = createPortalTool({
+    const tool = createAvailablePortalTools({
       callGateway: recorded.callGateway,
       callGatewayRequest: recorded.callGatewayRequest,
-    });
+    })[0]!;
 
     await expect(tool.execute("open", { action: "open" })).rejects.toThrow("port required");
     await expect(tool.execute("open", { action: "open", port: 3000, path: "app" })).rejects.toThrow(

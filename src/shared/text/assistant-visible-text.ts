@@ -25,8 +25,8 @@ const INTERNAL_TRACE_LINE_QUICK_RE =
   /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
 const INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
-// The current producer reserves "⚠️ 🛠️ Exec|Bash failed[:...]" for exec warnings, so
-// echoed copies must be removed. The second branch preserves the historical "(agent) failed" shape.
+// Keep historical tool-warning traces out of replayed prose, including the older
+// "(agent) failed" shape. Current warnings use plain tool labels and remain visible.
 const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
   /^(?:>\s*)?⚠️\s*🛠️\s+(?:(?:Exec|Bash)\s+failed(?:(?:\s+\(exit\s+-?\d+\))|(?:\s*:[^\r\n]*))?|\S[^\r\n]*\s+\(agent\)`{0,2}\s+failed(?:\s*:[^\r\n]*)?)\s*$/i;
 const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
@@ -487,7 +487,7 @@ export function stripToolCallXmlTags(
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls.
  */
-export function stripMinimaxToolCallXml(text: string): string {
+function stripMinimaxToolCallXml(text: string): string {
   const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
   const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
   const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
@@ -690,20 +690,19 @@ export function assistantVisibleTextFilters(
       }),
   };
   const filters: TextFilter[] = [
-    ...(!preserve ? [{ transform: stripMinimaxToolCallXml, activationTokens: ["<"] }] : []),
-    { transform: stripModelSpecialTokens, activationTokens: ["<"] },
-    { transform: stripRelevantMemoriesTags, activationTokens: ["<"] },
+    ...(!preserve ? [minimaxToolCallTextFilter] : []),
+    { transform: stripModelSpecialTokens, activationTokens: ["<|", "<｜"] },
     {
-      activationTokens: ["<"],
-      transform: (text) =>
-        stripToolCallXmlTags(text, {
-          stripFunctionCallsXmlPayloads: profile === "tool-progress",
-          stripFunctionResponseAfterPluralToolCalls:
-            profile === "delivery" || profile === "final-answer-delivery",
-        }),
+      transform: stripRelevantMemoriesTags,
+      activationTokens: ["relevant-memories", "relevant_memories"],
     },
+    toolCallXmlTextFilter({
+      stripFunctionCallsXmlPayloads: profile === "tool-progress",
+      stripFunctionResponseAfterPluralToolCalls:
+        profile === "delivery" || profile === "final-answer-delivery",
+    }),
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
-    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
     ...(!preserve ? [downgradedToolCallTextFilter(options)] : []),
   ];
@@ -721,6 +720,25 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
+export const minimaxToolCallTextFilter: TextFilter = {
+  transform: stripMinimaxToolCallXml,
+  activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+};
+
+export function toolCallXmlTextFilter(
+  options: Parameters<typeof stripToolCallXmlTags>[1] = {},
+): TextFilter {
+  return {
+    transform: (text) => stripToolCallXmlTags(text, options),
+    activationTokens: ["<"],
+  };
+}
+
+export const legacyBracketToolCallTextFilter: TextFilter = {
+  transform: stripLegacyBracketToolCallBlocks,
+  activationTokens: ["TOOL_CALL", "TOOL_RESULT"],
+};
+
 export const assistantTraceTextFilter: TextFilter = {
   transform: stripAssistantInternalTraceLines,
   activationTokens: ["tool", "function", "📊", "🛠", "📖", "📝", "🔍", "🔎", "⚙"],
@@ -729,7 +747,7 @@ export const assistantTraceTextFilter: TextFilter = {
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  activationTokens: ["[", "<", "to="],
+  activationTokens: ["[", "<function=", "to="],
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(

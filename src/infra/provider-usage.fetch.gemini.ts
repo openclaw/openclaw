@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
@@ -36,43 +35,34 @@ export async function fetchGeminiUsage(
   const buckets =
     isRecord(parsed.data) && Array.isArray(parsed.data.buckets) ? parsed.data.buckets : [];
   const windows: UsageWindow[] = [];
-  let proMin = 1;
-  let flashMin = 1;
-  let hasPro = false;
-  let hasFlash = false;
+  const families = [
+    { label: "Pro", match: "pro", remaining: 1, found: false },
+    { label: "Flash", match: "flash", remaining: 1, found: false },
+  ];
 
   for (const bucket of buckets) {
     if (!isRecord(bucket)) {
       continue;
     }
-    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
+    const model = normalizeLowercaseStringOrEmpty(bucket.modelId);
     const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
-    const lower = normalizeLowercaseStringOrEmpty(model);
-    if (lower.includes("pro")) {
-      hasPro = true;
-      if (frac < proMin) {
-        proMin = frac;
-      }
-    }
-    if (lower.includes("flash")) {
-      hasFlash = true;
-      if (frac < flashMin) {
-        flashMin = frac;
+    for (const family of families) {
+      if (model.includes(family.match)) {
+        family.found = true;
+        if (frac < family.remaining) {
+          family.remaining = frac;
+        }
       }
     }
   }
 
-  if (hasPro) {
-    windows.push({
-      label: "Pro",
-      usedPercent: clampPercent((1 - proMin) * 100),
-    });
-  }
-  if (hasFlash) {
-    windows.push({
-      label: "Flash",
-      usedPercent: clampPercent((1 - flashMin) * 100),
-    });
+  for (const family of families) {
+    if (family.found) {
+      windows.push({
+        label: family.label,
+        usedPercent: clampPercent((1 - family.remaining) * 100),
+      });
+    }
   }
 
   return {

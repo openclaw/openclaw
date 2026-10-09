@@ -10,12 +10,13 @@ type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
 /** Attribute used to mark DOM nodes that correspond to generated browser refs. */
 export const BROWSER_REF_MARKER_ATTRIBUTE = "data-openclaw-browser-ref";
 
-async function withPlaywrightPageCdpSession<T>(
-  page: Page,
-  fn: (session: CDPSession) => Promise<T>,
-  timeoutMs?: number,
-  frame?: Frame,
-): Promise<T> {
+/** Run a function with a CDP send helper scoped to one Playwright page. */
+export async function withPageScopedCdpClient<T>(opts: {
+  page: Page;
+  frame?: Frame;
+  fn: (send: CDPSession["send"]) => Promise<T>;
+  timeoutMs?: number;
+}): Promise<T> {
   let session: CDPSession | undefined;
   let released = false;
   let detach: Promise<void> | undefined;
@@ -26,10 +27,10 @@ async function withPlaywrightPageCdpSession<T>(
     return detach;
   };
   const operation = (async () => {
-    let ownerFrame = frame;
+    let ownerFrame = opts.frame;
     for (;;) {
       try {
-        session = await page.context().newCDPSession(ownerFrame ?? page);
+        session = await opts.page.context().newCDPSession(ownerFrame ?? opts.page);
         break;
       } catch (error) {
         // Same-process frames share the ancestor's CDP target; OOP frames own one.
@@ -47,34 +48,19 @@ async function withPlaywrightPageCdpSession<T>(
       if (released) {
         throw new Error("Page CDP operation has already expired.");
       }
-      return await fn(session);
+      return await opts.fn(session.send.bind(session));
     } finally {
       await releaseSession();
     }
   })();
   try {
-    return await withTimeout(operation, timeoutMs ?? 0, "Page CDP operation");
+    return await withTimeout(operation, opts.timeoutMs ?? 0, "Page CDP operation");
   } finally {
     // Release a timed-out command now; a late attach releases itself before
     // running any work. A stuck detach must not extend the operation's deadline.
     released = true;
     void releaseSession();
   }
-}
-
-/** Run a function with a CDP send helper scoped to one Playwright page. */
-export async function withPageScopedCdpClient<T>(opts: {
-  page: Page;
-  frame?: Frame;
-  fn: (send: CDPSession["send"]) => Promise<T>;
-  timeoutMs?: number;
-}): Promise<T> {
-  return await withPlaywrightPageCdpSession(
-    opts.page,
-    async (session) => await opts.fn(session.send.bind(session)),
-    opts.timeoutMs,
-    opts.frame,
-  );
 }
 
 /** Bind the already-resolved selector element to its native DOM identity, including shadow roots. */
@@ -126,11 +112,11 @@ export async function readDocumentIdentitiesForPage(
   page: Page,
   timeoutMs?: number,
 ): Promise<CdpDocumentIdentities> {
-  return await withPlaywrightPageCdpSession(
+  return await withPageScopedCdpClient({
     page,
-    async (session) => await readCdpDocumentIdentities(session.send.bind(session)),
-    resolveTimerTimeoutMs(timeoutMs, 5_000),
-  );
+    fn: readCdpDocumentIdentities,
+    timeoutMs: resolveTimerTimeoutMs(timeoutMs, 5_000),
+  });
 }
 
 /** Mark backend DOM node ids on the page with browser ref attributes. */
@@ -138,19 +124,10 @@ export async function markBackendDomRefsOnPage(opts: {
   page: Page;
   frame?: Frame;
   send?: CDPSession["send"];
+  rootBackendNodeId?: number;
   refs: MarkBackendDomRef[];
+  assertCurrent: () => void;
 }): Promise<Set<string>> {
-  await (opts.frame ?? opts.page)
-    .locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`)
-    .evaluateAll((elements, attr) => {
-      for (const element of elements) {
-        if (element instanceof Element) {
-          element.removeAttribute(attr);
-        }
-      }
-    }, BROWSER_REF_MARKER_ATTRIBUTE)
-    .catch(() => {});
-
   const refs = opts.refs.filter(
     (entry) =>
       /^(?:e|ax)\d+$/.test(entry.ref) &&
@@ -158,19 +135,54 @@ export async function markBackendDomRefsOnPage(opts: {
       Math.floor(entry.backendDOMNodeId) > 0,
   );
   const marked = new Set<string>();
-  if (!refs.length) {
-    return marked;
-  }
-
   const mark = async (send: CDPSession["send"]) => {
+    opts.assertCurrent();
     // Backend-id pushes require a bound document in this fresh session.
     // getDocument also enables DOM; depth zero avoids fetching the subtree.
-    await send("DOM.getDocument", { depth: 0 }).catch(() => {});
+    const { root } = await send("DOM.getDocument", { depth: 0 });
+    opts.assertCurrent();
+    const { object } = await send("DOM.resolveNode", {
+      backendNodeId: opts.rootBackendNodeId ?? root.backendNodeId,
+    });
+    try {
+      opts.assertCurrent();
+      if (!object.objectId) {
+        throw new Error("Snapshot document changed before refs were bound; retry.");
+      }
+      // Keep query and mutation in one browser invocation: Playwright evaluateAll
+      // awaits its selector read internally, letting canceled captures clear newer refs.
+      const cleared = await send("Runtime.callFunctionOn", {
+        objectId: object.objectId,
+        functionDeclaration: `function(attribute) {
+          const roots = [this.ownerDocument || this];
+          for (const root of roots) {
+            for (const element of root.querySelectorAll("*")) {
+              if (element.hasAttribute(attribute)) element.removeAttribute(attribute);
+              if (element.shadowRoot) roots.push(element.shadowRoot);
+            }
+          }
+        }`,
+        arguments: [{ value: BROWSER_REF_MARKER_ATTRIBUTE }],
+      });
+      opts.assertCurrent();
+      if (cleared.exceptionDetails) {
+        throw new Error("Snapshot markers could not be cleared; retry.");
+      }
+    } finally {
+      if (object.objectId) {
+        await send("Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
+      }
+    }
+    opts.assertCurrent();
+    if (!refs.length) {
+      return marked;
+    }
 
     const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
     const pushed = await send("DOM.pushNodesByBackendIdsToFrontend", {
       backendNodeIds,
     }).catch(() => ({ nodeIds: [] }));
+    opts.assertCurrent();
     const nodeIds = Array.isArray(pushed.nodeIds) ? pushed.nodeIds : [];
     const nodeIdByBackendId = new Map<number, number>();
     for (let index = 0; index < backendNodeIds.length; index += 1) {
@@ -186,6 +198,7 @@ export async function markBackendDomRefsOnPage(opts: {
       if (!nodeId) {
         continue;
       }
+      opts.assertCurrent();
       try {
         await send("DOM.setAttributeValue", {
           nodeId,
@@ -194,8 +207,9 @@ export async function markBackendDomRefsOnPage(opts: {
         });
         marked.add(entry.ref);
       } catch {
-        // Best-effort marker write. Unmarked refs fall back to role metadata.
+        // An unavailable DOM node remains unbound; never replace its identity by name.
       }
+      opts.assertCurrent();
     }
 
     return marked;

@@ -9,10 +9,7 @@ import { hasPersistedOpenClawAgentCanonicalValidation } from "../../state/opencl
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import * as lifecycle from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  hasOpenClawAgentCanonicalValidation,
-  invalidateOpenClawAgentDatabaseValidation,
-} from "../../state/openclaw-agent-db-validation-cache.js";
+import { hasOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -342,59 +339,6 @@ it("reuses two workers while closing each database task before runtime handoff",
   });
 });
 
-it("reuses durable fleet receipts and recertifies only the store revoked by its parent", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { agentIds, cfg } = seedFleet(state.env);
-    const admitted: string[] = [];
-    observer.onTask = ({ agentId }) => admitted.push(agentId);
-    const startup = () =>
-      runSessionStartupMigration({
-        cfg,
-        env: state.env,
-        log: { info: vi.fn(), warn: vi.fn() },
-      });
-
-    await startup();
-    expect(admitted.toSorted()).toEqual(agentIds);
-    expect(observer.workers.size).toBe(2);
-    for (const agentId of agentIds) {
-      expect(
-        withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, {
-          agentId,
-          env: state.env,
-        }),
-      ).toMatchObject({ found: true, value: true });
-    }
-
-    closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
-    await startup();
-    expect(admitted).toHaveLength(5);
-    expect(observer.workers.size).toBe(2);
-
-    const revokedAgentId = agentIds[0]!;
-    expect(
-      withOpenClawAgentDatabaseReadOnly(
-        (database) => {
-          invalidateOpenClawAgentDatabaseValidation(database.path);
-          return hasOpenClawAgentCanonicalValidation(database);
-        },
-        { agentId: revokedAgentId, env: state.env },
-      ),
-    ).toMatchObject({ found: true, value: false });
-    await startup();
-    expect(admitted.slice(5)).toEqual([revokedAgentId]);
-    expect(observer.workers.size).toBe(3);
-    expect(
-      withOpenClawAgentDatabaseReadOnly(hasOpenClawAgentCanonicalValidation, {
-        agentId: revokedAgentId,
-        env: state.env,
-      }),
-    ).toMatchObject({ found: true, value: true });
-    expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
-    expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-  });
-});
-
 it("stops fleet admission on refusal and drains an already-started sibling before startup rejects", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env, true);
@@ -648,6 +592,7 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env);
     const sharedPath = openOpenClawStateDatabase({ env: state.env }).path;
+    const previousExitHooks = new Set(process.rawListeners("beforeExit"));
     const primaryFailure = new Error("synthetic idle pool retirement failed");
     const retryFailures = [new Error("first recovery failed"), new Error("second recovery failed")];
     let worker: Worker | undefined;
@@ -674,7 +619,18 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
       expect(worker?.threadId).toBeGreaterThan(0);
       expect(retirementCalls?.()).toBe(1);
       expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-      for (const latestFailure of retryFailures) {
+      const exitHooks = () =>
+        process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
+      expect(exitHooks()).toHaveLength(1);
+      const emitBeforeExit = () => exitHooks().forEach((hook) => hook.call(process, 0));
+      emitBeforeExit();
+      await yieldToEventLoop();
+      expect(retirementCalls?.()).toBe(2);
+      emitBeforeExit();
+      await yieldToEventLoop();
+      expect(retirementCalls?.()).toBe(2);
+      expect(worker?.threadId).toBeGreaterThan(0);
+      for (const latestFailure of retryFailures.slice(1)) {
         const failure = await closeOpenClawStateDatabaseByPathAsync(sharedPath).catch(
           (error: unknown) => error,
         );

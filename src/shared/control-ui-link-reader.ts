@@ -1,32 +1,23 @@
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ControlUiLinkReaderDescriptorSchema } from "../../packages/gateway-protocol/src/schema/control-ui-link-reader.js";
+
 /** Passive link-reader models shared by plugins and the Control UI. */
-export type ControlUiLinkReaderMetadata = {
-  /** Exact lowercase DNS hostnames; no schemes, ports, or wildcards. */
-  hosts: string[];
-  /** Anchored pathname regular expression authored by the installed trusted plugin. */
-  pathPattern: string;
-  /** Same-plugin gateway method requiring operator.read. */
-  detailMethod: string;
-  previewMethod?: string;
-  /** Optional same-plugin read method resolving inline images without browser CORS. */
-  imageMethod?: string;
-};
+export type ControlUiLinkReaderMetadata = ControlUiLinkReaderDescriptor["linkReader"];
 
 /** Scope-filtered descriptor advertised in hello.controlUiLinkReaders. */
-export type ControlUiLinkReaderDescriptor = {
-  pluginId: string;
-  id: string;
-  label: string;
-  /** Existing Control UI icon name; unknown names use the generic link icon. */
-  icon?: string;
-  linkReader: ControlUiLinkReaderMetadata;
-};
+export type ControlUiLinkReaderDescriptor = SchemaContract<
+  Static<typeof ControlUiLinkReaderDescriptorSchema>
+>;
 
 export type ControlUiLinkReaderPreviewParams = {
   url: string;
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
 };
-export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
+export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  refresh?: boolean;
+};
 export type ControlUiLinkReaderImage = {
   /** Echo the validated requested image URL. */
   url: string;
@@ -42,6 +33,8 @@ export type ControlUiLinkReaderPreview = {
   badge?: {
     label: string;
     tone: "neutral" | "positive" | "negative" | "attention" | "accent";
+    /** Timestamp of the event represented by the badge, displayed instead of creation time. */
+    timestamp?: string;
   };
   author?: string;
   /** Optional HTTPS profile link on the source origin. */
@@ -60,6 +53,24 @@ export type ControlUiLinkReaderDocument = ControlUiLinkReaderPreview & {
   body: string;
   bodyTruncated?: boolean;
   partial?: boolean;
+  /** Passive provider-reported checks, not a mergeability or approval decision. */
+  checks?: {
+    state: "success" | "failure" | "pending" | "neutral" | "unavailable";
+    summary: string;
+    /** Known total; may be incomplete when truncated or unavailable. */
+    total: number;
+    items: Array<{
+      name: string;
+      state: "success" | "failure" | "pending" | "neutral";
+      detail?: string;
+      url?: string;
+    }>;
+    /** The item list is incomplete, including when a source could not be read. */
+    truncated?: boolean;
+    url?: string;
+    /** Exact source revision these checks describe, when available. */
+    commit?: string;
+  };
   comments?: Array<{
     id: string;
     url: string;

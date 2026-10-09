@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
@@ -8,16 +9,16 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
   requiresRetainedUpdateCommandOwner,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 import type {
   OriginalManagedServiceRuntime,
@@ -27,11 +28,6 @@ import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import {
-  runGatewayInstallWithLoadBoundary,
-  UpdateServiceLoadPreMutationError,
-  type UpdateServiceLoadBoundary,
-} from "./update-command-service-load.js";
 
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 
@@ -55,6 +51,20 @@ function formatCommandFailure(stdout: string, stderr: string): string {
     diagnostics.match(DEFINITION_DENIAL)?.[0] ??
     (typeof error === "string" ? error : stderr || stdout).trim();
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
+}
+
+async function runSettledGatewayCommand(argv: string[], options: CommandOptions) {
+  const result = await runCommandWithTimeout(argv, {
+    ...options,
+    // The complete owned env must not regain selectors removed during capture.
+    baseEnv: {},
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
+  });
+  if (result.cleanup === "forced" || result.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  return result;
 }
 
 /** Probe the staged target before activation, retaining the original child owner. */
@@ -88,24 +98,16 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   const check = await withUpdateCommandExecutorChild(
     params.executor,
     params.root,
-    async (_grant, bindChild) => {
-      const result = await runCommandWithTimeout(argv, {
+    (_grant, bindChild) =>
+      runSettledGatewayCommand(argv, {
         input: "",
         beforeInput: bindChild,
-        baseEnv: {},
         cwd: params.root,
         env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
         timeoutMs: params.timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
         ...(params.signal ? { signal: params.signal } : {}),
         maxOutputBytes: 64 * 1024,
-      });
-      if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-        throw new CommandProcessCleanupError();
-      }
-      return result;
-    },
+      }),
   );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
@@ -135,8 +137,8 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
 // Candidate version/preservation guards reject older targets before repair, without retry.
 export async function runUpdatedInstallGatewayCommand(
   params: {
-    result: { root?: string; mode?: UpdateRunResult["mode"] };
-    opts: Pick<UpdateCommandOptions, "json" | "run">;
+    result: Partial<Pick<UpdateRunResult, "root" | "mode">>;
+    opts: Pick<UpdateCommandOptions, "run">;
     invocationEnv: NodeJS.ProcessEnv;
     serviceEnv?: NodeJS.ProcessEnv;
     serviceInstallEnv?: NodeJS.ProcessEnv | null;
@@ -146,9 +148,9 @@ export async function runUpdatedInstallGatewayCommand(
     invocationCwd?: string;
     signal?: AbortSignal;
     assertCurrent?: () => void;
-    serviceLoadBoundary?: UpdateServiceLoadBoundary;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    onGatewayStartAttempted?: () => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -172,17 +174,11 @@ export async function runUpdatedInstallGatewayCommand(
       `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
     );
   }
-  const args = ["gateway", action];
-  if (installing) {
-    args.push("--force");
-    if (params.gatewayPort !== undefined) {
-      args.push("--port", String(params.gatewayPort));
-    }
-  } else {
-    // Update retries must not bypass the installer's backup and drift audit.
-    args.push("--preserve-definition");
+  // Update retries must not bypass the installer's backup and drift audit.
+  const args = ["gateway", action, installing ? "--force" : "--preserve-definition"];
+  if (installing && params.gatewayPort !== undefined) {
+    args.push("--port", String(params.gatewayPort));
   }
-  // Capture one structured child result in both outer output modes.
   args.push("--json");
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
   // The child manages this service from outside it. Captured Gateway markers
@@ -199,45 +195,9 @@ export async function runUpdatedInstallGatewayCommand(
   if (executor) {
     commandEnv.OPENCLAW_NO_RESPAWN = "1";
   }
-  params.signal?.throwIfAborted();
   assertCurrent();
-  const receiveInstallResult = (stdout: string) => {
-    const response = safeParseJsonRecord(stdout);
-    if (!installing || !response) {
-      return;
-    }
-    const warnings = Array.isArray(response.warnings)
-      ? response.warnings.filter((message): message is string => typeof message === "string")
-      : [];
-    if (warnings.length) {
-      params.onWarnings?.(warnings);
-    }
-    if (params.definitionRecovery) {
-      const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
-        response.definitionBackup,
-      );
-      const error = typeof response.error === "string" ? response.error : "";
-      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
-      if (backup.success && !recoveryFailed) {
-        params.definitionRecovery.backup = backup.data;
-        params.definitionRecovery.unverified = false;
-      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
-        params.definitionRecovery.preserved = true;
-        params.definitionRecovery.unverified = false;
-      } else {
-        params.onWarnings?.([
-          "Service definition backup receipt could not be verified; retained recovery data must be inspected before rollback.",
-        ]);
-      }
-    }
-  };
-  const boundary = params.serviceLoadBoundary;
+
   const installTimeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
-  if (installing && boundary && params.originalManagedServiceRuntime) {
-    throw new UpdateServiceLoadPreMutationError(
-      "Retained rebind requires the original definition receipt; deferred load cannot provide it.",
-    );
-  }
   if (run && !executor) {
     throw new UpdateCommandRecoveryPendingError(
       "Native command requires its original update executor.",
@@ -283,33 +243,14 @@ export async function runUpdatedInstallGatewayCommand(
   if (installing && params.definitionRecovery) {
     params.definitionRecovery.unverified = true;
   }
-  if (installing && boundary) {
-    return await runGatewayInstallWithLoadBoundary({
-      onResult: receiveInstallResult,
-      argv: [nodeRunner, entrypoint, ...args, "--defer-activation"],
-      cwd: params.result.root,
-      env: commandEnv,
-      signal: params.signal,
-      timeoutMs: installTimeoutMs,
-      boundary: {
-        ...boundary,
-        // The handoff adds an executor fence; it must not replace the repair owner.
-        assertCurrent: () => {
-          assertCurrent();
-          boundary.assertCurrent();
-        },
-      },
-    });
-  }
 
   const runChild = async (
     grant?: UpdateCommandChildGrant,
     bindChild?: (pid: number, argv?: readonly string[]) => void,
   ) => {
     const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
-    const result = await runCommandWithTimeout(argv, {
-      // The complete owned env must not regain selectors removed during capture.
-      baseEnv: {},
+    params.onGatewayStartAttempted?.();
+    return await runSettledGatewayCommand(argv, {
       ...(grant
         ? {
             input: JSON.stringify({
@@ -331,34 +272,45 @@ export async function runUpdatedInstallGatewayCommand(
       env: commandEnv,
       timeoutMs: installing ? installTimeoutMs : params.timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
     });
-    if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
-    return result;
   };
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
-  params.signal?.throwIfAborted();
   assertCurrent();
-  const exited =
-    res.termination === "exit" &&
-    res.signal === null &&
-    !res.killed &&
-    res.cleanup !== "forced" &&
-    res.cleanup !== "uncertain";
+  const exited = res.termination === "exit" && res.signal === null && !res.killed;
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
-  if (complete) {
-    receiveInstallResult(res.stdout);
+  if (installing && response) {
+    const warnings = Array.isArray(response.warnings)
+      ? response.warnings.filter((message): message is string => typeof message === "string")
+      : [];
+    if (warnings.length) {
+      params.onWarnings?.(warnings);
+    }
+    if (params.definitionRecovery) {
+      const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
+        response.definitionBackup,
+      );
+      const error = typeof response.error === "string" ? response.error : "";
+      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
+      if (backup.success && !recoveryFailed) {
+        params.definitionRecovery.backup = backup.data;
+        params.definitionRecovery.unverified = false;
+      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
+        params.definitionRecovery.preserved = true;
+        params.definitionRecovery.unverified = false;
+      } else {
+        params.onWarnings?.([
+          "Service definition backup receipt could not be verified; retained recovery data must be inspected before rollback.",
+        ]);
+      }
+    }
   }
 
   const original = params.originalManagedServiceRuntime;
   if (installing && original && exited && complete) {
-    const receipt = response && safeParseJsonRecord(JSON.stringify(response.rebind));
+    const receipt = asOptionalRecord(response?.rebind);
     if (
       receipt?.before === original.definition.fingerprint &&
       typeof receipt.after === "string" &&
@@ -419,6 +371,7 @@ export async function restartRetainedUpdateGatewayService(params: {
   stdout: NodeJS.WritableStream;
   assertCurrent: () => void;
   revalidate: () => Promise<void>;
+  onGatewayStartAttempted?: () => void;
   signal?: AbortSignal;
 }): Promise<GatewayServiceRestartResult> {
   const env = { ...params.env };
@@ -431,6 +384,7 @@ export async function restartRetainedUpdateGatewayService(params: {
         stdout: params.stdout,
         env,
         beforeMutation: params.revalidate,
+        onRestartAttempted: params.onGatewayStartAttempted,
         assertCurrent: () => {
           assertNative();
           assertCurrent();

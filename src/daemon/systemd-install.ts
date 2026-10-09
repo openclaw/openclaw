@@ -1,4 +1,3 @@
-/** systemd unit publication, installation, staging, and uninstall. */
 import fs from "node:fs/promises";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -33,6 +32,10 @@ import {
 import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import {
+  readSystemdEnvironmentFile,
+  serializeSystemdEnvironmentFile,
+} from "./systemd-environment-files.js";
+import {
   assertSystemdAvailable,
   disableSystemdUserUnitForRemoval,
   execSystemctlUser,
@@ -45,16 +48,15 @@ import { captureSystemdInstallRecovery } from "./systemd-install-recovery.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
   isNodeSystemdEnvironment,
-  readSystemdEnvironmentFile,
   readSystemdServiceExecStart,
   resolveLegacyNodeSystemdEnvironmentFilePath,
   resolveSystemdEnvironmentFilePath,
   resolveSystemdServiceName,
   resolveSystemdUnitPath,
-  serializeSystemdEnvironmentFile,
 } from "./systemd-service-files.js";
 import {
   buildSystemdUnit,
+  preserveSystemdUnitPolicy,
   parseSystemdEnvAssignments,
   renderSystemdEnvAssignment,
   splitSystemdLogicalLines,
@@ -151,18 +153,6 @@ function removeSystemdInlineEnvironmentKeys(content: string, keys: ReadonlySet<s
     );
   }
   return sanitizedLines.join("\n");
-}
-
-function sanitizeSystemdUnitBackupContent(params: {
-  content: string;
-  fileManagedKeys: ReadonlySet<string>;
-}): string {
-  // Gateway credentials are never useful in a recovery artifact. File-managed
-  // values are also omitted after OpenClaw moves them to the generated env file.
-  return removeSystemdInlineEnvironmentKeys(
-    params.content,
-    new Set([...params.fileManagedKeys, ...SYSTEMD_GATEWAY_CREDENTIAL_KEYS]),
-  );
 }
 
 function removeLegacyGatewayVersionMetadata(content: string): string {
@@ -265,7 +255,6 @@ async function writeSystemdUnit(
     environment,
     environmentValueSources,
     description,
-    beforeLoad,
     definitionTransaction,
     warn,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
@@ -290,7 +279,7 @@ async function writeSystemdUnit(
       const backupPath = `${unitPath}.bak`;
       const existingBackup = mutation.snapshots.get(backupPath) ?? null;
       const recovery =
-        load && !beforeLoad && !definitionTransaction
+        load && !definitionTransaction
           ? await withGatewayServiceInstallationRecovery(
               () => captureSystemdInstallRecovery(env, existingUnit !== null),
               async () => false,
@@ -322,12 +311,13 @@ async function writeSystemdUnit(
 
         const backupSource = existingUnit ?? existingBackup;
         if (backupSource) {
+          // Recovery artifacts omit credentials and values moved to the generated env file.
           await mutation.publish(
             backupPath,
-            sanitizeSystemdUnitBackupContent({
-              content: backupSource.contents.toString("utf8"),
-              fileManagedKeys,
-            }),
+            removeSystemdInlineEnvironmentKeys(
+              backupSource.contents.toString("utf8"),
+              new Set([...fileManagedKeys, ...SYSTEMD_GATEWAY_CREDENTIAL_KEYS]),
+            ),
             restrictSystemdArtifactMode(backupSource.mode),
           );
         }
@@ -384,13 +374,17 @@ async function writeSystemdUnit(
             );
           }),
         );
-        const unit = buildSystemdUnit({
-          description: resolveGatewayServiceDescription({ env, description }),
-          programArguments,
-          workingDirectory,
-          environment: environmentSansDotEnvEntries,
-          environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
-        });
+        const unit = preserveSystemdUnitPolicy(
+          buildSystemdUnit({
+            description: resolveGatewayServiceDescription({ env, description }),
+            programArguments,
+            workingDirectory,
+            environment: environmentSansDotEnvEntries,
+            environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
+          }),
+          existingUnit?.contents.toString("utf8") ?? "",
+          definitionTransaction?.preservePolicy,
+        );
         await assertNoSystemGatewayOwnership(env);
         await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
         await assertNoSystemGatewayOwnership(env);
@@ -400,13 +394,7 @@ async function writeSystemdUnit(
       } else {
         await withGatewayServiceInstallationRecovery(publish, restore);
       }
-      // Do not catch a seal refusal as publication failure: retain staged material,
-      // leave native state untouched, and let recovery reconcile the pending intent.
       if (load) {
-        if (beforeLoad) {
-          await beforeLoad({ files: structuredClone(mutation.stagedFiles) });
-          await mutation.assertCurrent();
-        }
         if (recovery) {
           await withGatewayServiceInstallationRecovery(() => load(recovery.beforeAction), restore);
         } else {
@@ -454,7 +442,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   if (!isNodeSystemdEnvironment(env)) {
     return;
   }
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const stateDir = resolveStateDir(env);
   const envFilePath = resolveSystemdEnvironmentFilePath({
     stateDir,
     environment: env,
@@ -465,11 +453,10 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   } catch {
     return;
   }
-  const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
     Object.entries(existingFile.environment).filter(([key, value]) => {
       const normalized = normalizeServiceEnvKey(key);
-      if (normalized && managedKeys.has(normalized)) {
+      if (normalized && SYSTEMD_GATEWAY_CREDENTIAL_KEYS.has(normalized)) {
         return false;
       }
       return existingFile.literalShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);
@@ -493,7 +480,7 @@ function reportSystemdServicePublication(
   if (backedUp) {
     lines.push({ label: "Previous unit backed up to", value: `${unitPath}.bak` });
   }
-  writeFormattedLines(stdout, lines, { leadingBlankLine: true });
+  writeFormattedLines(stdout, lines);
 }
 
 export async function stageSystemdService({

@@ -1,6 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
-import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
-import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
+import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
+import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
+import {
+  buildProjectedAgentRunIndex,
+  readAgentRunIndexVersion,
+} from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
@@ -11,43 +16,66 @@ import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
 } from "./session-utils-projection.js";
-import { refreshSessionRowProfiles } from "./session-utils-row.js";
+import { projectSessionRowChildLinks, refreshSessionRowProfiles } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
-export function createSessionRowProjectionContext() {
+export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
   let preparedEpoch = -1;
   let registryRevision: number | undefined = getSubagentRegistryPublicationRevision();
+  let registrySnapshot = subagents.snapshotIdentity();
+  let agentRunRevision = readAgentRunIndexVersion();
   let profileRevision = 0;
   let subagentRevision = 0;
   let parentRevision = 0;
-  let placementRevision = 0;
   let modelFactsDirty = false;
   const identityProjection = createSessionIdentityProjection();
-  let current: SessionListRowContext = {
-    ...buildSessionListRowMetadataContext({ now: Date.now() }),
+  const initialNow = Date.now();
+  const subagentIndex = createSubagentSessionListReadIndex(subagents, initialNow);
+  let current = {
+    ...buildSessionListRowMetadataContext({
+      now: initialNow,
+      subagentRuns: subagentIndex.read(initialNow),
+    }),
     identityProjection,
   };
   const subagentInputs = current.subagentRuns.inputs;
   function prepare(epoch: number) {
-    if (preparedEpoch === epoch) {
+    const snapshot = subagents.snapshotIdentity();
+    const revision = getSubagentRegistryPublicationRevision();
+    const runRevision = readAgentRunIndexVersion();
+    if (
+      preparedEpoch === epoch &&
+      registrySnapshot === snapshot &&
+      registryRevision === revision &&
+      agentRunRevision === runRevision
+    ) {
       return;
     }
-    const now = Date.now(),
-      revision = getSubagentRegistryPublicationRevision();
-    if (registryRevision !== revision) {
+    if (registrySnapshot !== snapshot) {
+      registryRevision = undefined;
+      registrySnapshot = snapshot;
+    }
+    const now = Date.now();
+    const previousIndexRevision = subagentIndex.revision;
+    const subagentRuns = subagentIndex.read(now);
+    const subagentChanged = previousIndexRevision !== subagentIndex.revision;
+    if (subagentChanged || registryRevision === undefined) {
       subagentRevision++;
     }
-    const subagentRuns =
-      registryRevision === revision
-        ? current.subagentRuns.atTime(now)
-        : buildSubagentSessionListReadIndex(now);
-    const projectedAgentRuns = buildProjectedAgentRunIndex();
+    // Keep maps local to this projection; independent builders still own fresh indexes.
+    const projectedAgentRuns =
+      agentRunRevision === runRevision ? current.projectedAgentRuns : buildProjectedAgentRunIndex();
+    const projectedSubagentActivity =
+      projectedAgentRuns === current.projectedAgentRuns && !subagentChanged
+        ? current.projectedSubagentActivity
+        : buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns);
     current = modelFactsDirty
       ? {
           ...buildSessionListRowMetadataContext({
             now,
             subagentRuns,
             projectedAgentRuns,
+            projectedSubagentActivity,
             userProfileIdentityById: current.userProfileIdentityById,
           }),
           identityProjection,
@@ -56,45 +84,60 @@ export function createSessionRowProjectionContext() {
           ...current,
           subagentRuns,
           projectedAgentRuns,
-          projectedSubagentActivity: buildProjectedSubagentActivity(
-            subagentRuns,
-            projectedAgentRuns,
-          ),
+          projectedSubagentActivity,
           subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
         };
     modelFactsDirty = false;
     Object.assign(subagentInputs, current.subagentRuns.inputs);
     registryRevision = revision;
+    agentRunRevision = runRevision;
     preparedEpoch = epoch;
   }
   return {
-    get current() {
+    dispose: subagentIndex.dispose,
+    readPrepared(epoch: number): SessionListRowContext | undefined {
+      return preparedEpoch === epoch &&
+        parentRevision === subagentRevision &&
+        agentRunRevision === readAgentRunIndexVersion() &&
+        registryRevision === getSubagentRegistryPublicationRevision() &&
+        registrySnapshot === subagents.snapshotIdentity()
+        ? current
+        : undefined;
+    },
+    get current(): SessionListRowContext {
       return current;
     },
     subagentInputs,
-    placementRevision: () => placementRevision,
     get materializedRevisions() {
       return { profileRevision, subagentRevision };
     },
     /** True means the publication changes only these derived facts. */
     invalidate(change: SessionRowChange): boolean {
       if (!("all" in change)) {
+        if (
+          change.scope === "runtime" &&
+          (!change.facts || change.facts.kind === "unchanged") &&
+          !change.factsInvalidated
+        ) {
+          return true;
+        }
         modelFactsDirty = true;
         return false;
       }
+      if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
+        return true;
+      }
       switch (change.scope) {
+        case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
           profileRevision++;
           return true;
+        case "config-presentation":
         case "subagent-runs":
-          registryRevision = undefined;
-          return true;
         case "worker-environments":
         case "worker-placements":
-          placementRevision++;
-          return true;
         case "agent-runs":
         case "sessions":
           // Registries are presented live; stored writes publish their own exact keys.
@@ -112,22 +155,28 @@ export function createSessionRowProjectionContext() {
       cfg: records.Inputs["cfg"],
       matching: (query: { key: string }) => records.Row[],
       put: (row: records.Row) => void,
+      referenced: (reference: string) => records.Row | undefined,
     ) {
-      const previous = current.subagentRunsByChildSessionKey;
+      const broad = registryRevision === undefined;
       prepare(epoch);
       if (parentRevision === subagentRevision) {
         return;
       }
-      for (const key of new Set([
-        ...previous.keys(),
-        ...current.subagentRunsByChildSessionKey.keys(),
-      ])) {
+      for (const key of broad
+        ? current.subagentRunsByChildSessionKey.keys()
+        : subagentIndex.changedChildren) {
         for (const row of matching({ key })) {
           if (!row.storedEntry) {
             continue;
           }
-          const parents = records.readSessionRowParents(row, row.storedEntry, cfg, current);
-          if (!records.sameParents(row.parents, parents)) {
+          const parents = records.readSessionRowParents(
+            row,
+            row.storedEntry,
+            cfg,
+            current,
+            referenced,
+          );
+          if (!isDeepStrictEqual(row.parents, parents)) {
             put({ ...row, parents });
           }
         }
@@ -143,13 +192,16 @@ export function createSessionRowProjectionContext() {
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        row.materialized.source.childLinks = readChildLinks(row);
-        row.materialized.row.swarm = buildSessionSwarmSummary(
+        row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
+        const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
+        if (!isDeepStrictEqual(row.materialized.row.swarm, swarm)) {
+          row.materialized.row.swarm = swarm;
+        }
         row.subagentRevision = subagentRevision;
       }
     },

@@ -8,6 +8,29 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
+// Script modern contracts; legacy setup fixtures keep their real source loader.
+vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-instance-module-loader.js")>();
+  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
+  return {
+    ...actual,
+    bindPluginInstanceModuleLoader: (
+      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
+    ) => {
+      if (!/^(?:doctor-)?contract-api\./.test(path.basename(params.source))) {
+        return actual.bindPluginInstanceModuleLoader(params);
+      }
+      params.instance.bindModuleLoader(
+        getCachedPluginModuleLoader({
+          modulePath: params.source,
+          importerUrl: import.meta.url,
+          createLoader: getRegistryJitiMocks().createJiti,
+        }),
+      );
+    },
+  };
+});
+
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
@@ -29,9 +52,10 @@ let resolveLivePluginDoctorStateMigrationInventory: typeof import("./doctor-cont
 let waitForPluginCacheRetirement:
   | typeof import("./plugin-cache.js").waitForPluginCacheRetirement
   | undefined;
-let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
-  | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
-  | undefined;
+
+function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
+  mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
+}
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-state-migrations", tempDirs);
@@ -63,7 +87,7 @@ function writeLegacySetupEntry(
 }
 
 afterEach(async () => {
-  setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
+  clearPluginDoctorContractRegistryCache?.();
   try {
     await waitForPluginCacheRetirement?.();
   } finally {
@@ -79,23 +103,14 @@ describe("doctor-contract-registry state migrations", () => {
       listPluginDoctorStateMigrationEntries,
       resolveLivePluginDoctorStateMigrationInventory,
     } = await import("./doctor-contract-registry.js"));
-    ({
-      clearPluginDoctorContractRegistryCache,
-      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
-    } = await import("./doctor-contract-registry.test-fixtures.js"));
+    ({ clearPluginDoctorContractRegistryCache } =
+      await import("./doctor-contract-registry.test-fixtures.js"));
     ({ waitForPluginCacheRetirement } = await import("./plugin-cache.js"));
   });
 
   beforeEach(() => {
     resetRegistryJitiMocks();
     doctorContractWarnMock.mockReset();
-    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
-    // can fire when that import never completed. Fail loudly here instead of silently
-    // running a case against the real module loader.
-    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
-      throw new Error("doctor contract registry test fixtures were not loaded");
-    }
-    setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });
 
@@ -112,27 +127,24 @@ describe("doctor-contract-registry state migrations", () => {
   }],
 };\n`,
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "dynamic-owner",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-        {
-          id: "declared-owner",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: [{ id: "declared-action" }] },
-        },
-      ],
-      diagnostics: [],
-    });
+    mockDoctorPlugins(
+      {
+        id: "dynamic-owner",
+        origin: "bundled",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { stateMigrations: true },
+      },
+      {
+        id: "declared-owner",
+        origin: "bundled",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { stateMigrations: [{ id: "declared-action" }] },
+      },
+    );
 
     expect(
       resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} }).descriptors,
@@ -274,6 +286,39 @@ describe("doctor-contract-registry state migrations", () => {
     expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
 
+  it.each(["stateless", "detector", "invalid-detector", "foreign-owner"] as const)(
+    "inspects the public setup entry without dropping %s migration obligations",
+    (kind) => {
+      const pluginRoot = makeTempDir();
+      const { setupSource } = writeLegacySetupEntry(
+        pluginRoot,
+        `module.exports = { plugin: {
+          id: ${JSON.stringify(kind === "foreign-owner" ? "other-channel" : "legacy-channel")},
+          ${kind === "detector" ? "lifecycle: { detectLegacyStateMigrations: () => [] }," : ""}
+          ${kind === "invalid-detector" ? "lifecycle: { detectLegacyStateMigrations: true }," : ""}
+        } };`,
+      );
+      mockDoctorPlugins({
+        id: "legacy-channel",
+        origin: "global",
+        rootDir: pluginRoot,
+        setupSource,
+        channels: ["legacy-channel"],
+        providers: [],
+      });
+      const stateless = vi.fn();
+      const entries = listPluginDoctorStateMigrationEntries({
+        config: {},
+        env: {},
+        pluginIds: ["legacy-channel"],
+        onInspectedStatelessPlugin: stateless,
+      });
+      expect(entries).toHaveLength(kind === "detector" ? 1 : 0);
+      expect(stateless).not.toHaveBeenCalled();
+      expect(doctorContractWarnMock).toHaveBeenCalledTimes(kind === "invalid-detector" ? 1 : 0);
+    },
+  );
+
   it.each([
     { name: "entry feature present", entryFeature: true, expectedCount: 1 },
     { name: "entry feature absent", entryFeature: false, expectedCount: 0 },
@@ -407,18 +452,13 @@ describe("doctor-contract-registry state migrations", () => {
         },
       ],
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "global",
-          rootDir: pluginRoot,
-          channels: ["alpha", "alpha-alias"],
-          providers: [],
-          doctorContract: { configRepair: true, stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "alpha",
+      origin: "global",
+      rootDir: pluginRoot,
+      channels: ["alpha", "alpha-alias"],
+      providers: [],
+      doctorContract: { configRepair: true, stateMigrations: true },
     });
 
     expect(listPluginDoctorStateMigrationEntries({ config, env: {} })).toEqual([]);
@@ -514,18 +554,13 @@ describe("doctor-contract-registry state migrations", () => {
         },
       ],
     }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "workspace",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "alpha",
+      origin: "workspace",
+      rootDir: pluginRoot,
+      channels: [],
+      providers: [],
+      doctorContract: { stateMigrations: true },
     });
 
     expect(
@@ -546,18 +581,13 @@ describe("doctor-contract-registry state migrations", () => {
 }] };\n`,
       "utf8",
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: ["alpha", "alpha-alias"],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "alpha",
+      origin: "bundled",
+      rootDir: pluginRoot,
+      channels: ["alpha", "alpha-alias"],
+      providers: [],
+      doctorContract: { stateMigrations: true },
     });
 
     expect(
@@ -661,18 +691,13 @@ describe("doctor-contract-registry state migrations", () => {
 }] };\n`,
       "utf8",
     );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "memory-state",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
+    mockDoctorPlugins({
+      id: "memory-state",
+      origin: "bundled",
+      rootDir: pluginRoot,
+      channels: [],
+      providers: [],
+      doctorContract: { stateMigrations: true },
     });
 
     expect(

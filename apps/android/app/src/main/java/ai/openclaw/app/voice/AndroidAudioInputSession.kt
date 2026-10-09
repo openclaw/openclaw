@@ -114,16 +114,7 @@ internal class AndroidAudioInputSession private constructor(
       onChanged: (List<AudioInputDeviceOption>) -> Unit,
     ): AutoCloseable {
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-      val callback =
-        object : AudioDeviceCallback() {
-          override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-            onChanged(listAvailableDevices(context))
-          }
-
-          override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-            onChanged(listAvailableDevices(context))
-          }
-        }
+      val callback = audioDeviceChanges { onChanged(listAvailableDevices(context)) }
       audioManager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
       onChanged(listAvailableDevices(context))
       return AutoCloseable { audioManager.unregisterAudioDeviceCallback(callback) }
@@ -147,16 +138,7 @@ internal class AndroidAudioInputSession private constructor(
   val canCaptureDuringPlayback: Boolean
     get() = echoCancellationEnabled && communicationAudio?.eligible == true
 
-  private val deviceCallback =
-    object : AudioDeviceCallback() {
-      override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-        refreshRouteSafely()
-      }
-
-      override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-        refreshRouteSafely()
-      }
-    }
+  private val deviceCallback = audioDeviceChanges(::refreshRouteSafely)
   private val routingChangedListener = AudioRouting.OnRoutingChangedListener { refreshActualRouteSafely() }
   internal val preferredInputType: Int?
     get() = synchronized(lock) { selectedInput?.type }
@@ -196,11 +178,7 @@ internal class AndroidAudioInputSession private constructor(
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
 
-  fun read(
-    buffer: ByteArray,
-    offset: Int,
-    size: Int,
-  ): Int = checkAudioRecordReadResult(audioRecord.read(buffer, offset, size))
+  fun read(buffer: ByteArray): Int = checkAudioRecordReadResult(audioRecord.read(buffer, 0, buffer.size))
 
   private fun openRoute() {
     if (!bluetoothCommunicationRoute.begin(communicationRouteOwner, isCurrent)) {
@@ -211,12 +189,19 @@ internal class AndroidAudioInputSession private constructor(
     refreshRouteSafely()
   }
 
-  private fun refreshRouteSafely() {
+  // Routing is a preference; default capture remains better than losing the voice session.
+  private fun refreshRouteSafely() = refreshSafely("Bluetooth route update failed", ::refreshRoute)
+
+  private fun refreshActualRouteSafely() = refreshSafely("audio route verification failed", ::refreshActualRoute)
+
+  private inline fun refreshSafely(
+    message: String,
+    refresh: () -> Unit,
+  ) {
     try {
-      refreshRoute()
+      refresh()
     } catch (err: RuntimeException) {
-      // Routing is a preference; default capture remains better than losing the voice session.
-      Log.w(tag, "Bluetooth route update failed: ${err.message ?: err::class.simpleName}")
+      Log.w(tag, "$message: ${err.message ?: err::class.simpleName}")
     }
   }
 
@@ -276,14 +261,6 @@ internal class AndroidAudioInputSession private constructor(
     if (appliedPreferredInputKey == value) return
     appliedPreferredInputKey = value
     onAppliedPreferredDeviceChanged(value)
-  }
-
-  private fun refreshActualRouteSafely() {
-    try {
-      refreshActualRoute()
-    } catch (err: RuntimeException) {
-      Log.w(tag, "audio route verification failed: ${err.message ?: err::class.simpleName}")
-    }
   }
 
   private fun refreshActualRoute() {
@@ -366,12 +343,7 @@ private class BluetoothCommunicationRoute {
   ): Boolean {
     if (!isCurrent() || owner < latestOwner) return false
     latestOwner = owner
-    if (device == null) {
-      if (activeOwner != null) audioManager.clearCommunicationDevice()
-      activeOwner = null
-      return false
-    }
-    if (!audioManager.setCommunicationDevice(device)) {
+    if (device == null || !audioManager.setCommunicationDevice(device)) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
       return false
@@ -392,6 +364,13 @@ private class BluetoothCommunicationRoute {
 }
 
 private val bluetoothCommunicationRoute = BluetoothCommunicationRoute()
+
+private fun audioDeviceChanges(onChanged: () -> Unit): AudioDeviceCallback =
+  object : AudioDeviceCallback() {
+    override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = onChanged()
+
+    override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = onChanged()
+  }
 
 private val externalCommunicationOutputs =
   setOf(

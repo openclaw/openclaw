@@ -56,6 +56,7 @@ async function invoke(
     ? {
         ...service,
         close: async () => {},
+        reconcileRuntimePolicy: async () => {},
         revokeRunAuthority: () => {},
         preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
       }
@@ -105,6 +106,28 @@ describe("Gateway computer RPC", () => {
         true,
         { available: false, configured: false },
       ]);
+    },
+  );
+
+  it.each([{ probe: "false" }, { probe: 1 }])(
+    "rejects malformed status probes: %j",
+    async (params) => {
+      const status = vi.fn();
+      expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(
+        false,
+      );
+      expect(status).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{}, { probe: false }, { probe: true }])(
+    "forwards status probe policy: %j",
+    async (params) => {
+      const status = vi.fn(async () => ({ configured: false, available: false }));
+      expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(
+        true,
+      );
+      expect(status).toHaveBeenCalledWith(params);
     },
   );
 
@@ -182,6 +205,7 @@ describe("Gateway computer RPC", () => {
         invoke: dispatch,
         status: async () => ({ configured: true, available: true }),
         close: async () => {},
+        reconcileRuntimePolicy: async () => {},
         revokeRunAuthority: () => {},
         preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
       },

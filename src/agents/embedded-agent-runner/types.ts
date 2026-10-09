@@ -1,6 +1,4 @@
-/**
- * Shared metadata and result types for embedded-agent runner surfaces.
- */
+import type { ProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
@@ -55,6 +53,9 @@ export type EmbeddedAgentMeta = {
   providerRefusal?: {
     provider?: string;
     category?: string;
+    review?: ProviderRefusalReview;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
   };
   /** Runtime-owned selection, independent of the final response or credential source. */
   runtimeModelSelection?: ModelRef;
@@ -131,34 +132,6 @@ export type TraceAttempt = {
   status?: number;
 };
 
-type ExecutionTrace = {
-  winnerProvider?: string;
-  winnerModel?: string;
-  attempts?: TraceAttempt[];
-  fallbackUsed?: boolean;
-  runner?: "embedded" | "cli";
-  providerPolicyRetry?: {
-    category: "cyber";
-    provider: string;
-    model: string;
-  };
-};
-
-type RequestShapingTrace = {
-  authMode?: string;
-  thinking?: string;
-  reasoning?: string;
-  verbose?: string;
-  trace?: string;
-  fallbackEligible?: boolean;
-  blockStreaming?: string;
-};
-
-type PromptSegmentTrace = {
-  key: string;
-  chars: number;
-};
-
 export type ToolSummaryTrace = {
   calls: number;
   tools: string[];
@@ -166,19 +139,6 @@ export type ToolSummaryTrace = {
   /** Latest tool failure not cleared by same-tool success, independent of reply presentation. */
   unresolvedError?: { toolName: string };
   totalToolTimeMs?: number;
-};
-
-type CompletionTrace = {
-  finishReason?: string;
-  stopReason?: string;
-  refusal?: boolean;
-};
-
-type ContextManagementTrace = {
-  sessionCompactions?: number;
-  lastTurnCompactions?: number;
-  preflightCompactionApplied?: boolean;
-  postCompactionContextInjected?: boolean;
 };
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
@@ -211,7 +171,10 @@ export type EmbeddedAgentRunMeta = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
-  modelFallbackStopReason?: "agent_run_terminal_timeout" | "idle_timeout_circuit_breaker";
+  modelFallbackStopReason?:
+    | "agent_run_terminal_timeout"
+    | "idle_timeout_circuit_breaker"
+    | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
@@ -220,7 +183,10 @@ export type EmbeddedAgentRunMeta = {
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
-  /** A visible parent delegated its otherwise-empty result to completion children. */
+  /**
+   * A visible parent delegated its otherwise-empty result to completion children
+   * or a detached media run.
+   */
   continuationPending?: true;
   error?: {
     kind:
@@ -249,12 +215,43 @@ export type EmbeddedAgentRunMeta = {
     name: string;
     arguments: string;
   }>;
-  executionTrace?: ExecutionTrace;
-  requestShaping?: RequestShapingTrace;
-  promptSegments?: PromptSegmentTrace[];
+  executionTrace?: {
+    winnerProvider?: string;
+    winnerModel?: string;
+    attempts?: TraceAttempt[];
+    fallbackUsed?: boolean;
+    runner?: "embedded" | "cli";
+    providerPolicyRetry?: {
+      category: "cyber";
+      provider: string;
+      model: string;
+    };
+  };
+  requestShaping?: {
+    authMode?: string;
+    thinking?: string;
+    reasoning?: string;
+    verbose?: string;
+    trace?: string;
+    fallbackEligible?: boolean;
+    blockStreaming?: string;
+  };
+  promptSegments?: {
+    key: string;
+    chars: number;
+  }[];
   toolSummary?: ToolSummaryTrace;
-  completion?: CompletionTrace;
-  contextManagement?: ContextManagementTrace;
+  completion?: {
+    finishReason?: string;
+    stopReason?: string;
+    refusal?: boolean;
+  };
+  contextManagement?: {
+    sessionCompactions?: number;
+    lastTurnCompactions?: number;
+    preflightCompactionApplied?: boolean;
+    postCompactionContextInjected?: boolean;
+  };
 };
 
 export type EmbeddedAgentRunResult = {
@@ -275,25 +272,19 @@ export type EmbeddedAgentRunResult = {
   }>;
   meta: EmbeddedAgentRunMeta;
   diagnosticTrace?: DiagnosticTraceContext;
-  // True if a messaging tool successfully sent a message.
-  // Used to suppress agent's confirmation text.
+  /** Suppresses confirmation text after a messaging tool successfully sends. */
   didSendViaMessagingTool?: boolean;
   // True if message_tool_only delivered a visible reply to the current source conversation.
   didDeliverSourceReplyViaMessageTool?: boolean;
   sourceReplyDelivered?: true;
   /** Current-input custody; unlike aggregate sends, this is reset when another input is admitted. */
   sourceReplyDeliveryState?: ReplyDeliveryState;
-  // True if a deterministic approval prompt was sent through the tool-result channel.
   didSendDeterministicApprovalPrompt?: boolean;
-  // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
-  // Media URLs successfully sent via messaging tools during the run.
   messagingToolSentMediaUrls?: string[];
-  // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
   // Message-tool replies delivered to the active internal UI source.
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  // Child sessions successfully accepted by sessions_spawn during the run.
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** An asynchronous tool task started during this run; its owner tracks completion. */
   asyncWorkStarted?: true;
@@ -301,7 +292,6 @@ export type EmbeddedAgentRunResult = {
   requesterContinuationSettled?: true;
   // Structured heartbeat outcome recorded by the heartbeat response tool.
   heartbeatToolResponse?: HeartbeatToolResponse;
-  // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
 };
 

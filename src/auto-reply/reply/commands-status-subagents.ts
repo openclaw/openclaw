@@ -1,35 +1,28 @@
-// Formats subagent status rows for the status command response.
-import type { TaskSummary } from "../../../packages/gateway-protocol/src/schema/tasks.js";
+import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
-import {
-  hasSubagentRunEnded,
-  isRetainedUnendedSubagentRun,
-} from "../../agents/subagents/registry/subagent-run-liveness.js";
+// Formats subagent status rows for the status command response.
+import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
+import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
-import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { formatRunLabel } from "./subagents-utils.js";
 
-function formatExecutionObservation(observation: NonNullable<TaskSummary["execution"]>): string {
+const WAIT_LABELS = new Map([
+  ["approval", "approval"],
+  ["user_input", "input"],
+  ["agent_messages", "agent messages"],
+  ["children", "child tasks"],
+]);
+
+function formatExecutionObservation(observation: SubagentExecutionObservation): string {
   switch (observation.state) {
     case "running": {
-      const tool = sanitizeTaskStatusText(observation.currentTool?.name, { maxChars: 60 });
+      const tool = sanitizeRunStatusText(observation.currentTool?.name, { maxChars: 60 });
       return tool ? `running ${tool}` : "running";
     }
     case "queued":
       return "queued";
     case "waiting":
-      switch (observation.wait?.kind) {
-        case "approval":
-          return "waiting for approval";
-        case "user_input":
-          return "waiting for input";
-        case "children":
-          return "waiting for child tasks";
-        case "agent_messages":
-          return "waiting for agent messages";
-        default:
-          return "waiting for external work";
-      }
+      return `waiting for ${WAIT_LABELS.get(observation.wait?.kind ?? "") ?? "external work"}`;
     case "finished":
       return "finished · settlement pending";
     default:
@@ -48,12 +41,13 @@ export function buildSubagentsStatusLine(params: {
     return undefined;
   }
   const now = params.now ?? Date.now();
+  const activeRuns = new Set(context.list.view.active);
   let active = 0;
   let done = 0;
   const detailLines: string[] = [];
   for (const entry of context.runs) {
-    const pendingDescendants = context.countPendingDescendantRuns(entry.childSessionKey);
-    if (isRetainedUnendedSubagentRun(entry, now) || pendingDescendants > 0) {
+    const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
+    if (activeRuns.has(entry)) {
       active += 1;
       if (detailLines.length >= 3) {
         continue;

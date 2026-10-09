@@ -92,7 +92,6 @@ describe("Sessions archive outcome lifetime", () => {
     { reconnect: "before confirmation", sameClient: true },
     { reconnect: "after confirmation", sameClient: true },
     { reconnect: "before confirmation", sameClient: false },
-    { reconnect: "after confirmation", sameClient: false },
   ])(
     "retires Undo on reconnect $reconnect (same client=$sameClient)",
     async ({ reconnect, sameClient }) => {

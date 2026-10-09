@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import { mockIpv4OnlyLocalhostLookup } from "../../../test/helpers/loopback-dns.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { getDeterministicFreePortBlock } from "../../test-utils/ports.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import type { PortalTarget } from "./portal-http-proxy.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
@@ -169,6 +169,40 @@ async function httpCall(params: {
   });
 }
 
+async function readUpgradeRejection(params: {
+  port: number;
+  host?: string;
+}): Promise<{ status: number; body: string; elapsedMs: number }> {
+  const started = Date.now();
+  const socket = net.connect({ host: "127.0.0.1", port: params.port });
+  await once(socket, "connect");
+  socket.write(
+    [
+      "GET / HTTP/1.1",
+      `Host: ${params.host ?? `127.0.0.1:${params.port}`}`,
+      "Connection: Upgrade",
+      "Upgrade: websocket",
+      "Sec-WebSocket-Version: 13",
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+      "",
+      "",
+    ].join("\r\n"),
+  );
+  const chunks: Buffer[] = [];
+  socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+  await Promise.race([once(socket, "close"), once(socket, "end")]);
+  socket.destroy();
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const separator = raw.indexOf("\r\n\r\n");
+  const head = separator >= 0 ? raw.slice(0, separator) : raw;
+  const body = (separator >= 0 ? raw.slice(separator + 4) : "").replace(/\r\n$/u, "");
+  return {
+    status: Number(head.split(" ")[1]),
+    body,
+    elapsedMs: Date.now() - started,
+  };
+}
+
 function storeCookies(jar: Map<string, string>, cookies: readonly string[] | undefined): void {
   for (const cookie of cookies ?? []) {
     const pair = cookie.split(";", 1)[0];
@@ -252,6 +286,11 @@ describe("portal HTTP proxy", () => {
     expect(unauthorized.body).toContain("This portal is private");
     expect(unauthorized.body).not.toContain(portal.tokenQuery);
 
+    const unauthorizedUpgrade = await readUpgradeRejection({ port: portal.listenPort });
+    expect(unauthorizedUpgrade.status).toBe(401);
+    expect(unauthorizedUpgrade.body).toBe("Unauthorized");
+    expect(unauthorizedUpgrade.elapsedMs).toBeLessThan(2000);
+
     const authorized = await httpCall({
       port: portal.listenPort,
       path: `/preview?x=1&${portal.tokenQuery}`,
@@ -271,6 +310,75 @@ describe("portal HTTP proxy", () => {
     });
     expect(cookieOnly).toMatchObject({ status: 200, body: "proxied" });
     expect(targetPaths).toEqual(["/preview?x=1", "/cookie?y=2"]);
+  });
+
+  it("flushes HTTP 404 on an unknown portal ingress upgrade instead of hanging", async () => {
+    const service = createGatewayPortalService({
+      httpBindHosts: ["127.0.0.1"],
+      httpServers: [],
+      ingress: { domain: "previews.example.net", port: 0 },
+    });
+    services.add(service);
+    const portal = await service.open({ targetPort, title: "App" });
+    const rejected = await readUpgradeRejection({
+      port: portal.listenPort,
+      host: "missing.previews.example.net",
+    });
+    expect(rejected.status).toBe(404);
+    expect(rejected.body).toBe("Unknown portal");
+    expect(rejected.elapsedMs).toBeLessThan(2000);
+  });
+
+  it("destroys the unauthorized upgrade server socket after flushing 401 while the client is still open", async () => {
+    const httpServers: Server[] = [];
+    const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers });
+    services.add(service);
+    const portal = await service.open({ targetPort, title: "App" });
+    const listener = httpServers[0];
+    if (!listener) {
+      throw new Error("expected the portal HTTP listener");
+    }
+    let serverSocket: Duplex | undefined;
+    listener.prependOnceListener("upgrade", (_req, socket) => {
+      serverSocket = socket;
+    });
+    const client = net.connect({ host: "127.0.0.1", port: portal.listenPort });
+    client.on("error", () => {});
+    await once(client, "connect");
+    const started = Date.now();
+    client.write(
+      [
+        "GET / HTTP/1.1",
+        `Host: 127.0.0.1:${portal.listenPort}`,
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    const chunks: Buffer[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("unauthorized upgrade timed out")), 2000);
+      client.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+        if (Buffer.concat(chunks).includes("\r\n\r\n")) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    const raw = Buffer.concat(chunks).toString("utf8");
+    expect(raw).toContain("HTTP/1.1 401 Unauthorized");
+    expect(raw).toContain("Unauthorized");
+    expect(client.destroyed).toBe(false);
+    await expect.poll(() => serverSocket?.destroyed === true).toBe(true);
+    expect(client.destroyed).toBe(false);
+    console.log(
+      `[portal unauthorized upgrade teardown] server_destroyed_before_client=true elapsed_ms=${Date.now() - started}`,
+    );
+    client.destroy();
   });
 
   it("keeps concurrent portal HTTP sessions authorized in A-B-A order", async () => {
@@ -869,17 +977,18 @@ describe("portal HTTP proxy", () => {
   it("reaches IPv6-only targets through the localhost dual-stack dial", async () => {
     mockIpv4OnlyLocalhostLookup();
     // Node >=17 dev servers (Vite, Next.js) often bind ::1 only on "localhost".
-    // Linux ephemeral listeners can claim a released probe before this IPv6 bind.
-    const v6Port = await getDeterministicFreePortBlock({ offsets: [0] });
+    // Keep the IPv4 endpoint unclaimed by sibling fixtures while only IPv6 is bound.
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    const v6Port = claim.port;
     const v6Target = createServer((req, res) => {
       res.statusCode = 200;
       res.end("v6 proxied");
     });
-    await new Promise<void>((resolve, reject) => {
-      v6Target.once("error", reject);
-      v6Target.listen(v6Port, "::1", () => resolve());
-    });
     try {
+      await new Promise<void>((resolve, reject) => {
+        v6Target.once("error", reject);
+        v6Target.listen(v6Port, "::1", () => resolve());
+      });
       const portal = await portalService().open({ targetPort: v6Port });
       const result = await httpCall({
         port: portal.listenPort,
@@ -890,6 +999,7 @@ describe("portal HTTP proxy", () => {
       await new Promise<void>((resolve) => {
         v6Target.close(() => resolve());
       });
+      await claim.release();
     }
   });
 

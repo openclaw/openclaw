@@ -1,8 +1,8 @@
 import type { APIEmbed } from "discord-api-types/v10";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-// Discord plugin module implements native command reply behavior.
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   hasOutboundReplyContent,
@@ -11,15 +11,15 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { registerDiscordComponentEntries } from "../components-registry.js";
 import { buildDiscordComponentMessage } from "../components.js";
 import {
   hasDiscordV2Components,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
   type CommandInteraction,
   type MessagePayloadFile,
-  type StringSelectMenuInteraction,
   type TopLevelComponents,
 } from "../internal/discord.js";
 import {
@@ -27,8 +27,21 @@ import {
   DISCORD_PRESENTATION_CAPABILITIES,
   resolveDiscordComponentSpec,
 } from "../outbound-components.js";
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
+
+export function resolveDiscordInteractionReplyOptions(
+  params: Pick<DiscordCommandArgContext, "cfg" | "discordConfig" | "accountId">,
+) {
+  return {
+    textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
+      fallbackLimit: 2000,
+    }),
+    maxLinesPerMessage: resolveDiscordMaxLinesPerMessage(params),
+    chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
+  };
+}
 
 function isDiscordUnknownInteraction(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -46,10 +59,7 @@ function isDiscordUnknownInteraction(error: unknown): boolean {
   if (err.status === 404 && /Unknown interaction/i.test(err.message ?? "")) {
     return true;
   }
-  if (/Unknown interaction/i.test(err.rawBody?.message ?? "")) {
-    return true;
-  }
-  return false;
+  return /Unknown interaction/i.test(err.rawBody?.message ?? "");
 }
 
 function resolveDiscordInteractionMessageParts(payload: ReplyPayload) {
@@ -84,7 +94,7 @@ export async function safeDiscordInteractionCall<T>(
 }
 
 export async function settleDiscordInteractionWithoutVisibleReply(
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
+  interaction: CommandInteraction | BaseComponentInteraction,
 ): Promise<void> {
   // Only slash-command defers create Discord's visible loading response. Component
   // defers own an existing message, so deleting their original response would erase UI.
@@ -97,7 +107,7 @@ export async function settleDiscordInteractionWithoutVisibleReply(
 }
 
 export async function deliverDiscordInteractionReply(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction: CommandInteraction | BaseComponentInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
   componentRoute?: { accountId: string; agentId: string; sessionKey: string };
@@ -129,25 +139,22 @@ export async function deliverDiscordInteractionReply(params: {
   const componentSpec = preserveNativeParts
     ? undefined
     : await resolveDiscordComponentSpec(payload);
-  let componentBuild = componentSpec
+  const componentBuild = componentSpec
     ? buildDiscordComponentMessage({ spec: componentSpec, ...params.componentRoute })
     : undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
-  let { components: firstMessageComponents, embeds: firstMessageEmbeds } =
-    resolveDiscordInteractionMessageParts(payload);
-  if (componentBuild) {
-    firstMessageComponents = componentBuild.components;
-  }
+  const messageParts = resolveDiscordInteractionMessageParts(payload);
+  const firstMessageComponents = componentBuild?.components ?? messageParts.components;
+  const firstMessageEmbeds = messageParts.embeds;
+  const hasFirstMessageParts = Boolean(firstMessageComponents || firstMessageEmbeds);
 
   // Interaction acknowledgement/defer state is not delivery for this payload. Only a
   // successful native send in this invocation can make a later expiry partial.
   let payloadDelivered = false;
-  const sendMessage = async (
-    content: string,
-    files?: MessagePayloadFile[],
-    components?: TopLevelComponents[],
-    embeds?: APIEmbed[],
-  ) => {
+  const sendMessage = async (content: string, files?: MessagePayloadFile[]) => {
+    const firstMessage = !payloadDelivered;
+    const components = firstMessage ? firstMessageComponents : undefined;
+    const embeds = firstMessage ? firstMessageEmbeds : undefined;
     const hasV2 = hasDiscordV2Components(components);
     const payloadLocal = {
       ...(content && !hasV2 ? { content } : {}),
@@ -156,17 +163,14 @@ export async function deliverDiscordInteractionReply(params: {
       ...(params.responseEphemeral !== undefined ? { ephemeral: params.responseEphemeral } : {}),
       ...(files?.length ? { files } : {}),
     };
-    let result: void | null;
     try {
-      result = await safeDiscordInteractionCall("interaction send", async () => {
+      const result = await safeDiscordInteractionCall("interaction send", async () => {
         const sent =
           !preferFollowUp && !payloadDelivered
             ? await interaction.reply(payloadLocal)
             : await interaction.followUp(payloadLocal);
         payloadDelivered = true;
-        firstMessageComponents = undefined;
-        firstMessageEmbeds = undefined;
-        if (componentBuild) {
+        if (firstMessage && componentBuild) {
           // Initial callbacks need not return a message; callback input supplies its ID later.
           const messageId =
             sent && typeof sent === "object" && "id" in sent && typeof sent.id === "string"
@@ -177,61 +181,38 @@ export async function deliverDiscordInteractionReply(params: {
             modals: componentBuild.modals,
             messageId,
           });
-          componentBuild = undefined;
         }
       });
+      if (result === null) {
+        throw new PlatformMessageNotDispatchedError(
+          "Discord interaction expired before message dispatch",
+          { cause: new Error("Unknown interaction") },
+        );
+      }
     } catch (error) {
       if (!payloadDelivered) {
         throw error;
       }
       throw createChannelPartialDeliveryError(error, { visibleReplySent: true });
     }
-    if (result !== null) {
-      return;
-    }
-    const expiry = new PlatformMessageNotDispatchedError(
-      "Discord interaction expired before message dispatch",
-      { cause: new Error("Unknown interaction") },
-    );
-    if (!payloadDelivered) {
-      throw expiry;
-    }
-    throw createChannelPartialDeliveryError(expiry, { visibleReplySent: true });
   };
 
-  if (reply.hasMedia) {
-    const media = await Promise.all(
-      reply.mediaUrls.map(async (url) => {
-        const loaded = await loadWebMedia(url, {
-          localRoots: params.mediaLocalRoots,
-        });
-        return {
-          name: loaded.fileName ?? "upload",
-          data: loaded.buffer,
-          contentType: loaded.contentType,
-        };
-      }),
-    );
-    const chunks = resolveTextChunksWithFallback(
-      reply.text,
-      chunkDiscordTextWithMode(reply.text, {
-        maxChars: textLimit,
-        maxLines: maxLinesPerMessage,
-        chunkMode,
-      }),
-    );
-    const caption = chunks[0] ?? "";
-    await sendMessage(caption, media, firstMessageComponents, firstMessageEmbeds);
-    for (const chunk of chunks.slice(1)) {
-      if (!chunk.trim()) {
-        continue;
-      }
-      await sendMessage(chunk);
-    }
-    return payloadDelivered;
-  }
+  const files = reply.hasMedia
+    ? await Promise.all(
+        reply.mediaUrls.map(async (url) => {
+          const loaded = await loadWebMedia(url, {
+            localRoots: params.mediaLocalRoots,
+          });
+          return {
+            name: loaded.fileName ?? "upload",
+            data: loaded.buffer,
+            contentType: loaded.contentType,
+          };
+        }),
+      )
+    : undefined;
 
-  if (!reply.hasText && !firstMessageComponents && !firstMessageEmbeds) {
+  if (!files && !reply.hasText && !hasFirstMessageParts) {
     return false;
   }
   const chunks = resolveTextChunksWithFallback(
@@ -245,11 +226,12 @@ export async function deliverDiscordInteractionReply(params: {
   if (chunks.length === 0) {
     chunks.push("");
   }
-  for (const chunk of chunks) {
-    if (!chunk.trim() && !firstMessageComponents && !firstMessageEmbeds) {
+  for (const [index, chunk] of chunks.entries()) {
+    const chunkFiles = index === 0 ? files : undefined;
+    if (!chunk.trim() && !chunkFiles && (payloadDelivered || !hasFirstMessageParts)) {
       continue;
     }
-    await sendMessage(chunk, undefined, firstMessageComponents, firstMessageEmbeds);
+    await sendMessage(chunk, chunkFiles);
   }
   return payloadDelivered;
 }

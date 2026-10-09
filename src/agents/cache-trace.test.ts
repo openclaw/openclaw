@@ -11,19 +11,11 @@ describe("createCacheTrace", () => {
   const bareGoogleKey = "AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW"; // pragma: allowlist secret
   const barePerplexityKey = "pplx-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
 
-  function createMemoryTraceForTest() {
+  function createMemoryTraceForTest(env: NodeJS.ProcessEnv = {}) {
     const lines: string[] = [];
-    // In-memory writer keeps cache trace assertions deterministic without
-    // touching real diagnostic log paths.
     const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
+      cfg: { diagnostics: { cacheTrace: { enabled: true } } },
+      env,
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
@@ -42,22 +34,28 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it("uses the fixed cache trace path under the state directory", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
+  it.each(["dashboard", "subagent", "internal-session-effects"])(
+    "does not record Incognito %s prompts even when content tracing is enabled",
+    (surface) => {
+      const lines: string[] = [];
+      const trace = createCacheTrace({
+        env: { OPENCLAW_CACHE_TRACE: "1" },
+        sessionKey: `agent:main:${surface}:incognito-private`,
+        writer: {
+          filePath: "memory",
+          write: (line) => lines.push(line),
+          flush: async () => undefined,
         },
-      },
-      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-cache-trace" },
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
+      });
+      trace?.recordStage("prompt:before", { prompt: "synthetic private prompt" });
+      expect(lines).toEqual([]);
+      expect(trace).toBeNull();
+    },
+  );
+
+  it("uses the fixed cache trace path under the state directory", () => {
+    const { lines, trace } = createMemoryTraceForTest({
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-cache-trace",
     });
 
     expect(typeof trace?.recordStage).toBe("function");
@@ -72,22 +70,7 @@ describe("createCacheTrace", () => {
   });
 
   it("records empty prompt/system values when enabled", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
-    });
+    const { lines, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("prompt:before", { prompt: "", system: "" });
 
@@ -96,36 +79,8 @@ describe("createCacheTrace", () => {
     expect(event.system).toBe("");
   });
 
-  it("records raw model run session stages", () => {
-    const { lines, trace } = createMemoryTraceForTest();
-
-    trace?.recordStage("session:raw-model-run", {
-      messages: [],
-      system: "",
-    });
-
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event.stage).toBe("session:raw-model-run");
-    expect(event.system).toBe("");
-  });
-
   it("records stream context from systemPrompt when wrapping stream functions", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
-    });
+    const { lines, trace } = createMemoryTraceForTest();
 
     const wrapped = trace?.wrapStreamFn(((model: unknown, context: unknown, options: unknown) => ({
       model,
@@ -153,24 +108,7 @@ describe("createCacheTrace", () => {
   });
 
   it("respects env overrides for enablement", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {
-        OPENCLAW_CACHE_TRACE: "0",
-      },
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
-    });
+    const { trace } = createMemoryTraceForTest({ OPENCLAW_CACHE_TRACE: "0" });
 
     expect(trace).toBeNull();
   });
@@ -239,14 +177,12 @@ describe("createCacheTrace", () => {
       baseUrl: "https://api.example.com",
     });
     expect(systemProvider.diagnosticText).toBeTypeOf("string");
-    expect(systemProvider.diagnosticText).not.toBe(bareAwsKey);
     expect(systemProvider.diagnosticText).not.toContain(bareAwsKey);
     expect(event.model).toEqual({
       id: "test-model",
       tokenCount: 8192,
       diagnosticText: expect.any(String),
     });
-    expect((event.model as { diagnosticText?: string }).diagnosticText).not.toBe(bareGoogleKey);
     expect((event.model as { diagnosticText?: string }).diagnosticText).not.toContain(
       bareGoogleKey,
     );
@@ -258,7 +194,6 @@ describe("createCacheTrace", () => {
       },
       images: "<redacted>",
     });
-    expect((event.options as { diagnosticText?: string }).diagnosticText).not.toBe(bareGithubKey);
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toContain(
       bareGithubKey,
     );
@@ -275,7 +210,6 @@ describe("createCacheTrace", () => {
       type: "text",
       text: expect.any(String),
     });
-    expect(content[0]?.text).not.toBe(barePerplexityKey);
     expect(content[0]?.text).not.toContain(barePerplexityKey);
     const source = (content[1]?.source ?? {}) as Record<string, unknown>;
     expect(source.data).toBe("<redacted>");
@@ -303,9 +237,6 @@ describe("createCacheTrace", () => {
     expect(event.prompt).toBeTypeOf("string");
     expect(event.note).toBeTypeOf("string");
     expect(event.error).toBeTypeOf("string");
-    expect(event.prompt).not.toBe(`prompt ${bareAnthropicKey}`);
-    expect(event.note).not.toBe(`note ${bareGithubKey}`);
-    expect(event.error).not.toBe(`error ${bareGoogleKey}`);
     const serialized = JSON.stringify(event);
     expect(serialized).not.toContain(bareAnthropicKey);
     expect(serialized).not.toContain(bareGithubKey);

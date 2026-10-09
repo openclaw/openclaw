@@ -24,6 +24,19 @@ import {
 } from "./state.js";
 import { ReefRelayError, ReefTransportClient } from "./transport.js";
 
+function createPrompter(handle = "molty", complete = false) {
+  const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", handle];
+  if (complete) {
+    textAnswers.push("gpt-5.6-terra", "REEF_GUARD_OPENAI_KEY", "reef-v1");
+  }
+  const selectAnswers = ["code-only", "openai", "api-key"];
+  return {
+    note: vi.fn(async () => undefined),
+    text: vi.fn(async () => textAnswers.shift() ?? ""),
+    select: vi.fn(async () => (complete ? selectAnswers.shift() : "code-only")),
+  };
+}
+
 describe("Reef setup wizard identity binding", () => {
   let stateDir = "";
 
@@ -68,17 +81,7 @@ describe("Reef setup wizard identity binding", () => {
   it("rejects a different handle before reusing the stored identity keys", async () => {
     const runtime = installRuntime();
     await bindIdentity(runtime, "existing");
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "replacement",
-    ];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter("replacement");
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
@@ -92,21 +95,7 @@ describe("Reef setup wizard identity binding", () => {
       handle: "molty",
       key_epoch: 1,
     });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-      "REEF_GUARD_OPENAI_KEY",
-      "reef-v1",
-    ];
-    const selectAnswers = ["code-only", "openai", "api-key"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-    };
+    const prompter = createPrompter("molty", true);
 
     await reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never });
 
@@ -462,12 +451,7 @@ describe("Reef setup wizard identity binding", () => {
     vi.spyOn(ReefTransportClient.prototype, "listFriends").mockRejectedValue(
       new ReefRelayError(401, "unknown_handle"),
     );
-    const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", "molty"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter();
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
@@ -481,12 +465,7 @@ describe("Reef setup wizard identity binding", () => {
     vi.spyOn(ReefTransportClient.prototype, "createHandle").mockRejectedValue(
       new TypeError("connection reset"),
     );
-    const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", "molty"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter();
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
@@ -506,12 +485,7 @@ describe("Reef setup wizard identity binding", () => {
     vi.spyOn(ReefTransportClient.prototype, "listFriends").mockRejectedValue(
       new ReefRelayError(401, "invalid_signature"),
     );
-    const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", "molty"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter();
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
@@ -531,21 +505,7 @@ describe("Reef setup wizard identity binding", () => {
       expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
       return { handle: "molty", key_epoch: 1 };
     });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-      "REEF_GUARD_OPENAI_KEY",
-      "reef-v1",
-    ];
-    const selectAnswers = ["code-only", "openai", "api-key"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-    };
+    const prompter = createPrompter("molty", true);
 
     await reefSetupWizard.configureInteractive({
       cfg: {},

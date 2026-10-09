@@ -1,4 +1,3 @@
-// Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -31,10 +30,6 @@ export function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "").replace(/\/(?:anthropic|v1)$/i, "");
 }
 
-function normalizeMinimaxTtsPitch(pitch: number): number {
-  return Math.trunc(pitch);
-}
-
 export async function minimaxTTS(params: {
   text: string;
   apiKey: string;
@@ -44,8 +39,6 @@ export async function minimaxTTS(params: {
   speed?: number;
   vol?: number;
   pitch?: number;
-  format?: string;
-  sampleRate?: number;
   timeoutMs: number;
 }): Promise<Buffer> {
   const {
@@ -57,8 +50,6 @@ export async function minimaxTTS(params: {
     speed = 1,
     vol = 1,
     pitch = 0,
-    format = "mp3",
-    sampleRate = 32000,
     timeoutMs,
   } = params;
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
@@ -90,11 +81,11 @@ export async function minimaxTTS(params: {
             voice_id: voiceId,
             speed,
             vol,
-            pitch: normalizeMinimaxTtsPitch(pitch),
+            pitch: Math.trunc(pitch),
           },
           audio_setting: {
-            format,
-            sample_rate: sampleRate,
+            format: "mp3",
+            sample_rate: 32000,
           },
         }),
         signal: controller.signal,

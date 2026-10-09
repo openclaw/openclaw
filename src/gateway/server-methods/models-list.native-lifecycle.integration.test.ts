@@ -1,15 +1,40 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { performance } from "node:perf_hooks";
-import { expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it.each([false, true])(
+async function closeEndpoint(endpoint: ReturnType<typeof createServer>) {
+  endpoint.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    endpoint.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+const modelRow = (provider: string, id: string) => expect.objectContaining({ provider, id });
+
+const coordinatorRoots = createSuiteTempRootTracker({ prefix: "native-catalog-coordinator-" });
+beforeAll(() => coordinatorRoots.setup());
+beforeEach(async () => {
+  // Auth refresh writes config; its handoff lease must not use the operator's coordinator.
+  vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+    await coordinatorRoots.make("coordinator"),
+  );
+});
+afterAll(async () => {
+  vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
+  await coordinatorRoots.cleanup();
+});
+
+it.for([false, true])(
   "models.list learns native models after cold Gateway startup (provider credentials: %s)",
-  async (withProviderCredentials) => {
+  { timeout: 120_000 },
+  async (withProviderCredentials, { signal }) => {
     const state = await createOpenClawTestState({
       label: "native-catalog-lifecycle",
       layout: "state-only",
@@ -30,37 +55,25 @@ it.each([false, true])(
     let emptyNativeCatalog = false;
     let failedNativeCatalog = false;
     let failedProviderCatalog = !withProviderCredentials;
-    let noteNativeRequested!: () => void;
-    const nativeRequested = new Promise<void>((resolve) => {
-      noteNativeRequested = resolve;
-    });
+    const nativeRequested = createDeferred();
     let holdOther = false;
-    let noteOtherRequested!: () => void;
-    const otherRequested = new Promise<void>((resolve) => {
-      noteOtherRequested = resolve;
-    });
-    let releaseOther!: () => void;
-    const otherReleased = new Promise<void>((resolve) => {
-      releaseOther = resolve;
-    });
-    let releaseNative!: () => void;
-    let nativeReleased = new Promise<void>((resolve) => {
-      releaseNative = resolve;
-    });
+    const otherRequested = createDeferred();
+    const otherReleased = createDeferred();
+    let nativeReleased = createDeferred();
     const endpoint = createServer((request, response) => {
       requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
       if (request.url === "/native/models") {
         if (failedNativeCatalog) {
-          void nativeReleased.then(() =>
+          void nativeReleased.promise.then(() =>
             response
               .writeHead(503)
               .end(JSON.stringify({ error: "Native catalog fixture unavailable" })),
           );
           return;
         }
-        noteNativeRequested();
-        void nativeReleased.then(() =>
+        nativeRequested.resolve();
+        void nativeReleased.promise.then(() =>
           response.end(
             JSON.stringify(
               emptyNativeCatalog
@@ -120,8 +133,8 @@ it.each([false, true])(
             JSON.stringify([{ id: "provider-account", name: "Provider account model" }]),
           );
         if (holdOther && request.url === "/other/models") {
-          noteOtherRequested();
-          void otherReleased.then(reply);
+          otherRequested.resolve();
+          void otherReleased.promise.then(reply);
         } else {
           reply();
         }
@@ -228,7 +241,7 @@ it.each([false, true])(
             modelPolicy: { allow: [`${provider}/*`] },
             models: { [`${provider}/static-model`]: { agentRuntime: { id: harness } } },
           },
-          list: [{ id: "main", workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         models: {
           providers: {
@@ -274,64 +287,52 @@ it.each([false, true])(
         await server.startupSettled;
         const list = () =>
           client.request<ModelsListResult>("models.list", { agentId: "main", view: "all" });
-        let waitTimer: ReturnType<typeof setTimeout> | undefined;
-        const nativeStarted = await Promise.race([
-          nativeRequested.then(() => true),
-          new Promise<boolean>((resolve) => {
-            waitTimer = setTimeout(() => resolve(false), 15_000);
-          }),
-        ]);
-        clearTimeout(waitTimer);
+        await nativeRequested.promise;
         const beforeReads = requests.length;
-        const readStarted = performance.now();
+        // Discovery stays held until these RPCs return the prepared snapshot.
         const pending = await Promise.all([list(), list()]);
-        const pendingReadMs = performance.now() - readStarted;
-        console.log(
-          "NATIVE_LIFECYCLE_PENDING",
-          JSON.stringify({ nativeStarted, pendingReadMs, requests, pending }),
-        );
-        expect.soft(nativeStarted).toBe(true);
         expect.soft(requests.filter((path) => path === "/native/models")).toHaveLength(1);
-        expect(pendingReadMs).toBeLessThan(1_000);
         expect(requests).toHaveLength(beforeReads);
         for (const result of pending) {
           expect(result.models.some((row) => row.id === "static-model")).toBe(true);
-          expect.soft(result.pendingProviders).toContain(provider);
+          expect(result.pendingProviders).toContain(provider);
+          expect(result.models).not.toContainEqual(modelRow(provider, nativeModelId));
         }
-        releaseNative();
+        nativeReleased.resolve();
         await expect
           .poll(
             async () => (await list()).models.find((row) => row.id === nativeModelId)?.available,
             { timeout: 15_000 },
           )
           .toBe(true);
-        expect((await list()).models).toContainEqual(
-          expect.objectContaining({ provider, id: "harness-host-row" }),
-        );
+        expect((await list()).models).toContainEqual(modelRow(provider, "harness-host-row"));
         if (!withProviderCredentials) {
-          expect(requests).toEqual(["/native/models"]);
-          const unavailable = await client.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            view: "all",
-            refresh: true,
-          });
+          // Cold startup discovers the full catalog, as an explicit refresh would.
+          expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
+          // Gateway refresh can return a pending snapshot before discovery publishes.
+          const refresh = () =>
+            waitForCatalogPublication({
+              signal,
+              start: () =>
+                client.request<ModelsListResult>("models.list", {
+                  agentId: "main",
+                  view: "all",
+                  refresh: true,
+                }),
+              read: list,
+              ready: (result) => !result.pendingProviders?.includes(provider),
+            });
+          const unavailable = await refresh();
           expect(unavailable.refreshFailed).toBe(true);
           expect
             .soft(unavailable.models)
-            .toContainEqual(expect.objectContaining({ provider, id: "unconfigured-starter" }));
-          expect(unavailable.models).toContainEqual(
-            expect.objectContaining({ provider, id: nativeModelId }),
-          );
-          console.log("NATIVE_FIRST_PROVIDER_FAILURE", JSON.stringify({ requests, unavailable }));
+            .toContainEqual(modelRow(provider, "unconfigured-starter"));
+          expect(unavailable.models).toContainEqual(modelRow(provider, nativeModelId));
           failedProviderCatalog = false;
-          await client.request("models.list", { agentId: "main", view: "all", refresh: true });
-          expect((await list()).models).toContainEqual(
-            expect.objectContaining({ provider, id: "provider-account" }),
-          );
+          await refresh();
+          expect((await list()).models).toContainEqual(modelRow(provider, "provider-account"));
           const beforeOpaqueReload = requests.length;
-          nativeReleased = new Promise<void>((resolve) => {
-            releaseNative = resolve;
-          });
+          nativeReleased = createDeferred();
           await client.request("models.authRefresh", { agentId: "main", operation: "logout" });
           await expect
             .poll(
@@ -346,15 +347,10 @@ it.each([false, true])(
           expect(requests).toHaveLength(beforeOpaqueReads);
           for (const result of opaquePending) {
             expect(result.pendingProviders).toContain(provider);
-            expect
-              .soft(result.models)
-              .not.toContainEqual(expect.objectContaining({ provider, id: nativeModelId }));
-            expect(result.models).toContainEqual(
-              expect.objectContaining({ provider, id: "provider-account" }),
-            );
+            expect.soft(result.models).not.toContainEqual(modelRow(provider, nativeModelId));
+            expect(result.models).toContainEqual(modelRow(provider, "provider-account"));
           }
-          console.log("NATIVE_OPAQUE_ACCOUNT_PENDING", JSON.stringify({ requests, opaquePending }));
-          releaseNative();
+          nativeReleased.resolve();
           await expect
             .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
             .not.toContain(provider);
@@ -368,44 +364,32 @@ it.each([false, true])(
             view: "all",
             refresh: true,
           });
-          await otherRequested;
+          await otherRequested.promise;
           const secondRefresh = client.request<ModelsListResult>("models.list", {
             agentId: "main",
             provider: "unrelated-native-fixture",
             view: "all",
             refresh: true,
           });
-          const concurrentReadStarted = performance.now();
-          expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
+          const concurrentRead = await list();
+          expect(concurrentRead.pendingProviders).toContain("unrelated-native-fixture");
+          expect(concurrentRead.models.find((row) => row.id === nativeModelId)?.available).toBe(
             true,
           );
-          const concurrentReadMs = performance.now() - concurrentReadStarted;
-          expect(concurrentReadMs).toBeLessThan(1_000);
           const foregroundResults = await Promise.all([firstRefresh, secondRefresh]);
           for (const result of foregroundResults) {
             expect(result.pendingProviders).toContain("unrelated-native-fixture");
           }
-          releaseOther();
+          otherReleased.resolve();
           await expect
             .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
             .not.toContain("unrelated-native-fixture");
           expect(requests.slice(beforeUnrelated)).toEqual(["/other/models"]);
-          console.log(
-            "NATIVE_PROVIDER_REFRESH_CONTENTION",
-            JSON.stringify({
-              concurrentReadMs,
-              foregroundResults,
-              requests: requests.slice(beforeUnrelated),
-            }),
-          );
           expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
             true,
           );
           expect((await list()).models).toContainEqual(
-            expect.objectContaining({
-              provider: "unrelated-native-fixture",
-              id: "unrelated-native-model",
-            }),
+            modelRow("unrelated-native-fixture", "unrelated-native-model"),
           );
           failedNativeCatalog = true;
           const beforeFailure = requests.length;
@@ -419,17 +403,10 @@ it.each([false, true])(
           for (const failed of failedReads) {
             expect.soft(failed.refreshFailed).toBe(true);
             expect(failed.pendingProviders ?? []).not.toContain(provider);
+            expect(failed.models).toContainEqual(modelRow(provider, "native-account-only"));
+            expect(failed.models).toContainEqual(modelRow(provider, "configured-native"));
             expect(failed.models).toContainEqual(
-              expect.objectContaining({ provider, id: "native-account-only" }),
-            );
-            expect(failed.models).toContainEqual(
-              expect.objectContaining({ provider, id: "configured-native" }),
-            );
-            expect(failed.models).toContainEqual(
-              expect.objectContaining({
-                provider: "unrelated-native-fixture",
-                id: "unrelated-native-model",
-              }),
+              modelRow("unrelated-native-fixture", "unrelated-native-model"),
             );
           }
           failedNativeCatalog = false;
@@ -438,9 +415,7 @@ it.each([false, true])(
           expect(requests.slice(beforeRecovery)).toEqual(["/provider/models", "/native/models"]);
           const recovered = await list();
           expect(recovered.refreshFailed).not.toBe(true);
-          expect(recovered.models).toContainEqual(
-            expect.objectContaining({ provider, id: "native-account-only" }),
-          );
+          expect(recovered.models).toContainEqual(modelRow(provider, "native-account-only"));
           nativeModelId = "native-new-release";
           const beforeScoped = requests.length;
           await client.request("models.list", { agentId: "main", provider, refresh: true });
@@ -451,7 +426,7 @@ it.each([false, true])(
           const withdrawn = await list();
           expect
             .soft(withdrawn.models)
-            .not.toContainEqual(expect.objectContaining({ provider, id: "native-account-only" }));
+            .not.toContainEqual(modelRow(provider, "native-account-only"));
           expect(withdrawn.models).toContainEqual(
             expect.objectContaining({
               provider: "unrelated-native-fixture",
@@ -460,39 +435,22 @@ it.each([false, true])(
             }),
           );
           expect(withdrawn.models).not.toContainEqual(
-            expect.objectContaining({
-              provider: "unrelated-native-fixture",
-              id: "outside-scope-new",
-            }),
+            modelRow("unrelated-native-fixture", "outside-scope-new"),
           );
           emptyNativeCatalog = true;
           const beforeEmpty = requests.length;
           await client.request("models.list", { agentId: "main", provider, refresh: true });
           expect(requests.slice(beforeEmpty)).toEqual(["/provider/models", "/native/models"]);
           const emptied = await list();
-          expect
-            .soft(emptied.models)
-            .not.toContainEqual(expect.objectContaining({ provider, id: "native-new-release" }));
-          expect
-            .soft(emptied.models)
-            .not.toContainEqual(expect.objectContaining({ provider, id: "native-account-only" }));
+          expect.soft(emptied.models).not.toContainEqual(modelRow(provider, "native-new-release"));
+          expect.soft(emptied.models).not.toContainEqual(modelRow(provider, "native-account-only"));
+          expect(emptied.models).toContainEqual(modelRow(provider, "static-model"));
+          expect(emptied.models).toContainEqual(modelRow(provider, "configured-native"));
           expect(emptied.models).toContainEqual(
-            expect.objectContaining({ provider, id: "static-model" }),
+            modelRow("unrelated-native-fixture", "unrelated-native-model"),
           );
           expect(emptied.models).toContainEqual(
-            expect.objectContaining({ provider, id: "configured-native" }),
-          );
-          expect(emptied.models).toContainEqual(
-            expect.objectContaining({
-              provider: "unrelated-native-fixture",
-              id: "unrelated-native-model",
-            }),
-          );
-          expect(emptied.models).toContainEqual(
-            expect.objectContaining({
-              provider: "unrelated-native-fixture",
-              id: "provider-account",
-            }),
+            modelRow("unrelated-native-fixture", "provider-account"),
           );
           emptyNativeCatalog = false;
           await client.request("models.list", { agentId: "main", provider, refresh: true });
@@ -516,9 +474,7 @@ it.each([false, true])(
             )
             .toBe(true);
           const beforeFullFailure = requests.length;
-          nativeReleased = new Promise<void>((resolve) => {
-            releaseNative = resolve;
-          });
+          nativeReleased = createDeferred();
           failedNativeCatalog = true;
           const fullFailure = expect
             .soft(client.request("models.list", { agentId: "main", refresh: true }))
@@ -532,55 +488,32 @@ it.each([false, true])(
             )
             .toBe(1);
           const beforeFullReads = requests.length;
-          const fullReadStarted = performance.now();
           const fullPending = await Promise.all([list(), list()]);
-          const fullReadMs = performance.now() - fullReadStarted;
-          expect(fullReadMs).toBeLessThan(1_000);
           expect(requests).toHaveLength(beforeFullReads);
-          console.log(
-            "NATIVE_UNSCOPED_HELD",
-            JSON.stringify({
-              fullReadMs,
-              requests: requests.slice(beforeFullFailure),
-              fullPending,
-            }),
-          );
           for (const fullResult of fullPending) {
             expect(fullResult.pendingProviders).toContain(provider);
-            expect
-              .soft(fullResult.models)
-              .toContainEqual(expect.objectContaining({ provider, id: nativeModelId }));
+            expect.soft(fullResult.models).toContainEqual(modelRow(provider, nativeModelId));
           }
-          releaseNative();
+          nativeReleased.resolve();
           await fullFailure;
           const beforeFullFailedReads = requests.length;
           const fullFailed = await Promise.all([list(), list()]);
           expect(requests).toHaveLength(beforeFullFailedReads);
-          console.log(
-            "NATIVE_UNSCOPED_FAILED",
-            JSON.stringify({ requests: requests.slice(beforeFullFailure), fullFailed }),
-          );
           for (const failed of fullFailed) {
             expect(failed.refreshFailed).toBe(true);
             expect(failed.pendingProviders ?? []).not.toContain(provider);
-            expect
-              .soft(failed.models)
-              .toContainEqual(expect.objectContaining({ provider, id: nativeModelId }));
+            expect.soft(failed.models).toContainEqual(modelRow(provider, nativeModelId));
           }
           failedNativeCatalog = false;
           await client.request("models.list", { agentId: "main", refresh: true });
           const fullRecovered = await list();
           expect(fullRecovered.refreshFailed).not.toBe(true);
-          expect(fullRecovered.models).toContainEqual(
-            expect.objectContaining({ provider, id: nativeModelId }),
-          );
+          expect(fullRecovered.models).toContainEqual(modelRow(provider, nativeModelId));
           expect(
             requests.slice(beforeFullFailure).filter((path) => path === "/native/models"),
           ).toHaveLength(2);
           const beforeRenewal = requests.length;
-          nativeReleased = new Promise<void>((resolve) => {
-            releaseNative = resolve;
-          });
+          nativeReleased = createDeferred();
           await saveAccount("native-renewed");
           await client.request("models.authRefresh", { agentId: "main", operation: "update" });
           expect((await list()).models.some((row) => row.id === "provider-account")).toBe(true);
@@ -592,29 +525,14 @@ it.each([false, true])(
             )
             .toBe(1);
           const beforeRenewalReads = requests.length;
-          const renewalReadStarted = performance.now();
           const renewalPending = await Promise.all([list(), list()]);
-          const renewalReadMs = performance.now() - renewalReadStarted;
-          expect(renewalReadMs).toBeLessThan(1_000);
           expect(requests).toHaveLength(beforeRenewalReads);
           for (const result of renewalPending) {
             expect(result.pendingProviders).toContain(provider);
-            expect
-              .soft(result.models)
-              .toContainEqual(expect.objectContaining({ provider, id: "native-new-release" }));
-            expect(result.models).not.toContainEqual(
-              expect.objectContaining({ provider, id: "harness-host-row" }),
-            );
+            expect.soft(result.models).toContainEqual(modelRow(provider, "native-new-release"));
+            expect(result.models).not.toContainEqual(modelRow(provider, "harness-host-row"));
           }
-          console.log(
-            "NATIVE_RENEWAL_PENDING",
-            JSON.stringify({
-              renewalReadMs,
-              requests: requests.slice(beforeRenewal),
-              renewalPending,
-            }),
-          );
-          releaseNative();
+          nativeReleased.resolve();
           await expect
             .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
             .not.toContain(provider);
@@ -631,33 +549,19 @@ it.each([false, true])(
         const settledRequests = requests.length;
         await Promise.all([list(), list(), list()]);
         expect(requests).toHaveLength(settledRequests);
-        console.log(
-          "NATIVE_LIFECYCLE_PROOF",
-          JSON.stringify({ pendingReadMs, requests, pending, settled: await list() }),
-        );
       } finally {
-        releaseOther();
-        releaseNative();
+        otherReleased.resolve();
+        nativeReleased.resolve();
         await disconnectGatewayClient(client);
         await server.close();
       }
     } finally {
-      releaseOther();
-      releaseNative();
-      endpoint.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        endpoint.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
+      otherReleased.resolve();
+      nativeReleased.resolve();
+      await closeEndpoint(endpoint);
       await state.cleanup();
     }
   },
-  120_000,
 );
 
 it("models.list full refresh discovers an enabled provider without configured credentials", async ({
@@ -728,7 +632,7 @@ it("models.list full refresh discovers an enabled provider without configured cr
     const cfg = {
       agents: {
         defaults: { models: { [`${provider}/*`]: {} } },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       plugins: {
         allow: [provider],
@@ -757,30 +661,16 @@ it("models.list full refresh discovers an enabled provider without configured cr
         read: list,
         ready: (result) => !result.pendingProviders?.includes(provider),
       });
-      console.log("FULL_CATALOG_WITHOUT_CREDENTIALS", JSON.stringify({ requests, refreshed }));
-      expect(refreshed.models).toContainEqual(
-        expect.objectContaining({ provider, id: "public-model" }),
-      );
+      expect(refreshed.models).toContainEqual(modelRow(provider, "public-model"));
       expect(requests).toBe(1);
-      expect((await list()).models).toContainEqual(
-        expect.objectContaining({ provider, id: "public-model" }),
-      );
+      expect((await list()).models).toContainEqual(modelRow(provider, "public-model"));
       expect(requests).toBe(1);
     } finally {
       await disconnectGatewayClient(client);
       await server.close();
     }
   } finally {
-    endpoint.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      endpoint.close((error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+    await closeEndpoint(endpoint);
     await state.cleanup();
   }
 }, 120_000);

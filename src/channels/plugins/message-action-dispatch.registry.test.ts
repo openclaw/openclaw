@@ -21,7 +21,7 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
 
@@ -198,7 +198,7 @@ describe("official plugin read-only authority", () => {
     const ctx = { ...fixture.context, action };
     // A client must still defer to the Gateway's attested live registration.
     expect(shouldDeferExternalMessageActionTargetResolution(ctx)).toBe(true);
-    expect(prepareExternalMessageActionTargetForResolution(ctx).params).toBe(ctx.params);
+    expect((await prepareExternalMessageActionTargetForResolution(ctx)).params).toBe(ctx.params);
     expect(await dispatchChannelMessageAction(ctx)).toBe(receipt);
     expect(fixture.handleAction).toHaveBeenCalledOnce();
   });
@@ -220,14 +220,16 @@ describe("official plugin read-only authority", () => {
       toolContext: undefined,
       assertDirectAdapterHandoff: vi.fn(),
     };
-    expect(() => prepareExternalMessageActionTargetForResolution(context)).toThrow(
+    await expect(prepareExternalMessageActionTargetForResolution(context)).rejects.toThrow(
       "requires current provider and account context",
     );
     const authorized = {
       ...context,
       messageActionAuthorization: { assertDashboardReadCurrent },
     };
-    expect(prepareExternalMessageActionTargetForResolution(authorized).params).toBe(context.params);
+    expect((await prepareExternalMessageActionTargetForResolution(authorized)).params).toBe(
+      context.params,
+    );
     await expect(dispatchChannelMessageAction(authorized)).resolves.toBe(receipt);
     expect(assertDashboardReadCurrent).toHaveBeenCalled();
     expect(fixture.handleAction.mock.calls[0]?.[0].conversationReadOrigin).toBe("delegated");
@@ -259,7 +261,7 @@ describe("official plugin read-only authority", () => {
     const fixture = registerReader(options);
     Object.assign(fixture.plugin, { trustedOfficialInstall: true });
     fixture.context.params.trustedOfficialInstall = true;
-    expect(() => prepareExternalMessageActionTargetForResolution(fixture.context)).toThrow(
+    await expect(prepareExternalMessageActionTargetForResolution(fixture.context)).rejects.toThrow(
       "exact current conversation",
     );
     await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
@@ -351,8 +353,10 @@ describe("official plugin read-only authority", () => {
     async ({ change, origin }) => {
       const fixture = registerReader({ origin, trusted: origin !== "bundled" });
       const resume = createDeferred();
+      const entered = createDeferred();
       const nextRequest = vi.fn();
       fixture.handleAction.mockImplementation(async () => {
+        entered.resolve();
         const assertCurrent = captureChannelReadAuthority();
         await resume.promise;
         assertCurrent?.();
@@ -360,6 +364,7 @@ describe("official plugin read-only authority", () => {
         return receipt;
       });
       const read = dispatchChannelMessageAction(fixture.context);
+      await entered.promise;
       if (change === "adopt") {
         const next = createEmptyPluginRegistry();
         next.plugins.push(fixture.record);
@@ -405,9 +410,9 @@ describe("official plugin read-only authority", () => {
       }
       const assertDenied = async () => {
         expect(shouldDeferExternalMessageActionTargetResolution(fixture.context)).toBe(true);
-        expect(() => prepareExternalMessageActionTargetForResolution(fixture.context)).toThrow(
-          "read authority is no longer active",
-        );
+        await expect(
+          prepareExternalMessageActionTargetForResolution(fixture.context),
+        ).rejects.toThrow("read authority is no longer active");
         await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
           "read authority is no longer active",
         );
@@ -432,8 +437,10 @@ describe("official plugin read-only authority", () => {
     async (change) => {
       const fixture = registerReader();
       const resume = createDeferred();
+      const entered = createDeferred();
       const nextRequest = vi.fn();
       fixture.handleAction.mockImplementation(async () => {
+        entered.resolve();
         const assertCurrent = captureChannelReadAuthority();
         expect(assertCurrent).toBeTypeOf("function");
         await resume.promise;
@@ -443,6 +450,7 @@ describe("official plugin read-only authority", () => {
       });
       const read = dispatchChannelMessageAction(fixture.context);
       const rejected = expect(read).rejects.toThrow("read authority is no longer active");
+      await entered.promise;
       switch (change) {
         case "replace":
           setActivePluginRegistry(createTestRegistry([]));
@@ -474,9 +482,14 @@ describe("official plugin read-only authority", () => {
     async (error) => {
       const fixture = registerReader();
       const pending = createDeferred<typeof receipt>();
-      fixture.handleAction.mockReturnValue(pending.promise);
+      const entered = createDeferred();
+      fixture.handleAction.mockImplementation(() => {
+        entered.resolve();
+        return pending.promise;
+      });
       const read = dispatchChannelMessageAction(fixture.context);
       const rejected = expect(read).rejects.toThrow("read authority is no longer active");
+      await entered.promise;
       fixture.record.enabled = false;
       if (error) {
         pending.reject(new Error("stale provider response"));
@@ -489,7 +502,7 @@ describe("official plugin read-only authority", () => {
 
   it("does not refresh a captured route's authority after awaited target resolution", async () => {
     const first = registerReader();
-    const prepared = prepareExternalMessageActionTargetForResolution(first.context);
+    const prepared = await prepareExternalMessageActionTargetForResolution(first.context);
     let replacement: ReturnType<typeof registerReader> | undefined;
     await expect(
       withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {

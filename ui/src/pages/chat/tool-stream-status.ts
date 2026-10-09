@@ -3,6 +3,8 @@ import {
   normalizeNullableString as toTrimmedString,
   normalizeLowercaseStringOrEmpty,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionOperationEvent } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -13,17 +15,6 @@ import type {
   CompactionStatus,
   ToolStreamHost,
 } from "./tool-stream-contract.ts";
-
-type SessionOperationEventPayload = {
-  operationId?: string;
-  operation?: string;
-  phase?: string;
-  sessionKey?: string;
-  agentId?: string;
-  ts?: number;
-  completed?: boolean;
-  reason?: string;
-};
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const modelValue = toTrimmedString(model);
@@ -174,25 +165,6 @@ function clearCompactionTimer(host: ToolStreamHost) {
   }
 }
 
-function scheduleCompactionClear(
-  host: ToolStreamHost,
-  delayMs: number,
-  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
-) {
-  host.compactionClearTimer = window.setTimeout(() => {
-    const current = host.compactionStatus;
-    if (expected?.phase && current?.phase !== expected.phase) {
-      return;
-    }
-    if (expected?.runId && current?.runId !== expected.runId) {
-      return;
-    }
-    host.compactionStatus = null;
-    host.compactionClearTimer = null;
-    host.requestUpdate?.();
-  }, delayMs);
-}
-
 function setCompactionStatus(
   host: ToolStreamHost,
   runId: string,
@@ -213,13 +185,21 @@ function setCompactionStatus(
     completedAt: completed ? Date.now() : null,
   };
   if (!completed) {
-    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, { phase, runId });
+    host.compactionClearTimer = window.setTimeout(() => {
+      const current = host.compactionStatus;
+      if (current?.phase !== phase || (runId && current?.runId !== runId)) {
+        return;
+      }
+      host.compactionStatus = null;
+      host.compactionClearTimer = null;
+      host.requestUpdate?.();
+    }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
 
 export function handleSessionOperationEvent(
   host: ToolStreamHost,
-  payload?: SessionOperationEventPayload,
+  payload?: Partial<SessionOperationEvent>,
 ) {
   if (!payload || payload.operation !== "compact") {
     return;
@@ -233,7 +213,6 @@ export function handleSessionOperationEvent(
   const operationId = toTrimmedString(payload.operationId) ?? `session-compact:${sessionKey}`;
 
   if (payload.phase === "start") {
-    clearCompactionTimer(host);
     setCompactionStatus(host, operationId, "active");
     return;
   }
@@ -244,11 +223,11 @@ export function handleSessionOperationEvent(
   if (host.compactionStatus?.runId && host.compactionStatus.runId !== operationId) {
     return;
   }
-  clearCompactionTimer(host);
   if (payload.completed === true) {
     setCompactionStatus(host, operationId, "complete");
     return;
   }
+  clearCompactionTimer(host);
   host.compactionStatus = null;
 }
 
@@ -265,17 +244,17 @@ function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload)
     return;
   }
   if (phase === "end") {
-    if (data.willRetry === true && completed) {
-      // Compaction already succeeded, but the run is still retrying.
-      // Keep that distinct state until the matching lifecycle end arrives.
-      setCompactionStatus(host, payload.runId, "retrying", itemId);
-      return;
-    }
     if (completed) {
-      setCompactionStatus(host, payload.runId, "complete", itemId);
-      return;
+      // Successful compaction can precede a retry; only lifecycle end completes it.
+      setCompactionStatus(
+        host,
+        payload.runId,
+        data.willRetry === true ? "retrying" : "complete",
+        itemId,
+      );
+    } else {
+      host.compactionStatus = null;
     }
-    host.compactionStatus = null;
   }
 }
 
@@ -288,8 +267,7 @@ function handleLifecycleCompactionEvent(host: ToolStreamHost, payload: AgentEven
 
   // We scope lifecycle cleanup to the visible chat session first, then
   // use runId only to match the specific compaction retry we started tracking.
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-  if (!accepted.accepted) {
+  if (!acceptsToolStreamSession(host, payload)) {
     return;
   }
   if (host.compactionStatus?.phase !== "retrying") {
@@ -302,27 +280,15 @@ function handleLifecycleCompactionEvent(host: ToolStreamHost, payload: AgentEven
   setCompactionStatus(host, payload.runId, "complete");
 }
 
-export function resolveAcceptedSession(
+export function acceptsToolStreamSession(
   host: ToolStreamHost,
   payload: AgentEventPayload,
-  options?: {
-    allowSessionScopedWhenIdle?: boolean;
-  },
-): { accepted: boolean; sessionKey?: string } {
+): boolean {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
-    return { accepted: false };
+    return false;
   }
-  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
-    return { accepted: true, sessionKey };
-  }
-  if (host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
-  if (!host.chatRunId) {
-    return { accepted: false };
-  }
-  return { accepted: true, sessionKey };
+  return host.chatRunId ? payload.runId === host.chatRunId : Boolean(sessionKey);
 }
 
 function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventPayload) {
@@ -332,8 +298,7 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
     return;
   }
 
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-  if (!accepted.accepted) {
+  if (!acceptsToolStreamSession(host, payload)) {
     return;
   }
 
@@ -413,7 +378,7 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         state: "status",
         runId: payload.runId,
         phase: "retrying",
-        message: formatUiExternalText(message.slice(0, 256)),
+        message: formatUiExternalText(truncateUtf16Safe(message, 256)),
         seq: payload.seq,
       });
     }

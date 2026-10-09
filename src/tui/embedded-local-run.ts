@@ -1,5 +1,6 @@
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import type { AssistantTextSnapshot } from "../gateway/agent-event-assistant-text.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../utils/queue-helpers.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 
@@ -11,7 +12,6 @@ export type LocalRunState = {
   assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
-  isBtw: boolean;
   question?: string;
   finishing: boolean;
   lifecycleEnded: boolean;
@@ -40,6 +40,13 @@ export type QueuedSessionRun = {
   promise: Promise<void>;
 };
 
+export function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return undefined;
+  }
+  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
+}
+
 export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pendingQueue"]>): string {
   const summary = previewQueueSummaryPrompt({
     state: queue,
@@ -56,14 +63,6 @@ export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pending
   return [summary, prompt].filter(Boolean).join("\n\n");
 }
 
-export function createQueuedRunReadiness() {
-  let markReady!: () => void;
-  const promise = new Promise<void>((ready) => {
-    markReady = ready;
-  });
-  return { promise, markReady };
-}
-
 export async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {
   if (promises.length === 0) {
     return true;
@@ -72,21 +71,7 @@ export async function waitForLocalRunShutdown(promises: Promise<void>[]): Promis
   if (timeoutMs <= 0) {
     return false;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let completed = false;
-  await Promise.race([
-    Promise.allSettled(promises).then(() => {
-      completed = true;
-    }),
-    new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, timeoutMs);
-      timeout.unref?.();
-    }),
-  ]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  return completed;
+  return await settlesWithin(Promise.allSettled(promises), timeoutMs);
 }
 
 export async function waitForQueuedLocalRun(
@@ -103,29 +88,9 @@ export async function waitForQueuedLocalRun(
     return;
   }
   const timeoutMs = resolveLocalRunShutdownGraceMs();
-  if (timeoutMs <= 0) {
+  if (timeoutMs <= 0 || !(await settlesWithin(previousRun.promise, timeoutMs))) {
     throw new Error(
       `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
     );
-  }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      previousRun.promise,
-      new Promise<void>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(
-            new Error(
-              `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
-            ),
-          );
-        }, timeoutMs);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }

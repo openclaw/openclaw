@@ -24,18 +24,12 @@ function resolveMaxLinks(value?: number): number {
 }
 
 function isAllowedUrl(raw: string): boolean {
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
-    }
-    if (isBlockedHostnameOrIp(parsed.hostname)) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(raw);
+  return Boolean(
+    parsed &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    !isBlockedHostnameOrIp(parsed.hostname),
+  );
 }
 
 /**

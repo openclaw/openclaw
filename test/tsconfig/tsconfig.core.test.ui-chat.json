@@ -5,6 +5,8 @@
   },
   "include": [
     "../../ui/src/main.ts",
+    "../../ui/src/api/**/*.test.ts",
+    "../../ui/src/api/**/*.test.tsx",
     "../../ui/src/pages/chat/**/*.test.ts",
     "../../ui/src/pages/chat/**/*.test.tsx"
   ]

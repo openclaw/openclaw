@@ -8,7 +8,7 @@ export function useVitestWorkerCache(env: NodeJS.ProcessEnv, execArgv: string[] 
   const options = parseNodeOptionsEnvVar(env.NODE_OPTIONS);
   return (
     !process.versions.bun &&
-    !isCiLikeEnv(env) &&
+    (!isCiLikeEnv(env) || env.OPENCLAW_VITEST_WORKER_CACHE === "1") &&
     !env.NODE_PATH &&
     !env.NAPI_RS_NATIVE_LIBRARY_PATH &&
     !env.NAPI_RS_WASI_FLAVOR &&

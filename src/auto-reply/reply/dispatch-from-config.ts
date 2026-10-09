@@ -1,4 +1,3 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
@@ -20,11 +19,9 @@ import type {
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
-import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -43,10 +40,11 @@ async function dispatchReplyFromConfigWithQueuePolicy(
   params: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
+  // Gateway ingress reserves before ACK so deferred preparation cannot reorder sends.
+  const inheritedTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
+  const ticket =
+    inheritedTicket ??
+    reserveReplyAdmissionTicket([params.ctx.SessionKey, params.ctx.CommandTargetSessionKey]);
   const ticketedParams = ticket
     ? {
         ...params,
@@ -81,7 +79,10 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     }
   } finally {
-    ticket?.release();
+    // Ingress owns retries until queue handoff or terminal dispatch cleanup.
+    if (!inheritedTicket) {
+      ticket?.release();
+    }
   }
 }
 

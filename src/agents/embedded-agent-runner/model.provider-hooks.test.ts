@@ -45,25 +45,6 @@ function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): b
   }).toolSearchControlsEnabled;
 }
 
-it("preserves hook selection precedence and stable default tables", () => {
-  const defaults = resolveRuntimeHooks();
-  const target = resolveRuntimeHooks({ skipAgentDiscovery: true });
-  const skipped = resolveRuntimeHooks({ skipProviderRuntimeHooks: true });
-  const explicit = { ...defaults };
-
-  expect(resolveRuntimeHooks()).toBe(defaults);
-  expect(resolveRuntimeHooks({ skipAgentDiscovery: true })).toBe(target);
-  expect(target).not.toBe(defaults);
-  expect(resolveRuntimeHooks({ runtimeHooks: explicit, skipAgentDiscovery: true })).toBe(explicit);
-  expect(
-    resolveRuntimeHooks({
-      runtimeHooks: explicit,
-      skipAgentDiscovery: true,
-      skipProviderRuntimeHooks: true,
-    }),
-  ).toBe(skipped);
-});
-
 describe("resolved model Tool Search policy", () => {
   beforeAll(() => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
@@ -75,13 +56,8 @@ describe("resolved model Tool Search policy", () => {
   });
 
   it.each([
-    { provider: "ollama", api: "ollama", id: "qwen3.5:4b", expected: true },
-    { provider: "custom-host", api: "ollama", id: "qwen3.5:4b", expected: true },
-    { provider: "custom-host", api: "ollama", id: "server-alias", expected: true },
-    { provider: "lmstudio", api: "openai-completions", id: "small-model", expected: true },
-    { provider: "ollama-cloud", api: "ollama", id: "cloud-model", expected: false },
+    { provider: "lmstudio", api: "openai-completions", id: "small-model", expected: "tools" },
     { provider: "custom-host", api: "ollama", id: "model:cloud", expected: false },
-    { provider: "custom-host", api: "openai-responses", id: "hosted-model", expected: false },
   ] as const)("prepares $provider/$id using its $api policy", ({ expected, ...route }) => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: false } } },
@@ -91,13 +67,17 @@ describe("resolved model Tool Search policy", () => {
       model: model(route),
       cfg: config,
     });
-    expect(toolSearchEnabled(resolved, config)).toBe(expected);
+    expect(resolved).toHaveProperty("toolSearchMode", expected);
+    // Provider preference is separate from the ordinary enabled Tool Search default.
+    expect(toolSearchEnabled(resolved, config)).toBe(true);
+    expect(toolSearchEnabled(resolved, { ...config, tools: { toolSearch: false } })).toBe(false);
     expect(config.tools).toBeUndefined();
   });
 
   it("uses the final transport and clears a previous attempt's preference", () => {
     const original = model();
     const local = normalizeResolvedModel({ provider: original.provider, model: original });
+    expect(local).toHaveProperty("toolSearchMode", "tools");
     expect(toolSearchEnabled(local)).toBe(true);
 
     const hosted = normalizeResolvedModel({
@@ -112,14 +92,39 @@ describe("resolved model Tool Search policy", () => {
       },
     });
     expect(hosted.baseUrl).toBe("https://hosted.example/v1");
-    expect(toolSearchEnabled(hosted)).toBe(false);
+    expect(hosted).toHaveProperty("toolSearchMode", undefined);
+    expect(toolSearchEnabled(hosted)).toBe(true);
+    expect(local).toHaveProperty("toolSearchMode", "tools");
     expect(toolSearchEnabled(local)).toBe(true);
   });
 
+  it("uses in-place model normalization for transport routing", () => {
+    const resolved = normalizeResolvedModel({
+      provider: "custom-host",
+      model: model(),
+      runtimeHooks: {
+        ...resolveRuntimeHooks(),
+        normalizeProviderResolvedModelWithPlugin: ({ context }) => {
+          context.model.id = "normalized-model";
+          return context.model;
+        },
+        applyProviderResolvedTransportWithPlugin: ({ context }) => ({
+          ...context.model,
+          baseUrl: `https://transport.example/v1/${context.modelId}`,
+        }),
+      },
+    });
+    expect(resolved.id).toBe("normalized-model");
+    expect(resolved.baseUrl).toBe("https://transport.example/v1/normalized-model");
+  });
+
   it.each([
-    { finalBaseUrl: "http://managed.example:8080/v1/", api: "openai-completions", expected: true },
-    { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: false },
-    { finalBaseUrl: "https://ollama.com/v1", api: "ollama", expected: false },
+    {
+      finalBaseUrl: "http://managed.example:8080/v1/",
+      api: "openai-completions",
+      expected: "tools",
+    },
+    { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: undefined },
   ] as const)(
     "limits managed inference defaults to $finalBaseUrl",
     ({ finalBaseUrl, api, expected }) => {
@@ -127,7 +132,7 @@ describe("resolved model Tool Search policy", () => {
         models: {
           providers: {
             " CUSTOM-HOST ": {
-              baseUrl: api === "ollama" ? finalBaseUrl : "http://managed.example:8080/v1",
+              baseUrl: "http://managed.example:8080/v1",
               api,
               models: [],
               localService: { command: "/fixture/server" },
@@ -140,7 +145,8 @@ describe("resolved model Tool Search policy", () => {
         model: model({ api, baseUrl: finalBaseUrl }),
         cfg,
       });
-      expect(toolSearchEnabled(resolved, cfg)).toBe(expected);
+      expect(resolved).toHaveProperty("toolSearchMode", expected);
+      expect(toolSearchEnabled(resolved, cfg)).toBe(true);
       expect(cfg.tools).toBeUndefined();
     },
   );

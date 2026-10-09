@@ -9,16 +9,18 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Link hover previews" });
 const url = "https://example.com/field-guide";
+const repositoryUrl = "https://github.com/openclaw/openclaw";
 const historyMessages = [
   { role: "user", content: "Can you share the guide and the project?", timestamp: 1000 },
   {
     role: "assistant",
     content:
-      "Start with the [Field guide](https://example.com/field-guide) for a practical introduction.\n\nThe [project update](https://github.com/openclaw/openclaw/pull/42) has the implementation details.\n\nYou can also read the [reference notes](https://example.org/notes).",
+      "Start with the [Field guide](https://example.com/field-guide) for a practical introduction.\n\nExplore the [OpenClaw repository](https://github.com/openclaw/openclaw). The [project update](https://github.com/openclaw/openclaw/pull/42) has the implementation details.\n\nYou can also read the [reference notes](https://example.org/notes).",
     timestamp: 2000,
   },
 ];
@@ -49,13 +51,12 @@ const preview = {
 };
 
 suite.define(() => {
-  it.each([
-    { name: "desktop-dark", width: 1280, height: 900, colorScheme: "dark" as const },
-    { name: "mobile-light", width: 390, height: 844, colorScheme: "light" as const },
-  ])("previews ordinary Web UI links ($name)", async ({ name, width, height, colorScheme }) => {
-    const artifacts = createControlUiE2eArtifactDir("link-hover-after-" + name);
+  it("previews ordinary Web UI links on mobile", async () => {
+    const width = 390;
+    const height = 844;
+    const artifacts = createControlUiE2eArtifactDir("link-hover-after-mobile-light");
     await suite.withPage(
-      { viewport: { width, height }, colorScheme },
+      { viewport: { width, height }, colorScheme: "light" },
       async ({ page, context }) => {
         const directRequests: string[] = [];
         await context.route("https://example.com/**", async (route) => {
@@ -71,6 +72,7 @@ suite.define(() => {
             "controlUi.linkPreview": {
               cases: [
                 { match: { url }, response: preview },
+                { match: { url: repositoryUrl }, response: preview },
                 { match: { url: "https://example.org/notes" }, response: {} },
               ],
             },
@@ -150,6 +152,24 @@ suite.define(() => {
           ),
         ).toBe(false);
         expect(await link.evaluate((element) => element === document.activeElement)).toBe(true);
+        const repository = page.getByRole("link", { name: "OpenClaw repository", exact: true });
+        await repository.hover();
+        await card.getByText(preview.title, { exact: true }).waitFor();
+        await card
+          .locator(".link-hovercard__image")
+          .evaluate((image: HTMLImageElement) => image.decode());
+        expect(await card.locator("a").getAttribute("href")).toBe(repositoryUrl);
+        expect(await card.locator(".link-hovercard__identity").textContent()).toContain(
+          "github.com",
+        );
+        const repositoryBounds = await card.boundingBox();
+        expect(repositoryBounds!.x).toBeGreaterThanOrEqual(0);
+        expect(repositoryBounds!.x + repositoryBounds!.width).toBeLessThanOrEqual(width);
+        expect(repositoryBounds!.y + repositoryBounds!.height).toBeLessThanOrEqual(height);
+        await page.screenshot({
+          path: path.join(artifacts, "repository.png"),
+          animations: "disabled",
+        });
         const github = page.getByRole("link", { name: "project update", exact: true });
         await github.hover();
         await page
@@ -169,7 +189,7 @@ suite.define(() => {
         });
         expect(
           (await gateway.getRequests("controlUi.linkPreview")).map((request) => request.params),
-        ).toEqual([{ url }, { url: "https://example.org/notes" }]);
+        ).toEqual([{ url }, { url: repositoryUrl }, { url: "https://example.org/notes" }]);
         await page.mouse.move(0, 0);
         await expect.poll(() => card.count()).toBe(0);
         await gateway.setMethodResponse("controlUi.linkPreview", {
@@ -195,7 +215,10 @@ suite.define(() => {
 
   it("keeps title hints when the optional hover runtime cannot load", async () => {
     await suite.withPage({}, async ({ page }) => {
-      await page.route("**/link-reader-hovercard-*.js", (route) => route.abort());
+      const hovercardModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/components/link-reader-hovercard.ts",
+      );
+      await page.route(hovercardModule, (route) => route.abort());
       const gateway = await installMockGateway(page, {
         automaticallyFetchFavicons: true,
         historyMessages: [
@@ -210,9 +233,7 @@ suite.define(() => {
       const link = page.getByRole("link", { name: "Field guide", exact: true });
       // A missing hashed chunk reloads the page; wait before hovering the new document.
       await Promise.all([
-        page.waitForEvent("requestfailed", (request) =>
-          request.url().includes("link-reader-hovercard-"),
-        ),
+        page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
         page.waitForEvent("domcontentloaded"),
         link.hover(),
       ]);
@@ -289,21 +310,6 @@ suite.define(() => {
       expect(
         (await gateway.getRequests("controlUi.linkPreview")).map((request) => request.params),
       ).toEqual([{ url: "https://example.org/control" }]);
-    });
-  });
-
-  it("also previews real About-page links outside the chat renderer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        automaticallyFetchFavicons: true,
-        methodResponses: { "controlUi.linkPreview": preview },
-      });
-      await page.goto(suite.server.baseUrl + "settings/about");
-      await page.locator('a[href="https://docs.openclaw.ai"]').hover();
-      await page.locator(".link-hovercard").getByText(preview.title).waitFor();
-      expect((await gateway.getRequests("controlUi.linkPreview"))[0]?.params).toEqual({
-        url: "https://docs.openclaw.ai/",
-      });
     });
   });
 

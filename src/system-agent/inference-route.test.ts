@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { isDeepStrictEqual } from "node:util";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
@@ -6,9 +7,8 @@ import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
 } from "./inference-route.js";
 
 function devConfig(agentRuntime?: string): OpenClawConfig {
@@ -16,7 +16,7 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
     agents: {
       defaults: { model: "openai/gpt-5.5" },
       entries: {
-        dev: { default: true, workspace: "/tmp/x" },
+        dev: { workspace: "/tmp/x" },
       },
     },
     models: {
@@ -79,26 +79,35 @@ afterEach(() => {
 });
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
-  it("retains a literal catalog @ suffix on a legacy implicit primary route", async () => {
-    const config = utilityConfig();
-    delete config.meta;
-    delete config.models?.providers?.openai;
-    const provider = config.models?.providers?.["local-utility"];
-    if (!provider?.models[0]) {
-      throw new Error("Missing local utility fixture");
-    }
-    provider.models[0].id = "tiny@experimental";
+  it.each([false, true])(
+    "retains a literal catalog @ suffix on a native implicit route (ACP=%s)",
+    async (acp) => {
+      const config = utilityConfig();
+      const agent = config.agents?.entries?.dev;
+      assert(agent);
+      if (acp) {
+        agent.model = "harness-only";
+        agent.runtime = { type: "acp" };
+      }
+      delete config.meta;
+      delete config.models?.providers?.openai;
+      const provider = config.models?.providers?.["local-utility"];
+      if (!provider?.models[0]) {
+        throw new Error("Missing local utility fixture");
+      }
+      provider.models[0].id = "tiny@experimental";
 
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+      const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
 
-    expect(route).toMatchObject({
-      provider: "local-utility",
-      model: "tiny@experimental",
-      modelLabel: "local-utility/tiny@experimental",
-    });
-    expect(route?.authProfileId).toBeUndefined();
-    expect(route?.modelTarget).toBeUndefined();
-  });
+      expect(route).toMatchObject({
+        provider: "local-utility",
+        model: "tiny@experimental",
+        modelLabel: "local-utility/tiny@experimental",
+      });
+      expect(route?.authProfileId).toBeUndefined();
+      expect(route?.modelTarget).toBeUndefined();
+    },
+  );
 
   it("invalidates the inherited primary verification when only utility separation changes", async () => {
     const legacy = utilityConfig();
@@ -109,8 +118,8 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       meta: { migrations: { utilityModelSeparation: true } },
     };
 
-    const primary = await projectDefaultInferenceRoute(legacy);
-    const utility = await projectDefaultInferenceRoute(separated);
+    const primary = await projectInferenceRoute(legacy);
+    const utility = await projectInferenceRoute(separated);
 
     expect(primary.route).toMatchObject({ modelLabel: "local-utility/tiny", agentId: "dev" });
     expect(primary.route).not.toHaveProperty("modelTarget");
@@ -118,52 +127,47 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       modelLabel: "local-utility/tiny",
       modelTarget: "utility",
     });
-    expect(sameDefaultInferenceRoute(primary, utility)).toBe(false);
+    expect(isDeepStrictEqual(primary, utility)).toBe(false);
     expect(
-      sameDefaultInferenceRoute(
-        await projectDefaultInferenceRoute(legacy, { modelTarget: "utility" }),
-        await projectDefaultInferenceRoute(separated, { modelTarget: "utility" }),
+      isDeepStrictEqual(
+        await projectInferenceRoute(legacy, undefined, { modelTarget: "utility" }),
+        await projectInferenceRoute(separated, undefined, { modelTarget: "utility" }),
       ),
     ).toBe(true);
   });
 
-  it("uses the explicit utility during first-run setup without manufacturing a primary", async () => {
-    const config = utilityConfig();
-    const original = structuredClone(config);
+  it.each([undefined, "openai/gpt-5.5"])(
+    "resolves utility with primary %s without changing config or credential ownership",
+    async (primaryModel) => {
+      const config = utilityConfig(primaryModel);
+      const original = structuredClone(config);
+      const primary = primaryModel
+        ? await resolveSystemAgentConfiguredRouteFromConfig(config)
+        : undefined;
+      const utility = await resolveSystemAgentConfiguredRouteFromConfig(
+        config,
+        undefined,
+        primaryModel ? { modelTarget: "utility" } : undefined,
+      );
 
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
-
-    expect(route).toMatchObject({
-      runner: "embedded",
-      modelTarget: "utility",
-      modelLabel: "local-utility/tiny",
-      provider: "local-utility",
-      model: "tiny",
-      agentId: "dev",
-      agentDir: resolveAgentDir(config, "dev"),
-    });
-    expect(route?.runConfig.agents?.defaults?.model).toBeUndefined();
-    expect(config).toEqual(original);
-  });
-
-  it("verifies the utility role alongside a primary without moving the credential owner", async () => {
-    const config = utilityConfig("openai/gpt-5.5");
-
-    const primary = await resolveSystemAgentConfiguredRouteFromConfig(config);
-    const utility = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
-      modelTarget: "utility",
-    });
-
-    expect(primary).toMatchObject({ modelLabel: "openai/gpt-5.5", agentId: "dev" });
-    expect(primary).not.toHaveProperty("modelTarget");
-    expect(utility).toMatchObject({
-      modelTarget: "utility",
-      modelLabel: "local-utility/tiny",
-      agentId: "dev",
-      agentDir: primary?.agentDir,
-    });
-    expect(utility?.runConfig.agents?.defaults?.model).toBe("openai/gpt-5.5");
-  });
+      if (primaryModel) {
+        expect(primary).toMatchObject({ modelLabel: primaryModel, agentId: "dev" });
+        expect(primary).not.toHaveProperty("modelTarget");
+        expect(utility?.agentDir).toBe(primary?.agentDir);
+      }
+      expect(utility).toMatchObject({
+        runner: "embedded",
+        modelTarget: "utility",
+        modelLabel: "local-utility/tiny",
+        provider: "local-utility",
+        model: "tiny",
+        agentId: "dev",
+        agentDir: resolveAgentDir(config, "dev"),
+      });
+      expect(utility?.runConfig.agents?.defaults?.model).toBe(primaryModel);
+      expect(config).toEqual(original);
+    },
+  );
 
   it.each(["defaults", "agent"] as const)(
     "invalidates utility verification after a %s utility change while preserving the primary route",
@@ -187,37 +191,34 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       };
 
       expect(
-        sameDefaultInferenceRoute(
-          await projectDefaultInferenceRoute(before, { modelTarget: "utility" }),
-          await projectDefaultInferenceRoute(after, { modelTarget: "utility" }),
+        isDeepStrictEqual(
+          await projectInferenceRoute(before, undefined, { modelTarget: "utility" }),
+          await projectInferenceRoute(after, undefined, { modelTarget: "utility" }),
         ),
       ).toBe(false);
       expect(
-        sameDefaultInferenceRoute(
-          await projectDefaultInferenceRoute(before),
-          await projectDefaultInferenceRoute(after),
-        ),
+        isDeepStrictEqual(await projectInferenceRoute(before), await projectInferenceRoute(after)),
       ).toBe(true);
     },
   );
 
   it("retires the first-run utility route when a primary becomes configured", async () => {
-    const utility = await projectDefaultInferenceRoute(utilityConfig());
-    const primary = await projectDefaultInferenceRoute(utilityConfig("openai/gpt-5.5"));
+    const utility = await projectInferenceRoute(utilityConfig());
+    const primary = await projectInferenceRoute(utilityConfig("openai/gpt-5.5"));
 
     expect(utility.route).toMatchObject({ modelTarget: "utility", model: "tiny" });
     expect(primary.route).toMatchObject({ model: "gpt-5.5" });
     expect(primary.route).not.toHaveProperty("modelTarget");
-    expect(sameDefaultInferenceRoute(utility, primary)).toBe(false);
+    expect(isDeepStrictEqual(utility, primary)).toBe(false);
   });
 
   it("does not reuse a primary verification for the same model selected as utility", async () => {
     const config = utilityConfig("local-utility/tiny");
 
     expect(
-      sameDefaultInferenceRoute(
-        await projectDefaultInferenceRoute(config),
-        await projectDefaultInferenceRoute(config, { modelTarget: "utility" }),
+      isDeepStrictEqual(
+        await projectInferenceRoute(config),
+        await projectInferenceRoute(config, undefined, { modelTarget: "utility" }),
       ),
     ).toBe(false);
   });
@@ -231,7 +232,6 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
         defaults: withoutRoster.agents?.defaults,
         entries: {
           main: {
-            default: true,
             workspace: "/tmp/openclaw-main",
             agentDir: resolveAgentDir(withoutRoster, "main"),
           },
@@ -240,9 +240,9 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     };
 
     expect(
-      sameDefaultInferenceRoute(
-        await projectDefaultInferenceRoute(withoutRoster),
-        await projectDefaultInferenceRoute(withFirstAgent),
+      isDeepStrictEqual(
+        await projectInferenceRoute(withoutRoster),
+        await projectInferenceRoute(withFirstAgent),
       ),
     ).toBe(true);
   });

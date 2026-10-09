@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
@@ -16,6 +19,9 @@ import {
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -43,6 +49,27 @@ export type TestCliBackendParams = {
   reseedFromRawTranscriptWhenUncompacted?: boolean;
   systemPromptWhen?: "first" | "always" | "never";
 };
+
+export function createCliRepositorySkillFixture(dir: string, taskDir: string, managed: boolean) {
+  const canonicalDir = path.join(dir, "canonical", "packages", "app");
+  const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+  );
+  if (managed) {
+    for (const source of [".agents/skills", "skills"]) {
+      const worktreeSkillDir = path.join(taskDir, source, "task-proof");
+      fs.mkdirSync(worktreeSkillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(worktreeSkillDir, "SKILL.md"),
+        "---\nname: task-proof\ndescription: Worktree copy\n---\n# Changed instructions\n",
+      );
+    }
+  }
+  return { canonicalDir, skillDir };
+}
 
 export function wrappedPluginSystemContext(text: string) {
   return `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
@@ -231,6 +258,7 @@ export function buildPreparedCliRunContext(
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir,
     backendResolved: {
       id: provider,
@@ -335,6 +363,7 @@ export async function expectPathMissing(targetPath: string) {
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
 export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
+  const lifetime = createFixtureLifetime();
   const admissions: PreparedAgentRunAdmission[] = [];
   const tempDirs = new Set<string>();
   const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
@@ -371,6 +400,8 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
 
   const getSession = () => (defaultSession ??= createSession());
   return {
+    run: lifetime.run,
+    settle: () => lifetime.cleanup(),
     get session() {
       return getSession();
     },
@@ -426,6 +457,7 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       }
     },
     async cleanup() {
+      await lifetime.cleanup();
       admissions.splice(0).forEach((admission) => admission.close());
       for (const databasePath of databasePaths) {
         await closeOpenClawAgentDatabaseByPathAsync(databasePath);
@@ -500,5 +532,36 @@ export function createWeatherSkillFixture(root: string, materialized: boolean) {
         },
       ],
     } satisfies NonNullable<RunCliAgentParams["skillsSnapshot"]>,
+  };
+}
+
+export function createContextEngineCustodyFixture() {
+  const registry = createEmptyPluginRegistry();
+  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+  resources.attach(registry);
+  const database = new DatabaseSync(":memory:");
+  let closed = false;
+  const close = () => {
+    if (!closed) {
+      closed = true;
+      database.close();
+    }
+  };
+  const retirement = createDeferred();
+  const retired = vi.fn(() => {
+    close();
+    retirement.resolve();
+  });
+  resources.register("fixture", { id: "cli-engine-database", dispose: retired });
+  return {
+    registry,
+    resources,
+    retired,
+    retirement: retirement.promise,
+    read: () => database.prepare("SELECT 42 AS value").get()?.value,
+    async cleanup() {
+      await resources.release();
+      close();
+    },
   };
 }

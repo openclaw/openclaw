@@ -1,4 +1,3 @@
-// File Transfer plugin module constructs the canonical directory-list worker.
 const DIR_LIST_WORKER = [
   'const fs=require("node:fs");',
   "const [directory,expected,device,inode,offsetText,maxText]=process.argv.slice(1);",
@@ -10,7 +9,7 @@ const DIR_LIST_WORKER = [
   'const all=fs.readdirSync(".",{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name));',
   "const offset=Number(offsetText),max=Number(maxText);",
   "const entries=all.slice(offset,offset+max).map(entry=>{",
-  "const stat=fs.lstatSync(entry.name);return{name:entry.name,isDirectory:stat.isDirectory(),size:stat.size,mtimeMs:stat.mtimeMs};",
+  "const stat=fs.lstatSync(entry.name);return{name:entry.name,isDirectory:stat.isDirectory(),isFile:stat.isFile(),size:stat.size,mtimeMs:stat.mtimeMs};",
   "});",
   "process.stdout.write(JSON.stringify({entries,total:all.length}));",
   "}catch{process.exit(1);}",

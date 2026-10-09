@@ -1,31 +1,13 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-
-type PumpProcess = {
-  pid?: number;
-  killed?: boolean;
-  stdin?: (Writable & { writableLength?: number }) | null;
-  stdout?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  stderr?: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown } | null;
-  kill(signal?: NodeJS.Signals): boolean;
-  on(
-    event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
-  ): unknown;
-  on(event: "error", listener: (error: Error) => void): unknown;
-};
-
-type SpawnFn = (
-  command: string,
-  args: string[],
-  options: {
-    env: NodeJS.ProcessEnv;
-    stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"];
-  },
-) => PumpProcess;
+import type {
+  RealtimeVoiceAudioChunkMetadata,
+  RealtimeVoicePlaybackItem,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 const CAFFEINATE_COMMAND = "/usr/bin/caffeinate";
 const CAPTURE_CLOSE_SAFE_FRAME = Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]);
@@ -44,23 +26,28 @@ export const FACETIME_FEED_DEVICE_NAME = "OpenClaw-Feed";
 export const FACETIME_MIC_DEVICE_NAME = "OpenClaw-Mic";
 const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
 
+type AudioProcess =
+  | { kind: "capture"; command: string }
+  | { kind: "playback" }
+  | { kind: "wake"; capturePid?: number };
+
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
-  processOutputSuppressed(): boolean;
-  writeOutputAudio(audio: Buffer): void;
+  processOutputSuppressed(this: void): boolean;
+  writeOutputAudio(audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void;
+  getPlaybackState(): RealtimeVoicePlaybackItem[];
   finishOutputAudio(): void;
   clearOutputAudio(): void;
   playedAudioFrames(): number;
   queuedAudioFrames(): number;
   suspendMedia(): Promise<void>;
-  failClosed(): Promise<void>;
   stop(): Promise<void>;
 };
 
-function sanitizedAudioChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function sanitizedAudioChildEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(env).filter(
+    Object.entries(process.env).filter(
       ([key]) => !/(?:API_?KEY|AUTH|CREDENTIAL|PASSWORD|SECRET|TOKEN)/iu.test(key),
     ),
   );
@@ -71,8 +58,11 @@ class PlaybackClock {
   private playedFramesBeforeSegment = 0;
   private playbackStartsAtMs = 0;
   private playbackUntilMs = 0;
+  private retiredFrames = 0;
+  private items: Array<{ itemId?: string; frames: number }> = [];
 
-  append(frames: number, nowMs = Date.now()): void {
+  append(frames: number, itemId?: string): void {
+    const nowMs = Date.now();
     if (nowMs >= this.playbackUntilMs) {
       this.playedFramesBeforeSegment = this.generatedFrames;
       this.playbackStartsAtMs = nowMs + OUTPUT_LATENCY_BUDGET_MS;
@@ -80,9 +70,37 @@ class PlaybackClock {
     }
     this.generatedFrames += frames;
     this.playbackUntilMs += (frames / FACETIME_AUDIO_SAMPLE_RATE_HZ) * 1000;
+    const previous = this.items.at(-1);
+    if (previous && previous.itemId === itemId) {
+      previous.frames += frames;
+    } else {
+      this.items.push({ itemId, frames });
+    }
   }
 
-  playedFrames(nowMs = Date.now()): number {
+  playbackState(): RealtimeVoicePlaybackItem[] {
+    let remaining = Math.max(0, this.playedFrames() - this.retiredFrames);
+    const playedByItem = new Map<string, number>();
+    for (const item of this.items) {
+      const consumed = Math.min(remaining, item.frames);
+      remaining -= consumed;
+      if (item.itemId) {
+        playedByItem.set(item.itemId, (playedByItem.get(item.itemId) ?? 0) + consumed);
+      }
+    }
+    return Array.from(playedByItem, ([itemId, frames]) => ({
+      itemId,
+      audioEndMs: Math.floor((frames * 1000) / FACETIME_AUDIO_SAMPLE_RATE_HZ),
+    }));
+  }
+
+  retireItems(): void {
+    this.items = [];
+    this.retiredFrames = this.generatedFrames;
+  }
+
+  playedFrames(): number {
+    const nowMs = Date.now();
     if (nowMs <= this.playbackStartsAtMs) {
       return this.playedFramesBeforeSegment;
     }
@@ -91,12 +109,12 @@ class PlaybackClock {
     return Math.min(this.generatedFrames, this.playedFramesBeforeSegment + elapsedFrames);
   }
 
-  queuedFrames(nowMs = Date.now()): number {
-    return Math.max(0, this.generatedFrames - this.playedFrames(nowMs));
+  queuedFrames(): number {
+    return Math.max(0, this.generatedFrames - this.playedFrames());
   }
 
-  millisecondsUntilDrained(nowMs = Date.now()): number {
-    return Math.max(0, this.playbackUntilMs - nowMs);
+  millisecondsUntilDrained(): number {
+    return Math.max(0, this.playbackUntilMs - Date.now());
   }
 
   reset(): void {
@@ -104,6 +122,7 @@ class PlaybackClock {
     this.playedFramesBeforeSegment = 0;
     this.playbackStartsAtMs = 0;
     this.playbackUntilMs = 0;
+    this.retireItems();
   }
 }
 
@@ -130,7 +149,31 @@ function buildSoxOutputArguments(): string[] {
   ];
 }
 
-async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIGTERM") {
+function spawnAudioProcess(process: AudioProcess, env: NodeJS.ProcessEnv): ChildProcess {
+  let command: string;
+  let args: string[];
+  let stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"];
+  switch (process.kind) {
+    case "capture":
+      command = process.command;
+      args = [];
+      stdio = ["pipe", "pipe", "pipe"];
+      break;
+    case "playback":
+      command = SOX_COMMAND;
+      args = buildSoxOutputArguments();
+      stdio = ["pipe", "ignore", "pipe"];
+      break;
+    case "wake":
+      command = CAFFEINATE_COMMAND;
+      args = ["-d", "-i", ...(process.capturePid ? ["-w", String(process.capturePid)] : [])];
+      stdio = ["ignore", "ignore", "pipe"];
+      break;
+  }
+  return spawn(command, args, { env, stdio });
+}
+
+async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (proc.killed && signal !== "SIGKILL") {
     return;
   }
@@ -141,31 +184,17 @@ async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIG
       resolve();
     });
   });
-  try {
-    proc.kill(signal);
-  } catch {
-    return;
-  }
-  await Promise.race([
-    exitedPromise,
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    }),
-  ]);
-  if (!exited && signal !== "SIGKILL") {
+  const signals: NodeJS.Signals[] = signal === "SIGKILL" ? [signal] : [signal, "SIGKILL"];
+  for (const nextSignal of signals) {
     try {
-      proc.kill("SIGKILL");
+      proc.kill(nextSignal);
     } catch {
       return;
     }
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 500);
-        timer.unref?.();
-      }),
-    ]);
+    await Promise.race([exitedPromise, sleepWithAbort(500, undefined, { ref: false })]);
+    if (exited) {
+      return;
+    }
   }
 }
 
@@ -176,19 +205,16 @@ export function startFaceTimeAudioPump(params: {
   onError?: (error: Error) => boolean | void | Promise<boolean | void>;
   onSuppressionLost?: (error: Error) => void | Promise<void>;
   onPlaybackDrained?: (event: { generation: number; playedFrames: number }) => void;
-  spawn?: SpawnFn;
 }): FaceTimeAudioPump {
-  const spawnFn: SpawnFn =
-    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const childEnv = sanitizedAudioChildEnv();
   const playbackClock = new PlaybackClock();
   let playbackGeneration = 1;
   let drainTimer: NodeJS.Timeout | undefined;
-  let outputProcess: PumpProcess;
-  const captureProcess = spawnFn(params.captureBinary, [], {
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  let outputProcess: ChildProcess;
+  const captureProcess = spawnAudioProcess(
+    { kind: "capture", command: params.captureBinary },
+    childEnv,
+  );
   let stopped = false;
   let mediaSuspended = false;
   let captureSuppressionActive = false;
@@ -197,18 +223,10 @@ export function startFaceTimeAudioPump(params: {
   let routeReadySettled = false;
   let routeReadyTimer: NodeJS.Timeout | undefined;
   let captureStderr = "";
-  let resolveCaptureReady = () => {};
-  let rejectCaptureReady = (_error: Error) => {};
-  const captureReadyPromise = new Promise<void>((resolve, reject) => {
-    resolveCaptureReady = resolve;
-    rejectCaptureReady = reject;
-  });
-  let resolveRouteReady = () => {};
-  let rejectRouteReady = (_error: Error) => {};
-  const routeReadyPromise = new Promise<void>((resolve, reject) => {
-    resolveRouteReady = resolve;
-    rejectRouteReady = reject;
-  });
+  const captureReady = createDeferred<void>();
+  const routeReady = createDeferred<void>();
+  const captureReadyPromise = captureReady.promise;
+  const routeReadyPromise = routeReady.promise;
   void captureReadyPromise.catch(() => {});
   void routeReadyPromise.catch(() => {});
 
@@ -219,9 +237,9 @@ export function startFaceTimeAudioPump(params: {
     captureReadySettled = true;
     clearTimeout(captureReadyTimer);
     if (error) {
-      rejectCaptureReady(error);
+      captureReady.reject(error);
     } else {
-      resolveCaptureReady();
+      captureReady.resolve();
     }
   };
   const settleRouteReady = (error?: Error) => {
@@ -234,9 +252,9 @@ export function startFaceTimeAudioPump(params: {
       routeReadyTimer = undefined;
     }
     if (error) {
-      rejectRouteReady(error);
+      routeReady.reject(error);
     } else {
-      resolveRouteReady();
+      routeReady.resolve();
     }
   };
   const reportFailure = (error: Error, suppressionLost: boolean) => {
@@ -265,20 +283,14 @@ export function startFaceTimeAudioPump(params: {
   const spawnOutput = () => {
     // Playback stays out of the capture helper: an in-process AVAudioEngine can
     // rebind OpenClaw-Feed after FaceTime claims it and tear down the carrier.
-    const proc = spawnFn(SOX_COMMAND, buildSoxOutputArguments(), {
-      env: childEnv,
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    proc.on("error", (error) => {
+    const proc = spawnAudioProcess({ kind: "playback" }, childEnv);
+    const onError = (error: Error) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(error, false);
       }
-    });
-    proc.stdin?.on("error", (error) => {
-      if (!stopped && !mediaSuspended && proc === outputProcess) {
-        reportFailure(error, false);
-      }
-    });
+    };
+    proc.on("error", onError);
+    proc.stdin?.on("error", onError);
     proc.on("exit", (code, signal) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(new Error(`SoX playback exited (${code ?? signal ?? "done"})`), false);
@@ -325,6 +337,7 @@ export function startFaceTimeAudioPump(params: {
     settleCaptureReady(new Error("FaceTime native audio bridge stopped before readiness"));
     settleRouteReady(new Error("FaceTime input route stopped before verification"));
     cancelDrainTimer();
+    playbackClock.reset();
     try {
       captureProcess.stdin?.write(CAPTURE_CLOSE_SAFE_FRAME);
       captureProcess.stdin?.end();
@@ -338,52 +351,8 @@ export function startFaceTimeAudioPump(params: {
       wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve(),
     ]);
   };
-  const failClosed = async () => {
-    if (stopped) {
-      return;
-    }
-    mediaSuspended = true;
-    stopped = true;
-    cancelDrainTimer();
-    playbackClock.reset();
-    try {
-      // No close-safe frame: EOF is the native watchdog's fail-closed signal.
-      captureProcess.stdin?.end();
-    } catch {
-      // The process may already be handling EOF.
-    }
-    let exited = false;
-    const exitedPromise = new Promise<void>((resolve) => {
-      captureProcess.on("exit", () => {
-        exited = true;
-        resolve();
-      });
-    });
-    // Stop queued model speech before waiting for the carrier watchdog. The
-    // native capture process retains hardware suppression during that wait.
-    const outputStopped = terminateProcess(outputProcess, "SIGKILL");
-    const wakeStopped = wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve();
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1_500);
-        timer.unref?.();
-      }),
-    ]);
-    await Promise.all([
-      exited ? Promise.resolve() : terminateProcess(captureProcess),
-      outputStopped,
-      wakeStopped,
-    ]);
-    captureSuppressionActive = false;
-  };
-
   const wakeProcess = existsSync(CAFFEINATE_COMMAND)
-    ? spawnFn(
-        CAFFEINATE_COMMAND,
-        ["-d", "-i", ...(captureProcess.pid ? ["-w", String(captureProcess.pid)] : [])],
-        { env: childEnv, stdio: ["ignore", "ignore", "pipe"] },
-      )
+    ? spawnAudioProcess({ kind: "wake", capturePid: captureProcess.pid }, childEnv)
     : undefined;
   wakeProcess?.on("error", () => undefined);
   captureProcess.on("error", (error) => reportFailure(error, true));
@@ -436,7 +405,7 @@ export function startFaceTimeAudioPump(params: {
       await routeReadyPromise;
     },
     processOutputSuppressed: () => captureSuppressionActive,
-    writeOutputAudio(audio) {
+    writeOutputAudio(audio, metadata) {
       if (stopped || mediaSuspended || audio.byteLength === 0) {
         return;
       }
@@ -452,13 +421,17 @@ export function startFaceTimeAudioPump(params: {
       try {
         cancelDrainTimer();
         outputProcess.stdin.write(audio);
-        playbackClock.append(audio.byteLength / 2);
+        playbackClock.append(audio.byteLength / 2, metadata?.itemId);
       } catch (error) {
         reportFailure(error instanceof Error ? error : new Error(formatErrorMessage(error)), false);
       }
     },
     finishOutputAudio() {
-      if (stopped || mediaSuspended || playbackClock.queuedFrames() <= 0) {
+      if (stopped || mediaSuspended) {
+        return;
+      }
+      if (playbackClock.queuedFrames() <= 0) {
+        playbackClock.retireItems();
         return;
       }
       cancelDrainTimer();
@@ -474,6 +447,7 @@ export function startFaceTimeAudioPump(params: {
           return;
         }
         drainTimer = undefined;
+        playbackClock.retireItems();
         params.onPlaybackDrained?.({
           generation,
           playedFrames: Math.floor(playbackClock.playedFrames()),
@@ -481,6 +455,7 @@ export function startFaceTimeAudioPump(params: {
       };
       notifyWhenDrained();
     },
+    getPlaybackState: () => playbackClock.playbackState(),
     clearOutputAudio: clearPlayback,
     playedAudioFrames: () => Math.floor(playbackClock.playedFrames()),
     queuedAudioFrames: () => Math.ceil(playbackClock.queuedFrames()),
@@ -492,7 +467,6 @@ export function startFaceTimeAudioPump(params: {
         await terminateProcess(outputProcess, "SIGKILL");
       }
     },
-    failClosed,
     stop,
   };
 }

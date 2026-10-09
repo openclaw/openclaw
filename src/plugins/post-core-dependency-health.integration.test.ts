@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import * as processExecution from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
@@ -141,8 +142,7 @@ describe("post-core update required dependency publication", () => {
                 const result = await realRun(...args);
                 const [argv, options] = args;
                 if (
-                  argv[0] !== "npm" ||
-                  argv[1] !== "install" ||
+                  npmCommandArgs(argv)?.[0] !== "install" ||
                   argv.includes("--package-lock-only") ||
                   result.code !== 0
                 ) {

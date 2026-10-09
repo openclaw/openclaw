@@ -11,9 +11,9 @@ import {
   renderCompactAttachmentCard,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { chatMediaSourceChanged, ChatMediaSourceController } from "./chat-media-source.ts";
 
 class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property() src = "";
@@ -35,8 +35,10 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
 
   private media: HTMLVideoElement | null = null;
   private mediaVisible = false;
-  private viewportElement: HTMLElement | null = null;
-  private stopObservingViewport: (() => void) | undefined;
+  private readonly viewport = new ChatAttachmentViewportRef(() => {
+    this.mediaVisible = true;
+    this.syncSource();
+  });
   private readonly sourceController = new ChatMediaSourceController();
 
   override connectedCallback(): void {
@@ -45,9 +47,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = null;
+    this.viewport.disconnect();
     this.sourceController.cancel();
     if (this.media) {
       this.sourceController.reset(this.media);
@@ -62,22 +62,14 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     }
     if (
       this.sourceController.readiness === "unavailable" &&
-      (changedProperties.has("src") ||
-        changedProperties.has("sourceIdentity") ||
-        changedProperties.has("playback") ||
-        changedProperties.has("authToken"))
+      chatMediaSourceChanged(changedProperties)
     ) {
       this.sourceController.cancel();
     }
   }
 
   override updated(changedProperties: PropertyValues<this>): void {
-    if (
-      changedProperties.has("src") ||
-      changedProperties.has("sourceIdentity") ||
-      changedProperties.has("playback") ||
-      changedProperties.has("authToken")
-    ) {
+    if (chatMediaSourceChanged(changedProperties)) {
       this.syncSource();
     }
   }
@@ -86,23 +78,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     this.frameReady = false;
     this.media = element instanceof HTMLVideoElement ? element : null;
     this.syncSource();
-  };
-
-  private setViewportElement = (element: Element | undefined) => {
-    const viewportElement = element instanceof HTMLElement ? element : null;
-    if (this.viewportElement === viewportElement) {
-      return;
-    }
-    this.stopObservingViewport?.();
-    this.stopObservingViewport = undefined;
-    this.viewportElement = viewportElement;
-    if (!viewportElement) {
-      return;
-    }
-    this.stopObservingViewport = observeChatAttachmentViewport(viewportElement, () => {
-      this.mediaVisible = true;
-      this.syncSource();
-    });
   };
 
   private syncSource(): void {
@@ -139,6 +114,11 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       return;
     }
     this.media?.pause();
+    // Touch activation need not focus a button. Give the modal a stable return
+    // target even when expansion came from the non-focusable card surface.
+    this.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.focus({
+      preventScroll: true,
+    });
     this.onExpand?.(source);
   };
 
@@ -165,9 +145,11 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           : {};
     return html`
       <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--video ${
+          loading ? "chat-assistant-attachment-card--loading" : ""
+        }"
         aria-busy=${loading ? "true" : nothing}
-        ${ref(this.setViewportElement)}
+        ${ref(this.viewport.setElement)}
         ?data-openable=${Boolean(onExpand)}
         @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, onExpand)}
       >
@@ -208,6 +190,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           }
           <video
             controls
+            aria-label=${this.label.trim() || t("chat.attachments.video")}
             preload=${this.preview ? "auto" : "metadata"}
             style=${styleMap(dimensions)}
             ${ref(this.setMedia)}

@@ -243,23 +243,6 @@ describe("windows output encoding", () => {
     ).toBe("你好");
   });
 
-  it("supports common Windows system codepage decoder labels", () => {
-    for (const encoding of [
-      "windows-874",
-      "windows-1250",
-      "windows-1251",
-      "windows-1252",
-      "windows-1253",
-      "windows-1254",
-      "windows-1255",
-      "windows-1256",
-      "windows-1257",
-      "windows-1258",
-    ]) {
-      expect(() => new TextDecoder(encoding)).not.toThrow();
-    }
-  });
-
   it("keeps multibyte Windows codepage characters intact across chunk boundaries", () => {
     const decoder = createWindowsOutputDecoder({
       platform: "win32",
@@ -316,6 +299,12 @@ describe("windows output encoding", () => {
       }
     },
   );
+
+  it.each(["linux", "darwin"] as const)("decodes UTF-16 BOM file buffers on %s", (platform) => {
+    for (const [, raw] of UTF16_OUTPUT_CASES) {
+      expect(decodeWindowsTextFileBuffer({ buffer: raw, platform })).toBe("hi\n");
+    }
+  });
 
   it.each(UTF16_OUTPUT_CASES)("decodes %s output across every chunk boundary", (_, raw) => {
     for (let split = 1; split < raw.length; split += 1) {

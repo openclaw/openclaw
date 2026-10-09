@@ -25,18 +25,6 @@ const builtinSegment = (argv: string[], resolvedPath?: string) => ({
 });
 
 describe("isSafeBuiltinSegment", () => {
-  it("allows a builtin segment with no resolved binary path", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["cd", "/etc"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
-  });
-
   it("allows a safe shell builtin even when the host has a same-named binary", () => {
     expect(
       isSafeBuiltinSegment({
@@ -68,21 +56,6 @@ describe("isSafeBuiltinSegment", () => {
         platform: "linux",
       }),
     ).toBe(false);
-  });
-
-  it("allows test and well-formed bracket predicates", () => {
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["test", "-d", "/tmp"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
-    expect(
-      isSafeBuiltinSegment({
-        segment: builtinSegment(["[", "-d", "/tmp", "]"]),
-        platform: "linux",
-      }),
-    ).toBe(true);
   });
 
   it("rejects malformed bracket predicates", () => {

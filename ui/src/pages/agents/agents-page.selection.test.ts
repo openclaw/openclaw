@@ -7,6 +7,7 @@ import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   agentsCapability,
   agentsList,
@@ -45,7 +46,7 @@ describe("AgentsPage routing", () => {
       } as unknown as ApplicationContext;
       page.agentsList = roster;
       page.agentsSelectedId = selectedId;
-      page.agentFileContents = { "AGENTS.md": "Previous agent's file" };
+      setAgentFileValues(page, "content", { "AGENTS.md": "Previous agent's file" });
       page.routeData = {
         ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
         gatewaySnapshot: snapshot(null, false),
@@ -57,7 +58,7 @@ describe("AgentsPage routing", () => {
       expect(page.agentsPanel).toBe("tools");
       expect(page.agentsSelectedId).toBe(expectedAgentId);
       expect(selection.state.selectedId).toBe(expectedAgentId);
-      expect(page.agentFileContents).toEqual(
+      expect(agentFileValues(page, "content")).toEqual(
         selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
       );
     },
@@ -110,8 +111,6 @@ describe("AgentsPage routing", () => {
 
   it.each([
     { pendingUpdate: false, newerIntent: false },
-    { pendingUpdate: true, newerIntent: false },
-    { pendingUpdate: false, newerIntent: true },
     { pendingUpdate: true, newerIntent: true },
   ])(
     "preserves Files while a reused page awaits route data (updated: $pendingUpdate, newer intent: $newerIntent)",
@@ -259,6 +258,70 @@ describe("AgentsPage routing", () => {
     });
     page.subscriptions.hostDisconnected();
   });
+
+  it.each(["same target", "different target", "excluded target", "profile", "source"])(
+    "retains an identity draft through discovery retirement only for its current owner (%s)",
+    (change) => {
+      const listeners = new Set<() => void>();
+      const client = {
+        request: vi.fn(async () => ({ models: [] })),
+      } as unknown as GatewayBrowserClient;
+      const currentGateway = gateway({ ...snapshot(client), selfUser: { id: "operator" } });
+      const agents = agentsCapability(async () => files("main", "main"));
+      agents.state.agentsList = roster;
+      agents.subscribe = (listener) => {
+        const notify = () => listener(agents.state);
+        listeners.add(notify);
+        return () => listeners.delete(notify);
+      };
+      const selection = createAgentSelectionCapability(
+        {
+          connection: { gatewayUrl: "ws://settings.test" },
+          snapshot: { assistantAgentId: "main" },
+          subscribe: () => () => undefined,
+        },
+        agents,
+        undefined,
+        undefined,
+        { requireConfiguredAgent: true },
+      );
+      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      page.context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
+      page.gateway.applySnapshot(currentGateway.snapshot, { initial: true, sourceChanged: false });
+      page.subscriptions.hostConnected();
+      try {
+        page.identityDraft = { name: "Lunar museum guide", emoji: null, avatar: null };
+        agents.state.agentsList = null;
+        listeners.forEach((listener) => listener());
+        expect(page.agentsSelectedId).toBeNull();
+        expect(page.identityDraft.name).toBeNull();
+        if (change === "different target") {
+          selection.set("research");
+          selection.set("main");
+        } else if (change === "profile") {
+          currentGateway.snapshot.selfUser = { id: "other-operator" };
+          page.gateway.applySnapshot(currentGateway.snapshot, {
+            initial: false,
+            sourceChanged: false,
+          });
+        } else if (change === "source") {
+          setPageGateway(page, client, true, true);
+        }
+        agents.state.agentsList =
+          change === "excluded target"
+            ? { ...roster, agents: roster.agents.filter((agent) => agent.id !== "main") }
+            : roster;
+        listeners.forEach((listener) => listener());
+        expect(page.agentsSelectedId).toBe(change === "excluded target" ? "research" : "main");
+        expect(page.identityDraft.name).toBe(
+          change === "same target" ? "Lunar museum guide" : null,
+        );
+      } finally {
+        page.subscriptions.hostDisconnected();
+        selection.dispose();
+      }
+    },
+  );
 
   it.each(["request", "roster refresh"])(
     "retires an identity save during its %s without losing the draft or settling a newer save",

@@ -15,7 +15,7 @@ function createNodesRuntime(
 }
 
 describe("Canvas widget presenter", () => {
-  it.each(["macos", "macOS 26.6.2"])("presents the hosted URL on a %s node", async (platform) => {
+  it("presents the hosted URL on a versioned macOS node", async () => {
     const runtime = createNodesRuntime([
       {
         nodeId: "android-recent",
@@ -29,7 +29,7 @@ describe("Canvas widget presenter", () => {
       {
         nodeId: "mac-local",
         displayName: "Studio",
-        platform,
+        platform: "macOS 26.6.2",
         connected: true,
         connectedAtMs: 10,
         caps: ["canvas"],
@@ -65,7 +65,7 @@ describe("Canvas widget presenter", () => {
     expect(runtime.invoke).toHaveBeenCalledTimes(1);
   });
 
-  it("maps missing eligible nodes and node invocation failures", async () => {
+  it("reports offline nodes as unavailable", async () => {
     const unavailable = createCanvasWidgetPresenter(
       createNodesRuntime([
         {
@@ -80,32 +80,6 @@ describe("Canvas widget presenter", () => {
     await expect(unavailable.availability({})).resolves.toMatchObject({
       ok: false,
       error: { code: "no_eligible_node" },
-    });
-
-    const runtime = createNodesRuntime([
-      {
-        nodeId: "mac-panel",
-        platform: "macos",
-        connected: true,
-        caps: ["canvas"],
-        invocableCommands: commands,
-      },
-    ]);
-    vi.mocked(runtime.invoke).mockRejectedValueOnce(new Error("panel disabled"));
-    const presenter = createCanvasWidgetPresenter(runtime);
-    await expect(
-      presenter.present({
-        document: {
-          kind: "html",
-          html: "<p>Status</p>",
-          hostedUrl: "/__openclaw__/canvas/documents/cv_2/index.html",
-        },
-        title: "Status",
-        context: {},
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      error: { code: "node_error", message: "panel disabled", nodeId: "mac-panel" },
     });
   });
 

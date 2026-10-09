@@ -152,6 +152,7 @@ describe("Codex ordinary MCP elicitation adapter", () => {
           gateway.calls.filter((entry) => entry.method === "question.waitAnswer"),
         ).toHaveLength(1),
       );
+      await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
       expect(settled).not.toHaveBeenCalled();
       const prompt = vi.mocked(params.onBlockReply!).mock.calls[0]?.[0];
       expect(prompt?.text).toContain(requestParams.message);
@@ -247,6 +248,29 @@ describe("Codex ordinary MCP elicitation adapter", () => {
         params: formParams({ mode: "openai/form", requestedSchema: schema }),
       }),
     ).resolves.toEqual({ action: "accept", content: { template: "monthly" }, _meta: null });
+  });
+
+  it("uses canonical option values for modern openaiForm input", async () => {
+    const gateway = createAnsweringGateway([{ template: ["monthly"] }]);
+    const bridge = createBridge({ gatewayCall: gateway.call });
+    await expect(
+      bridge.handleElicitationRequest({
+        id: "modern-choice",
+        params: formParams({
+          mode: "openaiForm",
+          requestedSchema: {
+            type: "object",
+            required: ["template"],
+            properties: {
+              template: { type: "string", oneOf: [{ const: "monthly", title: "Monthly review" }] },
+            },
+          },
+        }),
+      }),
+    ).resolves.toEqual({ action: "accept", content: { template: "monthly" }, _meta: null });
+    expect(requestedQuestions(gateway.calls)[0]?.questions[0]).toMatchObject({
+      options: [{ label: "Monthly review", value: "monthly" }],
+    });
   });
 
   it("uses only direct isSecret metadata and never persists that field in Gateway questions", async () => {
@@ -380,42 +404,48 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     await expect(response).resolves.toEqual({ action: "cancel", content: null, _meta: null });
   });
 
-  it("recognizes form, openai/form, URL, nullable turn, and exact scope envelopes", async () => {
-    const gateway = createAnsweringGateway([
-      { name: ["Ada"] },
-      { continue: ["I've completed this step"] },
-    ]);
-    const bridge = createBridge({ gatewayCall: gateway.call });
-    await expect(
-      bridge.handleElicitationRequest({ id: "nullable", params: formParams({ turnId: null }) }),
-    ).resolves.toEqual({ action: "accept", content: { name: "Ada" }, _meta: null });
-    await expect(
-      bridge.handleElicitationRequest({
-        id: "url",
-        params: formParams({
-          mode: "url",
-          requestedSchema: undefined,
-          url: "https://example.com/authorize",
-          elicitationId: "auth-1",
+  it.each(["form", "openai/form", "openaiForm"])(
+    "recognizes %s, URL, nullable turn, and exact scope envelopes",
+    async (mode) => {
+      const gateway = createAnsweringGateway([
+        { name: ["Ada"] },
+        { continue: ["I've completed this step"] },
+      ]);
+      const bridge = createBridge({ gatewayCall: gateway.call });
+      await expect(
+        bridge.handleElicitationRequest({
+          id: "nullable",
+          params: formParams({ turnId: null, mode }),
         }),
-      }),
-    ).resolves.toEqual({ action: "accept", content: null, _meta: null });
-    expect(requestedQuestions(gateway.calls)[1]?.questions).toContainEqual(
-      expect.objectContaining({ url: "https://example.com/authorize" }),
-    );
-    await expect(
-      bridge.handleElicitationRequest({
-        id: "wrong-turn",
-        params: formParams({ turnId: "other" }),
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      bridge.handleElicitationRequest({
-        id: "wrong-thread",
-        params: formParams({ threadId: "other" }),
-      }),
-    ).resolves.toBeUndefined();
-  });
+      ).resolves.toEqual({ action: "accept", content: { name: "Ada" }, _meta: null });
+      await expect(
+        bridge.handleElicitationRequest({
+          id: "url",
+          params: formParams({
+            mode: "url",
+            requestedSchema: undefined,
+            url: "https://example.com/authorize",
+            elicitationId: "auth-1",
+          }),
+        }),
+      ).resolves.toEqual({ action: "accept", content: null, _meta: null });
+      expect(requestedQuestions(gateway.calls)[1]?.questions).toContainEqual(
+        expect.objectContaining({ url: "https://example.com/authorize" }),
+      );
+      await expect(
+        bridge.handleElicitationRequest({
+          id: "wrong-turn",
+          params: formParams({ turnId: "other" }),
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        bridge.handleElicitationRequest({
+          id: "wrong-thread",
+          params: formParams({ threadId: "other" }),
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("rejects inherited and accessor thread correlation without invoking getters", async () => {
     const gateway = createAnsweringGateway([]);

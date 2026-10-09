@@ -1,8 +1,8 @@
 /** Immutable decision facts for action boundaries without an owner-native record. */
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type Selectable } from "kysely";
-import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
+import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -49,6 +49,10 @@ const EXECUTION_DECISION_SELECTOR_PREFIX = "decision-fact:";
 
 const ensureExecutionDecisionFactSchema = createOpenClawStateSchemaEnsurer({
   table: "execution_decision_facts",
+  indexes: [
+    "execution_decision_facts_context_occurred_idx",
+    "execution_decision_facts_run_occurred_idx",
+  ],
   endMarker: "  ON execution_decision_facts (run_id, occurred_at, receipt_id);\n",
   operationLabel: "audit.execution-decision.schema.ensure",
 });

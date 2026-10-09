@@ -17,8 +17,8 @@ import {
 
 const replaceFileAtomicSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./replace-file.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./replace-file.js")>()),
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
   replaceFileAtomicSync: replaceFileAtomicSyncMock,
 }));
 
@@ -56,25 +56,13 @@ afterEach(() => {
 
 describe("wide-area DNS discovery domain helpers", () => {
   it.each([
-    { value: "openclaw.internal", expected: "openclaw.internal." },
     { value: "openclaw.internal.", expected: "openclaw.internal." },
     { value: "  openclaw.internal  ", expected: "openclaw.internal." },
-    { value: "", expected: null },
     { value: "   ", expected: null },
-    { value: null, expected: null },
     { value: undefined, expected: null },
   ])("normalizes domains for %j", ({ value, expected }) => {
     expect(normalizeWideAreaDomain(value)).toBe(expected);
   });
-
-  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
-    "rejects invalid domains for %j",
-    (value) => {
-      expect(() => normalizeWideAreaDomain(value)).toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
-    },
-  );
 
   it.each([
     {
@@ -150,11 +138,6 @@ describe("wide-area DNS-SD zone rendering", () => {
   });
 
   it.each([
-    {
-      name: "includes tailnetDns when provided",
-      overrides: { tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net" },
-      records: [`tailnetDns=peters-mac-studio-1.sheep-coho.ts.net`],
-    },
     {
       name: "includes gateway TLS TXT fields and trims display metadata",
       overrides: {

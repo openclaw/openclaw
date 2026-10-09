@@ -58,16 +58,118 @@ callback preserves existing behavior. Set `allowProfileFallback: false` when
 the selected profile represents an account boundary that must not rotate to a
 different configured profile.
 
+## Session transcript hydration
+
+Use `await SessionManager.openAsync(target, cwd?, contextLimits?, signal?)` from
+`openclaw/plugin-sdk/agent-sessions` to load an existing SQLite transcript.
+`openBoundedAsync(target, { maxBytes, maxEvents, cwd?, onTruncated?, signal? })`
+loads the selected active branch, and `openDetachedBoundedAsync` returns the same
+selection without persistence. File-backed SQLite reads run on the history worker.
+The synchronous getters consume the prepared view without reading storage.
+
+Full reads transfer bounded chunks from one committed SQLite snapshot without
+truncating the transcript to fit the worker. The caller still holds the complete
+result in memory; use the bounded methods when the complete history is unnecessary.
+Cancellation and failed transfers leave the current view intact and join worker cleanup.
+
+`await manager.setSessionTargetAsync(target, signal?)` replaces a prepared view.
+It rejects if the manager changes while reading and leaves the current view intact
+when preparation fails. `reloadPersistedTranscriptAsync(signal?)` retains the
+manager's runtime working directory. Targets are captured before waiting, including
+relative store paths; a truncation callback cannot redirect later persistence.
+The binding also retains the resolved state directory and supervisor mode. Later
+environment changes do not redirect reloads or writes. `getSessionTarget()` returns
+a defensive copy with these storage facts, without unrelated environment values.
+
+These readers do not create a missing database or repair its schema. The session
+creation owner must prepare storage first. An existing database with an empty
+transcript retains lazy header initialization until its first append. Incognito
+SQLite remains with its process-local owner. `SessionManager.inMemory()` stays
+synchronous and does not access SQLite.
+
+The synchronous `open`, `openBounded`, `openDetachedBounded`, `openModelContext`,
+`setSessionTarget`, and `reloadPersistedTranscript` methods are deprecated
+third-party compatibility variants through the next Plugin SDK major. Runtime
+code should await their asynchronous counterparts.
+
+## Awaited transcript mutations
+
+Await `appendMessageAsync`, `appendCustomEntryAsync`, `appendSessionInfoAsync`,
+and the other `Async` persistence methods before using the resulting view or
+publishing dependent work. File-backed writes reuse the canonical SQLite worker,
+preserve per-session FIFO ordering, and adopt the committed result before the
+promise resolves. User and custom messages and `beforeFreshMessageCommit` use
+this same worker path. Incognito retains its process-local persistence owner;
+its awaited API preserves the same completion ordering.
+
+The low-level `persistAsync` retains its raw persistence contract and does not add
+the supplied entry to the loaded tree; use an append method or reload afterward.
+`branchAsync` and `resetLeafAsync` prepare navigation in queue order without
+writing a leaf record by themselves. The synchronous `resetLeaf()` remains a
+supported in-memory operation.
+
+Synchronous persistence methods retain their immediate return values for
+third-party plugins and warn once per method per process. Their removal gate is
+the next Plugin SDK major. See the [migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+for every replacement, return value, and the additive extension and provider
+replay APIs. Transcript formats, schemas, and update behavior are unchanged.
+
+## Native assistant persistence
+
+Assistant producers should reuse the committed row's `idempotencyKey` as the
+live `assistant` event's `itemId`. The Gateway retires that exact occurrence
+when its run-owned commit is published, including corrections that arrive
+after persistence. Separate occurrences need separate identities even when
+their text is identical.
+
+Native harnesses that publish committed assistant rows with
+`publishSessionTranscriptUpdateByIdentity` from
+`openclaw/plugin-sdk/session-transcript-runtime` can include
+`update.assistantItemIds`. These are the exact `assistant` stream item IDs whose
+live display the committed row replaces or supersedes. Capture the IDs before
+awaiting persistence, and publish only after the row commits or an exact
+idempotent persistence receipt confirms it. An empty array still identifies a
+native row with no preceding streamed item. The persisted row's existing
+idempotency key also identifies a later canonical assistant frame.
+
+This field is display provenance, not terminal or run authorization. Existing
+session and run ownership checks still apply. It is internal to the host's
+transcript notification path: do not put it in the persisted message or public
+gateway events. Independently owned keyed commentary and async rows omit it.
+When steering commits a completed item, include only that item's ID; a later
+unfinished item remains live even if its text repeats the committed row.
+
+The Gateway does not infer ownership from text. An unkeyed producer's text
+stays in the live tail until an identity-bearing commit can own it or the run
+terminates. Such a producer can temporarily show a duplicate durable row;
+the Gateway favors preserving unsaved text over guessing which occurrence to hide.
+
 ## Bounded model context
 
-`SessionManager.openModelContext` and `openModelContextAsync` from
-`openclaw/plugin-sdk/agent-sessions` accept optional `limits: { maxBytes, maxEvents }`.
-The reader measures projected payload bytes in SQLite before loading them and
-selects a recent context with its latest compaction or reset boundary. It preserves
+Use `await SessionManager.openModelContextAsync(...)` from
+`openclaw/plugin-sdk/agent-sessions` with optional `limits: { maxBytes, maxEvents }`.
+Bounded reads are strict by default. The reader measures projected payload bytes
+in SQLite before loading them and selects a recent context with its latest
+compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
 cancellation checks.
+
+For a temporary model-only view, callers may explicitly add
+`toolResultOverflow: "omit"` to `limits`. If the newest atomic tool frame would
+otherwise leave no fitting context, recovery replaces only the tool-result bodies
+needed to fit with omission notices, before loading those bodies from SQLite.
+Each notice identifies the tool, call, and original projected event size. Recovery
+retains the latest historical user request and complete owned call/result frames.
+Unselected result bodies and tool-call arguments remain intact.
+
+This is a lossy model view, not a full-fidelity history API. It does not rewrite
+canonical transcripts or change evidence and fork readers. The same byte/event
+limits, required boundaries, and tool-result ownership checks still apply. Reads
+still fail if required user messages, call arguments, summaries, or event counts
+cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
+preserves strict bounded-read behavior.
 
 ## Scoped session visibility
 
@@ -275,9 +377,9 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
 
     `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
 
-    `openclaw/plugin-sdk/session-store-runtime` still exports deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, `resolveSessionFilePath(...)`, and `resolveSessionStoreEntry(...)` for official plugins released with v2026.7.1-beta.5. These compatibility exports are separate from `api.runtime.agent.session`. The existing [beta.5 compatibility window](/plugins/compatibility#current-compatibility-areas) runs through 2026-10-12; removal also requires the minimum supported plugin version to exclude that release. The whole-store helpers use SQLite-backed projections, and the legacy transcript-path bridge supports older file-based doctor inspection; SQLite remains canonical.
+    The beta.5 whole-store and transcript-path bridge has been removed from `openclaw/plugin-sdk/session-store-runtime`, along with the package-root `loadSessionStore` and `saveSessionStore` aliases. The September 30, 2026 approved [supported-plugin cutoff](/plugins/compatibility#session-store-bridge-retirement) excludes `v2026.7.1-beta.5` and other releases still importing that bridge. The subpath, scoped entry helpers, and `resolveStorePath(...)` remain available. Pass `agentId` to row operations explicitly; path resolution does not select an agent for later calls.
 
-    For new plugin code, use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
+    Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs. SQLite remains canonical, and existing legacy-state import and Doctor migrations remain available.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -287,6 +389,22 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     const model = api.runtime.agent.defaults.model; // e.g. "gpt-6-astra"
     const provider = api.runtime.agent.defaults.provider; // e.g. "openai"
     ```
+
+  </Accordion>
+  <Accordion title="api.runtime.worktrees">
+    Managed worktree creation, release, and lossless removal retain the selected
+    state root's ownership through their Git and registry effects. Calls inside
+    the owning Gateway stay in-process. When no process owns the state, these
+    methods acquire exclusive offline custody and release it after accepted
+    work settles.
+
+    A foreign live Gateway or embedded owner rejects these mutations with
+    `code: "OWNER_UNAVAILABLE"` before local effects. Run the plugin operation
+    inside the owning Gateway, or stop the Gateway through its service owner
+    and wait for embedded runs to finish before retrying offline. The SDK's
+    synchronous commit guard for `create` remains local and cannot cross RPC.
+    Checkout-root and metadata inspection remain read-only. Method signatures
+    are unchanged; no migration is required.
 
   </Accordion>
   <Accordion title="api.runtime.sandbox">
@@ -320,6 +438,28 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     whose live config hash does not match the requested mounts or policy. Pass
     only exact tool names whose registered implementations the calling plugin
     confines; wildcard prefixes do not prove tool ownership.
+
+    Sandbox workspace preparation checks the selected state root's live owner.
+    This applies to
+    `prepareWorkspaceAuthority(...)` and `resolveSandboxContext(...)` from
+    `openclaw/plugin-sdk/agent-harness-runtime`. Disabled sandbox resolution stays
+    a no-op, and read-only session classification remains available in foreign
+    processes. When sandboxing is enabled, a foreign live Gateway or embedded
+    owner causes `code: "GATEWAY_STATE_OWNER_REQUIRED"` before sandbox workspace,
+    registry, or projection mutation. Run the call inside the owning Gateway
+    plugin/runtime, or stop the Gateway and wait for embedded runs to finish,
+    then retry offline.
+
+    Calls hosted by the current Gateway or embedded owner stay in-process.
+    Preparation rechecks captured custody before workspace setup and backend
+    provisioning. Losing that custody rejects with `GATEWAY_STATE_OWNER_REQUIRED`;
+    built-in container backends also retain the check across provisioning awaits.
+    Standalone SDK callers also stay local when no live owner exists. Preparation
+    does not acquire a temporary lock or forward permission callbacks over RPC;
+    it does not prevent another owner from starting after offline admission.
+    Released parameters and return types are unchanged. Older SDK binaries and
+    other state roots remain outside this same-root gate; database freshness
+    checks still apply. No migration or update step is required.
 
   </Accordion>
 </AccordionGroup>
