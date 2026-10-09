@@ -114,7 +114,7 @@ export function createPluginAgentRuntimeFacade({
                 return patch;
               }
               const next = params.replaceEntry
-                ? (patch as SessionEntry)
+                ? (patch as SessionEntry) // SAFETY: replaceEntry supplies the whole entry; the host store still validates it before writing.
                 : ({ ...entry, ...patch } satisfies SessionEntry);
               assertStoreEntryOwned({
                 action: "patch",
@@ -248,7 +248,7 @@ export function createPluginAgentRuntimeFacade({
     const scopedAgent = Object.create(
       Object.getPrototypeOf(agent),
       Object.getOwnPropertyDescriptors(agent),
-    ) as PluginRuntime["agent"];
+    ) as PluginRuntime["agent"]; // SAFETY: The source prototype and every property descriptor are preserved from the typed agent runtime.
     Object.defineProperties(scopedAgent, {
       resolveThinkingDefault: {
         configurable: true,
