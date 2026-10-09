@@ -7,6 +7,7 @@ import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import type {
   SqliteIntegrityWorkerInput,
   SqliteIntegrityWorkerMessage,
+  SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
@@ -37,18 +38,22 @@ function send(message: SqliteIntegrityWorkerMessage): Promise<void> {
   });
 }
 
+function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+  return send({ type: "phase", phase });
+}
+
 async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrityWorkerResult> {
   let database: import("node:sqlite").DatabaseSync | undefined;
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
   try {
-    await send({ type: "phase", phase: "opening" });
+    await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
     setSqliteBusyTimeout(database, input.busyTimeoutMs);
     configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-    await send({ type: "phase", phase: "checking" });
+    await sendPhase("checking");
     const startedAt = performance.now();
     try {
       assertSqliteIntegrity(database, input.databaseLabel);
@@ -60,7 +65,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   } finally {
     if (database) {
       try {
-        await send({ type: "phase", phase: "closing" });
+        await sendPhase("closing");
       } catch (error) {
         // Reporting failure cannot replace a native failure or skip native close.
         failure ??= toStringifiedError(error);
