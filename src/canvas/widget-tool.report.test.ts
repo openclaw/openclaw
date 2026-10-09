@@ -16,6 +16,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
+import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 
@@ -39,6 +40,29 @@ const report: BoardReport = {
 };
 
 describe("native report authoring", () => {
+  it("preserves plugin source kinds named report alongside native report data", async () => {
+    registerTestWidgetContentKind("report");
+    const { mock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir: tempDirs.make("openclaw-report-plugin-"),
+      agentSessionKey: "agent:main:report-plugin",
+      callGateway,
+    });
+    const result = await tool.execute("registered-report", {
+      title: "Plugin report",
+      kind: "report",
+      widget_code: "diagram:ready",
+      pin: true,
+    });
+    expect(result.details).toMatchObject({ kind: "canvas", view: { id: expect.any(String) } });
+    expect(mock).toHaveBeenCalledWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: { kind: "registered", contentKind: "report", source: "diagram:ready" },
+      }),
+    );
+  });
+
   it("pins, updates and reopens a report for a global agent without a document", async () => {
     const target = { sessionKey: "global", agentId: "research" };
     const stateDir = tempDirs.make("openclaw-native-report-");
@@ -123,9 +147,31 @@ describe("native report authoring", () => {
       props: { blocks: [{ type: "text", text: "Hello", script: "ignored" }] },
     },
     {
+      label: "unsupported blocks",
+      props: { blocks: [{ type: "image", url: "https://example.com/image.png" }] },
+    },
+    {
       label: "script links",
       props: {
         blocks: [{ type: "links", items: [{ label: "Invalid", url: "javascript:void(0)" }] }],
+      },
+    },
+    {
+      label: "mismatched table rows",
+      props: { blocks: [{ type: "table", columns: ["A", "B"], rows: [["one"]] }] },
+    },
+    {
+      label: "too many points",
+      props: {
+        blocks: [
+          { type: "chart", points: Array.from({ length: 41 }, () => ({ label: "A", value: 1 })) },
+        ],
+      },
+    },
+    {
+      label: "oversized UTF-8 data",
+      props: {
+        blocks: Array.from({ length: 3 }, () => ({ type: "text", text: "é".repeat(2_000) })),
       },
     },
   ])("rejects $label at the storage owner without changing the saved report", async ({ props }) => {

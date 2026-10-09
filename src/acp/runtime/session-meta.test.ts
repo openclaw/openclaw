@@ -500,8 +500,15 @@ describe("ACP raw alias lifecycle", () => {
   );
 });
 
-it("publishes canonical ACP identity only after commit", async () => {
-  const databaseKey = buildAcpDatabaseSessionKey("global", "ops");
+it.each([
+  {
+    databaseKey: buildAcpDatabaseSessionKey("global", "ops"),
+    targets: [{ agentId: "ops", sessionKey: "global" }],
+  },
+  { databaseKey: "@agent:ops:global", targets: [] },
+  { databaseKey: "agent:main:acp:project", targets: [] },
+  { databaseKey: "agent:MAIN:acp:PROJECT", targets: [] },
+])("publishes only canonical ACP identities after commit for $databaseKey", async (fixture) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { db } = openOpenClawStateDatabase({ env });
     const observed: Array<{ change: SessionRowChange; transaction: boolean; row: unknown }> = [];
@@ -509,13 +516,13 @@ it("publishes canonical ACP identity only after commit", async () => {
       observed.push({
         change,
         transaction: db.isTransaction,
-        row: selectAcpSessionRow(db, databaseKey)?.runtime_session_name,
+        row: selectAcpSessionRow(db, fixture.databaseKey)?.runtime_session_name,
       });
     });
     const write = () =>
       writeAcpSessionMetaForMigration({
         env,
-        sessionKey: databaseKey,
+        sessionKey: fixture.databaseKey,
         meta: {
           backend: "fixture",
           agent: "fixture",
@@ -538,9 +545,13 @@ it("publishes canonical ACP identity only after commit", async () => {
       ).toThrow("rollback");
       expect(observed).toEqual([]);
       write();
-      expect(observed).toEqual([
-        { change: { agentId: "ops", sessionKey: "global" }, transaction: false, row: "committed" },
-      ]);
+      expect(observed).toEqual(
+        fixture.targets.map((change) => ({
+          change,
+          transaction: false,
+          row: "committed",
+        })),
+      );
     } finally {
       unsubscribe();
     }

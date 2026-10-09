@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../../infra/kysely-sync.js";
 import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../../session-cards/progress-card-store.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -32,6 +36,62 @@ type LegacyMainSessionMigrationOutcomeKind = Awaited<
 >["outcomes"][number]["kind"];
 
 describe("legacy main session migration", () => {
+  it("migrates an in-place alias atomically to the owner key", async () => {
+    const storePath = path.join(tempDirs.make("in-place-migration-"), "sessions.sqlite");
+    const fixture = createFixture({
+      agents: { entries: { ops: {} } },
+      session: { store: storePath },
+    });
+    seedClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:main:chat" });
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionProgressCard(database.db, "agent:main:chat", {
+          markdown: "Keep working on the existing task",
+        });
+        database.db
+          .prepare(
+            "INSERT INTO heartbeat_outcomes (session_key, run_session_key, outcome, summary, occurred_at, updated_at) VALUES (?, ?, 'progress', 'Still working', 10, 10)",
+          )
+          .run("agent:main:chat", "agent:main:chat");
+      },
+      { agentId: "main", path: storePath },
+    );
+
+    const { result, committed } = await recordHarnessDeletions(() =>
+      migrateLegacyMainSessionKeys({
+        cfg: fixture.cfg,
+        env: fixture.env,
+        mode: "doctor-fix",
+      }),
+    );
+
+    expect(outcomeKinds(result)).toContain("migrated-in-place");
+    expect(committed).toEqual(["agent:main:chat"]);
+    expect(
+      readClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:main:chat" }),
+    ).toBeUndefined();
+    expect(
+      readClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:ops:chat" }),
+    ).toBeDefined();
+    const migratedArtifacts = runOpenClawAgentWriteTransaction(
+      (database) => ({
+        heartbeat: database.db
+          .prepare("SELECT session_key, run_session_key FROM heartbeat_outcomes")
+          .get(),
+        progressCard: readSessionProgressCard(database.db, "agent:ops:chat"),
+      }),
+      { agentId: "main", path: storePath },
+    );
+    expect(migratedArtifacts).toMatchObject({
+      heartbeat: { session_key: "agent:ops:chat", run_session_key: "agent:ops:chat" },
+      progressCard: {
+        markdown: "Keep working on the existing task",
+        revision: 1,
+        sessionKey: "agent:ops:chat",
+      },
+    });
+  });
+
   const closedOutcomeCases = [
     {
       kind: "not-armed",
@@ -395,6 +455,22 @@ function recordTranscriptReads() {
       }),
     );
 }
+
+it("rejects startup when session-store discovery fails", async () => {
+  const stateDir = tempDirs.make("openclaw-startup-discovery-");
+  await expect(
+    runSessionStartupMigration({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      log: { info: vi.fn(), warn: vi.fn() },
+      deps: {
+        resolveAllAgentSessionStoreTargetsSync() {
+          throw new Error("session-store discovery failed");
+        },
+      },
+    }),
+  ).rejects.toThrow("session-store discovery failed");
+});
 
 it("reports legacy session repairs without rewriting stored claims at startup", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-doctor-only-"));

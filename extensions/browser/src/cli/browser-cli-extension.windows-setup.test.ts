@@ -147,24 +147,29 @@ async function setup() {
 }
 
 describe("Windows saved selection through the registered setup CLI", () => {
-  it("recovers current work for selector-free verify", async () => {
+  it.each(["verify", "install"])("recovers current work for selector-free %s", async (action) => {
     const f = await setup();
-    await f.run("verify");
+    await f.run(action);
     expect(f.exit).not.toHaveBeenCalled();
     expect(f.json).toHaveBeenCalledWith(
       expect.objectContaining({
         target: expect.objectContaining({ profile: "work", relayPort: 19444 }),
       }),
     );
-    expect(f.mutations()).toHaveLength(0);
+    expect(f.mutations()).toHaveLength(action === "install" ? 1 : 0);
     expect(f.manage.mock.calls.map(([, r]) => [r.action, r.context?.browserProfile])).toEqual([
       ["inspect", "chrome"],
       ["inspect", "work"],
       ["inspect", "work"],
+      ...(action === "install" ? [["install", "work"]] : []),
     ]);
-    expect(boundary.connect).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: "work", port: 19444 }),
-    );
+    if (action === "verify") {
+      expect(boundary.connect).toHaveBeenCalledWith(
+        expect.objectContaining({ profile: "work", port: 19444 }),
+      );
+    } else {
+      expect(boundary.readToken).not.toHaveBeenCalled();
+    }
     expect(JSON.stringify(f.json.mock.calls)).not.toContain(f.identity.localAppData);
   });
   it("refuses an explicit different context without discovering or retrying another profile", async () => {

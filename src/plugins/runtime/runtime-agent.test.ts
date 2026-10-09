@@ -189,6 +189,37 @@ describe("plugin runtime session creation", () => {
     });
   });
 
+  it("does not run initialization when the durable initial row cannot be written", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-runtime-session-create-initial-write-failure" },
+      async (state) => {
+        const runtime = createRuntimeAgent();
+        const key = "agent:main:dashboard:codex-initial-write-failure";
+        fs.mkdirSync(path.join(state.agentDir(), "openclaw-agent.sqlite"), { recursive: true });
+        let initializerRan = false;
+
+        await expect(
+          runtime.session.createSessionEntry({
+            cfg: {},
+            key,
+            initialEntry: {
+              agentHarnessId: "codex",
+              pluginExtensions: {
+                codex: { supervision: { initializing: true } },
+              },
+            },
+            afterCreate: async () => {
+              initializerRan = true;
+              return { pluginExtensions: {} };
+            },
+          }),
+        ).rejects.toThrow();
+
+        expect(initializerRan).toBe(false);
+      },
+    );
+  });
+
   it("rolls back the original entry and transcript when final patch persistence fails", async () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-final-patch-rollback" },

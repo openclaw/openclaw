@@ -876,6 +876,28 @@ it("carries an actual typed lease refusal through Doctor IPC, finalization and p
   expect(JSON.stringify({ result, failed, publicFact })).not.toContain(privateCause);
 });
 
+it("retains the typed refusal and restoration failure in the aggregate", async () => {
+  const cause = new OpenClawAgentDatabaseLeaseActiveError(privateCause);
+  const restore = new Error("synthetic restoration failure");
+  boundary.lease.mockImplementation(() => {
+    throw cause;
+  });
+  boundary.resume.mockRejectedValue(restore);
+  const refusal: unknown = await begin().catch((error: unknown) => error);
+  expect(refusal).toBeInstanceOf(AggregateError);
+  expect(refusal).toMatchObject({
+    cause: restore,
+    errors: [expect.any(UpdateDoctorError), restore],
+  });
+  expect(collectNestedErrorCandidates(refusal)).toContain(cause);
+  expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([
+    { check: "doctor", code: leaseCode, message: leaseGuidance },
+  ]);
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.complete).toHaveBeenCalledOnce();
+  expect(boundary.restart).not.toHaveBeenCalled();
+});
+
 it("does not settle a typed refusal while command cleanup remains uncertain", async () => {
   const barrier = cleanupBarrier();
   const cause = new OpenClawAgentDatabaseLeaseActiveError(privateCause);

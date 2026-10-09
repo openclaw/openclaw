@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("show_widget current-channel presentation", () => {
-  it("prefers the channel presenter without an inline client", async () => {
+  it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
     const stateDir = tempDirs.make("openclaw-widget-presenter-");
     const present = vi.fn(async () => ({
       ok: true as const,
@@ -54,7 +54,7 @@ describe("show_widget current-channel presentation", () => {
     const tool = createShowWidgetTool({
       stateDir,
       sessionId: "current-channel",
-      inlineClientAvailable: false,
+      inlineClientAvailable: inlineClient,
       presenters: [presenter],
       presenterContext: context,
     });

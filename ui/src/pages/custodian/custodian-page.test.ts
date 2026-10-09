@@ -185,6 +185,45 @@ describe("custodian page", () => {
     expect(page.querySelector(".agent-chat__composer-shell")).not.toBeNull();
   });
 
+  it("refreshes durable rows for a same-ownership client replacement", async () => {
+    let historyCalls = 0;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "openclaw.chat.history") {
+        historyCalls += 1;
+        return {
+          turns:
+            historyCalls === 1
+              ? [{ role: "user", text: "Earlier state", at: 1 }]
+              : [
+                  { role: "user", text: "Earlier state", at: 1 },
+                  { role: "assistant", text: "Completed while away", at: 2 },
+                ],
+        };
+      }
+      if (method === "openclaw.chat") {
+        return chatReply("Live welcome");
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const { context, setGatewaySnapshot } = createContext(request, [
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewaySnapshot({ client: { request } as unknown as GatewayBrowserClient });
+    await waitForFast(() => expect(page.textContent).toContain("Completed while away"));
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
+    expect(page.querySelector(".chat-group.user")?.textContent).toContain("Earlier state");
+    expect(page.textContent).not.toContain("Live welcome");
+  });
+
   it("resolves a pending ordinary turn from durable history after client replacement", async () => {
     const pending = createDeferred<Reply>();
     const request = vi
@@ -813,6 +852,45 @@ describe("custodian page session lifecycle", () => {
     await waitForFast(() => expect(page.textContent).toContain("Ready."));
     return page;
   }
+
+  it.each([false, true])(
+    "keeps the live session after a failed ordinary send (sent=%s)",
+    async (sent) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(reply("Ready."))
+        .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+          if (sent) {
+            options?.onSent?.();
+          }
+          return Promise.reject(
+            new GatewayProtocolRequestError({
+              code: "UNAVAILABLE",
+              message: "Temporary request failure.",
+            }),
+          );
+        })
+        .mockResolvedValueOnce(reply("Still together."));
+      const page = await mountReady(request);
+      await fill(page, "textarea", "first try");
+      button(page, ".chat-send-btn").click();
+      await waitForFast(() => expect(page.textContent).toContain("Temporary request failure."));
+      expect(page.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(
+        sent ? "" : "first try",
+      );
+      expect(page.store.messages.filter((message) => message.role === "user")).toHaveLength(
+        sent ? 1 : 0,
+      );
+      await fill(page, "textarea", "second try");
+      button(page, ".chat-send-btn").click();
+      await waitForFast(() => expect(page.textContent).toContain("Still together."));
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls[2]?.[1]).toMatchObject({
+        sessionId: "engine-session",
+        message: "second try",
+      });
+    },
+  );
 
   it("retires sensitive input when cancelling an invalidated session", async () => {
     const request = vi

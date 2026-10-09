@@ -79,6 +79,10 @@ async function withAcmeSpeechProvider(run: () => Promise<void>) {
           id: "acme",
           label: "Acme Speech",
           isConfigured: () => true,
+          resolveTalkConfig: ({ talkProviderConfig }) => ({
+            ...talkProviderConfig,
+            resolvedBy: "acme-test-provider",
+          }),
           synthesize: async () => {
             throw new Error("synthesize should be mocked at the handler boundary");
           },
@@ -125,7 +129,14 @@ describe("gateway talk runtime", () => {
       });
 
       expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-      expect(expectSingleSynthesizeSpeechCall().text).toBe(CODE_HEAVY_SPOKEN_FALLBACK);
+      const synthesis = expectSingleSynthesizeSpeechCall();
+      expect(synthesis.text).toBe(CODE_HEAVY_SPOKEN_FALLBACK);
+      expect(synthesis.cfg).toMatchObject({
+        tts: {
+          provider: "acme",
+          providers: { acme: { resolvedBy: "acme-test-provider", voiceId: "plugin-voice" } },
+        },
+      });
     });
   });
 
