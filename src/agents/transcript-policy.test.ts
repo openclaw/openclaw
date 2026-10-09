@@ -12,6 +12,7 @@ import {
   validateAnthropicTurns,
 } from "./embedded-agent-helpers/turns.js";
 
+// mock-isolation: Policy resolution must not touch the real plugin registry cache.
 vi.mock("../plugins/loader.js", () => ({
   clearPluginRegistryLoadCache: vi.fn(),
 }));
