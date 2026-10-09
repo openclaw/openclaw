@@ -169,6 +169,106 @@ if (args[0] === "view") {
 });
 
 describe("recovery survivor evidence", () => {
+  it.each([false, true])(
+    "requires transcript destinations while accepting unused shared-index owners (database missing: %s)",
+    async (missingDatabase) => {
+      const root = temporary();
+      const artifacts = path.join(root, "artifacts");
+      const state = path.join(root, "state");
+      const sessions = path.join(state, "sessions");
+      const archive = path.join(state, "session-sqlite-import-archive");
+      const manifests = path.join(state, "session-sqlite-migration-runs");
+      for (const directory of [artifacts, sessions, archive, manifests]) {
+        fs.mkdirSync(directory, { recursive: true });
+      }
+      const store = path.join(sessions, "sessions.json");
+      const transcript = path.join(sessions, "old.jsonl");
+      writeRecoveryTranscript(transcript, "old", 3);
+      fs.writeFileSync(
+        store,
+        JSON.stringify({ "agent:main:old": { sessionId: "old", sessionFile: transcript } }),
+      );
+      const originals = [transcript, store].map((source) => ({
+        source,
+        disposition: "candidate",
+        identity: recoveryFileIdentity(source),
+      }));
+      const moves = originals.map((original, index) => {
+        const archivePath = path.join(archive, path.basename(original.source));
+        fs.renameSync(original.source, archivePath);
+        return {
+          kind: index === 0 ? "transcript" : "legacy-store",
+          sourcePath: original.source,
+          archivePath,
+          artifact: {
+            identity: original.identity,
+            classification: "imported",
+            disposal: { state: "retained" },
+          },
+        };
+      });
+      const database = path.join(state, "agents/main/agent/openclaw-agent.sqlite");
+      const unusedDatabase = path.join(state, "agents/ops/agent/openclaw-agent.sqlite");
+      const databaseBytes = "synthetic database bytes for the size observation";
+      if (!missingDatabase) {
+        fs.mkdirSync(path.dirname(database), { recursive: true });
+        fs.writeFileSync(database, databaseBytes);
+      }
+      fs.writeFileSync(
+        path.join(manifests, "session-sqlite-fixture.json"),
+        JSON.stringify({
+          manifestVersion: 3,
+          runId: "session-sqlite-fixture",
+          completedAt: "2026-09-26T00:00:00.000Z",
+          targets: [
+            { agentId: "main", storePath: store, sqlitePath: database, completedMoves: moves },
+            {
+              agentId: "ops",
+              storePath: store,
+              sqlitePath: unusedDatabase,
+              completedMoves: [moves[1]],
+            },
+          ],
+        }),
+      );
+      fs.writeFileSync(
+        path.join(artifacts, "recovery-fixture.json"),
+        JSON.stringify({
+          originals,
+          spec: { sessions: 1, eventsPerSession: 3 },
+          preDoctorPaths: [],
+        }),
+      );
+      fs.writeFileSync(path.join(artifacts, "recovery-update-metrics.log"), "");
+      const evidence = path.join(artifacts, "recovery-evidence.json");
+      const result = await runNodeScript(
+        [path.resolve("scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs"), "migrated"],
+        {
+          HOME: root,
+          TMPDIR: root,
+          OPENCLAW_STATE_DIR: state,
+          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+        },
+        10_000,
+      );
+      expect(result.error).toBeUndefined();
+      expect(fs.existsSync(unusedDatabase)).toBe(false);
+      if (missingDatabase) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ENOENT");
+        expect(result.stderr).toContain(database);
+        expect(fs.existsSync(evidence)).toBe(false);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
+          migrationBeforeStandaloneDoctor: true,
+          destinations: [{ file: database, bytes: Buffer.byteLength(databaseBytes) }],
+        });
+      }
+    },
+  );
+
   it("uses the existing volume controls and rejects unsafe counts", () => {
     expect(recoveryVolumeSpec({})).toEqual({ sessions: 2, eventsPerSession: 8 });
     expect(

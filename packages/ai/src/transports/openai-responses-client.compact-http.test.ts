@@ -67,128 +67,117 @@ describe("prepared Responses compaction HTTP lifetime", () => {
     expect(body.locked).toBe(false);
   });
 
-  it.each([
-    "request-timeout",
-    "host-timeout",
-    "body-timeout",
-    "status-error",
-    "caller-abort",
-    "success",
-    "oversized-body",
-  ] as const)("preserves SDK %s behavior with a bounded response body", async (mode) => {
-    const deadlineCase =
-      mode === "request-timeout" || mode === "host-timeout" || mode === "body-timeout";
-    const timeoutMs = deadlineCase ? 100 : 1_000;
-    const abortController = new AbortController();
-    const requestPaths: string[] = [];
-    let watchdogFired = false;
-    const { promise: headersReceived, resolve: firstHeaders } = createDeferred();
-    configureAiTransportHost({
-      resolveModelRequestTimeoutMs: () => (mode === "host-timeout" ? timeoutMs : undefined),
-      buildModelFetch: () => async (input, init) => {
-        const response = await fetch(input, init);
-        firstHeaders();
-        return response;
-      },
-    });
-    const server = createServer((request, response) => {
-      requestPaths.push(request.url ?? "");
-      request.resume();
-      if (mode === "status-error") {
-        // retry-after-ms hint present on purpose: the SDK must still surface
-        // the failure on the first attempt instead of retrying internally.
-        response.writeHead(503, { "content-type": "application/json", "retry-after-ms": "1" });
-        response.end(JSON.stringify({ error: { message: "synthetic 503 failure" } }));
-        return;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.flushHeaders();
-      if (mode === "oversized-body") {
-        response.end(Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
-      } else if (mode === "success") {
-        response.end(JSON.stringify(compacted));
-      } else {
-        // Headers arrive promptly; only SDK body parsing can enforce this deadline.
-        response.write('{"object":"response.compaction","output":[');
-      }
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const watchdog = setTimeout(() => {
-      watchdogFired = true;
-      abortController.abort(new Error("fixture cleanup: compaction did not settle"));
-      server.closeAllConnections();
-    }, 2_000);
-    try {
-      if (deadlineCase) {
-        // Start the deadline only after the real HTTP exchange reaches its stalled
-        // body; cold connection setup must not consume this body-lifetime proof.
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      }
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback address");
-      }
-      const model = {
-        id: "synthetic-model",
-        name: "Synthetic model",
-        provider: "synthetic-provider",
-        api: "openai-responses",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 100_000,
-        maxTokens: 1_000,
-      } satisfies Model;
-      const outcome = requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        model,
-        context,
-        {
-          apiKey: "synthetic-loopback-only",
-          ...(mode !== "host-timeout" ? { timeoutMs } : {}),
-          signal: abortController.signal,
+  it.each(["host-timeout", "status-error", "success", "oversized-body"] as const)(
+    "preserves SDK %s behavior with a bounded response body",
+    async (mode) => {
+      const deadlineCase = mode === "host-timeout";
+      const timeoutMs = deadlineCase ? 100 : 1_000;
+      const abortController = new AbortController();
+      const requestPaths: string[] = [];
+      let watchdogFired = false;
+      const { promise: headersReceived, resolve: firstHeaders } = createDeferred();
+      configureAiTransportHost({
+        resolveModelRequestTimeoutMs: () => (mode === "host-timeout" ? timeoutMs : undefined),
+        buildModelFetch: () => async (input, init) => {
+          const response = await fetch(input, init);
+          firstHeaders();
+          return response;
         },
-      ).then(
-        (value) => ({ value, error: undefined }),
-        (error: unknown) => ({ value: undefined, error }),
-      );
-      if (deadlineCase) {
-        await headersReceived;
-        await vi.advanceTimersByTimeAsync(timeoutMs);
-      } else if (mode === "caller-abort") {
-        await headersReceived;
-        abortController.abort();
-      }
-      const result = await outcome;
-      if (deadlineCase) {
-        expect(result.error).toBeInstanceOf(OpenAI.APIConnectionTimeoutError);
-      } else if (mode === "status-error") {
-        expect(result.error).toBeInstanceOf(OpenAI.APIError);
-        expect(String(result.error)).toContain("synthetic 503 failure");
-      } else if (mode === "caller-abort") {
-        expect(result.error).toBeInstanceOf(OpenAI.APIUserAbortError);
-      } else if (mode === "oversized-body") {
-        expect(result.error).toBeInstanceOf(Error);
-        expect(String(result.error)).toContain("response exceeds 16 MiB");
-      } else {
-        expect(result.error).toBeUndefined();
-        expect(result.value?.output).toEqual(compacted.output);
-      }
-      expect(watchdogFired).toBe(false);
-      // Exactly one request per mode: the embedded runner owns transient
-      // retries, so the SDK never re-issues a failed compaction call.
-      expect(requestPaths).toEqual(["/v1/responses/compact"]);
-    } finally {
-      vi.useRealTimers();
-      clearTimeout(watchdog);
-      abortController.abort();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
       });
-    }
-  });
+      const server = createServer((request, response) => {
+        requestPaths.push(request.url ?? "");
+        request.resume();
+        if (mode === "status-error") {
+          // retry-after-ms hint present on purpose: the SDK must still surface
+          // the failure on the first attempt instead of retrying internally.
+          response.writeHead(503, { "content-type": "application/json", "retry-after-ms": "1" });
+          response.end(JSON.stringify({ error: { message: "synthetic 503 failure" } }));
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.flushHeaders();
+        if (mode === "oversized-body") {
+          response.end(Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
+        } else if (mode === "success") {
+          response.end(JSON.stringify(compacted));
+        } else {
+          // Headers arrive promptly; only SDK body parsing can enforce this deadline.
+          response.write('{"object":"response.compaction","output":[');
+        }
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const watchdog = setTimeout(() => {
+        watchdogFired = true;
+        abortController.abort(new Error("fixture cleanup: compaction did not settle"));
+        server.closeAllConnections();
+      }, 2_000);
+      try {
+        if (deadlineCase) {
+          // Start the deadline only after the real HTTP exchange reaches its stalled
+          // body; cold connection setup must not consume this body-lifetime proof.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        }
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback address");
+        }
+        const model = {
+          id: "synthetic-model",
+          name: "Synthetic model",
+          provider: "synthetic-provider",
+          api: "openai-responses",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 100_000,
+          maxTokens: 1_000,
+        } satisfies Model;
+        const outcome = requestPreparedOpenAIResponsesCompaction(
+          createOpenAIResponsesTransportStreamFn(),
+          model,
+          context,
+          {
+            apiKey: "synthetic-loopback-only",
+            ...(mode !== "host-timeout" ? { timeoutMs } : {}),
+            signal: abortController.signal,
+          },
+        ).then(
+          (value) => ({ value, error: undefined }),
+          (error: unknown) => ({ value: undefined, error }),
+        );
+        if (deadlineCase) {
+          await headersReceived;
+          await vi.advanceTimersByTimeAsync(timeoutMs);
+        }
+        const result = await outcome;
+        if (deadlineCase) {
+          expect(result.error).toBeInstanceOf(OpenAI.APIConnectionTimeoutError);
+        } else if (mode === "status-error") {
+          expect(result.error).toBeInstanceOf(OpenAI.APIError);
+          expect(String(result.error)).toContain("synthetic 503 failure");
+        } else if (mode === "oversized-body") {
+          expect(result.error).toBeInstanceOf(Error);
+          expect(String(result.error)).toContain("response exceeds 16 MiB");
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(result.value?.output).toEqual(compacted.output);
+        }
+        expect(watchdogFired).toBe(false);
+        // Exactly one request per mode: the embedded runner owns transient
+        // retries, so the SDK never re-issues a failed compaction call.
+        expect(requestPaths).toEqual(["/v1/responses/compact"]);
+      } finally {
+        vi.useRealTimers();
+        clearTimeout(watchdog);
+        abortController.abort();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
 });

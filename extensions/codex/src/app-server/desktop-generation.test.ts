@@ -26,6 +26,7 @@ describe("Codex desktop generation owner", () => {
     const reads: ReturnType<typeof deferred<string>>[] = [];
     const changed = vi.fn();
     const owner = createCodexDesktopGenerationOwner({
+      signal: new AbortController().signal,
       readFingerprint: () => {
         const read = deferred<string>();
         reads.push(read);
@@ -58,6 +59,7 @@ describe("Codex desktop generation owner", () => {
     const readFingerprint = vi.fn(async () => fingerprint);
     const changed = vi.fn();
     const owner = createCodexDesktopGenerationOwner({
+      signal: new AbortController().signal,
       readFingerprint,
       onGenerationChange: changed,
     });
@@ -77,51 +79,26 @@ describe("Codex desktop generation owner", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it("keeps a failed refresh dirty for the next waiter", async () => {
-    vi.useFakeTimers();
-    const readFingerprint = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error("transient update"))
-      .mockResolvedValue("Y");
-    const owner = createCodexDesktopGenerationOwner({
-      readFingerprint,
-    });
-    owner.markDirty();
-
-    await expect(owner.wait()).rejects.toThrow("transient update");
-    const retry = owner.wait();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(retry).resolves.toEqual({ epoch: 1, fingerprint: "Y" });
-  });
-
-  it("detects changes in every desktop candidate that can supply a fallback artifact", async () => {
-    await withTempDir("openclaw-codex-generation-fingerprint-", async (root) => {
-      const chatGpt = candidate(root, "ChatGPT.app");
-      const codex = candidate(root, "Codex.app");
-      await Promise.all([
-        writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
-        writeCommand(codex.appServerCommandPath, "codex-x"),
-      ]);
-      const initial = await readMacOSDesktopGenerationFingerprint([chatGpt, codex]);
-
-      await writeCommand(codex.appServerCommandPath, "codex-y");
-      await expect(readMacOSDesktopGenerationFingerprint([chatGpt, codex])).resolves.not.toBe(
-        initial,
-      );
-    });
-  });
-
-  it("settles same-version Computer Use plugin content changes as a new generation", async () => {
+  it.each([
+    "plugins/openai-bundled/plugins/unified-computer-use",
+    "cua_node/lib/node_modules/@oai/cua-repl",
+  ])("settles same-version %s content changes as a new generation", async (artifactRelative) => {
     await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
       const chatGpt = candidate(root, "ChatGPT.app");
-      const pluginRoot = path.join(chatGpt.bundledMarketplacePath, "plugins", "computer-use");
+      const pluginRoot = path.join(
+        chatGpt.appBundlePath,
+        "Contents",
+        "Resources",
+        artifactRelative,
+      );
+      const pluginName = path.basename(pluginRoot);
       await Promise.all([
         writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
         fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true }),
       ]);
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        JSON.stringify({ name: "computer-use", version: "1.0.0" }),
+        JSON.stringify({ name: pluginName, version: "1.0.0" }),
       );
       await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-x");
       const initialFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
@@ -133,6 +110,7 @@ describe("Codex desktop generation owner", () => {
       vi.useFakeTimers();
       let fingerprint = initialFingerprint;
       const owner = createCodexDesktopGenerationOwner({
+        signal: new AbortController().signal,
         readFingerprint: async () => fingerprint,
       });
       const initial = owner.refresh();
@@ -162,8 +140,23 @@ function candidate(root: string, appName: "ChatGPT.app" | "Codex.app") {
   return {
     appName,
     appBundlePath,
-    appServerCommandPath: path.join(appBundlePath, "Contents", "Resources", "codex"),
-    bundledMarketplacePath: path.join(appBundlePath, "marketplace"),
+    appServerCommandPath: path.join(
+      appBundlePath,
+      "Contents",
+      "Resources",
+      "codex-cli",
+      "CodexCLI.app",
+      "Contents",
+      "MacOS",
+      "codex",
+    ),
+    bundledMarketplacePath: path.join(
+      appBundlePath,
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+    ),
     computerUseServiceAppPaths: [],
   };
 }

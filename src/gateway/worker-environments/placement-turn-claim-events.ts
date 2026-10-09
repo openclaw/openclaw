@@ -1,20 +1,37 @@
-import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { DatabaseSync } from "node:sqlite";
+import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
+  captureAgentRunDelegatedSourceAssertion,
+  claimAgentRunApprovalAuthority,
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../../process/gateway-work-admission.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
+import { safeEqualSecret } from "../../security/secret-equal.js";
+import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
+import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 
@@ -45,24 +62,58 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   delegatedAuthority: AgentRunDelegatedAuthority;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Original presence reader, retained on the Gateway without a worker-writable claim. */
+  assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
   sessionKey: string;
+  sessionTarget: Readonly<
+    BoundAgentRunSessionTarget & ReturnType<typeof captureSessionTranscriptTargetBinding>
+  >;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
-export type WorkerTurnExecutionIdentityCapability = Readonly<{
-  run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
+export type WorkerTurnTranscriptSource = Pick<
+  WorkerTurnExecutionIdentity,
+  "sessionTarget" | "receiptAuthority"
+>;
+
+export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
+  Readonly<{
+    assertPresenceSourceCurrent?: () => void;
+    run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
+  }>;
+
+type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
+
+export type WorkerTurnPromptCacheContext = Readonly<{
+  boundaryCount: number;
+  promptCacheKey?: string;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
 }>;
 
 type BoundWorkerTurnOwner = {
   capability: WorkerTurnExecutionIdentityCapability;
-  claim: WorkerSessionTurnClaim;
   claimKey: string;
   runtime: {
+    assertActive: () => void;
+    toolSurface?: WorkerGatewayToolRuntime;
+    prepareReplyMedia?: WorkerReplyMediaPreparer;
     delegatedAuthority: AgentRunDelegatedAuthority;
+    approvalLifetime: AbortController;
+    finishing?: {
+      credentialHash: string;
+      seq: number;
+      outcome: WorkerTurnFinishingOutcome;
+      isAckCurrent?: () => boolean;
+    };
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+    promptCacheContext?: WorkerTurnPromptCacheContext;
     scope?: GatewayRootWorkAdmissionContinuationScope;
-    store: WorkerTurnExecutionIdentityStore;
+    claimAuthority: PlacementTurnClaimAuthority;
+    stopWatchingAuthority?: () => void;
   };
 };
 
@@ -71,7 +122,7 @@ const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwn
   (ownersByPath) => {
     for (const owners of ownersByPath.values()) {
       for (const owner of owners.values()) {
-        owner.runtime?.scope?.release();
+        closeBoundOwner(owner);
       }
     }
     ownersByPath.clear();
@@ -79,60 +130,134 @@ const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwn
 );
 
 const WORKER_TURN_EXECUTION_IDENTITY_PATH = Symbol("workerTurnExecutionIdentityPath");
-type WorkerTurnExecutionIdentityStore = {
-  validateTurnClaim(claim: WorkerSessionTurnClaim): boolean;
+export type WorkerTurnExecutionIdentityStore = {
+  prepareTurnClaimAuthority(claim: WorkerSessionTurnClaim): Promise<PlacementTurnClaimAuthority>;
   [WORKER_TURN_EXECUTION_IDENTITY_PATH]?: string;
 };
 
 function claimKey(claim: WorkerSessionTurnClaim): string {
   return JSON.stringify([
+    claim.sessionId,
     claim.claimId,
     claim.runId,
     claim.placementGeneration,
     claim.owner.kind,
-    claim.owner.kind === "worker" ? claim.owner.environmentId : null,
-    claim.owner.kind === "worker" ? claim.owner.ownerEpoch : null,
+    claim.owner.environmentId ?? null,
+    claim.owner.ownerEpoch ?? null,
   ]);
 }
 
-/** Bind every worker to its live run; diagnostic provenance remains optional. */
-export function bindWorkerTurnOwner(
+/** Bind every worker to its live run and original operator source when one exists. */
+export async function bindWorkerTurnOwner(
   store: WorkerTurnExecutionIdentityStore,
-  claim: WorkerSessionTurnClaim,
+  requestedClaim: WorkerSessionTurnClaim,
   token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
-  source: { agentId: string; sessionKey: string },
+  requestedSource: BoundAgentRunSessionTarget,
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
-): void {
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+  assertPresenceSourceCurrent?: () => void,
+  promptCacheContext?: WorkerTurnPromptCacheContext,
+): Promise<
+  Readonly<{
+    capability: WorkerTurnExecutionIdentityCapability;
+    takeFinishingOutcome: (credentialHash: string) => WorkerTurnFinishingOutcome | undefined;
+  }>
+> {
+  let claim = structuredClone(requestedClaim);
+  const sessionTarget = Object.freeze(captureSessionTranscriptTargetBinding(requestedSource));
+  const preparedPromptCacheContext = promptCacheContext
+    ? Object.freeze({ ...promptCacheContext })
+    : undefined;
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
-  const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-  if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
+  const runAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+  if (!path || !runAuthority) {
     scope?.release();
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
-  const owners = workerTurnOwners.get(path) ?? new Map();
-  const assertActive = () => {
+  let claimAuthority: PlacementTurnClaimAuthority | undefined;
+  const approvalLifetime = new AbortController();
+  let delegatedAuthority: AgentRunDelegatedAuthority;
+  try {
+    const prepared = await store.prepareTurnClaimAuthority(claim);
+    claimAuthority = prepared;
+    const assertPreparedCurrent = () => {
+      if (
+        !prepared.isCurrent() ||
+        !validateAgentRunDelegatedAuthority(runAuthority) ||
+        sessionTarget.sessionId !== claim.sessionId ||
+        prepared.identity.agentId !== sessionTarget.agentId ||
+        prepared.identity.sessionKey !== sessionTarget.sessionKey
+      ) {
+        throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+      }
+    };
+    assertPreparedCurrent();
     assertRunActive();
+    operatorAuthority?.assertCurrent();
+    assertPreparedCurrent();
+    delegatedAuthority = claimAgentRunApprovalAuthority(runAuthority, [approvalLifetime.signal]);
+  } catch (error) {
+    approvalLifetime.abort();
+    claimAuthority?.release();
+    scope?.release();
+    throw error;
+  }
+  const authority = claimAuthority;
+  claim = authority.claim;
+  const owners = workerTurnOwners.get(path) ?? new Map();
+  const refuseOwner: () => never = () => {
+    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+  };
+  const delegatedSource = captureAgentRunDelegatedSourceAssertion(delegatedAuthority, refuseOwner);
+  if (!delegatedSource) {
+    approvalLifetime.abort();
+    authority.release();
+    scope?.release();
+    refuseOwner();
+  }
+  const assertOwnerCurrent = () => {
     if (
       owners.get(claim.sessionId) !== owner ||
-      !store.validateTurnClaim(claim) ||
-      !validateAgentRunDelegatedAuthority(delegatedAuthority)
+      workerTurnOwners.get(path) !== owners ||
+      !authority.isCurrent()
     ) {
-      throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+      refuseOwner();
     }
+    delegatedSource.assertBinding();
   };
+  const assertActive = composeSessionSourceAssertion(
+    [
+      delegatedSource.assertCurrent,
+      assertRunActive,
+      operatorAuthority?.assertCurrent,
+      delegatedSource.assertCurrent,
+    ],
+    (assertSources) => {
+      // A closed claim must not consult its retired source. Callbacks can also revoke it.
+      assertOwnerCurrent();
+      assertSources();
+      assertOwnerCurrent();
+    },
+  );
   const identity = Object.freeze({
-    agentId: source.agentId,
+    agentId: sessionTarget.agentId,
     delegatedAuthority,
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
+    ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     receiptAuthority: assertActive,
-    sessionKey: source.sessionKey,
+    sessionKey: sessionTarget.sessionKey,
+    sessionTarget,
     turnClaim: claim,
   });
   const capability = Object.freeze({
+    sessionTarget,
+    receiptAuthority: assertActive,
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
       const result = await callback(identity);
@@ -143,20 +268,54 @@ export function bindWorkerTurnOwner(
   });
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
-  existing?.runtime.scope?.release();
   const owner: BoundWorkerTurnOwner = {
     capability,
-    claim,
     claimKey: currentClaimKey,
     runtime: {
+      assertActive,
       delegatedAuthority,
+      approvalLifetime,
       prepareAssistantTranscriptMessage,
+      promptCacheContext: preparedPromptCacheContext,
       scope: scope ?? undefined,
-      store,
+      claimAuthority: authority,
     },
   };
-  owners.set(claim.sessionId, owner);
-  workerTurnOwners.set(path, owners);
+  const closeOwner = () => {
+    if (owners.get(claim.sessionId) === owner) {
+      owners.delete(claim.sessionId);
+      if (owners.size === 0 && workerTurnOwners.get(path) === owners) {
+        workerTurnOwners.delete(path);
+      }
+    }
+    closeBoundOwner(owner);
+  };
+  try {
+    if (existing) {
+      closeBoundOwner(existing);
+    }
+    owners.set(claim.sessionId, owner);
+    workerTurnOwners.set(path, owners);
+    owner.runtime.stopWatchingAuthority = authority.onRevoked(closeOwner);
+    assertActive();
+  } catch (error) {
+    closeOwner();
+    throw error;
+  }
+  const takeFinishingOutcome = (credentialHash: string) => {
+    assertActive();
+    const finishing = owner.runtime.finishing;
+    if (
+      !finishing ||
+      !safeEqualSecret(finishing.credentialHash, credentialHash) ||
+      !finishing.isAckCurrent?.()
+    ) {
+      return undefined;
+    }
+    owner.runtime.finishing = undefined;
+    return finishing.outcome;
+  };
+  return Object.freeze({ capability, takeFinishingOutcome });
 }
 
 export function getWorkerTurnExecutionIdentityCapability(
@@ -165,13 +324,45 @@ export function getWorkerTurnExecutionIdentityCapability(
 ): WorkerTurnExecutionIdentityCapability | undefined {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const bound = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
-  return bound && bound.claimKey === claimKey(claim) && store.validateTurnClaim(claim)
+  return bound && bound.claimKey === claimKey(claim) && bound.runtime.claimAuthority.isCurrent()
     ? bound.capability
     : undefined;
 }
 
+/** Retain this operational owner's claim incarnation across an approval's awaited work. */
+export function captureWorkerTurnClaimCurrentness(
+  store: WorkerTurnExecutionIdentityStore,
+  claim: WorkerSessionTurnClaim,
+  delegatedAuthority: AgentRunDelegatedAuthority,
+): (() => boolean) | undefined {
+  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
+  const owners = path ? workerTurnOwners.get(path) : undefined;
+  const bound = owners?.get(claim.sessionId);
+  const capturedKey = claimKey(claim);
+  if (
+    !path ||
+    !bound ||
+    bound.claimKey !== capturedKey ||
+    !bound.runtime.claimAuthority.isCurrent()
+  ) {
+    return undefined;
+  }
+  const isBoundCurrent = () =>
+    claimKey(claim) === capturedKey &&
+    workerTurnOwners.get(path) === owners &&
+    owners?.get(claim.sessionId) === bound &&
+    bound.runtime.claimAuthority.isCurrent();
+  return () =>
+    isBoundCurrent() &&
+    validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
+    isBoundCurrent();
+}
+
 function resolveWorkerTurnRuntime(
-  identity: WorkerConnectionIdentity,
+  identity: Pick<
+    WorkerConnectionIdentity,
+    "turnClaim" | "sessionId" | "runId" | "environmentId" | "ownerEpoch"
+  >,
 ): BoundWorkerTurnOwner["runtime"] | undefined {
   const claim = identity.turnClaim;
   if (
@@ -200,12 +391,112 @@ function resolveWorkerTurnRuntime(
   if (
     !owner ||
     !runtime ||
-    !runtime.store.validateTurnClaim(owner.claim) ||
+    !runtime.claimAuthority.isCurrent() ||
     !validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
   ) {
     return undefined;
   }
   return runtime;
+}
+
+/** Cache identity follows the Gateway's admitted transcript, never worker-supplied history. */
+export function readWorkerTurnPromptCacheContext(
+  identity: WorkerConnectionIdentity,
+): WorkerTurnPromptCacheContext | undefined {
+  return resolveWorkerTurnRuntime(identity)?.promptCacheContext;
+}
+
+export function bindWorkerTurnCapabilities(
+  store: WorkerTurnExecutionIdentityStore,
+  claim: WorkerSessionTurnClaim,
+  capabilities: {
+    toolSurface: WorkerGatewayToolRuntime;
+    prepareReplyMedia?: WorkerReplyMediaPreparer;
+  },
+): void {
+  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
+  const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
+  if (
+    !owner ||
+    owner.claimKey !== claimKey(claim) ||
+    !owner.runtime.claimAuthority.isCurrent() ||
+    !validateAgentRunDelegatedAuthority(owner.runtime.delegatedAuthority)
+  ) {
+    throw new Error("Worker turn has no admitted tool surface owner");
+  }
+  owner.runtime.toolSurface?.abort();
+  Object.assign(owner.runtime, capabilities);
+}
+
+export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.prepareReplyMedia;
+}
+
+export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
+  return resolveWorkerTurnRuntime(identity)?.toolSurface;
+}
+
+/** Capture before buffering; delayed events must never bind to a replacement owner. */
+export function captureWorkerTurnFinishing(
+  identity: WorkerConnectionIdentity,
+  request: WorkerLiveEventParams,
+): (() => void) | undefined {
+  if (
+    request.runId !== identity.runId ||
+    request.runEpoch !== identity.ownerEpoch ||
+    request.event.kind !== "lifecycle" ||
+    request.event.payload.phase !== "finishing"
+  ) {
+    return undefined;
+  }
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (!runtime) {
+    return undefined;
+  }
+  const finishing = {
+    credentialHash: identity.credentialHash,
+    seq: request.seq,
+    outcome: {
+      error: request.event.payload.error,
+      replayInvalid: request.event.payload.replayInvalid,
+    },
+  };
+  return () => {
+    if (resolveWorkerTurnRuntime(identity) !== runtime) {
+      return;
+    }
+    try {
+      runtime.assertActive();
+      runtime.finishing = finishing;
+    } catch {
+      // Cancellation still drains its ACK, but cannot revive a closed turn's failure.
+    }
+  };
+}
+
+/** The durable ACK and its admission predicate belong to the same process turn. */
+export function acknowledgeWorkerTurnFinishing(
+  identity: WorkerConnectionIdentity,
+  ackedSeq: number,
+  isAckCurrent: () => boolean,
+): void {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  const finishing = runtime?.finishing;
+  if (
+    !runtime ||
+    !finishing ||
+    finishing.seq > ackedSeq ||
+    !safeEqualSecret(finishing.credentialHash, identity.credentialHash)
+  ) {
+    return;
+  }
+  try {
+    runtime.assertActive();
+    // Recheck at consumption too: credentials may rotate before the claim is released.
+    finishing.isAckCurrent = isAckCurrent;
+  } catch {
+    // Retaining error detail cannot change cancellation or terminal ACK semantics.
+  }
 }
 
 export function runWorkerTurnAdmissionContinuation<T>(
@@ -223,7 +514,7 @@ export function prepareWorkerTurnTranscriptMessage(
   return (
     resolveWorkerTurnRuntime(identity)?.prepareAssistantTranscriptMessage?.(
       message,
-      extractAssistantPhaseText(message),
+      extractAssistantTranscriptSourceText(message),
     ) ?? message
   );
 }
@@ -246,7 +537,7 @@ export function waitersFor(path: string, sessionId: string): Set<TurnClaimReleas
   return waiters;
 }
 
-export function signalTurnClaimRelease(path: string, sessionId: string): void {
+function signalTurnClaimRelease(path: string, sessionId: string): void {
   const bySession = turnClaimReleaseWaiters.get(path);
   const waiters = bySession?.get(sessionId);
   if (!bySession || !waiters) {
@@ -295,22 +586,58 @@ export function registerWorkerTurnClaimClosedHandler(
   };
 }
 
-export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTurnClaim): void {
+function closeBoundOwner(owner: BoundWorkerTurnOwner): void {
+  owner.runtime.toolSurface?.abort();
+  owner.runtime.approvalLifetime.abort();
+  owner.runtime.finishing = undefined;
+  owner.runtime.stopWatchingAuthority?.();
+  owner.runtime.stopWatchingAuthority = undefined;
+  try {
+    owner.runtime.scope?.release();
+  } finally {
+    owner.runtime.claimAuthority.release();
+  }
+}
+
+function closeWorkerTurnClaim(
+  path: string,
+  claim: WorkerSessionTurnClaim,
+  expectedOwner: BoundWorkerTurnOwner | undefined,
+): void {
   signalTurnClaimRelease(path, claim.sessionId);
   const owners = workerTurnOwners.get(path);
   const owner = owners?.get(claim.sessionId);
-  if (owner?.claimKey === claimKey(claim)) {
-    owner.runtime?.scope?.release();
+  if (owner && owner === expectedOwner && owner.claimKey === claimKey(claim)) {
+    closeBoundOwner(owner);
     owners?.delete(claim.sessionId);
     if (owners?.size === 0) {
       workerTurnOwners.delete(path);
     }
   }
-  for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {
-    try {
-      handler(claim);
-    } catch {
-      // Settlement observation cannot roll back the authoritative store transition.
-    }
+  notifyListeners(workerTurnClaimClosedHandlers.get(path) ?? [], claim);
+}
+
+export function prepareWorkerTurnClaimClosed(
+  path: string,
+  claim: WorkerSessionTurnClaim,
+): () => void {
+  const captured = structuredClone(claim);
+  const owner = workerTurnOwners.get(path)?.get(claim.sessionId);
+  return () => closeWorkerTurnClaim(path, captured, owner);
+}
+
+export function deferWorkerTurnClaimClosed(
+  db: DatabaseSync,
+  path: string,
+  claim: WorkerSessionTurnClaim,
+): void {
+  if (!deferSqlitePostCommitPublication(db, prepareWorkerTurnClaimClosed(path, claim))) {
+    throw new Error("Worker turn closure requires its owning transaction");
+  }
+}
+
+export function deferTurnClaimRelease(db: DatabaseSync, path: string, sessionId: string): void {
+  if (!deferSqlitePostCommitPublication(db, () => signalTurnClaimRelease(path, sessionId))) {
+    throw new Error("Worker turn release requires its owning transaction");
   }
 }

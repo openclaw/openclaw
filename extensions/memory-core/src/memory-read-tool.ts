@@ -20,42 +20,14 @@ type MemoryReadRequest = {
   signal?: AbortSignal;
 };
 
-function readWiki(params: MemoryReadRequest, signal: AbortSignal) {
-  return readMemoryCorpusSupplements({
-    lookup: params.relPath,
-    fromLine: params.from,
-    lineCount: params.lines,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-    signal,
-  });
-}
-
-function attemptValue<T>(attempt: MemoryCorpusAttempt<T>): T | null {
-  return attempt.outcome === "not-registered" ? null : attempt.value;
-}
-
-export async function executeWikiMemoryReadResult(params: MemoryReadRequest) {
-  return await runMemoryCorpusDeadline({
-    operation: "memory_get",
-    parentSignal: params.signal,
-    run: async (signal) => {
-      const wiki = await readWiki(params, signal);
-      const result =
-        attemptValue(wiki) ??
-        (wiki.outcome === "ok"
-          ? { status: "not_found" as const, path: params.relPath, text: "" as const }
-          : { path: params.relPath, text: "" });
-      return jsonResult({ ...result, ...composeMemoryCorpusMetadata([wiki]) });
-    },
-  });
+function attemptValue<T>(attempt: MemoryCorpusAttempt<T> | null): T | null {
+  return !attempt || attempt.outcome === "not-registered" ? null : attempt.value;
 }
 
 export async function executeMemoryReadResult(
   params: MemoryReadRequest & { read: () => Promise<MemoryReadResult> },
 ) {
-  if (params.requestedCorpus !== "all") {
+  if (params.requestedCorpus !== "all" && params.requestedCorpus !== "wiki") {
     try {
       return jsonResult(await params.read());
     } catch (error) {
@@ -73,13 +45,16 @@ export async function executeMemoryReadResult(
     parentSignal: params.signal,
     run: async (signal) => {
       const [memory, wiki] = await Promise.all([
-        attemptMemoryCorpus({
-          corpus: "memory",
+        params.requestedCorpus === "all" ? attemptMemoryCorpus({ signal, run: params.read }) : null,
+        readMemoryCorpusSupplements({
+          lookup: params.relPath,
+          fromLine: params.from,
+          lineCount: params.lines,
+          agentId: params.agentId,
+          agentSessionKey: params.agentSessionKey,
+          sandboxed: params.sandboxed,
           signal,
-          unavailableValue: null,
-          run: params.read,
         }),
-        readWiki(params, signal),
       ]);
       const memoryResult = attemptValue(memory);
       const wikiResult = attemptValue(wiki);
@@ -87,10 +62,13 @@ export async function executeMemoryReadResult(
         memoryResult?.status !== "not_found" && memoryResult !== null
           ? memoryResult
           : (wikiResult ??
-            (memory.outcome === "ok" || wiki.outcome === "ok"
+            (memory?.outcome === "ok" || wiki.outcome === "ok"
               ? { status: "not_found" as const, path: params.relPath, text: "" as const }
-              : { status: "error", path: params.relPath, text: "" }));
-      return jsonResult({ ...result, ...composeMemoryCorpusMetadata([memory, wiki]) });
+              : { ...(memory ? { status: "error" } : {}), path: params.relPath, text: "" }));
+      return jsonResult({
+        ...result,
+        ...composeMemoryCorpusMetadata(memory ? [memory, wiki] : [wiki]),
+      });
     },
   });
 }

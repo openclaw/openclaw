@@ -12,6 +12,7 @@ import type {
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setAgentFileValues } from "./agent-file-state.test-helpers.ts";
 import { loadAgentFileContent } from "./files.ts";
 import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
@@ -35,7 +36,7 @@ type TestAgentsPage = HTMLElement &
     selectDefaultAgentFile: (agentId: string) => Promise<void>;
     syncCurrentAgentFiles: (agents?: ApplicationContext["agents"]) => void;
     loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
-    saveSelectedAgentFile: (agentId: string, name: string, content: string) => void;
+    saveSelectedAgentFile: (agentId: string, name: string) => void;
     render: () => TemplateResult;
   };
 
@@ -98,7 +99,7 @@ describe("agent file lifecycle", () => {
     page.agentFilesLoading = false;
     await page.selectDefaultAgentFile("main");
 
-    expect(page.agentFileContents["AGENTS.md"]).toBe("# Instructions");
+    expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("# Instructions");
   });
 
   it("refreshes the active file base without replacing a dirty draft", async () => {
@@ -126,15 +127,15 @@ describe("agent file lifecycle", () => {
     page.agentsSelectedId = "main";
 
     await page.loadAgentFiles("main");
-    page.agentFileDrafts = { "AGENTS.md": "local draft" };
+    setAgentFileValues(page, "draft", { "AGENTS.md": "local draft" });
     authoritativeContent = "server revision 2";
 
     await page.loadAgentFiles("main", true);
 
     expect(refreshFiles).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(page.agentFileContents["AGENTS.md"]).toBe("server revision 2");
-    expect(page.agentFileDrafts["AGENTS.md"]).toBe("local draft");
+    expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("server revision 2");
+    expect(page.agentFileEditors["AGENTS.md"]?.draft).toBe("local draft");
   });
 
   it("keeps a rejected save visible without refreshing it away", async () => {
@@ -152,7 +153,8 @@ describe("agent file lifecycle", () => {
     setPageGateway(page, client);
     page.agentsSelectedId = "main";
 
-    page.saveSelectedAgentFile("main", "AGENTS.md", "updated");
+    setAgentFileValues(page, "draft", { "AGENTS.md": "updated" });
+    page.saveSelectedAgentFile("main", "AGENTS.md");
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(page.agentFilesError).toBe("workspace write failed"));
@@ -206,8 +208,8 @@ describe("agent file lifecycle", () => {
       page.routeData = { panel: "files" } as AgentsRouteData;
       page.agentFilesList = missingList;
       page.agentFileActive = missingFile.name;
-      page.agentFileContents = { [missingFile.name]: "" };
-      page.agentFileDrafts = { [missingFile.name]: savedFile.content };
+      setAgentFileValues(page, "content", { [missingFile.name]: "" });
+      setAgentFileValues(page, "draft", { [missingFile.name]: savedFile.content });
       const unsubscribe = agents.subscribe(() => page.syncCurrentAgentFiles(agents));
       const refresh =
         pendingRequest !== "file list"
@@ -219,10 +221,10 @@ describe("agent file lifecycle", () => {
         if (pendingRequest === "invalidated cache") {
           agents.invalidateFiles(["main"]);
         }
-        page.saveSelectedAgentFile("main", missingFile.name, savedFile.content);
+        page.saveSelectedAgentFile("main", missingFile.name);
         await vi.waitFor(() => {
           expect(page.agentFileSaving).toBe(false);
-          expect(page.agentFileContents[missingFile.name]).toBe(savedFile.content);
+          expect(page.agentFileEditors[missingFile.name]?.content).toBe(savedFile.content);
         });
         expect(page.agentFilesList?.files).toEqual([
           expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
@@ -241,8 +243,8 @@ describe("agent file lifecycle", () => {
         expect(page.agentFilesList?.files).toEqual([
           expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
         ]);
-        expect(page.agentFileContents[missingFile.name]).toBe(savedFile.content);
-        expect(page.agentFileDrafts[missingFile.name]).toBe(savedFile.content);
+        expect(page.agentFileEditors[missingFile.name]?.content).toBe(savedFile.content);
+        expect(page.agentFileEditors[missingFile.name]?.draft).toBe(savedFile.content);
         expect(page.agentFilesError).toBeNull();
       } finally {
         unsubscribe();
@@ -308,22 +310,30 @@ describe("agent file lifecycle", () => {
       page.routeData = { panel: "files" } as AgentsRouteData;
       page.agentFilesList = list;
       page.agentFileActive = "AGENTS.md";
-      page.agentFileContents = { "AGENTS.md": "original" };
-      page.agentFileDrafts = { "AGENTS.md": savedContent };
+      setAgentFileValues(page, "content", { "AGENTS.md": "original" });
+      setAgentFileValues(page, "draft", { "AGENTS.md": savedContent });
       const unsubscribe = agents.subscribe(() => page.syncCurrentAgentFiles(agents));
       const container = document.createElement("div");
+      const saveDraft = () => {
+        render(page.render(), container);
+        const button = container.querySelector<HTMLButtonElement>(
+          ".agent-file-header .agent-file-actions button.primary",
+        );
+        expect(button?.disabled).toBe(false);
+        button?.click();
+      };
 
       try {
         agents.invalidateFiles(["main"]);
-        page.saveSelectedAgentFile("main", "AGENTS.md", savedContent);
+        saveDraft();
         await vi.waitFor(() => {
           expect(page.agentFileSaving).toBe(false);
-          expect(page.agentFileContents["AGENTS.md"]).toBe(savedContent);
+          expect(page.agentFileEditors["AGENTS.md"]?.content).toBe(savedContent);
           expect(listCalls).toBe(2);
         });
         if (newerSaveFails) {
-          page.agentFileDrafts = { "AGENTS.md": "newer draft" };
-          page.saveSelectedAgentFile("main", "AGENTS.md", "newer draft");
+          setAgentFileValues(page, "draft", { "AGENTS.md": "newer draft" });
+          saveDraft();
           await vi.waitFor(() => expect(page.agentFilesError).toBe(writeError));
         }
         rebuild.reject(new Error(rebuildError));
@@ -337,7 +347,7 @@ describe("agent file lifecycle", () => {
         expect(container.querySelector<HTMLTextAreaElement>(".agent-file-textarea")?.value).toBe(
           newerSaveFails ? "newer draft" : savedContent,
         );
-        expect(page.agentFileContents["AGENTS.md"]).toBe(savedContent);
+        expect(page.agentFileEditors["AGENTS.md"]?.content).toBe(savedContent);
       } finally {
         unsubscribe();
         rebuild.resolve(list);

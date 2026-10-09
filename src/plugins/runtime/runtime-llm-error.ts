@@ -10,3 +10,23 @@ export function createLlmCompleteError(
     code,
   });
 }
+
+/** Translate only failures from the host's operator authorization checks. */
+export function createLlmOperatorAuthorizationError(cause: unknown): Error {
+  if (isLlmOperatorAuthorizationError(cause)) {
+    return cause;
+  }
+  return createLlmCompleteError(
+    "LLM_COMPLETION_NOT_AUTHORIZED",
+    cause instanceof Error
+      ? cause.message
+      : "Plugin model completion operator authorization failed.",
+    cause,
+  );
+}
+
+export function isLlmOperatorAuthorizationError(error: unknown): error is Error {
+  return (
+    error instanceof Error && "code" in error && error.code === "LLM_COMPLETION_NOT_AUTHORIZED"
+  );
+}

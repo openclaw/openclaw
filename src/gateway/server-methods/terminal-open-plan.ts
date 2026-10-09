@@ -9,8 +9,6 @@ import {
 } from "../terminal/launch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type NodeCatalogTerminalPlan = Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
-
 export function authorizeTerminalNodeCommand(
   context: GatewayRequestHandlerOptions["context"],
   nodeId: string,
@@ -38,13 +36,6 @@ export function authorizeTerminalNodeCommand(
     allowlist,
   });
   return allowed.ok ? { ok: true, node } : { ok: false, message: allowed.reason };
-}
-
-export function authorizeCatalogTerminalNode(
-  context: GatewayRequestHandlerOptions["context"],
-  plan: NodeCatalogTerminalPlan,
-) {
-  return authorizeTerminalNodeCommand(context, plan.nodeId, plan.command);
 }
 
 export function resolveTerminalOpenSpawnPlan(

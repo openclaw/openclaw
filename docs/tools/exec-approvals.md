@@ -65,15 +65,23 @@ for matching, prompting, and binding restrictions.
 
 ## Inspecting the effective policy
 
-| Command                                                          | What it shows                                                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                           |
-| `openclaw exec-policy show`                                      | Local-machine merged view.                                                                 |
-| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step. |
+| Command                                                          | What it shows                                                                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                                      |
+| `openclaw exec-policy show`                                      | Terminal tool policies and local command approvals; add `--session <key>` for a session tool preview. |
+| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step.            |
 
 <Note>
 Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-%2Fexec).
 </Note>
+
+Tool availability and command approvals are separate: a `messaging` tool
+profile can exclude `exec` and `process` even when approvals permit commands.
+`exec-policy show` explains local exclusions offline and identifies the policy
+source. `--session <key>` previews tools from saved session settings. Inclusion
+does not guarantee execution, and absence does not prove a tool is disabled.
+Verify execution in a run; command approvals still apply.
+Use `--agent <id>` to select an agent and `--verbose` for all approval scopes.
 
 Full CLI reference (flags, JSON output, allowlist add/remove): [Approvals CLI](/cli/approvals).
 
@@ -371,9 +379,16 @@ openclaw exec-policy preset yolo
 
 Updates both local `tools.exec.host/security/ask` and the local approvals
 file defaults (including `askFallback: "full"`). It is intentionally
-local-only. To change gateway-host or node-host approvals remotely, use
+local-only and requires exclusive offline ownership of the selected state. Stop a
+running Gateway through its service owner before using `exec-policy set` or
+`preset`; these commands refuse before changing policy while another live Gateway
+owns the state. To change gateway-host or node-host approvals remotely, use
 `openclaw approvals set --gateway` or
 `openclaw approvals set --node <id|name|ip>`.
+
+A Gateway policy change that withdraws permission may be refused while a cron
+command is starting. Retry after command startup settles; the refusal leaves the
+previous policy in place.
 
 Other built-in presets: `cautious` (`host=gateway`, `security=allowlist`,
 `ask=on-miss`, `askFallback=deny`) and `deny-all` (`host=gateway`,
@@ -404,7 +419,10 @@ EOF
 
 - `openclaw exec-policy` does not synchronize node approvals.
 - `openclaw exec-policy set --host node` is rejected.
-- Node exec approvals are fetched from the node at runtime, so node-targeted updates must use `openclaw approvals --node ...`.
+- Node exec approvals are fetched from the node at runtime. Inspect them with
+  `openclaw approvals get --node <id|name|ip>` and replace them with
+  `openclaw approvals set --node <id|name|ip> --file <path>` (or `--stdin`); see the
+  [Approvals CLI](/cli/approvals).
 
 </Note>
 
@@ -429,7 +447,12 @@ Bare names match only commands invoked through `PATH`, so `rg` can match
 `/opt/homebrew/bin/rg` when the command is `rg`, but **not** `./rg` or
 `/tmp/rg`. Use a path glob to trust one specific binary location.
 
-Legacy `agents.default` entries are migrated to `agents.main` on load.
+Saved policies that still use the legacy `agents.default` key or `commandText`
+fields are not converted on load. OpenClaw refuses them until
+`openclaw doctor --fix` moves `agents.default` to `agents.main` and drops
+`commandText`; `openclaw update` runs the same Doctor pass. Plugin and operator
+APIs still accept the legacy shape as input and normalize it before saving. See
+[Exec approval policy](/gateway/doctor/config-migrations#exec-approval-policy).
 Shell chains such as `echo ok && pwd` still need every top-level segment
 to satisfy allowlist rules.
 
@@ -494,7 +517,7 @@ Each allowlist entry supports:
 | `argPattern`       | ECMAScript argv regex or generated exact-argv hash; omitted is path-only |
 | `id`               | Stable opaque ID; generated as a UUID when absent                        |
 | `source`           | Generated entry source, such as `allow-always`; omit for manual entries  |
-| `commandText`      | Legacy plaintext input; discarded during load                            |
+| `commandText`      | Legacy plaintext input; saved entries need `openclaw doctor --fix`       |
 | `lastUsedAt`       | Last-used timestamp                                                      |
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
@@ -565,15 +588,16 @@ Always allow will mint.
 
 ### What a grant covers, and when it stops
 
-A grant fails closed back to a normal prompt whenever anything changed: the
-job was edited or deleted (any configuration change invalidates it), the
-command, working directory, or environment differs by even one byte, the
-grant was revoked or expired, or the original approval record is gone. The
-check runs immediately before the process spawns, so a revocation or job
-edit that lands mid-flight still wins. Mutable file operands and commands
-that require explicit review (heredocs, strict inline eval, audit
-suppression) keep prompting per occurrence. Non-automation approvals are
-unchanged.
+A grant fails closed back to a normal prompt when the job is deleted or its
+substantive definition changes, even if a later edit restores the earlier
+definition. Pausing and re-enabling the unchanged automation preserves the
+grant. The grant also stops matching when the command, working directory, or
+environment differs by even one byte, when it is revoked or expired, or when
+the original approval record is gone. The check runs immediately before the
+process spawns, so a revocation or job edit that lands mid-flight still wins.
+Mutable file operands and commands that require explicit review (heredocs,
+strict inline eval, audit suppression) keep prompting per occurrence.
+Non-automation approvals are unchanged.
 
 ### Grant lifetime
 
@@ -602,8 +626,9 @@ Every standing grant is visible and revocable:
   `openclaw approvals grants revoke <grant-id>` revokes one grant. Revocation
   is idempotent and takes effect at the next occurrence's spawn boundary —
   that occurrence prompts again.
-- Deleting or editing the automation, or reversing the minting approval,
-  also invalidates the grant without touching the grants surface.
+- Deleting or substantively editing the automation, or reversing the minting
+  approval, also invalidates the grant without touching the grants surface.
+  Pausing and re-enabling the unchanged automation does not.
 
 The minting `operator_approvals` row remains the sole authorization owner: a
 grant is derivative correlation, revalidated against the live approval row,
@@ -667,6 +692,11 @@ When a prompt is required, the gateway broadcasts
 app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
 
+An approval accepted before its prompt deadline remains valid during the
+Gateway's live handoff window. Crossing the prompt deadline during dispatch
+does not undo that decision. Closed runs, expired handoff windows, and reused
+**Allow Once** approvals still reject execution.
+
 The macOS approval panel keeps ordinary commands compact, with the supplied agent
 and host in one summary. It shows the working directory beneath the full,
 wrapping command. Longer commands scroll. Expand **Details** to inspect the
@@ -688,14 +718,16 @@ context when forwarding approved `system.run` requests:
 - The node exec path prepares one canonical plan up front.
 - The approval record stores that plan and its binding metadata.
 - Once approved, the final forwarded `system.run` call reuses the stored plan instead of trusting later caller edits.
-- If the caller changes `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created, the gateway rejects the forwarded run as an approval mismatch.
+- Edits to `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created are discarded: the gateway forwards the stored values instead. Changed `env` overrides are still rejected as an approval mismatch.
 
 ## Approval scope summaries
 
 An approval owner can attach a typed, display-only scope describing the action's
 blast radius. OpenClaw renders the sanitized summary on channel approval cards
 and includes the bounded scope in the safe approval presentation available to
-Control UI clients. Scope never grants authorization or changes approval policy.
+Control UI clients. Standalone approval links display the supplied scope before
+the decision buttons, including automation grant terms. Scope never grants
+authorization or changes approval policy.
 
 - `message-send`: destination, recipient count, optional recipient preview, and
   whether the audience is internal or external.

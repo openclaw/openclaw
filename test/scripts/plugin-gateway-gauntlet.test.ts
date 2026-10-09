@@ -1,13 +1,22 @@
-// Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   buildObservationGuardFailures,
   createGauntletPrebuildCommand,
@@ -15,7 +24,6 @@ import {
   parseArgs,
   parseTimedMetrics,
   runMeasuredCommand,
-  runMeasuredCommandLive,
 } from "../../scripts/check-plugin-gateway-gauntlet.mts";
 import {
   buildGauntletPrebuildEnv,
@@ -28,16 +36,34 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import { hasErrnoCode } from "../../src/infra/errno.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const tsxImport = import.meta.resolve("tsx");
 const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
+  let receipts: FixtureReceiptChannel;
+  let fixtureCompletion: Promise<void> | undefined;
+
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+
+  afterAll(async () => {
+    await receipts.close();
+  });
 
   beforeEach(async () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-gauntlet-"));
@@ -45,6 +71,10 @@ describe("plugin gateway gauntlet helpers", () => {
   });
 
   afterEach(async () => {
+    // Vitest runs afterEach before onTestFinished; preserve fixture PID records
+    // and mocked clocks until an aborted body has finished its asynchronous cleanup.
+    await fixtureCompletion;
+    fixtureCompletion = undefined;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(repoRoot, { recursive: true, force: true });
@@ -54,6 +84,33 @@ describe("plugin gateway gauntlet helpers", () => {
     const dir = path.join(repoRoot, "extensions", pluginDir);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, fileName), source, "utf8");
+  }
+
+  function runGauntlet(
+    args: string[],
+    outputDir = path.join(repoRoot, "artifacts"),
+    env?: NodeJS.ProcessEnv,
+  ) {
+    return spawnSync(
+      process.execPath,
+      [
+        "--import",
+        tsxImport,
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        ...args,
+      ],
+      { cwd: path.resolve("."), encoding: "utf8", ...(env ? { env } : {}) },
+    );
+  }
+
+  async function readSummary(outputDir: string) {
+    return JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
   }
 
   async function runQaSummaryFailureScenario(params: {
@@ -85,16 +142,8 @@ describe("plugin gateway gauntlet helpers", () => {
       "utf8",
     );
 
-    const result = spawnSync(
-      process.execPath,
+    const result = runGauntlet(
       [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
         "--skip-prebuild",
         "--skip-lifecycle",
         "--skip-slash-help",
@@ -102,25 +151,15 @@ describe("plugin gateway gauntlet helpers", () => {
         "alpha",
         ...params.scenarioIds.flatMap((scenarioId) => ["--qa-scenario", scenarioId]),
       ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        ...(params.maxBytes
-          ? {
-              env: {
-                ...process.env,
-                OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: params.maxBytes,
-              },
-            }
-          : {}),
-      },
+      outputDir,
+      params.maxBytes
+        ? { ...process.env, OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: params.maxBytes }
+        : undefined,
     );
 
     expect(result.status, result.stdout).toBe(1);
     expect(result.stdout).toContain(`diagnostic=${params.diagnosticFailure}`);
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
+    const summary = await readSummary(outputDir);
     expect(summary.failures).toEqual([
       expect.objectContaining({
         ...(params.diagnosticDetail === undefined
@@ -177,29 +216,52 @@ describe("plugin gateway gauntlet helpers", () => {
     };
   }
 
-  async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 5_000) {
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      if (await predicate()) {
-        return;
-      }
-      await delay(5);
-    }
-    throw new Error("condition was not met before timeout");
+  function trackFixtureCompletion<T>(fixture: Promise<T>): Promise<T> {
+    // The body retains its failure; both teardown paths join its existing cleanup.
+    const settled = fixture.then(
+      () => {},
+      () => {},
+    );
+    fixtureCompletion = settled;
+    onTestFinished(() => settled);
+    return fixture;
   }
 
-  async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
-    return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(new Error("child did not close before timeout"));
-        }, timeoutMs);
-        child.once("close", (code, signal) => {
-          clearTimeout(timer);
-          resolve({ code, signal });
-        });
+  async function fixtureReadyBeforeSettlement(readyPath: string, operation: Promise<unknown>) {
+    const readReady = () =>
+      fs.readFile(readyPath, "utf8").catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return "";
+        }
+        throw error;
+      });
+    // Receipt delivery and command settlement are unordered; the fixture writes
+    // this durable record before it exits or lets its parent proceed.
+    const settled = operation.then(
+      async () => {
+        if ((await readReady()) !== "ready") {
+          throw new Error("condition was not met before timeout");
+        }
+      },
+      async (error: unknown) => {
+        if ((await readReady()) !== "ready") {
+          throw error;
+        }
       },
     );
+    await Promise.race([receipts.waitFor(readyPath, "ready"), settled]);
+  }
+
+  async function waitForDead(pid: number, signal: AbortSignal) {
+    // The command joins its process group, but Darwin can still expose a zombie
+    // PID until the orphan is reaped. No ChildProcess handle owns that final reap.
+    while (isProcessAlive(pid)) {
+      try {
+        await delay(5, undefined, { signal });
+      } catch (error) {
+        throw new Error(`process still alive: ${pid}`, { cause: error });
+      }
+    }
   }
 
   it("stops parsing options after the argument terminator", () => {
@@ -689,7 +751,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("clamps oversized measured command timers before scheduling", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -707,72 +769,117 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills timed-out measured command process groups when the leader exits first",
-    async () => {
-      const logDir = path.join(repoRoot, "logs");
-      const scriptPath = path.join(repoRoot, "leader-exits.mjs");
-      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
-      let grandchildPid = 0;
-      await fs.writeFile(
-        scriptPath,
-        `
+  it.runIf(process.platform !== "win32").for([
+    { label: "normal-leader-exits", normalExit: true },
+    { label: "timeout-leader-exits", normalExit: false },
+  ])("cleans measured process groups after $label", async ({ label, normalExit }, { signal }) => {
+    const logDir = path.join(repoRoot, "logs");
+    const scriptPath = path.join(repoRoot, "leader-exits.mjs");
+    const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+    const readyPath = path.join(repoRoot, "grandchild.ready");
+    let grandchildPid = 0;
+    await fs.writeFile(
+      scriptPath,
+      `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
+const normalExit = process.argv[4] === "normal";
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
-// Publish the pid by rename so the reader never observes a created-but-unwritten
-// or partially written file.
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');",
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+// Publish the PID atomically so failed startup still has an owned rescue target.
 fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
 fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+  if (normalExit) process.exit(0);
+});
 process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
+if (!normalExit) setInterval(() => {}, 1000);
 `,
-        "utf8",
-      );
+      "utf8",
+    );
 
-      try {
-        const rowPromise = runMeasuredCommand({
-          cwd: repoRoot,
-          env: process.env,
-          logDir,
-          command: process.execPath,
-          args: [scriptPath, grandchildPidPath],
-          label: "timeout-leader-exits",
-          phase: "probe",
-          timeoutKillGraceMs: 25,
-          timeoutMs: 250,
-          timeMode: "none",
-        });
+    const rowPromise = runMeasuredCommand({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: [scriptPath, grandchildPidPath, readyPath, normalExit ? "normal" : "timeout"],
+      label,
+      phase: "probe",
+      timeoutKillGraceMs: 25,
+      timeoutMs: normalExit ? 1000 : 250,
+      timeMode: "none",
+    });
+    // Observe early rejection while readiness is checked; the original is awaited below.
+    void rowPromise.catch(() => undefined);
 
-        await waitFor(() =>
-          fs
-            .access(grandchildPidPath)
-            .then(() => true)
-            .catch(() => false),
-        );
-        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-        expect(Number.isInteger(grandchildPid)).toBe(true);
-        expect(isProcessAlive(grandchildPid)).toBe(true);
+    await trackFixtureCompletion(
+      runQaGatewayFixture(
+        async () => {
+          await withinTest(fixtureReadyBeforeSettlement(readyPath, rowPromise), signal);
+          grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+          expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+          if (!normalExit) {
+            expect(isProcessAlive(grandchildPid)).toBe(true);
+          }
 
-        const row = await rowPromise;
-        expect(row.timedOut).toBe(true);
-        expect(row.spawnError?.code).toBe("ETIMEDOUT");
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-      }
-    },
-  );
+          const row = await withinTest(rowPromise, signal);
+          expect(row.timedOut).toBe(!normalExit);
+          if (normalExit) {
+            expect(row.status).toBe(1);
+          }
+          expect(row.spawnError?.code).toBe(
+            normalExit ? "EPROCESSGROUP_CLEANUP_FAILED" : "ETIMEDOUT",
+          );
+          await waitForDead(grandchildPid, signal);
+        },
+        async () => {
+          if (!grandchildPid) {
+            try {
+              grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+            } catch (error) {
+              if (
+                error &&
+                typeof error === "object" &&
+                "code" in error &&
+                error.code === "ENOENT"
+              ) {
+                return;
+              }
+              throw error;
+            }
+          }
+          expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+          if (isProcessAlive(grandchildPid)) {
+            try {
+              process.kill(grandchildPid, "SIGKILL");
+            } catch (error) {
+              if (
+                !(error && typeof error === "object" && "code" in error && error.code === "ESRCH")
+              ) {
+                throw error;
+              }
+            }
+          }
+          await waitForDead(grandchildPid, signal);
+        },
+        async () => {
+          await rowPromise;
+        },
+      ),
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
     "lets timed-out measured command descendants drain during kill grace",
-    async () => {
+    async ({ signal }) => {
       const logDir = path.join(repoRoot, "logs");
       const scriptPath = path.join(repoRoot, "leader-exits-drain.mjs");
       const readyPath = path.join(repoRoot, "grandchild.ready");
@@ -783,6 +890,8 @@ setInterval(() => {}, 1000);
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
 const grandchildScript = [
   "const fs = require('node:fs');",
   "process.on('SIGTERM', () => {",
@@ -791,11 +900,15 @@ const grandchildScript = [
   "    process.exit(0);",
   "  }, 20);",
   "});",
-  "fs.writeFileSync(process.argv[2], 'ready');",
+  "process.send('ready');",
   "setInterval(() => {}, 1000);",
 ].join("\\n");
-spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
-  stdio: "ignore",
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[2], "ready");
+  sendReceipt(process.argv[2], "ready");
 });
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -816,44 +929,27 @@ setInterval(() => {}, 1000);
         timeMode: "none",
       });
 
-      await waitFor(() =>
-        fs
-          .access(readyPath)
-          .then(() => true)
-          .catch(() => false),
-      );
-      const row = await rowPromise;
+      await trackFixtureCompletion(
+        runQaGatewayFixture(
+          async () => {
+            await withinTest(fixtureReadyBeforeSettlement(readyPath, rowPromise), signal);
+            const row = await withinTest(rowPromise, signal);
 
-      expect(row.timedOut).toBe(true);
-      expect(row.spawnError?.code).toBe("ETIMEDOUT");
-      await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
+            expect(row.timedOut).toBe(true);
+            expect(row.spawnError?.code).toBe("ETIMEDOUT");
+            await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
+          },
+          () => rowPromise,
+        ),
+      );
     },
   );
-
-  it("captures output from live measured commands", async () => {
-    const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
-      cwd: repoRoot,
-      env: process.env,
-      logDir,
-      command: process.execPath,
-      args: ["-e", "console.log('live stdout'); console.error('live stderr')"],
-      label: "live",
-      phase: "probe",
-      timeoutMs: 1000,
-      timeMode: "none",
-    });
-
-    expect(row.status).toBe(0);
-    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stdout");
-    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stderr");
-  });
 
   it("returns a failed row when measured command log writing fails", async () => {
     const logDir = path.join(repoRoot, "not-a-directory");
     await fs.writeFile(logDir, "blocks log directory creation", "utf8");
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -875,7 +971,7 @@ setInterval(() => {}, 1000);
     const logDir = path.join(repoRoot, "logs");
     const before = process.listenerCount("SIGTERM");
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -893,7 +989,7 @@ setInterval(() => {}, 1000);
 
   it.runIf(process.platform !== "win32")(
     "cleans parent-terminated measured process groups when the leader exits first",
-    async () => {
+    async ({ signal }) => {
       const logDir = path.join(repoRoot, "logs");
       const harnessPath = path.join(repoRoot, "parent-termination-harness.mjs");
       const scriptPath = path.join(repoRoot, "parent-termination-leader.mjs");
@@ -907,17 +1003,22 @@ setInterval(() => {}, 1000);
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
 const grandchildScript = [
-  "const fs = require('node:fs');",
   "process.on('SIGTERM', () => {});",
   "process.on('SIGHUP', () => {});",
-  "fs.writeFileSync(process.argv[2], 'ready');",
+  "process.send('ready');",
   "setInterval(() => {}, 1000);",
 ].join("\\n");
 const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
-  stdio: "ignore",
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+});
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,
@@ -926,11 +1027,11 @@ setInterval(() => {}, 1000);
       await fs.writeFile(
         harnessPath,
         `
-import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
+import { runMeasuredCommand } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
-await runMeasuredCommandLive({
+await runMeasuredCommand({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
@@ -952,35 +1053,48 @@ await runMeasuredCommandLive({
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      try {
-        await waitFor(async () => {
+      const closed = once(harness, "close");
+      void closed.catch(() => undefined);
+      await trackFixtureCompletion(
+        (async () => {
           try {
-            await fs.access(grandchildReadyPath);
-            return true;
-          } catch {
-            return false;
-          }
-        });
-        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-        expect(isProcessAlive(grandchildPid)).toBe(true);
+            await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, closed), signal);
+            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+            expect(isProcessAlive(grandchildPid)).toBe(true);
 
-        harness.kill("SIGTERM");
-        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        if (harness.pid && isProcessAlive(harness.pid)) {
-          harness.kill("SIGKILL");
-        }
-      }
+            harness.kill("SIGTERM");
+            await expect(withinTest(closed, signal)).resolves.toEqual([null, "SIGTERM"]);
+            await waitForDead(grandchildPid, signal);
+          } finally {
+            if (harness.pid && isProcessAlive(harness.pid)) {
+              harness.kill("SIGTERM");
+            }
+            await closed;
+            if (!grandchildPid) {
+              grandchildPid = Number(
+                await fs.readFile(grandchildPidPath, "utf8").catch((error: unknown) => {
+                  if (hasErrnoCode(error, "ENOENT")) {
+                    return "0";
+                  }
+                  throw error;
+                }),
+              );
+            }
+            if (grandchildPid && isProcessAlive(grandchildPid)) {
+              process.kill(grandchildPid, "SIGKILL");
+            }
+            if (grandchildPid) {
+              await waitForDead(grandchildPid, signal);
+            }
+          }
+        })(),
+      );
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rethrows parent termination received during timeout cleanup",
-    async () => {
+    async ({ signal }) => {
       const logDir = path.join(repoRoot, "logs");
       const harnessPath = path.join(repoRoot, "timeout-parent-termination-harness.mjs");
       const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
@@ -1020,13 +1134,15 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
+import { runMeasuredCommand } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
 import { inspectManagedProcessGroup } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href,
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.managedChildProcess).href,
         )};
+
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const realDelay = delay;
 // Mocked timers cannot keep Node alive while a native signal is in flight.
@@ -1041,7 +1157,7 @@ const observeChild = ({ process: owned }) => {
 // Only the controller's policy clock is mocked; readiness, exit, and signals are native.
 mock.timers.enable({ apis: ["Date", "setTimeout"] });
 children.subscribe(observeChild);
-const promise = runMeasuredCommandLive({
+const promise = runMeasuredCommand({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
@@ -1059,6 +1175,7 @@ fs.writeFileSync(${JSON.stringify(leaderPidPath)}, String(child.pid));
 try {
   assert.equal((await ready)[0], "ready");
   fs.writeFileSync(${JSON.stringify(grandchildReadyPath)}, "ready");
+  sendReceipt(${JSON.stringify(grandchildReadyPath)}, "ready");
   mock.timers.tick(200);
   assert.deepEqual(await closed, [0, null]);
   assert.equal(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }), "live");
@@ -1101,7 +1218,7 @@ try {
         try {
           pid = Number(await fs.readFile(pidPath, "utf8"));
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          if (hasErrnoCode(error, "ENOENT")) {
             return;
           }
           throw error;
@@ -1110,52 +1227,47 @@ try {
         try {
           process.kill(group ? -pid : pid, "SIGKILL");
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          if (!hasErrnoCode(error, "ESRCH")) {
             throw error;
           }
         }
-        await waitFor(() => !isProcessAlive(pid));
+        await waitForDead(pid, signal);
       };
-      await runQaGatewayFixture(
-        async () => {
-          await waitFor(async () => {
-            try {
-              await fs.access(grandchildReadyPath);
-              return true;
-            } catch {
-              return false;
-            }
-          }).catch((error: unknown) => {
-            throw new Error(`${String(error)}\n${stderr}`, { cause: error });
-          });
-          grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+      await trackFixtureCompletion(
+        runQaGatewayFixture(
+          async () => {
+            await withinTest(
+              fixtureReadyBeforeSettlement(grandchildReadyPath, closed),
+              signal,
+            ).catch((error: unknown) => {
+              throw new Error(`${String(error)}\n${stderr}`, { cause: error });
+            });
+            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
 
-          expect(
-            await withTestTimeout(closed, 5_000, "harness did not close after fixture readiness"),
-            stderr,
-          ).toEqual([null, "SIGTERM"]);
-          await waitFor(() => !isProcessAlive(grandchildPid));
-        },
-        () => reapPidFile(leaderPidPath, true),
-        () => reapPidFile(grandchildPidPath),
-        async () => {
-          if (harness.pid && isProcessAlive(harness.pid)) {
-            harness.kill("SIGKILL");
-          }
-          await withTestTimeout(closed, 5_000, "fixture cleanup did not join harness closure");
-        },
+            expect(await withinTest(closed, signal), stderr).toEqual([null, "SIGTERM"]);
+            await waitForDead(grandchildPid, signal);
+          },
+          () => reapPidFile(leaderPidPath, true),
+          () => reapPidFile(grandchildPidPath),
+          async () => {
+            if (harness.pid && isProcessAlive(harness.pid)) {
+              harness.kill("SIGKILL");
+            }
+            await closed;
+          },
+        ),
       );
     },
   );
 
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
       command: process.execPath,
-      args: ["-e", "process.stdout.write('x'.repeat(32))"],
+      args: ["-e", "process.stdout.write('x'.repeat(32)); process.stderr.write('y'.repeat(32))"],
       label: "live-bounded",
       phase: "probe",
       timeoutMs: 1000,
@@ -1167,6 +1279,8 @@ try {
     const log = await fs.readFile(row.logPath!, "utf8");
     expect(log).toContain("x".repeat(12));
     expect(log).toContain("[stdout truncated after 12 bytes]");
+    expect(log).toContain("y".repeat(12));
+    expect(log).toContain("[stderr truncated after 12 bytes]");
   });
 
   it("bounds relayed output from live measured commands", async () => {
@@ -1177,7 +1291,7 @@ try {
       return true;
     });
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1199,10 +1313,37 @@ try {
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("x".repeat(32));
   });
 
-  it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
+  it("force kills timed-out live measured process groups that ignore SIGTERM", async ({
+    signal,
+  }) => {
     const logDir = path.join(repoRoot, "logs");
     const markerPath = path.join(repoRoot, "timeout-marker.txt");
-    const row = await runMeasuredCommandLive({
+    const watcher = watch(repoRoot);
+    const ready = new Promise<void>((resolve, reject) => {
+      watcher.on("error", reject);
+      watcher.on("change", (_event, filename) => {
+        if (filename?.toString() === path.basename(markerPath)) {
+          resolve();
+        }
+      });
+    });
+    const scheduleTimeout = globalThis.setTimeout;
+    let fireDeadline: (() => void) | undefined;
+    // Drive only the policy deadline after the real child's signal handler is ready.
+    const timerSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) => {
+        const timer = scheduleTimeout(callback, ms, ...args);
+        if (ms === 100 && !fireDeadline) {
+          clearTimeout(timer);
+          fireDeadline = () => {
+            fireDeadline = undefined;
+            callback(...args);
+          };
+        }
+        return timer;
+      });
+    const command = runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1212,8 +1353,8 @@ try {
         [
           "const fs = require('node:fs');",
           "const marker = process.argv[1];",
-          "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
+          "fs.writeFileSync(marker, 'start\\n');",
           "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
@@ -1223,6 +1364,29 @@ try {
       timeoutMs: 100,
       timeoutKillGraceMs: 10,
     });
+    const row = await trackFixtureCompletion(
+      (async () => {
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              ready,
+              command,
+              "measured process fixture did not become ready",
+            ),
+            signal,
+          );
+          watcher.close();
+          timerSpy.mockRestore();
+          expectDefined(fireDeadline, "command deadline should be armed before readiness")();
+          return await withinTest(command, signal);
+        } finally {
+          watcher.close();
+          timerSpy.mockRestore();
+          fireDeadline?.();
+          await command;
+        }
+      })(),
+    );
 
     expect(row.status).toBe(1);
     expect(row.timedOut).toBe(true);
@@ -1237,76 +1401,50 @@ try {
 
   it("fails dry runs that do not execute any gauntlet commands", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--skip-qa",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
+    const result = runGauntlet(
+      ["--skip-prebuild", "--skip-lifecycle", "--skip-slash-help", "--skip-qa"],
+      outputDir,
     );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("No lifecycle, slash-help, or QA gauntlet commands ran");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(summary.guardFailures).toEqual([
-      expect.objectContaining({
-        kind: "empty-run",
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    const summary = await readSummary(outputDir);
+    try {
+      expect(summary.guardFailures).toEqual([
+        expect.objectContaining({
+          kind: "empty-run",
+        }),
+      ]);
+      expect(summary.isolatedRunRootPreserved).toBe(true);
+      await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
+      const config = JSON.parse(
+        await fs.readFile(path.join(summary.isolatedRunRoot, "state", "openclaw.json"), "utf8"),
+      );
+      expect(config).toMatchObject({
+        logging: { file: path.join(summary.isolatedRunRoot, "logs", "openclaw.log") },
+      });
+    } finally {
+      await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects non-decimal gauntlet numeric options", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--skip-qa",
-        "--allow-empty",
-        "--limit",
-        "1e3",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
+    const result = runGauntlet([
+      "--skip-prebuild",
+      "--skip-lifecycle",
+      "--skip-slash-help",
+      "--skip-qa",
+      "--allow-empty",
+      "--limit",
+      "1e3",
+    ]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
   it("documents gauntlet guardrail options and env defaults in help", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", tsxImport, path.resolve("scripts/check-plugin-gateway-gauntlet.mts"), "--help"],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
+    const result = runGauntlet(["--help"]);
 
     expect(result.status, result.stderr).toBe(0);
     for (const text of [
@@ -1332,35 +1470,14 @@ try {
     const outputDir = path.join(repoRoot, "artifacts");
     await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-qa",
-        "--plugin",
-        "acpx",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
+    const result = runGauntlet(["--skip-prebuild", "--skip-qa", "--plugin", "acpx"], outputDir);
 
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain("Cannot find module");
     expect(result.stderr).not.toContain("[plugin-gauntlet] acpx install");
     expect(result.stdout).toContain("failure missing-built-entry");
 
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
+    const summary = await readSummary(outputDir);
     expect(summary.rows).toEqual([]);
     expect(summary.failures).toEqual([]);
     expect(summary.guardFailures).toEqual([
@@ -1376,35 +1493,15 @@ try {
     const outputDir = path.join(repoRoot, "artifacts");
     await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-qa",
-        "--allow-empty",
-        "--plugin",
-        "acpx",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
+    const result = runGauntlet(
+      ["--skip-prebuild", "--skip-lifecycle", "--skip-qa", "--allow-empty", "--plugin", "acpx"],
+      outputDir,
     );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).not.toContain("missing-built-entry");
 
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
+    const summary = await readSummary(outputDir);
     expect(summary.rows).toEqual([]);
     expect(summary.guardFailures).toEqual([]);
   });
@@ -1466,32 +1563,13 @@ try {
 
   it("cleans the isolated run root after an explicitly empty dry run", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--skip-qa",
-        "--allow-empty",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
+    const result = runGauntlet(
+      ["--skip-prebuild", "--skip-lifecycle", "--skip-slash-help", "--skip-qa", "--allow-empty"],
+      outputDir,
     );
 
     expect(result.status, result.stderr).toBe(0);
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
+    const summary = await readSummary(outputDir);
     expect(summary.guardFailures).toEqual([]);
     expect(summary.isolatedRunRootPreserved).toBe(false);
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
@@ -1499,30 +1577,10 @@ try {
 
   it("does not parse QA summary limit env when QA is skipped", () => {
     const outputDir = path.join(repoRoot, "artifacts");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--skip-qa",
-        "--allow-empty",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "not-a-number",
-        },
-      },
+    const result = runGauntlet(
+      ["--skip-prebuild", "--skip-lifecycle", "--skip-slash-help", "--skip-qa", "--allow-empty"],
+      outputDir,
+      { ...process.env, OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "not-a-number" },
     );
 
     expect(result.status, result.stderr).toBe(0);
@@ -1583,32 +1641,13 @@ try {
       "utf8",
     );
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-qa",
-        ...extraArgs,
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
+    const result = runGauntlet(
+      ["--skip-prebuild", "--skip-qa", ...extraArgs, "--plugin", "workboard"],
+      outputDir,
     );
 
     expect(result.status, result.stderr).toBe(expectedStatus);
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
+    const summary = await readSummary(outputDir);
     if (mode === "default") {
       expect(summary.failures).toEqual([]);
       const slashHelpRow = summary.rows.find(
@@ -1686,16 +1725,8 @@ try {
       "utf8",
     );
 
-    const result = spawnSync(
-      process.execPath,
+    const result = runGauntlet(
       [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
         "--skip-prebuild",
         "--skip-lifecycle",
         "--skip-slash-help",
@@ -1704,10 +1735,7 @@ try {
         "--qa-scenario",
         "channel-chat-baseline",
       ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
+      outputDir,
     );
 
     expect(result.status, result.stderr).toBe(0);
@@ -1736,32 +1764,13 @@ try {
       "utf8",
     );
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        outputDir,
-        "--skip-prebuild",
-        "--skip-qa",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
+    const result = runGauntlet(
+      ["--skip-prebuild", "--skip-qa", "--skip-slash-help", "--plugin", "alpha"],
+      outputDir,
     );
 
     expect(result.status, result.stderr).toBe(0);
-    const summary = JSON.parse(
-      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
+    const summary = await readSummary(outputDir);
     expect(summary.rows.map((row: { label: string }) => row.label)).toEqual([
       "alpha-requires-beta-install",
       "alpha-install",
@@ -1780,16 +1789,8 @@ try {
         counts: { failed: 1, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
-          status: "completed",
-          concurrency: 1,
-          fastMode: false,
-          finishedAt: "2026-05-30T00:00:01.000Z",
-          primaryModel: "mock-openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
-          primaryProvider: "mock-openai",
-          providerMode: "mock-openai",
+          ...minimalQaSuiteSummary({}).run,
           scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
-          startedAt: "2026-05-30T00:00:00.000Z",
         },
         scenarios: [
           { name: "channel-chat-baseline", status: "pass", steps: [] },
@@ -1827,18 +1828,7 @@ try {
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-        run: {
-          status: "completed",
-          concurrency: 1,
-          fastMode: false,
-          finishedAt: "2026-05-30T00:00:01.000Z",
-          primaryModel: "mock-openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
-          primaryProvider: "mock-openai",
-          providerMode: "mock-openai",
-          scenarioIds: ["channel-chat-baseline"],
-          startedAt: "2026-05-30T00:00:00.000Z",
-        },
+        run: minimalQaSuiteSummary({}).run,
         scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
       },
       scenarioIds: ["channel-chat-baseline"],
@@ -1854,16 +1844,8 @@ try {
         counts: { failed: 0, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
-          status: "completed",
-          concurrency: 1,
-          fastMode: false,
-          finishedAt: "2026-05-30T00:00:01.000Z",
-          primaryModel: "mock-openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
-          primaryProvider: "mock-openai",
-          providerMode: "mock-openai",
+          ...minimalQaSuiteSummary({}).run,
           scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
-          startedAt: "2026-05-30T00:00:00.000Z",
         },
         scenarios: [
           { name: "channel-chat-baseline", status: "pass", steps: [] },

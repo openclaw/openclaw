@@ -4,6 +4,7 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -13,6 +14,14 @@ import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+
+/** An accepted visible work session and its canonical Control UI link. */
+export type VisibleWorkSession = {
+  sessionKey: string;
+  url: string;
+  label?: string;
+  publicRead?: boolean;
+};
 
 /** A successful runtime append, independent of optional active-path projection anchors. */
 export type ReplyDispatchAssistantTranscript = Pick<
@@ -30,6 +39,16 @@ export type ReplyDispatchRun = {
     assistantTranscript?: ReplyDispatchAssistantTranscript;
     terminalOutcome?: AgentRunTerminalOutcome;
   };
+};
+
+/** Prepared transcript boundary; current run and writer authority remain caller-owned. */
+export type PreparedReplyTranscriptStart = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  generation: string | null;
+  maxSeq: number | null;
 };
 
 export type BlockReplyContext = {
@@ -92,8 +111,10 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
-  /** Reports that a deferred turn is still queued behind an active turn. */
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
+  /** Requested cadence for pre-adoption heartbeats. */
+  deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
@@ -119,7 +140,7 @@ export type PartialReplyPayload = {
   replace?: true;
 };
 
-type ReasoningStreamPayload = Pick<
+export type ReasoningStreamPayload = Pick<
   ReplyPayload,
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
@@ -135,6 +156,8 @@ type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Host-issued capability for the exact findings acknowledged by the current operator. */
+  providerReviewAcknowledgment?: import("../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Channel-owned participant name encoding for source replies sent through message actions. */
   groupThreadReplyFormatter?: (
     text: string,
@@ -162,9 +185,12 @@ export type GetReplyOptions = {
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
     options?: ReplyDispatchRun,
+    transcriptStart?: PreparedReplyTranscriptStart | null,
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Reports visible work sessions this agent run spawned, in acceptance order. */
+  onVisibleWorkSessions?: (sessions: readonly VisibleWorkSession[]) => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
@@ -182,6 +208,8 @@ export type GetReplyOptions = {
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
   isHeartbeat?: boolean;
+  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+  useHeartbeatFailureCopy?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
@@ -204,6 +232,8 @@ export type GetReplyOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
   forceHeartbeatTool?: boolean;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
@@ -215,6 +245,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Keep automatic progress private for turns whose canonical reply expectation is optional. */
+  progressRequiresReply?: boolean;
   /** Suppress standalone tool/progress text even when verbose progress is enabled. */
   suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
@@ -225,8 +257,11 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
+   * @deprecated Use onVerboseProgressVisibilityAsync; retained until the next Plugin SDK major.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */
+  onVerboseProgressVisibilityAsync?: (isActive: () => Promise<boolean>) => Promise<void> | void;
   /** Preserve source-event callback start order for stateful channel progress renderers. */
   preserveProgressCallbackStartOrder?: boolean;
   onPartialReply?: (
@@ -249,6 +284,11 @@ export type GetReplyOptions = {
     context?: BlockReplyContext,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  /** Receives a block whose producer has already resolved inline directives. */
+  onPreparedBlockReply?: (
+    plan: OutboundPayloadPlan,
+    context?: BlockReplyContext,
+  ) => Promise<void> | void;
   onToolResult?: (
     payload: ReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -277,6 +317,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    hideFromChannelProgress?: boolean;
+    suppressChannelProgress?: boolean;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.

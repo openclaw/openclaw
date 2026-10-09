@@ -20,9 +20,11 @@ General model auth is covered in [Authentication](/gateway/authentication). The 
 
 - `scripts/setup-auth-system.sh` - one-time setup: checks current auth, helps generate a long-lived `claude setup-token`, and prints systemd/Termux install steps.
 - `scripts/claude-auth-status.sh [full|json|simple]` - checks Claude Code + OpenClaw auth status.
-- `scripts/auth-monitor.sh` - polls status and sends a notification (via OpenClaw send, and/or ntfy.sh) when the token nears expiry. Env: `WARN_HOURS` (default `2`), `NOTIFY_PHONE`, `NOTIFY_NTFY`. Run on a schedule via the bundled `scripts/systemd/openclaw-auth-monitor.{service,timer}` (every 30 minutes).
+- `scripts/auth-monitor.sh` - polls status and sends a notification (via `openclaw message send`, and/or ntfy.sh) when the token nears expiry, including its final hour while authentication remains usable. Env: `WARN_HOURS` (default `2`), `NOTIFY_PHONE`, `NOTIFY_NTFY`. Run on a schedule via the bundled `scripts/systemd/openclaw-auth-monitor.{service,timer}` (every 30 minutes).
 - `scripts/mobile-reauth.sh` - re-runs `claude setup-token` and prints URLs to open on a phone, for use over SSH from Termux.
-- `scripts/termux-quick-auth.sh`, `scripts/termux-auth-widget.sh`, `scripts/termux-sync-widget.sh` - Termux:Widget scripts. They SSH to the host and show a status toast. They open the re-auth console/instructions when auth has expired.
+- `scripts/termux-quick-auth.sh`, `scripts/termux-auth-widget.sh` - Termux:Widget scripts. They SSH to the host and show a status toast. They open the re-auth console/instructions when auth has expired.
+
+To use a Claude CLI login with OpenClaw, follow [Claude CLI reuse](/gateway/authentication#anthropic-claude-cli-reuse). The Claude process owns its login credentials.
 
 ## GitHub read helper
 

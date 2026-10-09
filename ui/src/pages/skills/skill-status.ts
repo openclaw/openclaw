@@ -1,12 +1,23 @@
 import { html } from "lit";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
   isSkillAvailable,
 } from "../../lib/skills-shared.ts";
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
+
+registerSkillsBrowserEnglish();
+
+export function renderSkillLibraryStatus(enabled: boolean) {
+  return renderSettingsStatus({
+    kind: enabled ? "ok" : "muted",
+    label: t(enabled ? "skillsPage.enabled" : "skillsPage.disabled"),
+  });
+}
 
 export function verdictForSkill(
   skill: SkillStatusEntry,

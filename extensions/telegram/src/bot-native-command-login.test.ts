@@ -6,11 +6,13 @@ import {
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLoginResult,
   createOwnerLoginConfig,
   exerciseDeferredModelAccess,
+  prepareTelegramLoginSessionStore,
   registerLoginCommand,
   type TelegramLoginFlow,
 } from "./bot-native-command-login.test-support.js";
@@ -21,6 +23,8 @@ import {
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-login-worker-");
 
 const loginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
@@ -462,7 +466,7 @@ describe("registerTelegramNativeCommands /login", () => {
     const commands = { native: true, ownerAllowFrom: ["200"] };
     const cfg: OpenClawConfig = {
       commands,
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     };
     let currentConfig = cfg;
     const persist = vi.fn();
@@ -637,13 +641,9 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toContain("ABORT-CODE");
   });
 
-  it("keeps pending login alive across a polling-cycle restart", async () => {
-    const account = new AbortController();
-    const pollingCycle = new AbortController();
+  it("delivers pending login results through the account sender instead of the retired bot", async () => {
     const finishLogin = createDeferred<void>();
-    let loginSignal: AbortSignal | undefined;
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
-      loginSignal = params.signal;
       await params.prompter.deviceCode?.({ title: "Codex login", code: "RESTART-CODE" });
       await finishLogin.promise;
       return createLoginResult("openai:codex");
@@ -651,15 +651,12 @@ describe("registerTelegramNativeCommands /login", () => {
     const { accountId, handler, sendMessage, sendMessageTelegram } = registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
-      abortSignal: account.signal,
     });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-    pollingCycle.abort(new Error("recoverable polling restart"));
     sendMessage.mockRejectedValue(new Error("retired polling bot"));
     sendMessageTelegram.mockResolvedValueOnce({ messageId: "1000", chatId: "100" });
 
-    expect(loginSignal?.aborted).toBe(false);
     finishLogin.resolve();
     await vi.waitFor(() =>
       expect(sendMessageTelegram).toHaveBeenCalledWith(
@@ -670,6 +667,29 @@ describe("registerTelegramNativeCommands /login", () => {
     );
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
+  it("persists the Telegram login account without caller-thread entry SQL", async () => {
+    const { store, scope, queries } = await prepareTelegramLoginSessionStore(
+      sessionDirs.make(),
+      loginSessionMocks,
+    );
+    const { handler } = registerLoginCommand({
+      accountId: "default",
+      cfg: createOwnerLoginConfig(),
+      loginFlow: vi.fn<TelegramLoginFlow>(async () => createLoginResult("openai:saved")),
+    });
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    expect(loginSessionMocks.patchSessionEntry).toHaveBeenCalledOnce();
+    expect(loginSessionMocks.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: scope.sessionKey, storePath: scope.storePath }),
+    );
+    expect(store.getSessionEntry(scope)?.authProfileOverride).toBe("openai:saved");
+    expect(
+      queries.filter((query) =>
+        /\b(?:session_nodes|session_entry_snapshots|session_windows)\b/i.test(query),
+      ),
+    ).toEqual([]);
+  });
+
   it("moves the target session to the profile returned by Telegram /login codex", async () => {
     const finishLogin = createDeferred<void>();
     loginSessionMocks.loadSessionStore.mockReturnValue({
@@ -840,7 +860,6 @@ describe("registerTelegramNativeCommands /login", () => {
         {},
       ),
     );
-    expect(sessionStore["agent:main:main"]?.authProfileOverride).toBe("openai:later-user-profile");
     expect(sendMessage).not.toHaveBeenCalledWith(
       100,
       "OpenAI login complete. Try your request again now.",

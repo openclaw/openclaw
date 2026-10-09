@@ -25,6 +25,9 @@ afterEach(async () => {
     for (const capture of logCaptures) {
       await capture.flush();
     }
+    if (vi.isFakeTimers()) {
+      expect(vi.getTimerCount()).toBe(0);
+    }
   } finally {
     for (const capture of logCaptures.splice(0)) {
       capture.cleanup();
@@ -114,6 +117,7 @@ describe("node desktop stream tickets", () => {
       const broker = createNodeDesktopStreamBroker();
       const session = { connId: "conn-1", pairingGeneration: "generation-1" };
       const baseUrl = await startBrokerServer({ broker, session });
+      const serverTimers = vi.getTimerCount();
       const binding = { nodeId: "node-1", ...session };
       const minted = kind === "desktop" ? broker.mint(binding) : broker.mintPortal(binding);
       const ws = await connectAndSend(
@@ -121,6 +125,7 @@ describe("node desktop stream tickets", () => {
         kind === "desktop" ? { auth: "vnc-password" } : { ok: true },
       );
       const { stream } = await minted.attached;
+      expect(vi.getTimerCount()).toBe(serverTimers + 1);
       const pings: Buffer[] = [];
       const streamBytes: Buffer[] = [];
       ws.on("ping", (data) => pings.push(data));
@@ -173,23 +178,32 @@ describe("node desktop stream tickets", () => {
       expect(serialized).not.toContain("resumed stream bytes");
       vi.advanceTimersByTime(25_000);
       expect(pings).toHaveLength(3);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(serverTimers);
     },
   );
 
-  it("is single-use and resolves one ticket-bound binary stream", async () => {
-    const broker = createNodeDesktopStreamBroker();
-    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
-    const baseUrl = await startBrokerServer({ broker, session });
-    const minted = broker.mint({ nodeId: "node-1", ...session });
+  it.each(
+    (["vnc-password", "ard-account"] as const).flatMap((auth) =>
+      [undefined, "synthetic-desktop-password"].map((vncPassword) => ({ auth, vncPassword })),
+    ),
+  )(
+    "is single-use and resolves one ticket-bound $auth stream with password $vncPassword",
+    async ({ auth, vncPassword }) => {
+      const broker = createNodeDesktopStreamBroker();
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const baseUrl = await startBrokerServer({ broker, session });
+      const minted = broker.mint({ nodeId: "node-1", ...session });
 
-    await connectAndSend(`${baseUrl}${minted.attachPath}`, { auth: "vnc-password" });
-    const attached = await minted.attached;
-    expect(attached.auth).toBe("vnc-password");
-    attached.stream.destroy();
+      const metadata = { auth, ...(vncPassword ? { vncPassword } : {}) };
+      await connectAndSend(`${baseUrl}${minted.attachPath}`, metadata);
+      const attached = await minted.attached;
+      expect(attached).toMatchObject(metadata);
+      expect(attached.vncPassword).toBe(vncPassword);
+      attached.stream.destroy();
 
-    await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
-  });
+      await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
+    },
+  );
 
   it("buffers early RFB bytes while the pairing binding is rechecked", async () => {
     let pairingChecks = 0;
@@ -252,12 +266,19 @@ describe("node desktop stream tickets", () => {
     releaseRecheck();
   });
 
-  it("rejects invalid metadata without exposing later WebSocket errors", async () => {
+  it.each([
+    { auth: "none" },
+    { auth: "vnc-password", vncPassword: 42 },
+    { auth: "ard-account", vncPassword: "secret", username: "worker" },
+    { auth: "ard-account", vncPassword: "x".repeat(64) },
+    { auth: "ard-account", vncPassword: "" },
+    { auth: "ard-account", vncPassword: "nul\0" },
+  ])("rejects invalid metadata %j without exposing later WebSocket errors", async (metadata) => {
     const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };
     const baseUrl = await startBrokerServer({ broker, session });
     const minted = broker.mint({ nodeId: "node-1", ...session });
-    const ws = await connectAndSend(`${baseUrl}${minted.attachPath}`, { auth: "none" });
+    const ws = await connectAndSend(`${baseUrl}${minted.attachPath}`, metadata);
     ws.send(Buffer.alloc(65 * 1024), { binary: true });
 
     await expect(minted.attached).rejects.toThrow();

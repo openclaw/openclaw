@@ -5,7 +5,10 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
-import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import {
+  parseDockerImageConfigVersion,
+  resolveDockerReleasePolicy,
+} from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { parsePlatform, verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
@@ -42,12 +45,11 @@ const VARIANTS = Object.freeze([
  * @property {boolean} [allowRollback]
  * @property {DockerExec} [execFileSyncImpl]
  * @property {(message: string) => void} [log]
+ * @property {() => void} [revalidateAuthority]
  * @property {(params: DockerAttestationParams) => void} [verifyAttestationsImpl]
  */
 
 /**
- * Build the version-specific source to moving-alias promotion plan.
- *
  * @param {DockerPromotionParams} params
  */
 export function createDockerChannelPromotionPlan({
@@ -83,7 +85,12 @@ export function createDockerChannelPromotionPlan({
   return { channel: policy.channel, promotions, version: policy.version };
 }
 
-function runDocker(args, execFileSyncImpl) {
+/** @param {string[]} args
+ * @param {DockerExec} execFileSyncImpl
+ * @param {() => void} [revalidateAuthority]
+ */
+function runDocker(args, execFileSyncImpl, revalidateAuthority) {
+  revalidateAuthority?.();
   return execFileSyncImpl("docker", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -141,20 +148,8 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
       throw error;
     }
 
-    let version;
-    try {
-      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
-    } catch (error) {
-      throw new Error(`Could not parse the ${platformName} image config for ${imageRef}.`, {
-        cause: error,
-      });
-    }
-    if (typeof version !== "string" || version.trim().length === 0) {
-      throw new Error(
-        `${imageRef} does not have an org.opencontainers.image.version label for ${platformName}.`,
-      );
-    }
-    versions.set(platformName, version.trim());
+    const version = parseDockerImageConfigVersion(raw, imageRef, platformName);
+    versions.set(platformName, version);
   }
   const uniqueVersions = new Set(versions.values());
   if (uniqueVersions.size !== 1) {
@@ -201,8 +196,6 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
 }
 
 /**
- * Promote every planned alias and verify the registry result.
- *
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */
@@ -238,6 +231,8 @@ export function promoteDockerChannel(params, options = {}) {
 
   for (const promotion of resolved) {
     const targetArgs = promotion.targetRefs.flatMap((targetRef) => ["--tag", targetRef]);
+    // Candidate publication carries the admission owner through all source and
+    // rollback reads. Standalone historical promotions retain their own gate.
     runDocker(
       [
         "buildx",
@@ -248,6 +243,7 @@ export function promoteDockerChannel(params, options = {}) {
         promotion.sourceDigestRef,
       ],
       execFileSyncImpl,
+      options.revalidateAuthority,
     );
     for (const targetRef of promotion.targetRefs) {
       const targetDigest = inspectManifestDigest(targetRef, execFileSyncImpl);

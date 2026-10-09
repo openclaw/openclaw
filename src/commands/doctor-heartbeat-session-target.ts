@@ -1,5 +1,4 @@
 import fs from "node:fs";
-/** Doctor warnings for heartbeat.session values that resolve to missing delivery sessions. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -24,14 +23,11 @@ import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
  * Warning only — repair would mean rewriting the config, which is the
  * operator's intent to express.
  */
-export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): string[] {
+export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): Promise<string[]> {
   const warnings: string[] = [];
   const sessionScope = cfg.session?.scope ?? "per-sender";
   for (const { agentId, heartbeat: heartbeatConfig } of resolveHeartbeatAgents(cfg)) {
-    if (!heartbeatConfig) {
-      continue;
-    }
-    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
+    if (!heartbeatConfig || !resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
       continue;
     }
     const configuredSession = normalizeOptionalString(heartbeatConfig.session);
@@ -42,20 +38,19 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     // `main` / `global` resolve to the agent main session via
     // `resolveHeartbeatSession`; missing entries fall back to the same key
     // and are repaired elsewhere — don't double-warn here.
-    if (normalizedSession === "main" || normalizedSession === "global") {
-      continue;
-    }
-    if (isSubagentSessionKey(configuredSession)) {
-      continue;
-    }
-    if (sessionScope === "global") {
+    if (
+      normalizedSession === "main" ||
+      normalizedSession === "global" ||
+      isSubagentSessionKey(configuredSession) ||
+      sessionScope === "global"
+    ) {
       continue;
     }
     const target = normalizeOptionalString(heartbeatConfig.target);
     if (target === "none") {
       continue;
     }
-    const deliveryWithoutSession = resolveHeartbeatDeliveryTarget({
+    const deliveryWithoutSession = await resolveHeartbeatDeliveryTarget({
       cfg,
       agentId,
       heartbeat: heartbeatConfig,
@@ -106,7 +101,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
         ? `  Heartbeats will skip with reason="no-route" until that session has a delivery route.`
         : `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped.`;
     const fix = ownerTarget
-      ? `  Fix: set commands.ownerAllowFrom or a channel allowFrom to a direct-message owner, set heartbeat.target="none", or choose an explicit heartbeat target.`
+      ? `  Fix: set commands.ownerAllowFrom=["telegram:123456789"] or a channel allowFrom to a direct-message owner; for explicit delivery, set heartbeat.target="telegram" with heartbeat.to="123456789"; use heartbeat.target="none" to suppress delivery.`
       : `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`;
     warnings.push(
       [

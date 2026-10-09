@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Discord tests cover transcripts source plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Guild, RequestClient } from "../internal/discord.js";
 import {
+  bindDiscordCaptureReceipts,
   discordVoiceTranscriptsSourceProvider,
   setDiscordTranscriptsVoiceManager,
 } from "./transcripts-source.js";
@@ -41,6 +43,61 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     }
     managers.clear();
     vi.useRealTimers();
+  });
+
+  it("publishes recording epochs before asynchronous start and stop transport work", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const stopEntered = createDeferred<void>();
+    const stopRelease = createDeferred<void>();
+    registerManager({
+      accountId: "receipt-test",
+      manager: {
+        startTranscriptsCapture: vi.fn(async () => {
+          entered.resolve();
+          await release.promise;
+          return { ok: true, message: "joined" };
+        }),
+        stopTranscriptsCapture: vi.fn(async () => {
+          stopEntered.resolve();
+          await stopRelease.promise;
+        }),
+      },
+    });
+    const manager = managers.get("receipt-test")!;
+    const source = { accountId: "receipt-test", guildId: "guild", channelId: "voice" };
+    const reader = bindDiscordCaptureReceipts(source, manager);
+    const clock = new BigInt64Array(reader.state);
+    expect(Atomics.load(clock, 0)).toBe(0n);
+    const starting = discordVoiceTranscriptsSourceProvider.start!({
+      session: {
+        sessionId: "epoch-a",
+        source: { providerId: "discord-voice", ...source },
+        startedAt: new Date().toISOString(),
+      },
+      onUtterance: vi.fn(),
+    });
+    try {
+      await entered.promise;
+      const epoch = Atomics.load(clock, 0);
+      expect(epoch).not.toBe(0n);
+      expect(reader.resolve(epoch)?.sessionId).toBe("epoch-a");
+      expect(reader.resolve(0n)).toBeUndefined();
+      const stopping = discordVoiceTranscriptsSourceProvider.stop!({
+        sessionId: "epoch-a",
+        source: { providerId: "discord-voice", ...source },
+      });
+      await stopEntered.promise;
+      expect(Atomics.load(clock, 0)).toBe(0n);
+      expect(reader.resolve(epoch)).toBeUndefined();
+      stopRelease.resolve();
+      await stopping;
+    } finally {
+      release.resolve();
+      stopRelease.resolve();
+      await starting;
+      reader.close();
+    }
   });
 
   it("declares Discord as its account ownership namespace", () => {

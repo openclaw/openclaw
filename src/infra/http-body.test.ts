@@ -2,7 +2,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
@@ -11,8 +10,13 @@ import {
   type RequestBodyLimitErrorCode,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
-  testApi,
 } from "./http-body.js";
+
+vi.mock("node:timers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers")>()),
+  setTimeout: (callback: () => void, delay: number) => globalThis.setTimeout(callback, delay),
+  clearTimeout: (timer: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(timer),
+}));
 
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
@@ -137,11 +141,6 @@ describe("http body limits", () => {
     vi.useRealTimers();
   });
 
-  it("reads body within max bytes", async () => {
-    const req = createMockRequest({ chunks: ['{"ok":true}'] });
-    await expect(readRequestBodyWithLimit(req, { maxBytes: 1024 })).resolves.toBe('{"ok":true}');
-  });
-
   it.each([
     {
       name: "rejects oversized streamed body",
@@ -208,15 +207,23 @@ describe("http body limits", () => {
   });
 
   it("does not overflow oversized request body timeouts into immediate failures", async () => {
-    expect(
-      testApi.resolveRequestBodyLimitValues({
+    vi.useFakeTimers();
+    try {
+      const req = createMockRequest({ emitEnd: false });
+      const result = readRequestBodyWithLimit(req, {
         maxBytes: 128,
         timeoutMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).toEqual({
-      maxBytes: 128,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS,
-    });
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      req.emit("data", Buffer.from("ok"));
+      req.emit("end");
+      await expect(result).resolves.toEqual({ value: "ok" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces connection-closed as a typed limit error", async () => {

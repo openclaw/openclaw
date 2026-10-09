@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
@@ -28,10 +29,7 @@ import {
   isExecApprovalFollowupSessionRebound,
   registerExecApprovalFollowupRuntimeHandoff,
 } from "./bash-tools.exec-approval-followup-state.js";
-import {
-  buildExecApprovalContinuationFallbackPrompt,
-  buildExecApprovalContinuationPrompt,
-} from "./bash-tools.exec-approval-output.js";
+import { buildExecApprovalContinuationFallbackPrompt } from "./bash-tools.exec-approval-output.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
@@ -48,11 +46,9 @@ const DIRECT_FOLLOWUP_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const;
-const AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS = 5 * 60;
 const AGENT_FOLLOWUP_WAIT_TIMEOUT_MS = 60_000;
 const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
-const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS =
-  AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS * 1_000 + AGENT_FOLLOWUP_WAIT_TIMEOUT_MS;
+const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS = 6 * 60_000;
 
 async function callExecApprovalFollowupGateway(
   method: "agent" | "agent.wait",
@@ -124,15 +120,6 @@ function formatUnknownError(error: unknown): string {
   }
 }
 
-/** Builds the prompt used to resume an agent after an approved async exec completes. */
-function buildExecApprovalFollowupPrompt(resultText: string): string {
-  const trimmed = resultText.trim();
-  if (isExecDeniedResultText(trimmed)) {
-    return buildExecDeniedFollowupPrompt(trimmed);
-  }
-  return buildExecApprovalContinuationPrompt(resultText).message;
-}
-
 function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
 }
@@ -190,40 +177,26 @@ function formatDirectExecApprovalFollowupText(
     return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
   }
 
+  const metadata =
+    parsed.kind === "finished" ? normalizeLowercaseStringOrEmpty(parsed.metadata) : "";
+  const body = redactToolPayloadText(
+    renderUserFacingText(
+      parsed.kind === "finished" || parsed.kind === "completed" ? parsed.body : parsed.raw,
+      { errorContext: !metadata.includes("code 0") },
+    ),
+  ).trim();
   if (parsed.kind === "finished") {
-    const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, {
-        errorContext: !metadata.includes("code 0"),
-      }),
-    ).trim();
-
-    let prefix = "";
-    if (!body) {
-      prefix = metadata.includes("code 0")
+    return (
+      body ||
+      (metadata.includes("code 0")
         ? "Background command finished."
         : metadata.includes("signal")
           ? "Background command stopped unexpectedly."
-          : "Background command finished with an error.";
-    }
-
-    return body ? `${prefix ? `${prefix}\n\n` : ""}${body}` : prefix || null;
+          : "Background command finished with an error.")
+    );
   }
 
-  if (parsed.kind === "completed") {
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, { errorContext: true }),
-    ).trim();
-    return body || "Background command finished.";
-  }
-
-  return (
-    redactToolPayloadText(renderUserFacingText(parsed.raw, { errorContext: true })).trim() || null
-  );
-}
-
-function buildSessionResumeFallbackPrefix(): string {
-  return "Automatic session resume failed, so sending the status directly.\n\n";
+  return body || (parsed.kind === "completed" ? "Background command finished." : null);
 }
 
 function readGatewayStatus(value: unknown): string | undefined {
@@ -246,10 +219,6 @@ function buildFollowupWaitError(params: { status?: string; error?: unknown }): E
         ? `: ${params.status}`
         : "";
   return new Error(`exec approval followup session resume failed${suffix}`);
-}
-
-function isSuccessfulFollowupStatus(status: string | undefined): boolean {
-  return status === "ok";
 }
 
 function hasTerminalFollowupEvidence(value: unknown): boolean {
@@ -300,16 +269,13 @@ async function waitForAgentFollowupRun(params: {
         return { status: "observation_ended", reason: "deadline", transportErrors };
       }
       if (consecutiveTransportErrors > 1) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, retryDelayMs);
-          timer.unref?.();
-        });
+        await sleepWithAbort(retryDelayMs, undefined, { ref: false });
       }
       continue;
     }
     consecutiveTransportErrors = 0;
     const status = readGatewayStatus(wait);
-    if (isSuccessfulFollowupStatus(status)) {
+    if (status === "ok") {
       return { status: "completed" };
     }
     if (hasTerminalFollowupEvidence(wait)) {
@@ -330,10 +296,6 @@ function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
     return true;
   }
   return !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0");
-}
-
-function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
-  return sessionError !== null;
 }
 
 function buildAgentFollowupArgs(params: {
@@ -361,7 +323,7 @@ function buildAgentFollowupArgs(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
     message: isDenied
-      ? buildExecApprovalFollowupPrompt(params.resultText)
+      ? buildExecDeniedFollowupPrompt(params.resultText)
       : buildExecApprovalContinuationFallbackPrompt(params.resultText),
     inputProvenance: {
       kind: "inter_session" as const,
@@ -387,7 +349,6 @@ function buildAgentFollowupArgs(params: {
     ...(params.internalRuntimeHandoffId
       ? { internalRuntimeHandoffId: params.internalRuntimeHandoffId }
       : {}),
-    timeout: AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS,
   };
 }
 
@@ -400,7 +361,7 @@ async function sendDirectFollowupFallback(params: {
   allowDenied?: boolean;
 }): Promise<boolean> {
   const directText = formatDirectExecApprovalFollowupText(params.resultText, {
-    allowDenied: params.allowDenied ?? canDirectSendDeniedFollowup(params.sessionError),
+    allowDenied: params.allowDenied ?? params.sessionError !== null,
   });
   if (!params.deliveryTarget.deliver || !directText) {
     return false;
@@ -408,7 +369,7 @@ async function sendDirectFollowupFallback(params: {
 
   const prefix =
     !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-      ? buildSessionResumeFallbackPrefix()
+      ? "Automatic session resume failed, so sending the status directly.\n\n"
       : "";
   const availableBodyUnits =
     DIRECT_FOLLOWUP_MAX_UTF16_UNITS - prefix.length - DIRECT_FOLLOWUP_TRUNCATION_MARKER.length - 1;
@@ -508,7 +469,7 @@ export async function sendExecApprovalFollowup(
       });
       const accepted = await callExecApprovalFollowupGateway("agent", 60_000, agentArgs);
       const status = readGatewayStatus(accepted);
-      if (isSuccessfulFollowupStatus(status)) {
+      if (status === "ok") {
         return true;
       }
       if (status === "accepted" || status === "in_flight" || status === "pending") {
@@ -547,44 +508,6 @@ export async function sendExecApprovalFollowup(
     }
   }
 
-  if (isDenied) {
-    if (
-      isExecApprovalFollowupDirectDeliveryStale({
-        agentId: params.agentId,
-        sessionKey,
-        expectedSessionId: params.expectedSessionId,
-        sessionStore: params.sessionStore,
-      })
-    ) {
-      emitDiagnosticEvent({
-        type: "exec.approval.followup_suppressed",
-        approvalId: params.approvalId,
-        reason: "session_rebound",
-        phase: "direct_delivery",
-      });
-      log.info(
-        `Dropping stale denied exec approval followup ${params.approvalId}: session ${sessionKey ?? ""} was rebound before the approval resolved`,
-      );
-      return false;
-    }
-    if (
-      await sendDirectFollowupFallback({
-        approvalId: params.approvalId,
-        agentId: params.agentId,
-        deliveryTarget,
-        resultText,
-        sessionError,
-        allowDenied: true,
-      })
-    ) {
-      return true;
-    }
-    if (sessionError) {
-      throw new Error(`Session followup failed: ${formatUnknownError(sessionError)}`);
-    }
-    return false;
-  }
-
   if (
     isExecApprovalFollowupDirectDeliveryStale({
       agentId: params.agentId,
@@ -600,7 +523,9 @@ export async function sendExecApprovalFollowup(
       phase: "direct_delivery",
     });
     log.info(
-      `Dropping stale exec approval followup ${params.approvalId} direct fallback: session ${sessionKey ?? ""} was rebound before the approval resolved`,
+      isDenied
+        ? `Dropping stale denied exec approval followup ${params.approvalId}: session ${sessionKey ?? ""} was rebound before the approval resolved`
+        : `Dropping stale exec approval followup ${params.approvalId} direct fallback: session ${sessionKey ?? ""} was rebound before the approval resolved`,
     );
     return false;
   }
@@ -612,6 +537,7 @@ export async function sendExecApprovalFollowup(
       deliveryTarget,
       resultText,
       sessionError,
+      ...(isDenied ? { allowDenied: true } : {}),
     })
   ) {
     return true;

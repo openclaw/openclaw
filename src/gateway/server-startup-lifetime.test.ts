@@ -20,6 +20,7 @@ import {
   releaseSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { selectCurrentPluginMetadataCache } from "../plugins/current-plugin-metadata-state.js";
 import {
   getLegacyPluginSdkResourceHost,
@@ -99,21 +100,6 @@ function createStartupTestState(label: string) {
   });
 }
 
-function registerSecretsClearFailure(
-  register: (hook: () => void) => void,
-  error: Error,
-): () => void {
-  let failure: Error | undefined = error;
-  register(function failRegisteredSecretsClear() {
-    if (failure) {
-      throw failure;
-    }
-  });
-  return () => {
-    failure = undefined;
-  };
-}
-
 describe("Gateway startup lifetime", () => {
   it.each(["donor", "metadata cache", "metadata borrower"] as const)(
     "releases idle prepared %s custody when one of two Gateways closes",
@@ -159,13 +145,13 @@ describe("Gateway startup lifetime", () => {
       const previous = captureActivePluginRegistrySnapshot();
       const bootstrapModule = await import("./server-startup-bootstrap.js");
       const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
-      const registries: ReturnType<typeof loadAndActivateRootPluginRegistry>[] = [];
+      const registries: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>>[] = [];
       const gatewayResolvers: GatewayContextResolver[] = [];
       const bootstrapSpy = vi
         .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
         .mockImplementation(async (...args) => {
           const result = await bootstrap(...args);
-          const registry = loadAndActivateRootPluginRegistry({
+          const registry = await loadAndActivateRootPluginRegistry({
             config,
             env: state.env,
             workspaceDir: state.workspaceDir,
@@ -510,25 +496,27 @@ describe("Gateway startup lifetime", () => {
       }> = [];
       const metadataSpy = vi
         .spyOn(metadataModule, "retainGatewayPluginMetadata")
-        .mockImplementation(() => {
-          const owner = retainMetadata();
+        .mockImplementation((...metadataArgs) => {
+          const owner = retainMetadata(...metadataArgs);
           const released = vi.fn();
           const close = owner.close.bind(owner);
           vi.spyOn(owner, "close").mockImplementation(async (...args) => {
-            await close(...args);
+            const result = await close(...args);
             released();
+            return result;
           });
           metadataOwners.push({ owner, released });
           return owner;
         });
+      const clearSecrets = secretsModule.clearSecretsRuntimeSnapshotState;
       const clearSecretsSpy = vi.spyOn(secretsModule, "clearSecretsRuntimeSnapshotState");
-      const clearError = new Error("synthetic registered secrets clear failure");
-      const stopClearFailure = clearFails
-        ? registerSecretsClearFailure(
-            secretsModule.registerSecretsRuntimeStateClearHook,
-            clearError,
-          )
-        : undefined;
+      const clearError = new Error("synthetic secrets clear failure");
+      if (clearFails) {
+        clearSecretsSpy.mockImplementation(() => {
+          clearSecrets();
+          throw clearError;
+        });
+      }
       const database = new DatabaseSync(":memory:");
       const entered = createDeferred();
       const resume = createDeferred();
@@ -598,7 +586,6 @@ describe("Gateway startup lifetime", () => {
         expect(clearSecretsSpy).toHaveBeenCalledOnce();
         expect(metadataOwners[0]?.released).toHaveBeenCalledOnce();
       } finally {
-        stopClearFailure?.();
         resume.resolve();
         await outcome;
         bootstrapSpy.mockRestore();
@@ -887,96 +874,134 @@ describe("Gateway startup lifetime", () => {
     },
   );
 
-  it("releases post-ready startup work after failure before joining cleanup", async () => {
-    const port = await getFreePort();
-    const state = await createStartupTestState("gateway-post-ready-startup-failure");
-    const startupError = new Error("startup failed after post-attach installation");
-    const emergencyRelease = createDeferred();
-    const drainEntered = createDeferred<{ barrierReleased: boolean }>();
-    const resumed = vi.fn<(state: { closing: boolean; listening: boolean }) => void>();
-    let barrierReleased = false;
-    let emergencyUsed = false;
-    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-    let postReadyWork: Promise<void> | undefined;
-    let startupOutcome: Promise<unknown> | undefined;
-    let unexpectedServer: GatewayServer | undefined;
-    const startupModule = await import("./server-startup-finish.js");
-    const finishStartup = startupModule.finishGatewayStartup;
-    const startupFactory = vi
-      .spyOn(startupModule, "finishGatewayStartup")
-      .mockImplementation(async (params) => {
-        const result = await finishStartup(params);
-        await result.startupSettled;
-        const owner = params.kernelRuntime;
-        kernel = owner;
-        const transport = owner.transportBridge.current();
-        if (!transport?.httpServer.listening) {
-          throw new Error("Expected the real Gateway listener before startup failure");
-        }
-        // Minimal boot skips this production continuation; retain the exact
-        // public-start barrier and work owner used by nonminimal post-attach.
-        const barrier = params.waitForPostReadyWork().then(() => {
-          barrierReleased = true;
-        });
-        const operation = (async () => {
-          const releasedBy = await Promise.race([
-            barrier.then(() => "gateway" as const),
-            emergencyRelease.promise.then(() => "fixture" as const),
-          ]);
-          emergencyUsed = releasedBy === "fixture";
-          resumed({
-            closing: owner.lifecycle.closePreludeStarted,
-            listening: transport.httpServer.listening,
+  it.each([false, true])(
+    "releases post-ready startup work after failure before joining cleanup (cleanup fails: %s)",
+    async (cleanupFails) => {
+      const port = await getFreePort();
+      const state = await createStartupTestState("gateway-post-ready-startup-failure");
+      const startupError = new Error("startup failed after post-attach installation");
+      const cleanupError = new Error("startup cleanup failed");
+      let failCleanup = cleanupFails;
+      const cleanupOwner = {
+        stop: vi.fn(async () => {
+          if (failCleanup) {
+            throw cleanupError;
+          }
+        }),
+      };
+      const emergencyRelease = createDeferred();
+      const drainEntered = createDeferred<{ barrierReleased: boolean }>();
+      const resumed = vi.fn<(state: { closing: boolean; listening: boolean }) => void>();
+      let barrierReleased = false;
+      let emergencyUsed = false;
+      let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+      let postReadyWork: Promise<void> | undefined;
+      let startupOutcome: Promise<unknown> | undefined;
+      let unexpectedServer: GatewayServer | undefined;
+      const startupModule = await import("./server-startup-finish.js");
+      const finishStartup = startupModule.finishGatewayStartup;
+      const startupFactory = vi
+        .spyOn(startupModule, "finishGatewayStartup")
+        .mockImplementation(async (params) => {
+          const result = await finishStartup(params);
+          await result.startupSettled;
+          const owner = params.kernelRuntime;
+          kernel = owner;
+          owner.registerGatewayLifetimeSidecars(cleanupOwner);
+          const transport = owner.transportBridge.current();
+          if (!transport?.httpServer.listening) {
+            throw new Error("Expected the real Gateway listener before startup failure");
+          }
+          // Minimal boot skips this production continuation; retain the exact
+          // public-start barrier and work owner used by nonminimal post-attach.
+          const barrier = params.waitForPostReadyWork().then(() => {
+            barrierReleased = true;
           });
-        })();
-        postReadyWork = owner.connectionWork.track(() => operation);
-        const drain = owner.connectionWork.drain.bind(owner.connectionWork);
-        vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
-          drainEntered.resolve({ barrierReleased });
-          await drain();
+          const operation = (async () => {
+            const releasedBy = await Promise.race([
+              barrier.then(() => "gateway" as const),
+              emergencyRelease.promise.then(() => "fixture" as const),
+            ]);
+            emergencyUsed = releasedBy === "fixture";
+            resumed({
+              closing: owner.lifecycle.closePreludeStarted,
+              listening: transport.httpServer.listening,
+            });
+          })();
+          postReadyWork = owner.connectionWork.track(() => operation);
+          const drain = owner.connectionWork.drain.bind(owner.connectionWork);
+          vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
+            drainEntered.resolve({ barrierReleased });
+            await drain();
+          });
+          throw startupError;
         });
-        throw startupError;
-      });
-    try {
-      const token = "gateway-post-ready-startup-token";
-      await state.writeConfig({
-        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-      });
-      state.applyEnv();
-      const { startGatewayServerCore } = await import("./server-start.js");
-      startupOutcome = startGatewayServerCore(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      }).then(
-        (server) => {
-          unexpectedServer = server;
-          return undefined;
-        },
-        (error: unknown) => error,
-      );
-      const boundary = await Promise.race([drainEntered.promise, startupOutcome]);
-      expect(boundary).toEqual({ barrierReleased: true });
-      expect(await startupOutcome).toBe(startupError);
-      await postReadyWork;
-      expect(emergencyUsed).toBe(false);
-      expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
-      expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
-    } finally {
-      // A broken catch path is already observable at drain entry. Release only
-      // the synthetic tail here so its original cleanup can finish before state removal.
-      emergencyRelease.resolve();
       try {
-        await Promise.all([startupOutcome, postReadyWork]);
-        await unexpectedServer?.close();
-        await state.cleanup();
+        const token = "gateway-post-ready-startup-token";
+        await state.writeConfig({
+          gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+        });
+        state.applyEnv();
+        const { startGatewayServerCore } = await import("./server-start.js");
+        startupOutcome = startGatewayServerCore(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }).then(
+          (server) => {
+            unexpectedServer = server;
+            return undefined;
+          },
+          (error: unknown) => error,
+        );
+        const boundary = await Promise.race([drainEntered.promise, startupOutcome]);
+        expect(boundary).toEqual({ barrierReleased: true });
+        const startupFailure = await startupOutcome;
+        if (cleanupFails) {
+          expect(startupFailure).toBeInstanceOf(AggregateError);
+          const aggregate = startupFailure as AggregateError & { cause?: unknown };
+          expect(aggregate.name).toBe("GatewayStartupCleanupError");
+          expect(aggregate.message).toBe(startupError.message);
+          expect(aggregate.errors).toHaveLength(2);
+          expect(aggregate.errors[0]).toBe(startupError);
+          expect(aggregate.cause).toBe(startupError);
+          const formatted = formatErrorMessage(startupFailure);
+          expect(formatted.startsWith(startupError.message)).toBe(true);
+          expect(formatted).toContain(cleanupError.message);
+          expect(formatted.indexOf(startupError.message)).toBeLessThan(
+            formatted.indexOf(cleanupError.message),
+          );
+        } else {
+          expect(startupFailure).toBe(startupError);
+        }
+        await postReadyWork;
+        expect(emergencyUsed).toBe(false);
+        expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
+        expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(cleanupFails);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (!cleanupFails) {
+          expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
+        }
+        expect(cleanupOwner.stop).toHaveBeenCalled();
       } finally {
-        startupFactory.mockRestore();
-        vi.restoreAllMocks();
+        // A broken catch path is already observable at drain entry. Release only
+        // the synthetic tail here so its original cleanup can finish before state removal.
+        emergencyRelease.resolve();
+        try {
+          await Promise.all([startupOutcome, postReadyWork]);
+          if (cleanupFails) {
+            failCleanup = false;
+            await kernel?.closeOnStartupFailure();
+          } else {
+            await unexpectedServer?.close();
+          }
+          await state.cleanup();
+        } finally {
+          startupFactory.mockRestore();
+          vi.restoreAllMocks();
+        }
       }
-    }
-  });
+    },
+  );
 });

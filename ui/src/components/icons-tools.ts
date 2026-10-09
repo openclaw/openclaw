@@ -1,15 +1,16 @@
-// Control UI tool icon set, split from icons.ts to keep both under the max-lines cap.
-import { html, svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { html, nothing, svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { neutralMark } from "./neutral-mark.ts";
 
 // Shared Lucide icon shell. Inline presentation attributes keep icons visible
 // inside shadow roots that global stylesheet icon rules cannot reach; CSS
 // rules still override them where a surface wants a different stroke width.
 // Bodies must be svg`` fragments: html`` would parse the shapes outside the
 // SVG namespace and they would silently render as nothing.
-export function strokeIcon(body: SVGTemplateResult): TemplateResult {
+export function strokeIcon(body: SVGTemplateResult, style?: string): TemplateResult {
   return html`
     <svg
       viewBox="0 0 24 24"
+      style=${style ?? nothing}
       fill="none"
       stroke="currentColor"
       stroke-width="2"
@@ -21,46 +22,24 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
   `;
 }
 
-const memoryIconBody = svg`
-  <path d="M18.8 5.6A8.5 8.5 0 1 0 18.8 18.4" />
-  <path d="M15.8 8.7a4.3 4.3 0 1 0 0 6.6" />
-  <circle cx="12" cy="12" r="1.35" fill="currentColor" stroke="none" />
-`;
-const fileToolOutline = svg`<path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-7-6ZM13 3v6h7" />`;
-const directoryToolOutline = svg`<path d="M3 8V5a1 1 0 0 1 1-1h6l3 4h7a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z" />`;
+// Lucide geometry shared by toolbar icons and keyboard symbols.
+export const keyboardIconShapes = {
+  "⌘": svg`<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />`,
+  "⌥": svg`<path d="M3 3h6l6 18h6M14 3h7" />`,
+  "⇧": svg`<path d="M9 19a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-6a1 1 0 0 1 1-1h3.293a.707.707 0 0 0 .5-1.207l-7.086-7.086a1 1 0 0 0-1.414 0l-7.086 7.086a.707.707 0 0 0 .5 1.207H8a1 1 0 0 1 1 1z" />`,
+  "⌃": svg`<path d="m18 15-6-6-6 6" />`,
+  "⏎": svg`<polyline points="9 10 4 15 9 20" /><path d="M20 4v7a4 4 0 0 1-4 4H4" />`,
+  "↑": svg`<path d="M12 19V5m-7 7 7-7 7 7" />`,
+  "↓": svg`<path d="M12 5v14m7-7-7 7-7-7" />`,
+  "←": svg`<path d="m12 19-7-7 7-7M19 12H5" />`,
+  "→": svg`<path d="M5 12h14m-7-7 7 7-7 7" />`,
+};
 
 export const toolIcons = {
-  memory: strokeIcon(memoryIconBody),
-  memoryStore: strokeIcon(svg`${memoryIconBody}<path d="M17.5 12H22M19.75 9.75v4.5" />`),
-  memoryForget: strokeIcon(svg`${memoryIconBody}<path d="M17.5 12H22" />`),
-  browserTool: strokeIcon(svg`
-    <path d="M14 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7M3 9h9" />
-    <path d="m14 3 7 4-5 2Z" fill="currentColor" stroke="none" />
-    <path d="m16 9-3 5" />
-  `),
-  canvasTool: strokeIcon(svg`
-    <path d="M10 3H5a2 2 0 0 0-2 2v5M14 21h5a2 2 0 0 0 2-2v-5M21 10V5a2 2 0 0 0-2-2h-5M3 14v5a2 2 0 0 0 2 2h5" />
-    <path d="m8 9 7-2 2 7-7 3Z" />
-  `),
-  diffsTool: strokeIcon(svg`
-    <path d="M9 3H4v18h5M15 3h5v18h-5M12 3v18" />
-    <path d="M6 9h3M15 15h3M16.5 13.5v3" />
-  `),
-  fileFetch: strokeIcon(svg`${fileToolOutline}<path d="M12 11v6m-3-3 3 3 3-3" />`),
-  fileWrite: strokeIcon(svg`${fileToolOutline}
-    <path d="m9 18 1-4 4-3 2 2-4 4Z" />
-    <path d="m11 13 2 2" />
-  `),
-  directoryList: strokeIcon(svg`${directoryToolOutline}
-    <path d="M11 12h6M11 16h6" />
-    <circle cx="7.5" cy="12" r="1" fill="currentColor" stroke="none" />
-    <circle cx="7.5" cy="16" r="1" fill="currentColor" stroke="none" />
-  `),
-  directoryFetch: strokeIcon(svg`${directoryToolOutline}<path d="M12 10.5V17m-3-3 3 3 3-3" />`),
-  intent: strokeIcon(svg`
-    <path d="M8 4H4v16h4M12 12h9m-3.5-3.5L21 12l-3.5 3.5" />
-    <circle cx="8" cy="12" r="1.4" fill="currentColor" stroke="none" />
-  `),
+  bookOpenText: strokeIcon(svg`<path d="M12 5v16M16 13h2M16 9h2" />
+    <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
+    <path d="M6 13h2M6 9h2" />`),
+  mark: neutralMark,
   shieldCheck: strokeIcon(
     svg`<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9 12l2 2 4-4" />`,
   ),

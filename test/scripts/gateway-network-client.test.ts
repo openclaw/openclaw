@@ -299,14 +299,24 @@ describe("gateway network client", () => {
   });
 
   it("rejects frame waits immediately when the socket closes", async () => {
-    const ws = new EventEmitter();
-    const startedAt = Date.now();
-    const frame = onceFrame(ws, () => false, 1000);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const ws = new EventEmitter();
+      const rejected = vi.fn();
+      const frame = onceFrame(ws, () => false, 1000).catch(rejected);
+      expect(vi.getTimerCount()).toBe(1);
 
-    ws.emit("close", 1006, Buffer.from("bye"));
+      ws.emit("close", 1006, Buffer.from("bye"));
+      await vi.advanceTimersByTimeAsync(0);
 
-    await expect(frame).rejects.toThrow("closed before frame: 1006 bye");
-    expect(Date.now() - startedAt).toBeLessThan(250);
+      expect(rejected).toHaveBeenCalledExactlyOnceWith(new Error("closed before frame: 1006 bye"));
+      expect(ws.eventNames()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      await frame;
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("rejects frame waits immediately on socket errors", async () => {

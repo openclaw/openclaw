@@ -1,6 +1,7 @@
 // Covers transport readiness polling.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 
 const transportReadyMocks = vi.hoisted(() => ({
@@ -132,6 +133,34 @@ describe("waitForTransportReady", () => {
     });
     expect(runtime.error).not.toHaveBeenCalled();
   });
+
+  it.each([50, 150])(
+    "stops quietly when aborted during a probe (%dms elapsed)",
+    async (elapsedMs) => {
+      vi.setSystemTime(0);
+      const runtime = createTestRuntime();
+      const controller = new AbortController();
+      const probe = createDeferred<{ ok: boolean; error: string }>();
+      const check = vi.fn(() => probe.promise);
+      const waitPromise = waitForTransportReady({
+        label: "test transport",
+        timeoutMs: 100,
+        logAfterMs: 0,
+        runtime,
+        abortSignal: controller.signal,
+        check,
+      });
+
+      expect(check).toHaveBeenCalledOnce();
+      controller.abort();
+      vi.setSystemTime(elapsedMs);
+      probe.resolve({ ok: false, error: "still down" });
+
+      await expect(waitPromise).resolves.toBeUndefined();
+      expect(check).toHaveBeenCalledOnce();
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops polling when aborted during the sleep interval", async () => {
     const runtime = createTestRuntime();

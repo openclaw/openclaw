@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
@@ -30,7 +31,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -51,6 +56,15 @@ describe("memory index", () => {
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.snippet).toMatch(/Alpha/i);
+    expect(Object.keys(results[0] ?? {}).slice(0, 7)).toEqual([
+      "path",
+      "startLine",
+      "endLine",
+      "score",
+      "textScore",
+      "snippet",
+      "source",
+    ]);
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
@@ -178,7 +192,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -287,7 +305,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -354,7 +376,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -405,7 +431,11 @@ describe("memory index", () => {
       extraPaths: [staleDir, freshDir],
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -442,7 +472,11 @@ describe("memory index", () => {
       extraPaths,
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -530,7 +564,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -572,7 +610,11 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     const manager = requireManager(result);
     trackManager(manager);
     resetManagerForTest(manager);
@@ -671,6 +713,30 @@ describe("memory index", () => {
       expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
     },
   );
+
+  it("recalls an ASCII term embedded in an unspaced Chinese query", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        ftsTokenizer: "trigram",
+        minScore: 0,
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "deploy.md"),
+      "上周我们决定用React部署前端服务",
+    );
+    await fs.writeFile(path.join(fixture.paths.memory, "other.md"), "午饭吃了面条");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("用react部署方案", { maxResults: 5, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/deploy.md"]);
+  });
 
   it("keeps substring-only body ranking within an exact hybrid tier", async () => {
     const manager = await getPersistentManager(

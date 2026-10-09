@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import {
   prepareTsdownBuildExecution,
-  resolveStagedSdkDeclarationConcurrency,
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_UNIFIED_CACHE_ENV,
 } from "../tsdown-build.mts";
@@ -44,6 +44,7 @@ export async function writeTsdownDeclarations(
   try {
     // The private child retains declared cwd ownership; snapshot/output paths are physical.
     await withDistArtifactOwnership(process.cwd(), async () => {
+      await ensureKyselyTypes(root);
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
       const staging = createStage();
@@ -74,7 +75,7 @@ export async function writeTsdownDeclarations(
         ) {
           throw new Error(`Missing canonical declaration group ${name}`);
         }
-        // Runtime worker entries are absolute; declaration partitions are checkout-relative.
+        // Runtime worker entries are absolute; declaration roots are checkout-relative.
         const entries = Object.entries(config.entry).map(
           ([entry, inputs]) =>
             [entry, [inputs].flat().map((input) => path.resolve(root, input))] as const,
@@ -125,8 +126,7 @@ export async function writeTsdownDeclarations(
           cache: {
             env: TSDOWN_UNIFIED_CACHE_ENV,
             inputs: generatorInputs,
-            // An empty canonical partition still owns its successful compiler
-            // receipt. Ordinary cache records never admit an empty inventory.
+            // Successful publication includes the compiler membership receipt.
             outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }, receipt],
             requiredOutputs: [...required.map((entry) => `dist/${entry}`), receipt],
             restore: "always",
@@ -165,16 +165,7 @@ export async function writeTsdownDeclarations(
           throw new Error("Declaration cache changed before restoration; rerun the build");
         }
       }
-      // Empty partitions still produce receipts, but only two nonempty SDK misses
-      // may overlap. All other plans retain dependency-ordered serial execution.
       const misses = prepared.filter((group) => !group.state?.fresh);
-      const concurrency = misses.every(
-        (group) => group.required.length > 0 && group.plan.invocations.length === 1,
-      )
-        ? resolveStagedSdkDeclarationConcurrency(
-            misses.map((group) => ({ name: group.name, maxOldSpaceMb: group.plan.maxOldSpaceMb })),
-          )
-        : 1;
       const plan = {
         ...prepared[0]!.plan,
         invocations: misses.flatMap((group) => group.plan.invocations),
@@ -206,7 +197,6 @@ export async function writeTsdownDeclarations(
             }
           }
         },
-        concurrency,
       );
       for (const group of prepared) {
         if (group.state && !group.state.fresh) {

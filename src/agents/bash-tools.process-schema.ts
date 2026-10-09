@@ -1,10 +1,13 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
+import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 
 const sessionProperties = {
   sessionId: Type.String(),
   name: Type.Optional(Type.String()),
 };
 const inputProperties = {
+  followUp: Type.Optional(Type.String()),
   stdinWritable: Type.Boolean(),
   waitingForInput: Type.Boolean(),
   idleMs: Type.Number(),
@@ -29,9 +32,12 @@ const sessionListProperties = {
 };
 const closed = { additionalProperties: false } as const;
 
-/** Structured process details, shared by eager and lazy tool construction. */
-export const ProcessToolOutputSchema = Type.Union([
-  Type.Object({ status: Type.Literal("failed"), error: Type.String() }, closed),
+const ProcessFailureSchema = Type.Object(
+  { status: Type.Literal("failed"), error: Type.String() },
+  closed,
+);
+const ProcessListOutputSchema = Type.Union([
+  ProcessFailureSchema,
   Type.Object(
     {
       status: Type.Literal("completed"),
@@ -60,7 +66,9 @@ export const ProcessToolOutputSchema = Type.Union([
     },
     closed,
   ),
-  Type.Object({ status: Type.Literal("running"), ...sessionProperties }, closed),
+]);
+const ProcessPollOutputSchema = Type.Union([
+  ProcessFailureSchema,
   Type.Object(
     {
       status: Type.Literal("running"),
@@ -75,19 +83,64 @@ export const ProcessToolOutputSchema = Type.Union([
     { status: terminalStatus, ...sessionProperties, ...exitProperties, aggregated: Type.String() },
     closed,
   ),
+]);
+const logProperties = {
+  ...sessionProperties,
+  output: Type.String(),
+  total: Type.Number(),
+  totalLines: Type.Number(),
+  totalChars: Type.Number(),
+  truncated: Type.Boolean(),
+};
+const ProcessLogOutputSchema = Type.Union([
+  ProcessFailureSchema,
   Type.Object(
     {
-      status: Type.Union([Type.Literal("running"), terminalStatus]),
-      ...sessionProperties,
-      ...exitProperties,
-      ...Type.Partial(Type.Object(inputProperties)).properties,
-      output: Type.String(),
-      total: Type.Number(),
-      totalLines: Type.Number(),
-      totalChars: Type.Number(),
-      truncated: Type.Boolean(),
+      ...logProperties,
+      // An exited session still in the running registry retains input details.
+      status: Type.Union([Type.Literal("running"), Type.Literal("completed")]),
+      ...inputProperties,
     },
     closed,
   ),
+  Type.Object({ ...logProperties, status: terminalStatus, ...exitProperties }, closed),
+]);
+const ProcessInputOutputSchema = Type.Union([
+  ProcessFailureSchema,
+  Type.Object({ status: Type.Literal("running"), ...sessionProperties }, closed),
+]);
+const ProcessControlOutputSchema = Type.Union([
+  ProcessFailureSchema,
   Type.Object({ status: Type.Literal("completed"), name: Type.Optional(Type.String()) }, closed),
 ]);
+
+/** Poll is the only process action that returns an aggregate for one session. */
+export function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
+  );
+}
+
+/** Structured process details, shared by eager and lazy tool construction. */
+export const ProcessToolOutputSchema = defineToolOutputSchema({
+  inputProperty: "action",
+  variants: {
+    list: ProcessListOutputSchema,
+    poll: ProcessPollOutputSchema,
+    log: ProcessLogOutputSchema,
+    write: ProcessInputOutputSchema,
+    "send-keys": ProcessInputOutputSchema,
+    submit: ProcessInputOutputSchema,
+    paste: ProcessInputOutputSchema,
+    kill: ProcessControlOutputSchema,
+    clear: ProcessControlOutputSchema,
+    remove: ProcessControlOutputSchema,
+  },
+});

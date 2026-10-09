@@ -1,9 +1,14 @@
-import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { workerBundleArchiveEntrypoint } from "./worker-bundle-archive-runtime.test-support.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   extractWorkerBundleArchive,
@@ -76,6 +81,94 @@ describe("worker bundle archive", () => {
     await expect(
       readWorkerBundleArchiveManifest(archive, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
     ).rejects.toThrow("Invalid worker bundle tar entry");
+  });
+
+  it.each([
+    { name: "duplicate paths", paths: ["worker.mjs", "worker.mjs"], error: "Duplicate" },
+    { name: "unsafe paths", paths: ["../worker.mjs"], error: "Invalid worker bundle archive path" },
+    {
+      name: "entry limit",
+      paths: ["worker.mjs", "other.mjs"],
+      maxEntries: 1,
+      error: "entry limit",
+    },
+    {
+      name: "byte limit",
+      paths: ["worker.mjs"],
+      maxExpandedBytes: 1,
+      error: "expanded byte limit",
+    },
+  ])("rejects $name without crashing or reading the remaining archive", async (scenario) => {
+    const chunks: Buffer[] = [];
+    for (const entryPath of scenario.paths) {
+      const header = Buffer.alloc(512);
+      new tar.Header({ path: entryPath, type: "File", mode: 0o600, size: 2 }).encode(header);
+      chunks.push(header, Buffer.from("ok"), Buffer.alloc(510));
+    }
+    const tail = randomBytes(1024 * 1024);
+    const tailHeader = Buffer.alloc(512);
+    new tar.Header({ path: "tail", type: "File", mode: 0o600, size: tail.length }).encode(
+      tailHeader,
+    );
+    const bytes = Buffer.concat([...chunks, tailHeader, tail, Buffer.alloc(1024)]);
+    const limits = {
+      maxEntries: scenario.maxEntries ?? 10,
+      maxExpandedBytes: scenario.maxExpandedBytes ?? bytes.length,
+    };
+    // Callback exceptions used to escape the promise and terminate the process.
+    const archiveUrl = resolveRuntimeWorkerUrl(workerBundleArchiveEntrypoint);
+    const probe = `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const createReadStream = fs.createReadStream;
+      let input;
+      // Exercise header-boundary cancellation without a transfer-sized fixture.
+      fs.createReadStream = (file, options) =>
+        (input = createReadStream(file, { ...options, highWaterMark: 1024 }));
+      syncBuiltinESMExports();
+      const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
+      await assert.rejects(
+        readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(limits)}),
+        { message: new RegExp(${JSON.stringify(scenario.error)}) },
+      );
+      assert.equal(input.closed, true);
+      assert.ok(input.bytesRead < fs.statSync(process.argv[1]).size);
+    `;
+    for (const compressed of [false, true]) {
+      const archive = path.join(root, compressed ? "invalid.tgz" : "invalid.tar");
+      await fs.writeFile(archive, compressed ? gzipSync(bytes) : bytes);
+      const result = await promisify(execFile)(
+        process.execPath,
+        [
+          ...resolveRuntimeWorkerArgv(archiveUrl).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          probe,
+          archive,
+        ],
+        { timeout: 10_000 },
+      );
+      expect(result.stderr).toBe("");
+    }
+  });
+
+  it("preserves archive ratio admission with a highly compressible prefix", async () => {
+    const source = path.join(root, "ratio-source");
+    const archive = path.join(root, "ratio.tgz");
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, "zeros"), Buffer.alloc(5 * 1024 * 1024));
+    await fs.writeFile(path.join(source, "tail"), randomBytes(2 * 1024 * 1024));
+    await tar.create({ cwd: source, file: archive, gzip: true }, ["zeros", "tail"]);
+
+    const manifest = await readWorkerBundleArchiveManifest(
+      archive,
+      DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+    );
+    expect(manifest.map(({ path: entryPath, size }) => ({ path: entryPath, size }))).toEqual([
+      { path: "tail", size: 2 * 1024 * 1024 },
+      { path: "zeros", size: 5 * 1024 * 1024 },
+    ]);
   });
 
   it.each(["replacement", "oversized", "symlink"] as const)(

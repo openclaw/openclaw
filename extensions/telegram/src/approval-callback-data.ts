@@ -1,4 +1,3 @@
-// Telegram plugin module implements approval callback data behavior.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
 
@@ -6,6 +5,17 @@ export const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
 const TELEGRAM_APPROVAL_CALLBACK_PREFIX = "tga1:";
 
 export type TelegramApprovalCallback = Extract<MessagePresentationAction, { type: "approval" }>;
+
+const APPROVAL_KINDS = [
+  ["exec", "e"],
+  ["plugin", "p"],
+  ["system-agent", "s"],
+] as const;
+const APPROVAL_DECISIONS = [
+  ["allow-once", "o"],
+  ["allow-always", "a"],
+  ["deny", "d"],
+] as const;
 
 // `(?![\s\S])` is an absolute end-of-input anchor; `$` also matches before a
 // final line terminator, which would make the fixed-length alias slice corrupt it.
@@ -25,27 +35,10 @@ export function hasTelegramApprovalCallbackPrefix(data?: string | null): boolean
 export function buildTelegramApprovalCallbackData(
   action: TelegramApprovalCallback,
 ): string | undefined {
-  if (!action.approvalId) {
-    return undefined;
-  }
   const approvalKind = action.approvalKind;
-  const kind =
-    approvalKind === "exec"
-      ? "e"
-      : approvalKind === "plugin"
-        ? "p"
-        : approvalKind === "system-agent"
-          ? "s"
-          : null;
-  const decision =
-    action.decision === "allow-once"
-      ? "o"
-      : action.decision === "allow-always"
-        ? "a"
-        : action.decision === "deny"
-          ? "d"
-          : null;
-  if (!kind || !decision) {
+  const kind = APPROVAL_KINDS.find(([value]) => value === approvalKind)?.[1];
+  const decision = APPROVAL_DECISIONS.find(([value]) => value === action.decision)?.[1];
+  if (!action.approvalId || !kind || !decision) {
     return undefined;
   }
   const encode = (approvalId: string) =>
@@ -70,34 +63,19 @@ export function parseTelegramApprovalCallbackData(
   if (encoded.length < 5 || encoded[1] !== ":" || encoded[3] !== ":") {
     return null;
   }
-  const approvalKind =
-    encoded[0] === "e"
-      ? "exec"
-      : encoded[0] === "p"
-        ? "plugin"
-        : encoded[0] === "s"
-          ? "system-agent"
-          : null;
-  const decision =
-    encoded[2] === "o"
-      ? "allow-once"
-      : encoded[2] === "a"
-        ? "allow-always"
-        : encoded[2] === "d"
-          ? "deny"
-          : null;
+  const approvalKind = APPROVAL_KINDS.find(([, code]) => code === encoded[0])?.[0];
+  const decision = APPROVAL_DECISIONS.find(([, code]) => code === encoded[2])?.[0];
   const approvalId = encoded.slice(4);
-  if (!approvalKind || !decision || !approvalId) {
+  if (!approvalKind || !decision) {
     return null;
   }
   return { type: "approval", approvalId, approvalKind, decision };
 }
 
 export function rewriteTelegramApprovalDecisionAlias(value: string): string {
-  if (!TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN.test(value)) {
-    return value;
-  }
-  return value.slice(0, -"allow-always".length) + "always";
+  return TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN.test(value)
+    ? value.slice(0, -"allow-always".length) + "always"
+    : value;
 }
 
 export function sanitizeTelegramCallbackData(value: string): string | undefined {

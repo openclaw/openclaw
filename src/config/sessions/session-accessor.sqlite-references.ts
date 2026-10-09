@@ -1,19 +1,10 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  executeSqliteQuerySync,
-  iterateSqliteQuerySync,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
+import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
-import {
-  isRecentSessionMaintenanceEntry,
-  isSessionEntryDiskBudgetEvictable,
-} from "./store-maintenance.js";
+import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { isSessionEntryDiskBudgetEvictable } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 /** Every transcript generation retained by one canonical logical-session record. */
@@ -30,7 +21,7 @@ export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
   for (const sessionId of entry.usageFamilySessionIds ?? []) {
     add(sessionId);
   }
-  for (const checkpoint of entry.compactionCheckpoints ?? []) {
+  for (const checkpoint of readLegacyCompactionHistory(entry)) {
     add(checkpoint.sessionId);
     add(checkpoint.preCompaction.sessionId);
     add(checkpoint.postCompaction.sessionId);
@@ -59,7 +50,7 @@ export function addRetainedWindowSessionReferences(
       "session_nodes.updated_at",
       "session_nodes.pinned_at",
     ])
-    .$if(diskBudget !== undefined, (projection) => projection.select(sessionEntryMetadataJson))
+    .$if(diskBudget !== undefined, (projection) => projection.select("session_nodes.entry_json"))
     .where((eb) =>
       eb.or([
         eb("session_nodes.archived_at", "is not", null),
@@ -89,40 +80,4 @@ export function addRetainedWindowSessionReferences(
     }
     sessionIds.add(row.session_id);
   }
-}
-
-export function isRecentHistoricalSessionId(params: {
-  database: OpenClawAgentDatabase;
-  preserveRecentMs?: number | null;
-  sessionId: string;
-}): boolean {
-  if (params.preserveRecentMs == null) {
-    return false;
-  }
-  const db = getSessionKysely(params.database.db);
-  const row = executeSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
-      .select([
-        "session_nodes.current_session_id",
-        "session_nodes.entry_json",
-        "session_nodes.session_key",
-        "session_nodes.updated_at",
-      ])
-      .where("session_windows.session_id", "=", params.sessionId),
-  ).rows[0];
-  if (!row) {
-    return false;
-  }
-  const entry = parseSessionEntryJson(row);
-  return Boolean(
-    entry &&
-    isRecentSessionMaintenanceEntry({
-      key: row.session_key,
-      entry,
-      preserveRecentMs: params.preserveRecentMs,
-    }),
-  );
 }

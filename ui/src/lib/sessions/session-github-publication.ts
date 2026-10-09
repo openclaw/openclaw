@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
@@ -13,7 +14,11 @@ import type {
   SessionConnectionOwner,
   SessionGateway,
 } from "./session-capability.ts";
-import { isUiGlobalSessionKey, resolveUiConversationIdentity } from "./session-key.ts";
+import {
+  isUiGlobalSessionKey,
+  resolveUiConversationIdentity,
+  scopedSessionArtifactKey,
+} from "./session-key.ts";
 
 const MAX_RETAINED_PUBLICATIONS = 32;
 
@@ -33,13 +38,24 @@ function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
     sharingRole: row.sharingRole,
     visibility: row.visibility,
     archived: row.archived,
+    worktree: row.worktree ? { ...row.worktree } : undefined,
+    repositoryWorkspaceId: row.repositoryWorkspaceId,
+    repository: row.repository ? { ...row.repository } : undefined,
   };
 }
 
 function authority(row: GatewaySessionRow): string {
-  return JSON.stringify([row.sessionId, row.sharingRole, row.visibility, row.archived === true]);
+  const workspace = row.repositoryWorkspaceId
+    ? ["repository", row.repositoryWorkspaceId, row.repository?.branch]
+    : ["worktree", row.worktree?.id, row.worktree?.branch, row.worktree?.repoRoot];
+  return JSON.stringify([
+    row.sessionId,
+    row.sharingRole,
+    row.visibility,
+    row.archived === true,
+    ...workspace,
+  ]);
 }
-
 function identity(snapshot: SessionGateway["snapshot"]): string {
   return JSON.stringify([
     snapshot.selfUser?.identity ?? null,
@@ -197,6 +213,39 @@ export function createSessionGitHubPublication(host: Host) {
             }).result?.sessions[0]
           : row,
       );
+      if (asNullableRecord(payload)?.reason === "github-publication") {
+        const entry = entries.get(key);
+        if (entry?.current()) {
+          entry.controller.invalidate();
+        }
+      }
+    },
+    observePullRequests(payload: unknown) {
+      const snapshots = asNullableRecord(asNullableRecord(payload)?.sessions);
+      if (!snapshots) {
+        return;
+      }
+      for (const entry of entries.values()) {
+        const snapshot = asNullableRecord(
+          snapshots[scopedSessionArtifactKey(entry.row.key, entry.row.agentId)],
+        );
+        if (snapshot?.status !== "ready" || !Array.isArray(snapshot.pullRequests)) {
+          continue;
+        }
+        // The Gateway decides coverage. Recheck held failure on fresh PR evidence,
+        // even with the same head: an earlier coverage read may have been unavailable.
+        // Existing controller coalescing shares this read across presentations.
+        if (entry.current() && entry.controller.result?.status === "failed") {
+          entry.controller.invalidate();
+        }
+      }
+    },
+    invalidate() {
+      for (const entry of entries.values()) {
+        if (entry.current()) {
+          entry.controller.invalidate();
+        }
+      }
     },
     clear() {
       for (const [key, entry] of entries) {

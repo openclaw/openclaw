@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime state files behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findFilesByName } from "./scenario-runtime-find-files.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
@@ -35,38 +35,6 @@ async function readJsonFile(pathname: string): Promise<unknown> {
 
 async function writeJsonFile(pathname: string, value: unknown) {
   await fs.writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function findFilesByName(params: {
-  filename: string;
-  rootDir: string;
-  maxDepth?: number;
-}): Promise<string[]> {
-  const maxDepth = params.maxDepth ?? 8;
-  const matches: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (depth > maxDepth) {
-      return;
-    }
-    let entries: Array<{ isDirectory(): boolean; isFile(): boolean; name: string }>;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === params.filename) {
-        matches.push(entryPath);
-        continue;
-      }
-      if (entry.isDirectory()) {
-        await visit(entryPath, depth + 1);
-      }
-    }
-  }
-  await visit(params.rootDir, 0);
-  return matches.toSorted();
 }
 
 function readPersistedMatrixSyncCursor(parsed: unknown): string | null {
@@ -123,16 +91,18 @@ function parsePluginStateJson(raw: unknown): unknown {
   }
 }
 
-function readMatrixSyncCacheCursorFromRows(
-  rows: Array<{ entryKey?: unknown; valueJson?: unknown }>,
-): MatrixSyncStoreCursor[] {
+function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson?: unknown }>) {
   const rowsByKey = new Map<string, unknown>();
   for (const row of rows) {
     if (typeof row.entryKey === "string") {
       rowsByKey.set(row.entryKey, parsePluginStateJson(row.valueJson));
     }
   }
-  const cursors: MatrixSyncStoreCursor[] = [];
+  const entries: Array<{
+    cursor: string;
+    stateKey: string;
+    sync: unknown;
+  }> = [];
   for (const [entryKey, rawMeta] of rowsByKey) {
     if (!entryKey.endsWith(":meta") || !isRecord(rawMeta) || rawMeta.kind !== "meta") {
       continue;
@@ -158,17 +128,16 @@ function readMatrixSyncCacheCursorFromRows(
       continue;
     }
     try {
-      const cursor = readPersistedMatrixSyncCursor({
-        savedSync: JSON.parse(chunks.join("")) as unknown,
-      });
+      const sync: unknown = JSON.parse(chunks.join(""));
+      const cursor = readPersistedMatrixSyncCursor({ savedSync: sync });
       if (cursor) {
-        cursors.push({ cursor, pathname: "", source: "sqlite", stateKey });
+        entries.push({ cursor, stateKey, sync });
       }
     } catch {
       continue;
     }
   }
-  return cursors;
+  return entries;
 }
 
 async function readMatrixSyncCacheCursorsFromSqlite(
@@ -203,8 +172,8 @@ async function readMatrixSyncCacheCursorsFromSqlite(
           entryKey?: unknown;
           valueJson?: unknown;
         }>;
-        for (const cursor of readMatrixSyncCacheCursorFromRows(rows)) {
-          cursors.push({ ...cursor, pathname: databasePath });
+        for (const { cursor, stateKey } of readMatrixSyncCacheFromRows(rows)) {
+          cursors.push({ cursor, pathname: databasePath, source: "sqlite", stateKey });
         }
       } finally {
         db.close();
@@ -236,10 +205,6 @@ function chunkMatrixSyncCacheJson(value: string): string[] {
   return chunks;
 }
 
-function digestText(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 async function rewriteMatrixSyncCacheRows(params: {
   cursor: string;
   pathname: string;
@@ -265,30 +230,14 @@ async function rewriteMatrixSyncCacheRows(params: {
     if (!isRecord(meta)) {
       throw new Error("Matrix sync cache metadata row was missing");
     }
-    const cursorEntry = readMatrixSyncCacheCursorFromRows(rows)[0];
+    const cursorEntry = readMatrixSyncCacheFromRows(rows).find(
+      (entry) => entry.stateKey === params.stateKey,
+    );
     if (!cursorEntry) {
       throw new Error("Matrix sync cache did not contain a persisted sync cursor");
     }
-    const generation = typeof meta.generation === "string" ? meta.generation : "";
-    const chunkCount =
-      typeof meta.chunkCount === "number" &&
-      Number.isSafeInteger(meta.chunkCount) &&
-      meta.chunkCount <= MATRIX_SYNC_CACHE_MAX_CHUNKS
-        ? meta.chunkCount
-        : 0;
-    const chunks: string[] = [];
-    for (let index = 0; index < chunkCount; index += 1) {
-      const chunk = parsePluginStateJson(
-        rows.find((row) => row.entryKey === `${params.stateKey}:sync:${generation}:${index}`)
-          ?.valueJson,
-      );
-      if (!isRecord(chunk) || typeof chunk.data !== "string") {
-        throw new Error("Matrix sync cache chunk row was missing");
-      }
-      chunks.push(chunk.data);
-    }
     const syncJson = JSON.stringify(
-      writePersistedMatrixSyncCursor(JSON.parse(chunks.join("")), params.cursor),
+      writePersistedMatrixSyncCursor(cursorEntry.sync, params.cursor),
     );
     const nextGeneration = randomUUID().replaceAll("-", "");
     const nextChunks = chunkMatrixSyncCacheJson(syncJson);
@@ -316,7 +265,7 @@ async function rewriteMatrixSyncCacheRows(params: {
         ...meta,
         generation: nextGeneration,
         chunkCount: nextChunks.length,
-        syncDigest: digestText(syncJson),
+        syncDigest: createHash("sha256").update(syncJson, "utf8").digest("hex"),
       }),
       now,
     );

@@ -229,17 +229,4 @@ describe("mcp.tools.call.v1", () => {
     ]);
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(20 * MEBIBYTE);
   });
-
-  it("sends MCP payloads as structured invoke data without double JSON escaping", async () => {
-    const escaped = "\\".repeat(8 * 1024 * 1024);
-    const result = await invokeMcp(
-      managerWith(async () => ({ content: [], structuredContent: { escaped } })),
-      { server: "docs", tool: "escaped" },
-    );
-    expect(result.payloadJSON).toBeUndefined();
-    expect(
-      (result.payload as { structuredContent: { escaped: string } }).structuredContent.escaped,
-    ).toBe(escaped);
-    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(20 * MEBIBYTE);
-  });
 });

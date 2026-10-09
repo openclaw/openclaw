@@ -61,27 +61,3 @@ export function reattachTerminalSessionHosts(
     forceTerminalRender(activeTab.controller);
   }
 }
-
-export function fitActiveTerminalSession(
-  tabs: readonly TerminalPanelSessionTab[],
-  activeId: string | null,
-): void {
-  tabs.find((tab) => tab.id === activeId)?.controller.fit();
-}
-
-export function fitAllTerminalSessions(tabs: readonly TerminalPanelSessionTab[]): void {
-  for (const tab of tabs) {
-    tab.controller.fit();
-  }
-}
-
-export function prepareTerminalSessionHostVisibility(
-  tabs: readonly TerminalPanelSessionTab[],
-  activeId: string | null,
-): void {
-  // Keep only the active session's host visible; ghostty renders to a canvas
-  // that must be laid out to measure correctly.
-  for (const tab of tabs) {
-    tab.host.style.display = tab.id === activeId ? "block" : "none";
-  }
-}

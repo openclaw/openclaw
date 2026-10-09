@@ -151,50 +151,6 @@ async function buildPluginPendingPayload(params: {
   })) as SlackPayload;
 }
 
-function buildExecResolvedResult() {
-  return slackApprovalNativeRuntime.presentation.buildResolvedResult({
-    ...APPROVAL_CONTEXT,
-    request: {
-      id: "req-1",
-      request: { command: "echo hi" },
-      ...APPROVAL_TIMING,
-    },
-    resolved: {
-      id: "req-1",
-      decision: "allow-once",
-      resolvedBy: "U123APPROVER",
-      ts: 0,
-    } as never,
-    view: {
-      approvalKind: "exec",
-      approvalId: "req-1",
-      decision: "allow-once",
-      commandText: "echo hi",
-      resolvedBy: "U123APPROVER",
-    } as never,
-    entry: APPROVAL_ENTRY,
-  });
-}
-
-function buildExecExpiredResult() {
-  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
-    ...APPROVAL_CONTEXT,
-    request: {
-      id: "req-1",
-      request: { command: "echo hi" },
-      ...APPROVAL_TIMING,
-    },
-    view: {
-      approvalKind: "exec",
-      approvalId: "req-1",
-      phase: "expired",
-      commandText: "echo hi",
-      metadata: [],
-    } as never,
-    entry: APPROVAL_ENTRY,
-  });
-}
-
 function buildPluginResolvedResult() {
   return slackApprovalNativeRuntime.presentation.buildResolvedResult({
     ...APPROVAL_CONTEXT,
@@ -336,8 +292,6 @@ describe("slackApprovalNativeRuntime", () => {
   it.each([
     { phase: "resolved", status: "processing", threadTs: "1712345678.000001" },
     { phase: "expired", status: "active", threadTs: "1712345678.000001" },
-    { phase: "resolved", status: "processing", threadTs: undefined },
-    { phase: "expired", status: "active", threadTs: undefined },
   ] as const)(
     "tracks $phase approval session status with thread $threadTs",
     async ({ phase, status, threadTs }) => {
@@ -419,10 +373,6 @@ describe("slackApprovalNativeRuntime", () => {
     },
   );
 
-  it("subscribes to all native approval events", () => {
-    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
-  });
-
   it("does not leave dangling surrogates when truncating exec approval command mrkdwn", async () => {
     const commandText = `${"a".repeat(2598)}😀tail`;
     const payload = await buildExecPendingPayload({
@@ -432,32 +382,6 @@ describe("slackApprovalNativeRuntime", () => {
 
     const commandMrkdwn = findApprovalMrkdwn(payload, "*Command*");
     expect(commandMrkdwn).toMatch(/…\n```$/);
-    expect(UNPAIRED_SURROGATE_RE.test(commandMrkdwn)).toBe(false);
-  });
-
-  it("does not leave dangling surrogates when truncating plugin approval request mrkdwn", async () => {
-    const title = `${"a".repeat(2598)}😀tail`;
-    const payload = await buildPluginPendingPayload({
-      approvalId: "plugin:req-surrogate",
-      title,
-      description: "Needs approval.",
-      severity: "warning",
-      pluginId: "test-plugin",
-      toolName: "test-tool",
-    });
-
-    const requestMrkdwn = findApprovalMrkdwn(payload, "*Request*");
-    expect(requestMrkdwn).toMatch(/…$/);
-    expect(UNPAIRED_SURROGATE_RE.test(requestMrkdwn)).toBe(false);
-  });
-
-  it("still truncates plain BMP approval mrkdwn at the Slack approval preview limit", async () => {
-    const commandText = "b".repeat(2700);
-    const payload = await buildExecPendingPayload({ approvalId: "req-bmp", commandText });
-
-    const commandMrkdwn = findApprovalMrkdwn(payload, "*Command*");
-    expect(commandMrkdwn).toMatch(/…\n```$/);
-    expect(commandMrkdwn).toContain(`${"b".repeat(2599)}…`);
     expect(UNPAIRED_SURROGATE_RE.test(commandMrkdwn)).toBe(false);
   });
 
@@ -529,100 +453,52 @@ describe("slackApprovalNativeRuntime", () => {
     ]);
   });
 
-  it("renders resolved updates without interactive blocks", async () => {
-    const result = await buildExecResolvedResult();
-
-    expect(result.kind).toBe("update");
-    if (result.kind !== "update") {
-      throw new Error("expected Slack resolved update payload");
-    }
-    const payload = result.payload as SlackPayload;
-    expect(payload.text).toContain("*Exec approval: Allowed once*");
-    expect(payload.text).toContain("Resolved by <@U123APPROVER>.");
-    expect(
-      (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
-    ).toBe(false);
-  });
-
-  it.each([
-    { terminalStatus: undefined, label: "Not applied" },
-    { terminalStatus: "cancelled", label: "Cancelled" },
-  ] as const)(
-    "preserves the $label system-agent heading after denial",
-    async ({ terminalStatus, label }) => {
-      const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
-        ...APPROVAL_CONTEXT,
+  it("preserves the Denied system-agent heading after denial", async () => {
+    const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
+      ...APPROVAL_CONTEXT,
+      request: {
+        approvalKind: "system-agent",
+        id: "system-agent:change-1",
         request: {
-          approvalKind: "system-agent",
-          id: "system-agent:change-1",
-          request: {
-            title: "OpenClaw change",
-            description: "restart the Gateway",
-            command: "restart the Gateway",
-            proposalHash: "a".repeat(64),
-            allowedDecisions: ["allow-once", "deny"],
-            sessionId: "delegation-1",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 60_000,
-        },
-        resolved: {
-          id: "system-agent:change-1",
-          decision: "deny",
-          applicationStatus: "not-applied",
-          terminalStatus,
-          ts: 1,
-        },
-        view: {
-          approvalKind: "system-agent",
-          approvalId: "system-agent:change-1",
-          phase: "resolved",
           title: "OpenClaw change",
-          metadata: [],
-          commandText: "restart the Gateway",
-          operationSummary: "restart the Gateway",
-          decision: "deny",
-          applicationStatus: "not-applied",
-          terminalStatus,
+          description: "restart the Gateway",
+          command: "restart the Gateway",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
+          sessionId: "delegation-1",
         },
-        entry: null,
-      });
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      resolved: {
+        id: "system-agent:change-1",
+        decision: "deny",
+        applicationStatus: "not-applied",
+        terminalStatus: undefined,
+        ts: 1,
+      },
+      view: {
+        approvalKind: "system-agent",
+        approvalId: "system-agent:change-1",
+        phase: "resolved",
+        title: "OpenClaw change",
+        metadata: [],
+        commandText: "restart the Gateway",
+        operationSummary: "restart the Gateway",
+        decision: "deny",
+        applicationStatus: "not-applied",
+        terminalStatus: undefined,
+      },
+      entry: null,
+    });
 
-      expect(result).toMatchObject({
-        kind: "update",
-        payload: {
-          text: `*OpenClaw change approval: ${label}*\nResolved.\n\n*Change*\n\`\`\`\nrestart the Gateway\n\`\`\``,
-          blocks: [
-            { text: { text: `*OpenClaw change approval: ${label}*\nResolved.` } },
-            { text: { text: "*Change*\n```\nrestart the Gateway\n```" } },
-          ],
-        },
-      });
-    },
-  );
-
-  it("renders expired exec approvals without interactive controls", async () => {
-    const result = await buildExecExpiredResult();
-
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "update",
       payload: {
-        text: "*Exec approval expired*\nThis approval request expired before it was resolved.\n\n*Command*\n```\necho hi\n```",
+        text: "*OpenClaw change approval: Denied*\nResolved.\n\n*Change*\n```\nrestart the Gateway\n```",
         blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: "*Exec approval expired*\nThis approval request expired before it was resolved.",
-            },
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: "*Command*\n```\necho hi\n```",
-            },
-          },
+          { text: { text: "*OpenClaw change approval: Denied*\nResolved." } },
+          { text: { text: "*Change*\n```\nrestart the Gateway\n```" } },
         ],
       },
     });

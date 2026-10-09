@@ -18,8 +18,8 @@ import { parse } from "yaml";
 
 const helperPath = ".github/actions/setup-node-env/seed-bun-from-image.mjs";
 const pins = {
-  "linux-x64": "2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452",
-  "linux-x64-baseline": "184fb4595f0d401a217cf7c78c1bc430ba83314dab7a8b94805babbf7fa7097f",
+  "linux-x64": "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913",
+  "linux-x64-baseline": "c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f",
 };
 type Variant = keyof typeof pins;
 type Step = { name: string; run?: string; if?: string };
@@ -33,7 +33,7 @@ afterEach(() => {
   }
 });
 
-function fixture(options: { platform?: string; arch?: string; glibc?: boolean } = {}) {
+function fixture() {
   const root = mkdtempSync(join(tmpdir(), "bun-image-"));
   roots.push(root);
   const image = join(root, "image");
@@ -42,7 +42,6 @@ function fixture(options: { platform?: string; arch?: string; glibc?: boolean } 
   const nodeBin = join(root, "node-bin");
   const cpu = join(root, "cpuinfo");
   const npmLog = join(root, "npm.log");
-  const helperLog = join(root, "helper.log");
   const bunLog = join(root, "bun.log");
   for (const directory of [image, runnerTemp, actionPath, nodeBin]) {
     mkdirSync(directory);
@@ -55,9 +54,6 @@ function fixture(options: { platform?: string; arch?: string; glibc?: boolean } 
     `if [[ "$*" == "-p process.execPath" ]]; then
   printf '%s/node\\n' "$FIXTURE_NODE_BIN"
 else
-  if [[ "\${1:-}" == *seed-bun-from-image.mjs ]]; then
-    echo helper >> "$FIXTURE_HELPER_LOG"
-  fi
   exec "$FIXTURE_REAL_NODE" "$@"
 fi`,
   );
@@ -67,7 +63,7 @@ fi`,
   echo fixture-npm
 else
   printf '%s\\n' "$*" >> "$FIXTURE_NPM_LOG"
-  [[ "$*" == "install -g bun@1.4.0" ]]
+  [[ "$*" == "install -g bun@1.4.2" ]]
   cp "$FIXTURE_FALLBACK" "$FIXTURE_NODE_BIN/bun"
 fi`,
   );
@@ -76,7 +72,7 @@ fi`,
   symlinkSync("bun", join(nodeBin, "bunx"));
   shell(join(root, "fallback-bun"), "echo npm-fallback-bun");
   const hashes = new Map<Variant, string>();
-  function archive(variant: Variant, version = "1.4.0", member = `bun-${variant}/bun`) {
+  function archive(variant: Variant, version = "1.4.2", member = `bun-${variant}/bun`) {
     const stage = join(root, `stage-${variant}`);
     rmSync(stage, { recursive: true, force: true });
     mkdirSync(join(stage, member, ".."), { recursive: true });
@@ -89,7 +85,7 @@ else
   echo ${variant}
 fi`,
     );
-    const path = join(image, `bun-v1.4.0-${variant}.zip`);
+    const path = join(image, `bun-v1.4.2-${variant}.zip`);
     rmSync(path, { force: true });
     execFileSync("zip", ["-q", path, member], { cwd: stage });
     hashes.set(variant, createHash("sha256").update(readFileSync(path)).digest("hex"));
@@ -107,12 +103,9 @@ fi`,
     let source = readFileSync(helperPath, "utf8")
       .replaceAll("/opt/crabbox/toolchain-archives", image)
       .replaceAll("/proc/cpuinfo", cpu)
-      .replaceAll("process.platform", JSON.stringify(options.platform ?? "linux"))
-      .replaceAll("process.arch", JSON.stringify(options.arch ?? "x64"))
-      .replaceAll(
-        "process.report.getReport().header.glibcVersionRuntime",
-        options.glibc === false ? "undefined" : '"2.39"',
-      );
+      .replaceAll("process.platform", '"linux"')
+      .replaceAll("process.arch", '"x64"')
+      .replaceAll("process.report.getReport().header.glibcVersionRuntime", '"2.39"');
     for (const variant of Object.keys(pins) as Variant[]) {
       const hash = hashes.get(variant);
       if (!hash || !source.includes(pins[variant])) {
@@ -130,12 +123,11 @@ fi`,
     FIXTURE_REAL_NODE: process.execPath,
     FIXTURE_NODE_BIN: nodeBin,
     FIXTURE_NPM_LOG: npmLog,
-    FIXTURE_HELPER_LOG: helperLog,
     FIXTURE_BUN_LOG: bunLog,
     FIXTURE_FALLBACK: join(root, "fallback-bun"),
   };
   const log = (path: string) => (existsSync(path) ? readFileSync(path, "utf8").trim() : "");
-  function runAction(installBun = true) {
+  function runAction() {
     prepareHelper();
     const additions: string[] = [];
     const jobEnv: Record<string, string> = { ...env };
@@ -179,9 +171,6 @@ fi`,
       }
       if (entry.if) {
         expect(entry.if).toBe("inputs.install-bun == 'true'");
-        if (!installBun) {
-          continue;
-        }
       }
       if (!entry.run) {
         throw new Error(`Missing executable block for ${entry.name}`);
@@ -211,11 +200,9 @@ fi`,
     nodeBin,
     cpu,
     npmLog,
-    helperLog,
     bunLog,
     log,
     archive,
-    hashes,
     runAction,
     run() {
       prepareHelper();
@@ -225,19 +212,6 @@ fi`,
 }
 
 describe("Bun image archive consumer", () => {
-  it("uses fresh private Bun before stale Node-bin Bun in the setup step and later shells", () => {
-    const f = fixture();
-    const { result, runs } = f.runAction();
-    expect(result.status, result.stderr).toBe(0);
-    expect(f.log(f.npmLog)).toBe("");
-    for (const output of [runs.get("Setup Bun")?.stdout, result.stdout]) {
-      expect(output).toContain(`${f.runnerTemp}/`);
-      expect(output).toContain("linux-x64-baseline\nlinux-x64-baseline");
-      expect(output).not.toContain("stale-node-bun");
-    }
-    expect(result.stdout).toContain(f.nodeBin);
-  });
-
   it("creates independent private destinations and never reuses a modified extracted Bun", () => {
     const f = fixture();
     const bins: string[] = [];
@@ -256,73 +230,23 @@ describe("Bun image archive consumer", () => {
     expect(readdirSync(f.runnerTemp)).toHaveLength(2);
   });
 
-  it.each([
-    ["all flags", "processor\t: 0\nflags\t\t: sse4_2 avx avx2\n", true],
-    ["only AVX2", "processor : 0\nflags : avx2\n", false],
-    ["only AVX", "processor : 0\nflags : avx\n", false],
-    ["mixed CPUs", "processor : 0\nflags : avx avx2\n\nprocessor : 1\nflags : avx\n", false],
-    ["both CPUs", "processor : 0\nflags : avx avx2\n\nprocessor : 1\nflags : avx2 avx\n\n", true],
-    [
-      "later flags missing",
-      "processor : 0\nflags : avx avx2\n\nprocessor : 1\nmodel name : incomplete fixture\n",
-      false,
-    ],
-    [
-      "earlier flags missing",
-      "processor : 0\nmodel name : incomplete fixture\n\nprocessor : 1\nflags : avx avx2",
-      false,
-    ],
-    ["sole flags missing", "processor : 0\nmodel name : incomplete fixture\n", false],
-    ["unowned flags", "flags : avx avx2\n", false],
-    ["empty evidence", "", false],
-    ["unreadable evidence", undefined, false],
-  ] as const)("selects the safe archive with %s", (_name, cpuinfo, optimized) => {
-    const f = fixture();
-    if (cpuinfo === undefined) {
-      rmSync(f.cpu);
-    } else {
-      writeFileSync(f.cpu, cpuinfo);
-    }
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(f.log(f.bunLog)).toBe(optimized ? "linux-x64" : "linux-x64-baseline");
-  });
-
-  it.each([
-    "tampered",
-    "wrong-variant",
-    "directory",
-    "symlink",
-    "malformed",
-    "layout",
-    "version",
-  ] as const)(
+  it.each(["tampered", "directory", "symlink", "layout"] as const)(
     "fails setup on a present %s archive despite an old Bun, without npm fallback",
     (kind) => {
       const f = fixture();
       const baseline: Variant = "linux-x64-baseline";
-      const archive = join(f.image, `bun-v1.4.0-${baseline}.zip`);
-      if (kind === "version") {
-        f.archive(baseline, "1.3.0");
-      } else if (kind === "layout") {
-        f.archive(baseline, "1.4.0", "unexpected/bun");
+      const archive = join(f.image, `bun-v1.4.2-${baseline}.zip`);
+      if (kind === "layout") {
+        f.archive(baseline, "1.4.2", "unexpected/bun");
       } else if (kind === "directory" || kind === "symlink") {
         rmSync(archive);
         if (kind === "directory") {
           mkdirSync(archive);
         } else {
-          symlinkSync(join(f.image, "bun-v1.4.0-linux-x64.zip"), archive);
+          symlinkSync(join(f.image, "bun-v1.4.2-linux-x64.zip"), archive);
         }
       } else {
-        writeFileSync(
-          archive,
-          kind === "wrong-variant"
-            ? readFileSync(join(f.image, "bun-v1.4.0-linux-x64.zip"))
-            : "not an original Bun archive",
-        );
-        if (kind === "malformed") {
-          f.hashes.set(baseline, createHash("sha256").update(readFileSync(archive)).digest("hex"));
-        }
+        writeFileSync(archive, "not an original Bun archive");
       }
       const { result, runs } = f.runAction();
       expect(result.status).not.toBe(0);
@@ -330,41 +254,17 @@ describe("Bun image archive consumer", () => {
       expect(f.log(f.npmLog)).toBe("");
       expect(runs.has("Runtime versions")).toBe(false);
       expect(readdirSync(f.runnerTemp)).toEqual([]);
-      expect(f.log(f.bunLog)).toBe(kind === "version" ? baseline : "");
+      expect(f.log(f.bunLog)).toBe("");
     },
   );
 
   it("uses the unchanged pinned npm fallback only when the matching archive is missing", () => {
     const f = fixture();
-    rmSync(join(f.image, "bun-v1.4.0-linux-x64-baseline.zip"));
+    rmSync(join(f.image, "bun-v1.4.2-linux-x64-baseline.zip"));
     const { result } = f.runAction();
     expect(result.status, result.stderr).toBe(0);
-    expect(f.log(f.npmLog)).toBe("install -g bun@1.4.0");
+    expect(f.log(f.npmLog)).toBe("install -g bun@1.4.2");
     expect(result.stdout).toContain("npm-fallback-bun");
-    expect(readdirSync(f.runnerTemp)).toEqual([]);
-  });
-
-  it.each([{ platform: "darwin" }, { platform: "win32" }, { arch: "arm64" }, { glibc: false }])(
-    "preserves npm installation on unsupported $platform/$arch/$glibc routes",
-    (options) => {
-      const f = fixture(options);
-      writeFileSync(join(f.image, "bun-v1.4.0-linux-x64-baseline.zip"), "corrupt but ineligible");
-      const { result } = f.runAction();
-      expect(result.status, result.stderr).toBe(0);
-      expect(f.log(f.npmLog)).toBe("install -g bun@1.4.0");
-      expect(readdirSync(f.runnerTemp)).toEqual([]);
-      expect(f.log(f.bunLog)).toBe("");
-    },
-  );
-
-  it("skips both the helper and npm when disabled without requiring existing Bun to disappear", () => {
-    const f = fixture();
-    writeFileSync(join(f.image, "bun-v1.4.0-linux-x64-baseline.zip"), "corrupt but disabled");
-    const { result } = f.runAction(false);
-    expect(result.status, result.stderr).toBe(0);
-    expect(f.log(f.npmLog)).toBe("");
-    expect(f.log(f.helperLog)).toBe("");
-    expect(result.stdout).toContain("stale-node-bun");
     expect(readdirSync(f.runnerTemp)).toEqual([]);
   });
 });

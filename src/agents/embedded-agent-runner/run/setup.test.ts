@@ -1,11 +1,15 @@
 // Setup tests cover model-resolution hooks and effective runtime model context
 // metadata before an embedded run starts.
 import { describe, expect, it, vi } from "vitest";
+import { resolveCompactionThreshold } from "../../../auto-reply/reply/memory-flush.js";
+import { resolveContextTokens } from "../../../auto-reply/reply/model-selection-context.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE } from "../../../sessions/agent-harness-session-key.js";
+import { AuthStorage } from "../../sessions/auth-storage.js";
+import { ModelRegistry } from "../../sessions/model-registry.js";
 import { resolveEmbeddedRunEffectiveModel } from "./model-harness.js";
 import {
   buildBeforeModelResolveAttachments,
@@ -242,6 +246,19 @@ function createConfiguredModel(
 }
 
 describe("resolveEmbeddedRuntimeModelPolicy", () => {
+  it("keeps an unknown model's generic fallback untrusted", () => {
+    const result = resolveEmbeddedRuntimeModelPolicy({
+      cfg: {},
+      provider: "local-fixture",
+      modelId: "unknown-window",
+      runtimeModel: { ...createRuntimeModel(), contextTokens: undefined, contextWindow: 0 },
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextWindowInfo).toEqual({ source: "default", tokens: 200_000 });
+    expect(result.contextTokensSource).toBeUndefined();
+  });
+
   it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
     const cfg = {
       models: {
@@ -284,6 +301,59 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     );
   });
 
+  it("uses the registered prompt budget for both reply maintenance and inference after replacement", () => {
+    const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+    const provider = "fixture-runtime";
+    const id = "shared-model";
+    // A -> B -> A metadata replacement models account-scoped rematerialization;
+    // no credential selection, provider request, or operator state is involved.
+    for (const contextTokens of [872_000, 64_000, 872_000]) {
+      registry.registerProvider(provider, {
+        api: "openai-responses",
+        baseUrl: "https://models.example/v1",
+        models: [
+          {
+            id,
+            name: "Shared model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1_000_000,
+            contextTokens,
+            maxTokens: 128_000,
+          },
+        ],
+      });
+      const runtimeModel = registry.find(provider, id)!;
+      const earlyBudget = resolveContextTokens({
+        cfg: {},
+        provider,
+        model: id,
+        modelContextTokens: runtimeModel.contextTokens,
+        modelContextWindow: runtimeModel.contextWindow,
+      });
+      expect(earlyBudget).toBe(contextTokens);
+      expect(
+        resolveCompactionThreshold({
+          contextWindowTokens: earlyBudget,
+          reserveTokensFloor: 20_000,
+        }),
+      ).toBe(contextTokens - 20_000);
+      const inference = resolveEmbeddedRuntimeModelPolicy({
+        cfg: {},
+        provider,
+        modelId: id,
+        runtimeModel,
+        nativeModelOwned: false,
+      });
+      expect(inference.contextTokenBudget).toBe(contextTokens);
+      expect(inference.contextTokensSource).toBe("resolved-v1");
+      expect(inference.effectiveModel.contextWindow).toBe(contextTokens);
+      expect(inference.effectiveModel.maxTokens).toBe(128_000);
+      expect(runtimeModel.contextWindow).toBe(1_000_000);
+    }
+  });
+
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
@@ -309,6 +379,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "modelsConfig",
       tokens: 1_000_000,
     });
+    expect(result.contextTokensSource).toBeUndefined();
     expect(result.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -336,6 +407,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "model",
       tokens: 272_000,
     });
+    expect(result.contextTokensSource).toBe("resolved-v1");
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 
@@ -372,10 +444,12 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const selected = resolve("200k");
     expect(selected.contextTokenBudget).toBe(200_000);
+    expect(selected.contextTokensSource).toBeUndefined();
     expect(selected.effectiveModel.contextWindow).toBe(200_000);
 
     const unselected = resolve(undefined);
     expect(unselected.contextTokenBudget).toBe(1_000_000);
+    expect(unselected.contextTokensSource).toBeUndefined();
     expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -414,6 +488,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const discovered = resolve({ contextWindow: "200k" });
     expect(discovered.contextTokenBudget).toBe(200_000);
+    expect(discovered.contextTokensSource).toBeUndefined();
     expect(discovered.effectiveModel.contextWindow).toBe(200_000);
 
     const configured = resolve({
@@ -430,6 +505,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       } satisfies OpenClawConfig,
     });
     expect(configured.contextTokenBudget).toBe(200_000);
+    expect(configured.contextTokensSource).toBeUndefined();
     expect(configured.effectiveModel.contextWindow).toBe(200_000);
 
     // Without a selection the declared default resolves to the wider option, so
@@ -457,6 +533,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const capped = resolve([createConfiguredModel({ contextTokens: 32_000 })]);
     expect(capped.contextTokenBudget).toBe(32_000);
+    expect(capped.contextTokensSource).toBeUndefined();
     expect(capped.authoredContextTokenCap).toBe(32_000);
 
     const discovered = resolve([]);
@@ -483,6 +560,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextTokenBudget).toBe(32_000);
+    expect(result.contextTokensSource).toBeUndefined();
     expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 32_000,

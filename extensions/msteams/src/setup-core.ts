@@ -1,6 +1,6 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Msteams plugin module implements setup core behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
@@ -12,7 +12,6 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
@@ -98,39 +97,33 @@ export function createMSTeamsSetupWizardBase(): Pick<
       );
 
       let next: OpenClawConfig = cfg;
-      let appId: string | null = null;
-      let appPassword: string | null = null;
-      let tenantId: string | null = null;
 
       if (!resolved && !hasConfigCreds) {
         await noteMSTeamsCredentialHelp(prompter);
       }
 
-      if (canUseEnv || hasConfigCreds) {
-        const keep = await prompter.confirm({
+      const keep =
+        (canUseEnv || hasConfigCreds) &&
+        (await prompter.confirm({
           message: t(canUseEnv ? "wizard.msteams.envPrompt" : "wizard.msteams.credentialsKeep"),
           initialValue: true,
-        });
-        if (keep) {
-          next = msteamsSetupAdapter.applyAccountConfig({
-            cfg: next,
-            accountId: DEFAULT_ACCOUNT_ID,
-            input: {},
-          });
-        } else {
-          ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-        }
-      } else {
-        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-      }
-
-      if (appId && appPassword && tenantId) {
-        next = patchTopLevelChannelConfigSection({
+        }));
+      if (keep) {
+        next = msteamsSetupAdapter.applyAccountConfig({
           cfg: next,
-          channel,
-          enabled: true,
-          patch: { appId, appPassword, tenantId },
+          accountId: DEFAULT_ACCOUNT_ID,
+          input: {},
         });
+      } else {
+        const { appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter);
+        if (appId && appPassword && tenantId) {
+          next = patchTopLevelChannelConfigSection({
+            cfg: next,
+            channel,
+            enabled: true,
+            patch: { appId, appPassword, tenantId },
+          });
+        }
       }
 
       return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };

@@ -1,18 +1,17 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/primitives.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
-import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
@@ -20,9 +19,6 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -51,19 +47,19 @@ type ChatSendOriginatingRoute = {
 };
 
 export type ChatSendExplicitOrigin = {
-  originatingChannel?: string;
-  originatingTo?: string;
+  originatingChannel: string;
+  originatingTo: string;
   accountId?: string;
   messageThreadId?: string;
 };
 
 export function normalizeExplicitChatSendOrigin(
-  params: ChatSendExplicitOrigin,
+  params: Partial<ChatSendExplicitOrigin>,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalChatText(params.originatingChannel);
-  const originatingTo = normalizeOptionalChatText(params.originatingTo);
-  const accountId = normalizeOptionalChatText(params.accountId);
-  const messageThreadId = normalizeOptionalChatText(params.messageThreadId);
+  const originatingChannel = normalizeOptionalString(params.originatingChannel);
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const accountId = normalizeOptionalString(params.accountId);
+  const messageThreadId = normalizeOptionalString(params.messageThreadId);
   const hasAnyExplicitOriginField = Boolean(
     originatingChannel || originatingTo || accountId || messageThreadId,
   );
@@ -94,38 +90,6 @@ export function normalizeExplicitChatSendOrigin(
   };
 }
 
-export function validateChatSelectedAgent(params: {
-  cfg: OpenClawConfig;
-  requestedSessionKey: string;
-  explicitAgentId?: string;
-}): { ok: true; agentId?: string } | { ok: false; error: string } {
-  const resolved = resolveRequestedSessionAgentId(
-    params.cfg,
-    params.requestedSessionKey,
-    params.explicitAgentId,
-  );
-  return resolved.ok
-    ? { ok: true, agentId: resolved.agentId }
-    : { ok: false, error: resolved.error.message };
-}
-
-export function resolveChatSendActiveScopeKey(params: {
-  sessionKey: string;
-  agentId?: string;
-  mainKey?: string;
-}): string {
-  if (parseAgentSessionKey(params.sessionKey) || !params.agentId) {
-    return params.sessionKey;
-  }
-  return (
-    scopeLegacySessionKeyToAgent({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      mainKey: params.mainKey,
-    }) ?? params.sessionKey
-  );
-}
-
 export function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
   deliver?: boolean;
@@ -135,7 +99,7 @@ export function resolveChatSendOriginatingRoute(params: {
   mainKey?: string;
   sessionKey: string;
 }): ChatSendOriginatingRoute {
-  if (params.explicitOrigin?.originatingChannel && params.explicitOrigin.originatingTo) {
+  if (params.explicitOrigin) {
     return {
       originatingChannel: params.explicitOrigin.originatingChannel,
       originatingTo: params.explicitOrigin.originatingTo,
@@ -230,54 +194,28 @@ export function resolveChatSendOriginatingRoute(params: {
   };
 }
 
-function isAcpSessionKey(sessionKey: string | undefined): boolean {
-  return Boolean(sessionKey?.split(":").includes("acp"));
-}
-
-export function explicitOriginTargetsAcpSession(
+export async function resolveExplicitOriginBindingTargets(
   origin: ChatSendExplicitOrigin | undefined,
-): boolean {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  const binding = getSessionBindingService().resolveByConversation({
-    channel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-  return isAcpSessionKey(binding?.targetSessionKey);
-}
-
-export function explicitOriginTargetsPluginBinding(
-  origin: ChatSendExplicitOrigin | undefined,
-): boolean {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  const binding = getSessionBindingService().resolveByConversation({
-    channel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-  return isPluginOwnedSessionBindingRecord(binding);
+): Promise<{ acp: boolean; plugin: boolean }> {
+  const binding =
+    origin?.accountId && origin.originatingChannel !== INTERNAL_MESSAGE_CHANNEL
+      ? await getSessionBindingService().resolveByConversationAsync({
+          channel: origin.originatingChannel,
+          accountId: origin.accountId,
+          conversationId: origin.originatingTo,
+        })
+      : undefined;
+  return {
+    acp: Boolean(binding?.targetSessionKey?.split(":").includes("acp")),
+    plugin: isPluginOwnedSessionBindingRecord(binding),
+  };
 }
 
 export function normalizeOptionalChatSystemReceipt(
-  value: unknown,
+  value: string | undefined,
 ): { ok: true; receipt?: string } | { ok: false; error: string } {
   if (value == null) {
     return { ok: true };
-  }
-  if (typeof value !== "string") {
-    return { ok: false, error: "systemProvenanceReceipt must be a string" };
   }
   const sanitized = sanitizeChatSendMessageInput(value);
   if (!sanitized.ok) {
@@ -295,9 +233,4 @@ export function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
-}
-
-export function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
 }

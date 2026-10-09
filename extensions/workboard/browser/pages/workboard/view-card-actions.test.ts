@@ -56,7 +56,10 @@ describe("Workboard card execution actions", () => {
       const card = createWorkboardCard({ sessionKey: key });
       const resolution: WorkboardSessionResolution = { key, status };
       const { container, state, props } = renderDetails(card, { sessionResolution: resolution });
-      const open = container.querySelector<HTMLButtonElement>('button[aria-label="Open session"]');
+      const open =
+        Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Open session",
+        ) ?? null;
       if (canOpen) {
         expectDefined(open, "canonical session action").click();
         expect(props.onOpenSession).toHaveBeenCalledWith({ sessionKey: key });

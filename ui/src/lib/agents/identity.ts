@@ -1,11 +1,14 @@
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
-type AgentIdentityGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-};
+type AgentIdentityGatewaySnapshot = Pick<
+  ApplicationGatewaySnapshot,
+  "client" | "phase" | "restartPending" | "suspensionPhase"
+>;
 
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
@@ -15,12 +18,12 @@ type AgentIdentityGateway = {
 
 type AgentIdentityCacheEntry = {
   pending: Promise<AgentIdentityResult | null>;
-  result?: { identity: AgentIdentityResult | null; cachedAt: number };
+  result?: { identity: AgentIdentityResult | null };
+  refreshAt: number;
+  failures: number;
 };
 
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
-// Workspace avatars can change in place without a config or roster event.
-const AGENT_IDENTITY_CACHE_TTL_MS = 60_000;
 const identityRequests = new WeakMap<GatewayBrowserClient, Map<string, AgentIdentityCacheEntry>>();
 
 /** Retire every UI surface's cached request when its connection or roster revision changes. */
@@ -41,10 +44,6 @@ function invalidateAgentIdentityCache(
   }
 }
 
-function hasFreshAgentIdentityResult(entry: AgentIdentityCacheEntry | undefined): boolean {
-  return Boolean(entry?.result && Date.now() - entry.result.cachedAt < AGENT_IDENTITY_CACHE_TTL_MS);
-}
-
 export function fetchAgentIdentity(
   client: GatewayBrowserClient,
   agentId: string,
@@ -56,13 +55,17 @@ export function fetchAgentIdentity(
   }
   const key = agentId.trim();
   const cached = cache.get(key);
-  if (cached && (!cached.result || hasFreshAgentIdentityResult(cached))) {
+  if (cached && Date.now() < cached.refreshAt) {
     cache.delete(key);
     cache.set(key, cached);
     return cached.pending;
   }
   cache.delete(key);
-  const entry: AgentIdentityCacheEntry = { pending: Promise.resolve(null) };
+  const entry: AgentIdentityCacheEntry = {
+    pending: Promise.resolve(null),
+    refreshAt: Infinity,
+    failures: cached?.failures ?? 0,
+  };
   entry.pending = client
     .request<AgentIdentityResult | null>("agent.identity.get", { agentId: key })
     .then(
@@ -70,39 +73,32 @@ export function fetchAgentIdentity(
         if (identityRequests.get(client) !== cache || cache.get(key) !== entry) {
           return null;
         }
-        entry.result = { identity, cachedAt: Date.now() };
-        for (const [id, candidate] of cache) {
-          if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
-            break;
-          }
-          if (candidate.result) {
-            cache.delete(id);
-          }
-        }
+        entry.result = { identity };
         return identity;
       },
       (error: unknown) => {
-        if (cache.get(key) === entry) {
-          cache.delete(key);
-        }
+        // Renders share the rejected request until the retry window opens.
+        entry.refreshAt = Date.now() + resolveGatewayReadRetryDelayMs(error, entry.failures++);
         throw error;
       },
-    );
+    )
+    .finally(() => {
+      for (const [id, candidate] of cache) {
+        if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
+          break;
+        }
+        if (candidate.result || Number.isFinite(candidate.refreshAt)) {
+          cache.delete(id);
+        }
+      }
+    });
   cache.set(key, entry);
   return entry.pending;
 }
 
-export type AgentIdentityCapability = {
-  get: (agentId: string | null | undefined) => AgentIdentityResult | null;
-  entries: () => AgentIdentityResult[];
-  ensure: (agentIds: readonly (string | null | undefined)[]) => Promise<void>;
-  invalidate: (agentIds: readonly (string | null | undefined)[]) => void;
-  subscribe: (listener: () => void) => () => void;
-};
+export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapability>;
 
-export function createAgentIdentityCapability(
-  gateway: AgentIdentityGateway,
-): AgentIdentityCapability {
+export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
   let connectionGeneration = 0;
@@ -135,14 +131,6 @@ export function createAgentIdentityCapability(
 
   gateway.subscribe(resetForGateway);
 
-  const normalizeIds = (agentIds: readonly (string | null | undefined)[]) => [
-    ...new Set(
-      agentIds
-        .map((agentId) => agentId?.trim())
-        .filter((agentId): agentId is string => Boolean(agentId)),
-    ),
-  ];
-
   gateway.subscribeEvents?.((event) => {
     if (event.event !== "config.changed") {
       return;
@@ -155,27 +143,24 @@ export function createAgentIdentityCapability(
   });
 
   return {
-    get(agentId) {
+    get(agentId: string | null | undefined) {
       const normalized = agentId?.trim();
       return normalized ? (identities.get(normalized) ?? null) : null;
     },
     entries() {
       return [...identities.values()];
     },
-    async ensure(agentIds) {
+    async ensure(this: void, agentIds: readonly (string | null | undefined)[]) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || snapshot.phase !== "connected") {
+      if (!client || !isGatewayAvailable(snapshot)) {
         return;
       }
       const generation = connectionGeneration;
-      const missing = normalizeIds(agentIds).filter((agentId) => {
+      const missing = normalizeUniqueTrimmedStringList(agentIds).filter((agentId) => {
         const cached = identityRequests.get(client)?.get(agentId);
-        return (
-          !hasFreshAgentIdentityResult(cached) ||
-          identities.get(agentId) !== cached?.result?.identity
-        );
+        return !cached?.result || identities.get(agentId) !== cached?.result?.identity;
       });
       if (missing.length === 0) {
         return;
@@ -214,9 +199,9 @@ export function createAgentIdentityCapability(
         publish();
       }
     },
-    invalidate(agentIds) {
+    invalidate(agentIds: readonly (string | null | undefined)[]) {
       let changed = false;
-      const ids = normalizeIds(agentIds);
+      const ids = normalizeUniqueTrimmedStringList(agentIds);
       invalidateAgentIdentityCache(cachedClient, ids);
       for (const agentId of ids) {
         invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
@@ -228,9 +213,6 @@ export function createAgentIdentityCapability(
         publish();
       }
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
 }

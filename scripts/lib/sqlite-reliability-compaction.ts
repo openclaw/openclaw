@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -8,14 +8,9 @@ import {
   assertSameReliabilityState,
   formatReliabilityStderr,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
-import {
-  assertReliabilityForcedExit,
-  waitForReliabilityWorkerExit,
-  waitForReliabilityWorkerMessage,
-} from "./sqlite-reliability-process.js";
+import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
@@ -27,8 +22,6 @@ const COMPACTION_WORKER_PATH = fileURLToPath(
 );
 const COMPACTION_TIMEOUT_MS = 120_000;
 const MIN_ACTIVE_SIDECAR_BYTES = 1024 * 1024;
-const WORKER_EXIT_TIMEOUT_MESSAGE =
-  "SQLite compaction worker did not exit after forced termination.";
 
 function fileSize(filePath: string): number {
   try {
@@ -49,24 +42,6 @@ function workerArgs(target: CompactionTarget): string[] {
     return ["agent", target.path, target.identity.agentId];
   }
   throw new Error(`unsupported reliability target role: ${target.identity.role}`);
-}
-
-async function waitForWorkerReady(params: {
-  child: ChildProcess;
-  readStderr: () => string;
-}): Promise<void> {
-  await waitForReliabilityWorkerMessage({
-    child: params.child,
-    matches: (message) =>
-      message !== null &&
-      typeof message === "object" &&
-      (message as { kind?: unknown }).kind === "ready",
-    timeoutMs: 30_000,
-    timeoutMessage: () =>
-      `SQLite compaction worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
-    exitMessage: (code, signal) =>
-      `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-  });
 }
 
 async function waitForActiveVacuum(params: {
@@ -102,31 +77,21 @@ export async function runVacuumInterruptionProof(params: {
   readPayload: () => CompactionPayloadProof;
   recoverAndVerifyDatabase: () => ReliabilityStateProof;
   target: CompactionTarget;
-}): Promise<ReliabilityReport["maintenanceProof"]["vacuumInterruption"]> {
-  let stderr = "";
-  const child = fork(COMPACTION_WORKER_PATH, workerArgs(params.target), {
+}) {
+  const worker = startReliabilityCrashWorker(COMPACTION_WORKER_PATH, workerArgs(params.target), {
+    label: "SQLite compaction worker",
     env: params.env,
-    execArgv: ["--import", "tsx"],
-    serialization: "json",
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
+  const { child, readStderr } = worker;
 
   try {
-    await waitForWorkerReady({ child, readStderr: () => stderr });
+    await worker.waitForReady();
     const observed = await waitForActiveVacuum({
       child,
       databasePath: params.target.path,
-      readStderr: () => stderr,
+      readStderr,
     });
-    if (!child.kill("SIGKILL")) {
-      throw new Error("SQLite compaction worker exited before the crash signal was delivered.");
-    }
-    const exit = await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE);
-    assertReliabilityForcedExit(exit, "SQLite compaction worker");
+    const exit = await worker.crash();
 
     const stateAfterRecovery = params.recoverAndVerifyDatabase();
     assertSameReliabilityState(stateAfterRecovery, params.expectedState, "vacuum crash recovery");
@@ -163,9 +128,6 @@ export async function runVacuumInterruptionProof(params: {
       walBytesObserved: observed.walBytes,
     };
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(() => undefined);
-    }
+    await worker.stop();
   }
 }

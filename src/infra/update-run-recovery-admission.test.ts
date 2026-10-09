@@ -42,7 +42,7 @@ describe("package-only recovery admission", () => {
         record: { runId: f.run.runId },
       });
       expect(changed).toBe(true);
-      expect(fs.readFileSync(f.file)).toEqual(before);
+      expect(fs.readFileSync(f.file).equals(before)).toBe(true);
       expect(fs.existsSync(replacement)).toBe(false);
     },
   );
@@ -74,7 +74,15 @@ describe("package-only recovery admission", () => {
       await expect(assertUpdateRecoveryAdmission(f.options)).rejects.toThrow(
         /recovery|publication/i,
       );
-      expect(snapshot()).toEqual(before);
+      const after = snapshot();
+      expect(after).toHaveLength(before.length);
+      for (const [index, bytes] of before.entries()) {
+        if (bytes === null) {
+          expect(after[index]).toBeNull();
+        } else {
+          expect(after[index]?.equals(bytes)).toBe(true);
+        }
+      }
       if (freshRun) {
         expect(getUpdateRun(freshRun.runId, f.options)).toEqual(freshRun);
       }

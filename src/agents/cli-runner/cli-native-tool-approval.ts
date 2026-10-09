@@ -7,10 +7,11 @@ import {
 } from "../../infra/exec-approval-text-sanitize.js";
 import { evaluateShellAllowlistWithAuthorization } from "../../infra/exec-approvals-allowlist.js";
 import {
-  loadExecApprovals,
+  readExecApprovalsSnapshotAsync,
   recordAllowlistMatchesUse,
   resolveExecApprovalsFromFile,
   type ExecAsk,
+  type ExecApprovalUsageAuthorization,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
 import { buildAuthorizedShellCommandFromPlan } from "../../infra/exec-authorization-render.js";
@@ -25,6 +26,7 @@ import {
   revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../../infra/system-run-approval-binding.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
 
@@ -136,14 +138,17 @@ export async function requestCliNativeToolApproval(params: {
       typeof params.toolInput.command === "string"
         ? params.toolInput.command
         : undefined;
-    let autoAllow: (() => CliNativeToolApprovalOutcome) | undefined;
+    let autoAllow: (() => Promise<CliNativeToolApprovalOutcome>) | undefined;
     if (
       params.ask === "on-miss" &&
       params.pluginId === "claude-cli" &&
       bashCommand &&
       params.agentId
     ) {
-      const file = loadExecApprovals();
+      const policyContext = captureOpenClawStateWorkerContext();
+      const file = (await readExecApprovalsSnapshotAsync(policyContext)).file;
+      params.abortSignal?.throwIfAborted();
+      params.assertActive?.();
       const { allowlist } = resolveExecApprovalsFromFile({ file, agentId: params.agentId });
       const analysis = await evaluateShellAllowlistWithAuthorization({
         command: bashCommand,
@@ -177,24 +182,33 @@ export async function requestCliNativeToolApproval(params: {
                   : (candidates[miss]?.sourceStep.text ?? "no classified executable"),
             };
       if (rendered.ok) {
-        autoAllow = () => {
-          params.abortSignal?.throwIfAborted();
-          params.assertActive?.();
+        autoAllow = async () => {
+          const assertCurrent = () => {
+            params.abortSignal?.throwIfAborted();
+            params.assertActive?.();
+          };
+          assertCurrent();
+          const authorization: ExecApprovalUsageAuthorization = {
+            source: "current-policy",
+            security: "allowlist",
+            ask: params.ask,
+            allowlistSatisfied: true,
+          };
           // Require current grants even when the caller policy is full with prompting.
-          recordAllowlistMatchesUse({
-            approvals: file,
-            agentId: params.agentId,
-            matches: analysis.allowlistMatches,
-            command: bashCommand,
-            resolvedPath:
-              candidates[0]?.sourceSegment.resolution?.execution.resolvedPath ?? undefined,
-            authorization: {
-              source: "current-policy",
-              security: "allowlist",
-              ask: params.ask,
-              allowlistSatisfied: true,
+          const assertPolicyCurrent = await recordAllowlistMatchesUse(
+            {
+              assertCurrent,
+              agentId: params.agentId,
+              matches: analysis.allowlistMatches,
+              command: bashCommand,
+              resolvedPath:
+                candidates[0]?.sourceSegment.resolution?.execution.resolvedPath ?? undefined,
+              authorization,
             },
-          });
+            policyContext,
+          );
+          assertCurrent();
+          assertPolicyCurrent();
           logVerbose("Claude CLI native Bash auto-allowed via exec allowlist");
           return {
             kind: "allow",
@@ -217,18 +231,21 @@ export async function requestCliNativeToolApproval(params: {
         env: autoAllow ? params.env : (params.bindingEnv ?? params.env),
       });
       if (!prepared.ok) {
+        const message =
+          prepared.reason === "unsupported-command-shape"
+            ? `${prepared.message}\nNo approval request was created for this attempt; this is not a user denial. Retry a supported direct executable/script command with explicit paths through the normal approval flow.`
+            : prepared.message;
         return {
           kind: "deny",
           reason: "operand-binding",
-          message: sanitizeExecApprovalWarningTextWithStatus(
-            `${prepared.message}\n${description.text}`,
-          ).text,
+          message: sanitizeExecApprovalWarningTextWithStatus(`${message}\n${description.text}`)
+            .text,
         };
       }
       mutableFileBinding = prepared.binding.operands.length > 0 ? prepared.binding : undefined;
     }
     if (autoAllow) {
-      return autoAllow();
+      return await autoAllow();
     }
     if (
       bashCommand &&

@@ -17,7 +17,9 @@ function asyncKeyedStore<T>(store: {
   };
 }
 
-export function createKernelStores(dbPath: string): ReturnType<typeof createWorkboardSqliteStores> {
+export function createKernelStores(
+  dbPath: string,
+): Omit<ReturnType<typeof createWorkboardSqliteStores>, "runWithWriteAuthority"> {
   const kernel = createWorkboardSqliteKernel(dbPath);
   return {
     ready: Promise.resolve(kernel.dataVersion()),
@@ -25,7 +27,7 @@ export function createKernelStores(dbPath: string): ReturnType<typeof createWork
     close: async () => kernel.close(),
     cards: {
       ...asyncKeyedStore(kernel.cards),
-      entries: async (boardId) => kernel.cards.entries(boardId),
+      entries: async (scope) => kernel.cards.entries(scope),
       registerIfAbsent: async (...args) => kernel.cards.registerIfAbsent(...args),
       registerIfUpdatedAt: async (...args) => kernel.cards.registerIfUpdatedAt(...args),
       claimIfOwnerAvailable: async (...args) => kernel.cards.claimIfOwnerAvailable(...args),
@@ -36,6 +38,13 @@ export function createKernelStores(dbPath: string): ReturnType<typeof createWork
       hasCards: async (boardId) => kernel.cards.hasCards(boardId),
     },
     boards: asyncKeyedStore(kernel.boards),
+    sessionsBoard: {
+      get: async (boardId) => kernel.sessionsBoard.get(boardId),
+      update: async (boardId, patch) => kernel.sessionsBoard.update(boardId, patch),
+      listPlacements: async (boardId) => kernel.sessionsBoard.listPlacements(boardId),
+      repairPlacements: async () => kernel.sessionsBoard.repairPlacements(),
+      writePlacement: async (...args) => kernel.sessionsBoard.writePlacement(...args),
+    },
     subscriptions: asyncKeyedStore(kernel.subscriptions),
     attachments: asyncKeyedStore(kernel.attachments),
   };

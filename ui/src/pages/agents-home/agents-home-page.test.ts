@@ -42,7 +42,7 @@ const roster: AgentsListResult = {
   ],
 };
 
-function createPage(pageSize = 2) {
+function createPage() {
   let sessions: GatewaySessionRow[] = [
     {
       key: "agent:harbor:team-room",
@@ -89,7 +89,9 @@ function createPage(pageSize = 2) {
     if (method === "sessions.list") {
       const offset =
         params && typeof params === "object" && "offset" in params ? Number(params.offset) : 0;
-      const rows = sessions.slice(offset, offset + pageSize);
+      const limit =
+        params && typeof params === "object" && "limit" in params ? Number(params.limit) : 300;
+      const rows = sessions.slice(offset, offset + limit);
       return {
         ts: 6_000,
         path: "",
@@ -120,6 +122,7 @@ function createPage(pageSize = 2) {
     return () => eventListeners.delete(listener);
   };
   const agentSelection: ApplicationContext["agentSelection"] = {
+    intentRevision: 0,
     state: { selectedId: "harbor", scopeId: null },
     set: () => undefined,
     setScope: () => undefined,
@@ -204,8 +207,7 @@ describe("AgentsHomePage", () => {
     expect(page.textContent).not.toContain("A newer side-task message.");
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
-      expect.objectContaining({ includeLastMessage: true, offset: 2 }),
-      expect.anything(),
+      expect.objectContaining({ includeLastMessage: true, archived: "all", limit: 100 }),
     );
 
     const openChat = cards[0]?.querySelector<HTMLElement>(".agents-home__open");
@@ -217,7 +219,7 @@ describe("AgentsHomePage", () => {
   it("shares bounded activity loading between consumers and stops after the last detach", async () => {
     vi.useFakeTimers();
     const { page, provider, request, rosterListenerCount, updateSessions, emitChange } =
-      createPage(100);
+      createPage();
     await vi.waitFor(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
     const second = new (customElements.get(elementName) ?? AgentsHomePage)();
     provider.append(second);
@@ -229,12 +231,12 @@ describe("AgentsHomePage", () => {
           (method !== "sessions.list" ||
             (params !== null &&
               typeof params === "object" &&
-              "includeLastMessage" in params &&
-              params.includeLastMessage === true)),
+              "archived" in params &&
+              params.archived === "all")),
       );
-    expect(calls("sessions.subscribe")).toHaveLength(1);
+    expect(calls("sessions.subscribe")).toHaveLength(0);
     expect(calls("sessions.list")).toHaveLength(1);
-    expect(rosterListenerCount()).toBe(1);
+    expect(rosterListenerCount()).toBe(0);
 
     updateSessions(
       Array.from({ length: 301 }, (_, index) => ({
@@ -246,25 +248,25 @@ describe("AgentsHomePage", () => {
     );
     request.mockClear();
     emitChange();
-    await vi.waitFor(() => {
-      expect(page.textContent).toContain("Activity 299");
-      expect(second.textContent).toContain("Activity 299");
-    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(page.textContent).toContain("Activity 299");
+    expect(second.textContent).toContain("Activity 299");
     expect(calls("sessions.list")).toHaveLength(3);
     expect(calls("sessions.subscribe")).toHaveLength(0);
     expect(page.textContent).not.toContain("Activity 300");
 
     page.remove();
-    expect(rosterListenerCount()).toBe(1);
+    expect(rosterListenerCount()).toBe(0);
     request.mockClear();
     emitChange();
-    await vi.waitFor(() => expect(calls("sessions.list")).toHaveLength(3));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls("sessions.list")).toHaveLength(3);
     emitChange();
     second.remove();
     expect(rosterListenerCount()).toBe(0);
     request.mockClear();
     emitChange();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(calls("sessions.list")).toHaveLength(0);
   });
 
@@ -284,6 +286,7 @@ describe("AgentsHomePage", () => {
     ]);
     emitChange();
     emitChange();
+    await vi.advanceTimersByTimeAsync(5_000);
     await vi.waitFor(() => expect(page.textContent).toContain("The tool is finished."));
     expect(page.querySelector(".agents-home__working")).toBeNull();
 

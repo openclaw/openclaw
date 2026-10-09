@@ -41,42 +41,12 @@ let runMatrixSelfVerification: typeof import("./verification.js").runMatrixSelfV
 let startMatrixVerification: typeof import("./verification.js").startMatrixVerification;
 let confirmMatrixVerificationSas: typeof import("./verification.js").confirmMatrixVerificationSas;
 
-type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-
-function mockCallArg(source: MockCallSource, label: string, callIndex = 0, argIndex = 0): unknown {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex} to exist`);
-  }
-  if (!(argIndex in call)) {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to exist`);
-  }
-  return call[argIndex];
-}
-
-function mockObjectArg(
-  source: MockCallSource,
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const value = mockCallArg(source, label, callIndex, argIndex);
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
 function expectResolvedActionClientReadinessNone(): void {
-  expect(mockObjectArg(withResolvedActionClientMock, "withResolvedActionClient").readiness).toBe(
-    "none",
-  );
-  expect(mockCallArg(withResolvedActionClientMock, "withResolvedActionClient", 0, 1)).toBeTypeOf(
-    "function",
-  );
-  expect(mockCallArg(withResolvedActionClientMock, "withResolvedActionClient", 0, 2)).toBe(
+  expect(withResolvedActionClientMock.mock.calls[0]).toEqual([
+    expect.objectContaining({ readiness: "none" }),
+    expect.any(Function),
     "discard",
-  );
+  ]);
 }
 
 describe("matrix verification actions", () => {
@@ -102,7 +72,7 @@ describe("matrix verification actions", () => {
     });
   });
 
-  function mockCompletedSelfVerificationCrypto() {
+  function createVerificationStages() {
     const requested = {
       completed: false,
       hasSas: false,
@@ -114,15 +84,13 @@ describe("matrix verification actions", () => {
       ...requested,
       hasSas: true,
       phaseName: "started",
-      sas: {
-        decimal: [1, 2, 3],
-      },
+      sas: { decimal: [1, 2, 3] },
     };
-    const completed = {
-      ...sas,
-      completed: true,
-      phaseName: "done",
-    };
+    return { requested, sas, completed: { ...sas, completed: true, phaseName: "done" } };
+  }
+
+  function mockCompletedSelfVerificationCrypto() {
+    const { requested, sas, completed } = createVerificationStages();
     return {
       confirmVerificationSas: vi.fn(async () => completed),
       listVerifications: vi.fn(async () => [sas]),
@@ -175,29 +143,6 @@ describe("matrix verification actions", () => {
     };
   }
 
-  it("points encryption guidance at the selected Matrix account", async () => {
-    loadConfigMock.mockReturnValue({
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              encryption: false,
-            },
-          },
-        },
-      },
-    });
-    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
-      return await run({ crypto: null });
-    });
-
-    await expect(
-      listMatrixVerifications({ cfg: loadConfigMock(), accountId: "ops" }),
-    ).rejects.toThrow(
-      "Matrix encryption is not available (enable channels.matrix.accounts.ops.encryption=true)",
-    );
-  });
-
   it("uses the resolved default Matrix account when accountId is omitted", async () => {
     loadConfigMock.mockReturnValue({
       channels: {
@@ -245,35 +190,23 @@ describe("matrix verification actions", () => {
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
-  it("prepares local crypto before resolving authoritative verification status", async () => {
+  it("refreshes own-device keys before resolving authoritative verification status", async () => {
     const prepareForOneOff = vi.fn(async () => undefined);
+    const refreshOwnDeviceKeys = vi.fn(async () => undefined);
     const start = vi.fn(async () => undefined);
     const getOwnDeviceVerificationStatus = vi.fn().mockResolvedValue({
+      ...mockVerifiedOwnerStatus(),
       encryptionEnabled: true,
-      verified: true,
-      userId: "@bot:example.org",
-      deviceId: "DEVICE123",
-      localVerified: true,
-      crossSigningVerified: true,
-      signedByOwner: true,
       recoveryKeyStored: true,
-      recoveryKeyCreatedAt: null,
       recoveryKeyId: "SSSS",
       backupVersion: "11",
-      backup: {
-        serverVersion: "11",
-        activeVersion: "11",
-        trusted: true,
-        matchesDecryptionKey: true,
-        decryptionKeyCached: true,
-        keyLoadAttempted: false,
-        keyLoadError: null,
-      },
+      backup: { ...mockVerifiedOwnerStatus().backup, serverVersion: "11", activeVersion: "11" },
       serverDeviceKnown: true,
     });
     withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({
         prepareForOneOff,
+        refreshOwnDeviceKeys,
         crypto: {
           listVerifications: vi.fn(async () => []),
           getRecoveryKey: vi.fn(async () => ({
@@ -293,6 +226,12 @@ describe("matrix verification actions", () => {
     expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
     expectResolvedActionClientReadinessNone();
     expect(prepareForOneOff).toHaveBeenCalledTimes(1);
+    expect(refreshOwnDeviceKeys).toHaveBeenCalledTimes(1);
+    const finalStatusReadOrder = getOwnDeviceVerificationStatus.mock.invocationCallOrder[1];
+    if (finalStatusReadOrder === undefined) {
+      throw new Error("expected a final Matrix verification status read");
+    }
+    expect(refreshOwnDeviceKeys.mock.invocationCallOrder[0]).toBeLessThan(finalStatusReadOrder);
     expect(start).not.toHaveBeenCalled();
     expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
     expect(withStartedActionClientMock).not.toHaveBeenCalled();
@@ -301,26 +240,12 @@ describe("matrix verification actions", () => {
   it("fails closed before local Matrix prep when the current device is gone", async () => {
     const prepareForOneOff = vi.fn(async () => undefined);
     const getOwnDeviceVerificationStatus = vi.fn(async () => ({
+      ...mockUnverifiedOwnerStatus(),
       encryptionEnabled: true,
-      verified: false,
-      userId: "@bot:example.org",
-      deviceId: "DEVICE123",
-      localVerified: false,
-      crossSigningVerified: false,
-      signedByOwner: false,
       recoveryKeyStored: true,
-      recoveryKeyCreatedAt: null,
       recoveryKeyId: "SSSS",
       backupVersion: "11",
-      backup: {
-        serverVersion: "11",
-        activeVersion: "11",
-        trusted: true,
-        matchesDecryptionKey: true,
-        decryptionKeyCached: true,
-        keyLoadAttempted: false,
-        keyLoadError: null,
-      },
+      backup: { ...mockVerifiedOwnerStatus().backup, serverVersion: "11", activeVersion: "11" },
       serverDeviceKnown: false,
     }));
     withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
@@ -457,13 +382,7 @@ describe("matrix verification actions", () => {
   });
 
   it("keeps self-verification in one started Matrix client session", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
+    const { requested } = createVerificationStages();
     const ready = {
       ...requested,
       phaseName: "ready",
@@ -642,13 +561,7 @@ describe("matrix verification actions", () => {
   });
 
   it("waits for SAS data without restarting an already-started self-verification", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
+    const { requested } = createVerificationStages();
     const started = {
       ...requested,
       phaseName: "started",
@@ -697,13 +610,7 @@ describe("matrix verification actions", () => {
   });
 
   it("fails immediately when an already-started self-verification uses a non-SAS method", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
+    const { requested } = createVerificationStages();
     const started = {
       ...requested,
       chosenMethod: "m.reciprocate.v1",
@@ -805,26 +712,7 @@ describe("matrix verification actions", () => {
   });
 
   it("fails self-verification if SAS completes but full identity trust cannot be established", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
-    const sas = {
-      ...requested,
-      hasSas: true,
-      phaseName: "started",
-      sas: {
-        decimal: [1, 2, 3],
-      },
-    };
-    const completed = {
-      ...sas,
-      completed: true,
-      phaseName: "done",
-    };
+    const { requested, sas, completed } = createVerificationStages();
     const crypto = {
       cancelVerification: vi.fn(),
       confirmVerificationSas: vi.fn(async () => completed),
@@ -860,13 +748,7 @@ describe("matrix verification actions", () => {
   });
 
   it("cancels the pending self-verification request when acceptance times out", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
+    const { requested } = createVerificationStages();
     const crypto = {
       cancelVerification: vi.fn(async () => requested),
       listVerifications: vi.fn(async () => []),
@@ -887,13 +769,7 @@ describe("matrix verification actions", () => {
   });
 
   it("fails immediately when the self-verification request is cancelled while waiting", async () => {
-    const requested = {
-      completed: false,
-      hasSas: false,
-      id: "verification-1",
-      phaseName: "requested",
-      transactionId: "tx-self",
-    };
+    const { requested } = createVerificationStages();
     const cancelled = {
       ...requested,
       error: "Remote cancelled",

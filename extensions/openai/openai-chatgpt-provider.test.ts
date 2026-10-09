@@ -1,7 +1,7 @@
 // Openai tests cover openai chatgpt provider plugin behavior.
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
@@ -36,17 +36,23 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(provider.id).toBe("openai");
     expect(provider.aliases).toBeUndefined();
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
-    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
+    expect(provider.auth?.map((method) => method.id)).toEqual([
+      "oauth",
+      "device-code",
+      "siwc",
+      "api-key",
+    ]);
     expect(provider.auth?.map((method) => method.wizard?.choiceId)).toEqual([
       "openai",
       "openai-device-code",
+      "openai-token-sharing",
       "openai-api-key",
     ]);
     expect(
       provider.auth
         .filter((method) => method.kind === "oauth" || method.kind === "device_code")
         .map((method) => method.starterModel),
-    ).toEqual([OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_MODEL]);
+    ).toEqual([OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
 
@@ -148,32 +154,77 @@ describe("OpenAI provider Codex transport hooks", () => {
         title: "OpenAI Codex device code",
         code: "ABCD-EFGH",
         expiresInMinutes: 15,
-        message: [
-          "Open this URL in your LOCAL browser and enter the code below.",
-          "URL: <https://auth.openai.com/codex/device>",
-        ].join("\n"),
+        message: "Enter this one-time code on the sign-in page.",
       });
+      expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
       expect(note).not.toHaveBeenCalled();
     },
   );
 
-  it("routes Codex-backed OpenAI models through the Codex Responses transport", () => {
-    const provider = buildOpenAIProvider();
+  it.each([
+    ["gpt-5.5-pro", "gpt-5.5-pro", 1_000_000, 272_000, 30, 180, 0],
+    ["gpt-5.4", "gpt-5.4", 1_050_000, 272_000, 2.5, 15, 0.25],
+    ["gpt-5.4-codex", "gpt-5.4", 1_050_000, 272_000, 2.5, 15, 0.25],
+    ["gpt-5.4-pro", "gpt-5.4-pro", 1_050_000, 272_000, 30, 180, 0],
+    ["gpt-5.4-mini", "gpt-5.4-mini", 400_000, 272_000, 0.75, 4.5, 0.075],
+    ["gpt-5.3-codex-spark", "gpt-5.3-codex-spark", 128_000, 128_000, 0.75, 4.5, 0.075],
+  ] as const)(
+    "preserves %s Codex metadata with synthesized and fallback template models",
+    (modelId, canonicalId, contextWindow, contextTokens, inputCost, outputCost, cacheRead) => {
+      const provider = buildOpenAIProvider();
+      const templateIds =
+        modelId === "gpt-5.5-pro"
+          ? ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"]
+          : ["gpt-5.3-codex", "gpt-5.4"];
+      // Remove each preferred template in turn, ending with no catalog metadata.
+      for (let firstAvailable = 0; firstAvailable <= templateIds.length; firstAvailable++) {
+        const available = templateIds.slice(firstAvailable);
+        const model = provider.resolveDynamicModel?.({
+          provider: "openai",
+          modelId,
+          providerConfig: CODEX_PROVIDER_CONFIG,
+          modelRegistry: {
+            find: (providerId: string, id: string) =>
+              providerId === "openai" && available.includes(id)
+                ? {
+                    provider: "openai",
+                    id,
+                    name: `Template ${id}`,
+                    api: "openai-responses",
+                    baseUrl: "https://api.openai.com/v1",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+                    contextWindow: 8_192,
+                    contextTokens: 4_096,
+                    maxTokens: 1_024,
+                    headers: { "x-template": id },
+                  }
+                : null,
+          },
+        } as never);
 
-    const model = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      providerConfig: { api: "openai-chatgpt-responses" },
-      modelRegistry: { find: () => null },
-    } as never);
-
-    expect(model).toMatchObject({
-      provider: "openai",
-      id: "gpt-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-  });
+        expect(model).toMatchObject({
+          provider: "openai",
+          id: canonicalId,
+          name: canonicalId,
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          reasoning: true,
+          input: modelId === "gpt-5.3-codex-spark" ? ["text"] : ["text", "image"],
+          contextWindow,
+          contextTokens,
+          maxTokens: 128_000,
+          cost: available.length
+            ? { input: inputCost, output: outputCost, cacheRead, cacheWrite: 0 }
+            : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        });
+        expect(model?.headers).toEqual(
+          available.length ? { "x-template": available[0] } : undefined,
+        );
+      }
+    },
+  );
 
   it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
     "resolves %s through the Codex Responses transport without live catalog metadata",
@@ -277,37 +328,6 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(model).toMatchObject({
       provider: "openai",
       id: "gpt-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-  });
-
-  it("keeps cloned Codex-backed OpenAI models on the Codex Responses transport", () => {
-    const provider = buildOpenAIProvider();
-
-    const model = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      providerConfig: { api: "openai-chatgpt-responses" },
-      modelRegistry: {
-        find: () => ({
-          provider: "openai",
-          id: "gpt-5.4",
-          name: "gpt-5.4",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
-          contextWindow: 128_000,
-          maxTokens: 16_384,
-        }),
-      },
-    } as never);
-
-    expect(model).toMatchObject({
-      provider: "openai",
-      id: "gpt-5.4",
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });

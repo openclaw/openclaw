@@ -150,6 +150,34 @@ async function withTranscript(
 }
 
 describe("buildContextReply", () => {
+  it.each<{ resolved?: number; authored?: number; expected: number }>([
+    { expected: 32_768 },
+    { resolved: 65_536, expected: 65_536 },
+    { resolved: 200_000, expected: 200_000 },
+    { authored: 16_384, expected: 16_384 },
+  ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
+    const params = makeParams("/context json", false, { contextTokens: 200_000 });
+    params.provider = "ollama";
+    params.model = "qwen2.5:7b";
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      sessionId: "local-context",
+      updatedAt: 1,
+      modelProvider: params.provider,
+      model: params.model,
+      agentHarnessId: "openclaw",
+      contextTokens: 32_768,
+      contextTokensSource: "resolved-v1",
+    };
+    params.contextTokenProjection = {
+      contextTokens: testCase.resolved,
+      authoredContextTokens: testCase.authored,
+    };
+
+    const result = await buildContextReply(params);
+    expect(JSON.parse(result.text ?? "{}").session.contextTokens).toBe(testCase.expected);
+  });
+
   it("describes compactable transcript counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
@@ -208,13 +236,12 @@ describe("buildContextReply", () => {
               bootstrapMaxChars: 12_000,
               bootstrapTotalMaxChars: 60_000,
             },
-            list: [
-              {
-                id: "scout",
+            entries: {
+              scout: {
                 bootstrapMaxChars: 32_000,
                 bootstrapTotalMaxChars: 96_000,
               },
-            ],
+            },
           },
         },
       }),
@@ -239,9 +266,14 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
   });
 
-  it("reports compactable real conversation messages from the active transcript", async () => {
+  it("counts conversation anchors across active transcript pages", async () => {
     await withTranscript(
       [
+        ...Array.from({ length: 127 }, (_, index) => ({
+          role: "assistant",
+          content: "NO_REPLY",
+          timestamp: index,
+        })),
         { role: "user", content: "Please inspect the repo", timestamp: 1 },
         {
           role: "assistant",
@@ -266,7 +298,7 @@ describe("buildContextReply", () => {
         );
 
         expect(result.text).toContain(
-          "Compactable transcript: 2 real conversation message(s) / 3 transcript message(s)",
+          "Compactable transcript: 2 real conversation message(s) / 130 transcript message(s)",
         );
         expect(result.text).not.toContain("Compaction note:");
       },
@@ -327,37 +359,40 @@ describe("buildContextReply", () => {
   });
 
   it("prefers the target session entry from sessionStore for cached context stats", async () => {
-    const params = makeParams("/context detail", false, {
-      contextTokens: 8_192,
-      totalTokens: 111,
-    });
-    const sessionEntry = {
-      ...params.sessionEntry,
-      sessionId: params.sessionEntry?.sessionId ?? "session-main",
-      updatedAt: params.sessionEntry?.updatedAt ?? 1,
-      totalTokens: 111,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      inputTokens: 100,
-      outputTokens: 11,
-    } satisfies SessionEntry;
-    params.sessionEntry = sessionEntry;
-    params.sessionStore = {
-      [params.sessionKey]: {
-        ...sessionEntry,
-        totalTokens: 900,
+    await withTranscript([{ role: "user", content: "cached context fixture" }], async (target) => {
+      const params = makeParams("/context detail", false, {
+        contextTokens: 8_192,
+        totalTokens: 111,
+        ...target,
+      });
+      const sessionEntry = {
+        ...params.sessionEntry,
+        sessionId: target.sessionId,
+        updatedAt: params.sessionEntry?.updatedAt ?? 1,
+        totalTokens: 111,
         totalTokensFresh: true,
         totalTokensVersion: 1,
-        inputTokens: 700,
-        outputTokens: 200,
-      },
-    };
+        inputTokens: 100,
+        outputTokens: 11,
+      } satisfies SessionEntry;
+      params.sessionEntry = sessionEntry;
+      params.sessionStore = {
+        [params.sessionKey]: {
+          ...sessionEntry,
+          totalTokens: 900,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          inputTokens: 700,
+          outputTokens: 200,
+        },
+      };
 
-    const result = await buildContextReply(params);
+      const result = await buildContextReply(params);
 
-    expect(result.text).toContain("Actual context usage (cached): 900 tok");
-    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
-    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+      expect(result.text).toContain("Actual context usage (cached): 900 tok");
+      expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+      expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+    });
   });
 
   it("renders context map as sensitive local PNG media", async () => {

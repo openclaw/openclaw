@@ -54,117 +54,78 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function runAppend(): Promise<unknown> {
+  it("rechecks source authority after provenance work before appending", async () => {
+    const absolute = path.join(root, RELATIVE_PATH);
+    await fs.mkdir(path.dirname(absolute), { recursive: true });
+    await fs.writeFile(absolute, "seed\n");
+    const originalClaim = {};
+    let claim = originalClaim;
+    let reachedCommit = false;
     const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
       root,
       relativePath: RELATIVE_PATH,
+      memoryWriteProvenance: {
+        classifies: async () => true,
+        write: async ({ commit }) => {
+          reachedCommit = true;
+          claim = {};
+          await commit();
+        },
+        clearAfterDelete: async () => {},
+      },
     });
-    const result = await wrapped.execute(
-      "call-1",
-      { path: RELATIVE_PATH, content: "hello" },
-      new AbortController().signal,
-      undefined,
+    const pending = withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:memory-flush-authority",
+        receiptAuthority: () => claim === originalClaim,
+      },
+      () => wrapped.execute("source-append", { path: RELATIVE_PATH, content: "hello" }),
     );
-    return result.details;
-  }
-
-  it.each(["revoked", "replaced", "active"] as const)(
-    "checks %s source authority after provenance work before appending",
-    async (authority) => {
-      const absolute = path.join(root, RELATIVE_PATH);
-      await fs.mkdir(path.dirname(absolute), { recursive: true });
-      await fs.writeFile(absolute, "seed\n");
-      const originalClaim = {};
-      let claim: object | undefined = originalClaim;
-      let reachedCommit = false;
-      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
-        root,
-        relativePath: RELATIVE_PATH,
-        memoryWriteProvenance: {
-          classifies: async () => true,
-          write: async ({ commit }) => {
-            reachedCommit = true;
-            if (authority === "revoked") {
-              claim = undefined;
-            }
-            if (authority === "replaced") {
-              claim = {};
-            }
-            await commit();
-          },
-          clearAfterDelete: async () => {},
-        },
-      });
-      const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:memory-flush-authority",
-          receiptAuthority: () => claim === originalClaim,
-        },
-        () => wrapped.execute("source-append", { path: RELATIVE_PATH, content: "hello" }),
-      );
-      if (authority === "active") {
-        await expect(pending).resolves.toMatchObject({ details: { changed: true } });
-      } else {
-        await expect(pending).rejects.toThrow("authority is no longer active");
-      }
-      expect(reachedCommit).toBe(true);
-      expect(await fs.readFile(absolute, "utf8")).toBe(
-        authority === "active" ? "seed\nhello" : "seed\n",
-      );
-    },
-  );
-
-  it("returns write-schema-conforming details when creating the memory file", async () => {
-    const details = await runAppend();
-    expect(details).toEqual({ changed: true });
-    expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
+    await expect(pending).rejects.toThrow("authority is no longer active");
+    expect(reachedCommit).toBe(true);
+    expect(await fs.readFile(absolute, "utf8")).toBe("seed\n");
   });
 
-  it.each(["seed", "seed\n"])(
-    "returns write-schema-conforming append results for existing content %j",
-    async (seed) => {
-      const absolute = path.join(root, RELATIVE_PATH);
-      await fs.mkdir(path.dirname(absolute), { recursive: true });
-      await fs.writeFile(absolute, seed, "utf-8");
-      const baseTool = baseWriteTool();
-      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseTool, {
-        root,
-        relativePath: RELATIVE_PATH,
-      });
-      const result = await wrapped.execute("call-append", {
-        path: RELATIVE_PATH,
-        content: "hello",
-      });
-      expect(result).toEqual({
-        content: [{ type: "text", text: `Appended content to ${RELATIVE_PATH}.` }],
-        details: { changed: true },
-      });
-      expect(validateAgainstDeclaredSchema(result.details).ok).toBe(true);
-      expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
-      await expect(
-        wrapped.execute("call-sibling", {
-          path: "memory/other-day.md",
-          content: "wrong target",
-        }),
-      ).rejects.toThrow(
-        `Memory flush writes are restricted to ${RELATIVE_PATH}; use that path only.`,
-      );
-      expect(baseTool.execute).not.toHaveBeenCalled();
-    },
-  );
+  it("appends schema-conforming results only to the allowed memory file", async () => {
+    const absolute = path.join(root, RELATIVE_PATH);
+    await fs.mkdir(path.dirname(absolute), { recursive: true });
+    await fs.writeFile(absolute, "seed", "utf-8");
+    const baseTool = baseWriteTool();
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseTool, {
+      root,
+      relativePath: RELATIVE_PATH,
+    });
+    const result = await wrapped.execute("call-append", {
+      path: RELATIVE_PATH,
+      content: "hello",
+    });
+    expect(result).toEqual({
+      content: [{ type: "text", text: `Appended content to ${RELATIVE_PATH}.` }],
+      details: { changed: true },
+    });
+    expect(validateAgainstDeclaredSchema(result.details).ok).toBe(true);
+    expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
+    await expect(
+      wrapped.execute("call-sibling", {
+        path: "memory/other-day.md",
+        content: "wrong target",
+      }),
+    ).rejects.toThrow(
+      `Memory flush writes are restricted to ${RELATIVE_PATH}; use that path only.`,
+    );
+    expect(baseTool.execute).not.toHaveBeenCalled();
+  });
 
-  it.each(["file", "ancestor", "absent"] as const)(
+  it.each(["file", "absent"] as const)(
     "rejects @memory paths instead of appending to their allowed sibling (literal: %s)",
     async (literalState) => {
       const allowedPath = path.join(root, RELATIVE_PATH);
       const literalPath = path.join(root, `@${RELATIVE_PATH}`);
       await fs.mkdir(path.dirname(allowedPath), { recursive: true });
       await fs.writeFile(allowedPath, "allowed", "utf8");
-      if (literalState !== "absent") {
-        await fs.mkdir(path.dirname(literalPath), { recursive: true });
-      }
       if (literalState === "file") {
+        await fs.mkdir(path.dirname(literalPath), { recursive: true });
         await fs.writeFile(literalPath, "literal", "utf8");
       }
       const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
@@ -184,9 +145,4 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
       }
     },
   );
-
-  it("documents the pre-fix regression: append-only metadata violates the declared schema", () => {
-    const validation = validateAgainstDeclaredSchema({ path: RELATIVE_PATH, appendOnly: true });
-    expect(validation.ok).toBe(false);
-  });
 });

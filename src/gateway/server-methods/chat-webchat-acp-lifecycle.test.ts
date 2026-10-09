@@ -1,19 +1,12 @@
 // Bound ACP events must persist a coherent source or target session owner.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
-import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../server-chat-state.js";
+import { createSubscriptionTestFixture } from "../server-runtime-subscriptions.test-support.js";
 
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
-  persistLifecycle: vi.fn(async () => {}),
+  persistLifecycle: vi.fn(async (_params: unknown) => {}),
 }));
 vi.mock("../../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../audit/audit-config.js", () => ({
@@ -22,59 +15,33 @@ vi.mock("../../audit/audit-config.js", () => ({
   resolveAuditMessageMode: () => "off",
 }));
 vi.mock("../../audit/audit-recorder.js", () => ({
-  createAuditEventRecorder: () => ({ stop: vi.fn(async () => {}) }),
+  createAuditEventRecorder: () => ({
+    record: vi.fn(),
+    recordTool: vi.fn(),
+    stop: vi.fn(async () => {}),
+  }),
 }));
 vi.mock("../server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
-vi.mock("../session-lifecycle-state.js", () => ({
-  persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+vi.mock("../session-lifecycle-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-state.js")>()),
+  prepareGatewaySessionLifecycleEvent: (params: unknown) => () =>
+    agentEventHandlerMocks.persistLifecycle(params),
 }));
 const { startGatewayEventSubscriptions } = await import("../server-runtime-subscriptions.js");
-type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
-const mockLog: SubsystemLogger = {
-  subsystem: "gateway-test",
-  isEnabled: () => true,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => mockLog,
-};
-function createParams(): SubscriptionParams {
-  const chatRunState = createChatRunState();
-  return {
-    log: mockLog,
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
-    chatRunState,
-    toolEventRecipients: chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
-  };
-}
+const { createParams } = createSubscriptionTestFixture();
 describe("bound ACP terminal lifecycle", () => {
   let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
   beforeEach(() => {
     vi.clearAllMocks();
-    installInMemoryTaskRegistryRuntime();
   });
   afterEach(async () => {
     await unsubs?.agentUnsub();
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
-    void unsubs?.taskUnsub();
     resetAgentEventsForTest();
-    resetTaskRegistryForTests({ persist: false });
   });
   it.each([false, true])(
     "keeps bound ACP terminal ownership together (chat link=%s)",

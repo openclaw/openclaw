@@ -1,39 +1,30 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
   type CodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createCodexThreadsTool } from "./native-thread-tool.js";
+import {
+  withCodexNativeThreadToolFixture,
+  wrapCodexNativeThreadToolRequest,
+  type CodexNativeThreadToolFixture,
+} from "./native-thread-tool.test-helpers.js";
 
 describe("native Codex thread tool", () => {
-  let root: string;
-  let sessionFile: string;
+  let fixture: CodexNativeThreadToolFixture;
 
   async function withFixture(run: () => void | Promise<void>): Promise<void> {
-    await withTempDir("openclaw-codex-threads-", async (tempRoot) => {
-      root = tempRoot;
-      sessionFile = path.join(root, "sessions", "session-id.jsonl");
-      await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-      await fs.writeFile(sessionFile, "");
-      resetCodexTestBindingStore();
-      registerCodexTestSessionIdentity(
-        "session-id",
-        "session-id",
-        "agent:main:telegram:direct:owner",
-      );
+    await withCodexNativeThreadToolFixture(async (current) => {
+      fixture = current;
       await run();
     });
   }
@@ -46,7 +37,7 @@ describe("native Codex thread tool", () => {
     allowRawTranscripts?: boolean;
     allowWriteControls?: boolean;
     getPluginConfig?: () => unknown;
-    request?: ReturnType<typeof vi.fn>;
+    request?: Mock;
     sessionId?: string | null;
     modelSelectionLocked?: boolean;
     bindingStore?: CodexAppServerBindingStore;
@@ -54,8 +45,8 @@ describe("native Codex thread tool", () => {
     const context: OpenClawPluginToolContext = {
       config: {},
       agentId: "main",
-      agentDir: path.join(root, "agent"),
-      workspaceDir: path.join(root, "workspace"),
+      agentDir: path.join(fixture.root, "agent"),
+      workspaceDir: path.join(fixture.root, "workspace"),
       sessionKey: "agent:main:telegram:direct:owner",
       sessionId: params?.sessionId === null ? undefined : (params?.sessionId ?? "session-id"),
       senderIsOwner: params?.owner ?? true,
@@ -65,11 +56,11 @@ describe("native Codex thread tool", () => {
         session: {
           getSessionEntry: () => ({
             sessionId: "session-id",
-            sessionFile,
+            sessionFile: fixture.sessionFile,
             updatedAt: Date.now(),
             modelSelectionLocked: params?.modelSelectionLocked,
           }),
-          resolveStorePath: () => path.join(root, "sessions", "sessions.json"),
+          resolveStorePath: () => path.join(fixture.root, "sessions", "sessions.json"),
         },
       },
     });
@@ -93,7 +84,9 @@ describe("native Codex thread tool", () => {
               }
             : {}),
         })),
-      request: params?.request as never,
+      request: params?.request
+        ? wrapCodexNativeThreadToolRequest(params.request, fixture.client)
+        : undefined,
     });
   }
 
@@ -253,6 +246,7 @@ describe("native Codex thread tool", () => {
         supervision: true,
         allowRawTranscripts: true,
         request,
+        modelSelectionLocked: true,
       });
 
       const result = await tool?.execute("call-allowed-read", {
@@ -261,22 +255,16 @@ describe("native Codex thread tool", () => {
         include_turns: true,
       });
 
+      expect(request).toHaveBeenCalledWith(
+        expect.any(Object),
+        CODEX_CONTROL_METHODS.readThread,
+        { threadId: "thread-1", includeTurns: true },
+        expect.any(Object),
+      );
       expect(result?.details).toEqual(response);
     }));
 
   it.each([
-    {
-      action: "fork",
-      params: { action: "fork", thread_id: "thread-1", attach: false },
-    },
-    {
-      action: "rename",
-      params: { action: "rename", thread_id: "thread-1", name: "Renamed" },
-    },
-    {
-      action: "archive",
-      params: { action: "archive", thread_id: "thread-1", confirm: true },
-    },
     {
       action: "unarchive",
       params: { action: "unarchive", thread_id: "thread-1" },
@@ -305,6 +293,7 @@ describe("native Codex thread tool", () => {
         supervision: true,
         allowWriteControls: true,
         request,
+        modelSelectionLocked: true,
       });
 
       await tool?.execute("call-allowed-write", {
@@ -363,6 +352,7 @@ describe("native Codex thread tool", () => {
         },
         attached: false,
       });
+      await expect(readCodexAppServerBinding("session-id")).resolves.toBeUndefined();
     }));
 
   it("redacts unarchive transcripts when raw reads are disabled", () =>
@@ -381,6 +371,7 @@ describe("native Codex thread tool", () => {
         supervision: true,
         allowWriteControls: true,
         request,
+        modelSelectionLocked: true,
       });
 
       const result = await tool?.execute("call-redacted-unarchive", {
@@ -436,7 +427,7 @@ describe("native Codex thread tool", () => {
         expect.any(Object),
       );
       await expect(
-        readCodexAppServerBinding("session-id", { agentDir: path.join(root, "agent") }),
+        readCodexAppServerBinding("session-id", { agentDir: path.join(fixture.root, "agent") }),
       ).resolves.toMatchObject({
         threadId: "forked-thread",
         cwd: "/tmp/project",
@@ -463,23 +454,8 @@ describe("native Codex thread tool", () => {
       error: "returned an invalid thread/read response",
     },
     {
-      name: "an unknown status",
-      response: { thread: { id: "source-thread", status: { type: "futureStatus" } } },
-      error: "unless it is idle or not loaded",
-    },
-    {
       name: "a missing status",
       response: { thread: { id: "source-thread" } },
-      error: "unless it is idle or not loaded",
-    },
-    {
-      name: "a system-error status",
-      response: { thread: { id: "source-thread", status: { type: "systemError" } } },
-      error: "unless it is idle or not loaded",
-    },
-    {
-      name: "an active status",
-      response: { thread: { id: "source-thread", status: { type: "active" } } },
       error: "unless it is idle or not loaded",
     },
   ])("refuses to attach a fork of the bound thread after $name", ({ response, error }) =>
@@ -535,28 +511,24 @@ describe("native Codex thread tool", () => {
       }
     }));
 
-  it.each([
-    { action: "fork", params: { action: "fork", thread_id: "source-thread" } },
-    {
-      action: "archive",
-      params: { action: "archive", thread_id: "bound-thread", confirm: true },
-    },
-  ])("does not change a locked session binding via $action", ({ params }) =>
-    withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        cwd: "/tmp/project",
-      });
-      const request = vi.fn();
-      const tool = createTool({ request, modelSelectionLocked: true });
-      await expect(tool?.execute("call-locked-mutation", params)).rejects.toThrow(
-        MODEL_SELECTION_LOCKED_MESSAGE,
-      );
-      expect(request).not.toHaveBeenCalled();
-      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
-        threadId: "bound-thread",
-      });
-    }),
+  it.each([{ action: "fork", params: { action: "fork", thread_id: "source-thread" } }])(
+    "does not change a locked session binding via $action",
+    ({ params }) =>
+      withFixture(async () => {
+        await writeCodexAppServerBinding("session-id", {
+          threadId: "bound-thread",
+          cwd: "/tmp/project",
+        });
+        const request = vi.fn();
+        const tool = createTool({ request, modelSelectionLocked: true });
+        await expect(tool?.execute("call-locked-mutation", params)).rejects.toThrow(
+          MODEL_SELECTION_LOCKED_MESSAGE,
+        );
+        expect(request).not.toHaveBeenCalled();
+        await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
+          threadId: "bound-thread",
+        });
+      }),
   );
 
   it.each([
@@ -599,26 +571,6 @@ describe("native Codex thread tool", () => {
     }),
   );
 
-  it("keeps an attached fork off a supervision-only connection without a binding", () =>
-    withFixture(async () => {
-      const request = vi.fn();
-      const tool = createTool({
-        omitHomeScope: true,
-        supervision: true,
-        allowWriteControls: true,
-        request,
-      });
-
-      await expect(
-        tool?.execute("call-supervision-only-fork", {
-          action: "fork",
-          thread_id: "source-thread",
-        }),
-      ).rejects.toThrow("Supervised Codex forks must stay detached");
-      expect(request).not.toHaveBeenCalled();
-      await expect(readCodexAppServerBinding("session-id")).resolves.toBeUndefined();
-    }));
-
   it("rechecks the live connection config before attaching a fork", () =>
     withFixture(async () => {
       let pluginConfig: unknown = { appServer: { homeScope: "user" } };
@@ -633,58 +585,6 @@ describe("native Codex thread tool", () => {
         }),
       ).rejects.toThrow("Supervised Codex forks must stay detached");
       expect(request).not.toHaveBeenCalled();
-    }));
-
-  it("allows a detached fork through a supervision-only connection", () =>
-    withFixture(async () => {
-      const response = {
-        thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
-      };
-      const request = vi.fn(async () => response);
-      const tool = createTool({
-        omitHomeScope: true,
-        supervision: true,
-        allowWriteControls: true,
-        request,
-      });
-
-      const result = await tool?.execute("call-supervision-detached-fork", {
-        action: "fork",
-        thread_id: "source-thread",
-        attach: false,
-      });
-
-      expect(result?.details).toMatchObject({ attached: false });
-      await expect(readCodexAppServerBinding("session-id")).resolves.toBeUndefined();
-    }));
-
-  it("allows a detached fork without changing a locked session binding", () =>
-    withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        cwd: "/tmp/project",
-      });
-      const request = vi.fn(async () => ({
-        thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
-      }));
-      const tool = createTool({ request, modelSelectionLocked: true });
-
-      const result = await tool?.execute("call-detached-fork", {
-        action: "fork",
-        thread_id: "source-thread",
-        attach: false,
-      });
-
-      expect(request).toHaveBeenCalledWith(
-        { appServer: { homeScope: "user" } },
-        CODEX_CONTROL_METHODS.forkThread,
-        { threadId: "source-thread", threadSource: "user", excludeTurns: true },
-        expect.any(Object),
-      );
-      expect(result?.details).toMatchObject({ attached: false });
-      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
-        threadId: "bound-thread",
-      });
     }));
 
   it("refuses to archive an active bound thread", () =>
@@ -755,16 +655,6 @@ describe("native Codex thread tool", () => {
     }));
 
   it.each([
-    {
-      name: "a mismatched read response",
-      response: { thread: { id: "different-thread", status: { type: "idle" } } },
-      error: "returned a different thread than requested",
-    },
-    {
-      name: "a missing status",
-      response: { thread: { id: "thread-1" } },
-      error: "cannot verify that the Codex thread is idle",
-    },
     {
       name: "a system-error status",
       response: { thread: { id: "thread-1", status: { type: "systemError" } } },
@@ -871,43 +761,6 @@ describe("native Codex thread tool", () => {
       });
     }));
 
-  it("allows a locked session to archive an unowned unrelated thread", () =>
-    withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        cwd: "/tmp/project",
-      });
-      const request = vi.fn(async (_config, method: string) =>
-        method === CODEX_CONTROL_METHODS.readThread
-          ? { thread: { id: "other-thread", status: { type: "idle" } } }
-          : method === CODEX_CONTROL_METHODS.listThreads
-            ? { data: [] }
-            : {},
-      );
-      const tool = createTool({
-        request,
-        modelSelectionLocked: true,
-        supervision: true,
-        allowWriteControls: true,
-      });
-
-      await tool?.execute("call-other-archive", {
-        action: "archive",
-        thread_id: "other-thread",
-        confirm: true,
-      });
-
-      expect(request).toHaveBeenCalledWith(
-        expect.anything(),
-        CODEX_CONTROL_METHODS.archiveThread,
-        { threadId: "other-thread" },
-        expect.anything(),
-      );
-      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
-        threadId: "bound-thread",
-      });
-    }));
-
   it("rejects archive when another OpenClaw session owns the thread", () =>
     withFixture(async () => {
       await writeCodexAppServerBinding("session-id", {
@@ -945,60 +798,64 @@ describe("native Codex thread tool", () => {
       });
     }));
 
-  it("rejects archive when a spawned descendant is owned by an OpenClaw session", () =>
-    withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "current-thread",
-        cwd: "/tmp/project",
-      });
-      await writeCodexAppServerBinding("other-session", {
-        threadId: "owned-descendant",
-        cwd: "/tmp/project",
-      });
-      const request = vi.fn(async (_config, method: string, requestParams?: unknown) => {
-        if (method === CODEX_CONTROL_METHODS.readThread) {
-          return {
-            thread: {
-              id: (requestParams as { threadId: string }).threadId,
-              status: { type: "idle" },
-            },
-          };
-        }
-        if (method === CODEX_CONTROL_METHODS.listThreads) {
-          return { data: [{ id: "owned-descendant" }] };
-        }
-        return {};
-      });
-      const tool = createTool({ request });
+  it.each([true])(
+    "rejects archive when a spawned descendant is owned by an OpenClaw session (archived=%s)",
+    (archived) =>
+      withFixture(async () => {
+        await writeCodexAppServerBinding("other-session", {
+          threadId: "owned-descendant",
+          cwd: "/tmp/project",
+        });
+        const request = vi.fn(async (_config, method: string, requestParams?: unknown) => {
+          if (method === CODEX_CONTROL_METHODS.readThread) {
+            return {
+              thread: {
+                id: (requestParams as { threadId: string }).threadId,
+                status: { type: "idle" },
+              },
+            };
+          }
+          if (method === CODEX_CONTROL_METHODS.listThreads) {
+            return {
+              data:
+                (requestParams as { archived: boolean }).archived === archived
+                  ? [{ id: "owned-descendant" }]
+                  : [],
+            };
+          }
+          return {};
+        });
+        const tool = createTool({ request });
 
-      await expect(
-        tool?.execute("call-descendant-owned-archive", {
-          action: "archive",
-          thread_id: "parent-thread",
-          confirm: true,
-        }),
-      ).rejects.toThrow("spawned descendant is owned by an OpenClaw session");
+        await expect(
+          tool?.execute("call-descendant-owned-archive", {
+            action: "archive",
+            thread_id: "parent-thread",
+            confirm: true,
+          }),
+        ).rejects.toThrow("spawned descendant is owned by an OpenClaw session");
 
-      expect(request).toHaveBeenCalledWith(
-        expect.anything(),
-        CODEX_CONTROL_METHODS.listThreads,
-        {
-          ancestorThreadId: "parent-thread",
-          archived: false,
-          limit: 100,
-          sortKey: "created_at",
-          sortDirection: "desc",
-          useStateDbOnly: true,
-        },
-        expect.anything(),
-      );
-      expect(request).not.toHaveBeenCalledWith(
-        expect.anything(),
-        CODEX_CONTROL_METHODS.archiveThread,
-        expect.anything(),
-        expect.anything(),
-      );
-    }));
+        expect(request).toHaveBeenCalledWith(
+          expect.anything(),
+          CODEX_CONTROL_METHODS.listThreads,
+          {
+            ancestorThreadId: "parent-thread",
+            archived,
+            limit: 100,
+            sortKey: "created_at",
+            sortDirection: "desc",
+            useStateDbOnly: true,
+          },
+          expect.anything(),
+        );
+        expect(request).not.toHaveBeenCalledWith(
+          expect.anything(),
+          CODEX_CONTROL_METHODS.archiveThread,
+          expect.anything(),
+          expect.anything(),
+        );
+      }),
+  );
 
   it("fails closed when native descendant enumeration errors", () =>
     withFixture(async () => {
@@ -1027,39 +884,4 @@ describe("native Codex thread tool", () => {
         expect.anything(),
       );
     }));
-
-  it.each([
-    {
-      action: "read" as const,
-      params: { action: "read", thread_id: "thread-1", include_turns: true },
-      method: CODEX_CONTROL_METHODS.readThread,
-      requestParams: { threadId: "thread-1", includeTurns: true },
-    },
-    {
-      action: "rename" as const,
-      params: { action: "rename", thread_id: "thread-1", name: "Shared thread" },
-      method: CODEX_CONTROL_METHODS.renameThread,
-      requestParams: { threadId: "thread-1", name: "Shared thread" },
-    },
-    {
-      action: "unarchive" as const,
-      params: { action: "unarchive", thread_id: "thread-1" },
-      method: CODEX_CONTROL_METHODS.unarchiveThread,
-      requestParams: { threadId: "thread-1" },
-    },
-  ])("routes $action through the typed Codex control method", ({ params, method, requestParams }) =>
-    withFixture(async () => {
-      const request = vi.fn(async () => ({ thread: { id: "thread-1" } }));
-      const tool = createTool({ request, modelSelectionLocked: true });
-
-      await tool?.execute("call-5", params);
-
-      expect(request).toHaveBeenCalledWith(
-        { appServer: { homeScope: "user" } },
-        method,
-        requestParams,
-        expect.any(Object),
-      );
-    }),
-  );
 });

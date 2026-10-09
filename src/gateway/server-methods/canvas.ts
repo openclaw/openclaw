@@ -1,5 +1,6 @@
 import {
   CANVAS_DOCUMENT_PREVIEW_MAX_BYTES,
+  WIDGET_HTML_MAX_UTF8_BYTES,
   type CanvasDocumentViewResult,
   ErrorCodes,
   errorShape,
@@ -10,10 +11,10 @@ import { buildSandboxHostPath } from "../../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../../canvas/config.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
+import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
-const CANVAS_WIDGET_VIEW_MAX_BYTES = 2 * 1024 * 1024;
 const CANVAS_WIDGET_UNAVAILABLE =
   "Canvas widget unavailable; reload the chat or ask the agent to recreate it.";
 const CANVAS_PREVIEW_UNAVAILABLE =
@@ -24,6 +25,7 @@ async function respondWithCanvasHtml(
   invocation: GatewayRequestHandlerOptions,
   readHtml: () => string | Promise<string>,
   unavailableMessage: string,
+  sandboxUrl: string,
 ): Promise<void> {
   const { context, client, respond } = invocation;
   const resolveContext = context.resolveGatewayContext;
@@ -58,7 +60,7 @@ async function respondWithCanvasHtml(
     const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
     const result: CanvasDocumentViewResult = {
       html,
-      sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+      sandboxUrl,
       sandboxPort,
       ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
     };
@@ -77,17 +79,18 @@ export const canvasHandlers: GatewayRequestHandlers = {
         invocation,
         async () => {
           const document = await readCanvasDocumentHtmlSource(invocation.params.docId, {
-            maxBytes: CANVAS_WIDGET_VIEW_MAX_BYTES,
+            maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
           });
           if (
             document.cspSandbox !== "scripts" ||
-            Buffer.byteLength(document.html, "utf8") > CANVAS_WIDGET_VIEW_MAX_BYTES
+            Buffer.byteLength(document.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
           ) {
             throw new Error(CANVAS_WIDGET_UNAVAILABLE);
           }
           return document.html;
         },
         CANVAS_WIDGET_UNAVAILABLE,
+        buildBoardWidgetSandboxPath({ grantState: "none" }),
       ),
   ),
   "canvas.document.preview": defineValidatedGatewayMethod(
@@ -102,12 +105,17 @@ export const canvasHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "invalid canvas.document.preview params: html must not exceed 256 KiB of UTF-8 data",
+            "invalid canvas.document.preview params: html must not exceed 2 MiB of UTF-8 data",
           ),
         );
         return;
       }
-      await respondWithCanvasHtml(invocation, () => html, CANVAS_PREVIEW_UNAVAILABLE);
+      await respondWithCanvasHtml(
+        invocation,
+        () => html,
+        CANVAS_PREVIEW_UNAVAILABLE,
+        buildSandboxHostPath({ blockDescendantFrames: true }),
+      );
     },
   ),
 };

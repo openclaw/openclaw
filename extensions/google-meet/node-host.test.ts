@@ -1,7 +1,8 @@
 // Google Meet tests cover node host plugin behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 
 type MockChild = EventEmitter & {
   exitCode: number | null;
@@ -24,7 +25,6 @@ function finishMockChild(child: MockChild, code: number | null, signal: NodeJS.S
 }
 
 const children: MockChild[] = [];
-let handleGoogleMeetNodeHostCommand: typeof import("./src/node-host.js").handleGoogleMeetNodeHostCommand;
 let originalPlatform: NodeJS.Platform;
 
 const MEET_URL = "https://meet.google.com/xyz-abcd-uvw";
@@ -86,10 +86,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 describe("google-meet node host bridge sessions", () => {
-  beforeAll(async () => {
-    ({ handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js"));
-  });
-
   beforeEach(() => {
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });

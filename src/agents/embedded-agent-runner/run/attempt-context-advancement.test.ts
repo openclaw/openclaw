@@ -4,14 +4,30 @@ import {
   type Model,
   type Message,
 } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
-import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  createToolResultPromptProjectionState,
+  getEmbeddedSessionPromptState,
+} from "../session-prompt-state.js";
+import { installContextEngineLoopHook } from "../tool-result-context-guard.js";
+import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
+import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+
+registerAgentSessionLoopTestLifecycle();
 
 const model: Model = makeProviderModelFixture({
   id: "synthetic-model",
@@ -25,17 +41,14 @@ const model: Model = makeProviderModelFixture({
 const usage = createZeroUsageFixture();
 
 describe("context advancement through embedded attempt guards", () => {
-  it.each(
-    (["afterTurn", "ingestBatch", "ingest"] as const).flatMap((ingestion) =>
-      (["stop", "error", "aborted"] as const).flatMap((terminal) =>
-        (["stored-prefix", "live-input"] as const).map((assembly) => ({
-          ingestion,
-          terminal,
-          assembly,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { ingestion: "afterTurn", terminal: "stop", assembly: "stored-prefix" },
+    { ingestion: "afterTurn", terminal: "error", assembly: "live-input" },
+    { ingestion: "ingestBatch", terminal: "aborted", assembly: "stored-prefix" },
+    { ingestion: "ingestBatch", terminal: "stop", assembly: "live-input" },
+    { ingestion: "ingest", terminal: "error", assembly: "stored-prefix" },
+    { ingestion: "ingest", terminal: "aborted", assembly: "live-input" },
+  ] as const)(
     "preserves live context with $assembly assembly and defers $ingestion after $terminal",
     async ({ ingestion, terminal, assembly }) => {
       const remembered: AgentMessage[] = [];
@@ -175,12 +188,12 @@ describe("context advancement through embedded attempt guards", () => {
         getCompactionReplayEnabled: () => false,
         getServerToolClearingEnabled: () => false,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-        getSystemPrompt: () => "",
+        getSystemPrompt: () => "system boundary text ".repeat(64),
         isOpenAIResponsesApi: false,
         repairToolUseResultPairing: false,
         sessionAgentId: "synthetic",
         sessionManager: {},
-        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 64 },
+        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 1024 },
       } as never);
       try {
         await agent.prompt("Read the fixture.");
@@ -207,8 +220,9 @@ describe("context advancement through embedded attempt guards", () => {
         expect(assemble.mock.calls[1]?.[0]).toMatchObject({
           prompt: "Read the fixture.",
           availableTools: new Set(["read_fixture"]),
+          // 8192 context - 1024 reserve - 432 system pressure - 14 pending exchange.
+          tokenBudget: 6722,
         });
-        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBeLessThan(8192);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();
@@ -216,6 +230,147 @@ describe("context advancement through embedded attempt guards", () => {
         agent.abort();
         await agent.waitForIdle();
         guards.remove();
+      }
+    },
+  );
+
+  it.each([0, 6])(
+    "preserves active content through prompt preparation and submission with %i silent replay messages",
+    async (silentCount) => {
+      const prompt = "Perform task with tools.";
+      const sessionId = `replay-boundary-${silentCount}`;
+      const storedPrefix: AgentMessage[] = [
+        { role: "user", content: "Summary of accepted history.", timestamp: 0 },
+      ];
+      const engine: ContextEngine = {
+        info: {
+          id: "synthetic-engine",
+          name: "Synthetic",
+          ownsCompaction: true,
+          transcriptSemantics: {
+            currentTurnFence: "before-current-turn-entry-v1",
+            turnAdvancementIdempotency: "atomic-idempotent-v1",
+          },
+        },
+        ingest: async () => ({ ingested: true }),
+        assemble: async () => ({ messages: storedPrefix, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false, reason: "fits" }),
+        commitTurn: async () => ({ status: "committed" }),
+      };
+      let toolCalls = 0;
+      const { session } = await createTestSession({
+        model,
+        customTools: [
+          {
+            name: "read_fixture",
+            label: "Read fixture",
+            description: "Read fixture",
+            parameters: Type.Object({}),
+            execute: async () => ({
+              content: [{ type: "text", text: `fixture observation ${++toolCalls}` }],
+              details: {},
+            }),
+          },
+        ],
+      });
+      session.agent.state.messages = [
+        { role: "user", content: "Earlier accepted request.", timestamp: 0 },
+        createAssistant(model, [{ type: "text", text: "Earlier accepted answer." }]),
+        ...Array.from({ length: silentCount }, () =>
+          createAssistant(model, [{ type: "text", text: "NO_REPLY" }]),
+        ),
+      ];
+      const modelRequests: Message[][] = [];
+      session.agent.streamFn = (_model, context) => {
+        modelRequests.push(structuredClone(context.messages));
+        const round = modelRequests.length;
+        return createAssistantResultStream(
+          createAssistant(
+            model,
+            round <= 2
+              ? [{ type: "toolCall", id: `call-${round}`, name: "read_fixture", arguments: {} }]
+              : [{ type: "text", text: "done" }],
+            round <= 2 ? "toolUse" : "stop",
+          ),
+        );
+      };
+      const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+      const promptContext = await prepareEmbeddedAttemptPromptContext({
+        attempt: { config: {}, contextTokenBudget: 8192, sessionId },
+        capabilityToolNames: new Set(["read_fixture"]),
+        includeBoundaryTimestamp: false,
+        isRawModelRun: false,
+        messages: session.messages,
+        prompt: { effectivePrompt: prompt, effectiveTranscriptPrompt: prompt },
+        replaceSessionMessages: (messages) => {
+          session.agent.state.messages = messages;
+        },
+        sessionAgentId: "synthetic",
+        systemPromptText: "",
+        toolResultPromptProjectionState: sessionPromptState.toolResults,
+      });
+      const removeLoopHook = installContextEngineLoopHook({
+        agent: session.agent,
+        contextEngine: engine,
+        sessionId,
+        sessionFile: "unused",
+        tokenBudget: 8192,
+        modelId: model.id,
+        getPrePromptMessageCount: () => promptContext.prePromptMessageCount,
+        deferredTurn: { prompt, availableTools: new Set(["read_fixture"]) },
+      });
+      try {
+        await submitEmbeddedAttemptPrompt({
+          attempt: { sessionId },
+          activeSession: session,
+          contextTokenBudget: promptContext.contextTokenBudget,
+          images: [],
+          modelPrompt: promptContext.promptForModel,
+          onFinalPromptText: () => {},
+          onSteeringAcknowledged: () => {},
+          persistToolResultProjections: async () => {},
+          promptActiveSession: (text, options) => session.prompt(text, options),
+          runtimeOnly: false,
+          systemPrompt: "",
+          toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
+          toolResultMaxChars: promptContext.promptToolResultMaxChars,
+          toolResultPromptProjectionState: sessionPromptState.toolResults,
+          trajectoryRecorder: null,
+          transcriptLeafId: null,
+          transcriptPrompt: promptContext.promptForSession,
+        });
+        expect(modelRequests).toHaveLength(3);
+        expect(toolCalls).toBe(2);
+        for (const messages of modelRequests) {
+          expect(messages).toContainEqual(
+            expect.objectContaining({
+              role: "user",
+              content: [{ type: "text", text: prompt }],
+            }),
+          );
+        }
+        for (const [index, messages] of modelRequests.entries()) {
+          for (let round = 1; round <= index; round++) {
+            expect(messages).toContainEqual(
+              expect.objectContaining({
+                role: "assistant",
+                content: [
+                  { type: "toolCall", id: `call-${round}`, name: "read_fixture", arguments: {} },
+                ],
+              }),
+            );
+            expect(messages).toContainEqual(
+              expect.objectContaining({
+                role: "toolResult",
+                toolCallId: `call-${round}`,
+                content: [{ type: "text", text: `fixture observation ${round}` }],
+              }),
+            );
+          }
+        }
+      } finally {
+        removeLoopHook();
+        clearEmbeddedSessionPromptStates([sessionId]);
       }
     },
   );

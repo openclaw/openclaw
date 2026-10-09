@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
@@ -13,6 +14,8 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -33,6 +36,7 @@ import {
   claimManagedImageRecordCleanupIfCurrent,
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
+import { managedImageRecordOperations } from "./managed-image-record-store.kernel.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
@@ -64,20 +68,32 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
   const records = () => listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
   const updates: SessionTranscriptUpdate[] = [];
   const downloads: Array<ReturnType<typeof resolveManagedOutgoingMediaArtifactDownload>> = [];
+  const readDownloads = async () =>
+    (await Promise.allSettled(downloads)).map((result) => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      return result.value;
+    });
   const unsubscribe = onSessionTranscriptUpdate((update) => {
     if (update.target.sessionId !== sessionId) {
       return;
     }
     updates.push(update);
-    for (const { record } of records()) {
-      downloads.push(
-        resolveManagedOutgoingMediaArtifactDownload({
-          sessionKey,
-          agentId: "main",
-          stateDir: state.stateDir,
-          artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
-        }),
-      );
+    // Observe records at publication, before a wrongly late write could make the test pass.
+    const entries = managedImageRecordOperations["managedImages.entries"](
+      { sessionKey },
+      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
+    );
+    for (const { record } of entries) {
+      const pending = resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey,
+        agentId: "main",
+        stateDir: state.stateDir,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
+      });
+      void pending.catch(() => {});
+      downloads.push(pending);
     }
   });
   const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ sessionId });
@@ -111,7 +127,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       },
       () =>
         persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { default: true, workspace: state.workspaceDir } } } },
+          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
           sessionKey: options.sessionKey ?? sessionKey,
           expectedSessionId: sessionId,
           agentId: "main",
@@ -130,25 +146,39 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
           },
         }),
     );
-  const removePromotionFault = () =>
-    database.db.exec("DROP TRIGGER IF EXISTS fail_second_media_promotion");
+  let restorePromotionAdmission: (() => void) | undefined;
+  const removePromotionFault = () => {
+    restorePromotionAdmission?.();
+    restorePromotionAdmission = undefined;
+  };
   return {
     state,
     scope,
     entry,
     records,
     updates,
-    downloads,
+    downloads: readDownloads,
     persist,
     events: () => loadTranscriptEvents(scope),
     failNextDrain: () => {
       failDrain = true;
     },
-    failSecondPromotion: () =>
-      database.db.exec(`CREATE TEMP TRIGGER fail_second_media_promotion
-      BEFORE UPDATE OF message_id ON managed_outgoing_image_records
-      WHEN OLD.original_filename = 'second.png' AND NEW.message_id IS NOT NULL
-      BEGIN SELECT RAISE(ABORT, 'second media promotion failed'); END`),
+    failSecondPromotion: () => {
+      let promotions = 0;
+      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+        // Refuse the second native commit, retaining the real update and rollback.
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          request.facts.type === "managedImages.attach" &&
+          ++promotions === 2
+        ) {
+          throw new Error("second media promotion failed");
+        }
+        admit(request, grant);
+      });
+      restorePromotionAdmission = () => spy.mockRestore();
+    },
     removePromotionFault,
     holdWrites: async () => {
       const entered = createDeferredCore();
@@ -165,7 +195,11 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     dispose: async () => {
       unsubscribe();
       removePromotionFault();
-      await lifecycle.dispose();
+      try {
+        await readDownloads();
+      } finally {
+        await lifecycle.dispose();
+      }
     },
   };
 }
@@ -173,7 +207,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
 type Fixture = Awaited<ReturnType<typeof createSourceReplyFixture>>;
 
 async function expectOriginalBytes(fixture: Fixture) {
-  for (const { record } of fixture.records()) {
+  for (const { record } of await fixture.records()) {
     await expect(
       fs.readFile(
         path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId),
@@ -192,12 +226,14 @@ async function createPartialPromotion(fixture: Fixture) {
   expect(assistants).toHaveLength(1);
   const messageId = readTranscriptEventId(assistants[0]);
   expect(messageId).toBeTruthy();
-  expect(fixture.records()).toHaveLength(2);
+  expect(await fixture.records()).toHaveLength(2);
   expect(
-    fixture.records().find(({ record }) => record.original.filename === "first.png")?.record,
+    (await fixture.records()).find(({ record }) => record.original.filename === "first.png")
+      ?.record,
   ).toMatchObject({ messageId, retentionClass: "history" });
   expect(
-    fixture.records().find(({ record }) => record.original.filename === "second.png")?.record,
+    (await fixture.records()).find(({ record }) => record.original.filename === "second.png")
+      ?.record,
   ).toMatchObject({ messageId: null, retentionClass: "transient" });
   expect(fixture.updates).toEqual([]);
   await expectOriginalBytes(fixture);
@@ -206,7 +242,7 @@ async function createPartialPromotion(fixture: Fixture) {
 }
 
 describe("internal source reply persistence", () => {
-  it.each(["partial-promotion", "owned-drain", "ordinary", "canonical-key", "text-only"] as const)(
+  it.each(["partial-promotion", "owned-drain", "canonical-key", "text-only"] as const)(
     "completes exact replay and refreshes history after %s",
     async (mode) => {
       await withOpenClawTestState(
@@ -221,7 +257,9 @@ describe("internal source reply persistence", () => {
               await expect(fixture.persist()).rejects.toThrow("nested drain failed");
               expect(fixture.updates).toEqual([]);
               expect(
-                fixture.records().every(({ record }) => record.retentionClass === "history"),
+                (await fixture.records()).every(
+                  ({ record }) => record.retentionClass === "history",
+                ),
               ).toBe(true);
             } else {
               await fixture.persist({ textOnly: mode === "text-only" });
@@ -236,8 +274,7 @@ describe("internal source reply persistence", () => {
               __openclaw: { runId: "original-run" },
             });
             const messageId = readTranscriptEventId(assistants[0]);
-            const originalIds = fixture
-              .records()
+            const originalIds = (await fixture.records())
               .map(({ record }) => record.attachmentId)
               .toSorted();
             const beforeUpdates = fixture.updates.length;
@@ -252,26 +289,22 @@ describe("internal source reply persistence", () => {
             ).resolves.toBeUndefined();
             expect(await fixture.events()).toEqual(events);
             expect(
-              fixture
-                .records()
-                .map(({ record }) => record.attachmentId)
-                .toSorted(),
+              (await fixture.records()).map(({ record }) => record.attachmentId).toSorted(),
             ).toEqual(originalIds);
             expect(fixture.updates).toHaveLength(beforeUpdates + 1);
             expect(fixture.updates.at(-1)?.message).toBeUndefined();
             expect(fixture.updates.filter((update) => update.message !== undefined)).toHaveLength(
               beforeUpdates,
             );
-            expect(fixture.records()).toHaveLength(mode === "text-only" ? 0 : 2);
-            for (const { record, cleanupPending } of fixture.records()) {
+            expect(await fixture.records()).toHaveLength(mode === "text-only" ? 0 : 2);
+            for (const { record, cleanupPending } of await fixture.records()) {
               expect(cleanupPending).toBe(false);
               expect(record).toMatchObject({ messageId, retentionClass: "history" });
             }
             await expectOriginalBytes(fixture);
-            expect(fixture.downloads).toHaveLength(
-              fixture.updates.length * (mode === "text-only" ? 0 : 2),
-            );
-            for (const download of await Promise.all(fixture.downloads)) {
+            const downloads = await fixture.downloads();
+            expect(downloads).toHaveLength(fixture.updates.length * (mode === "text-only" ? 0 : 2));
+            for (const download of downloads) {
               expect(download).toMatchObject({ type: "image" });
             }
           } finally {
@@ -333,14 +366,16 @@ describe("internal source reply persistence", () => {
                 ),
               );
             } else {
-              const pending = fixture
-                .records()
-                .find(({ record }) => record.messageId === null)?.record;
+              const pending = (await fixture.records()).find(
+                ({ record }) => record.messageId === null,
+              )?.record;
               if (!pending) {
                 throw new Error("expected second prepared media record");
               }
               if (changed === "cleanup-pending") {
-                expect(claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(true);
+                expect(await claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(
+                  true,
+                );
               } else {
                 await removeManagedOutgoingMediaBlocks({
                   stateDir: state.stateDir,
@@ -352,11 +387,11 @@ describe("internal source reply persistence", () => {
                     },
                   ],
                 });
-                expect(fixture.records()).toHaveLength(1);
+                expect(await fixture.records()).toHaveLength(1);
               }
             }
             const beforeEvents = await fixture.events();
-            const beforeRecords = fixture.records();
+            const beforeRecords = await fixture.records();
             held.release();
             await expect(replay).rejects.toThrow(
               changed === "missing-media" || changed === "cleanup-pending"
@@ -365,7 +400,7 @@ describe("internal source reply persistence", () => {
             );
             await held.done;
             expect(await fixture.events()).toEqual(beforeEvents);
-            expect(fixture.records()).toEqual(beforeRecords);
+            expect(await fixture.records()).toEqual(beforeRecords);
             expect(fixture.updates).toEqual([]);
             await expectOriginalBytes(fixture);
           } finally {

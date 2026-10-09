@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -16,12 +17,14 @@ import {
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
+  vi.restoreAllMocks();
   resetGlobalHookRunner();
   await tempDirs.cleanup();
 });
 
 describe("committed skill artifact snapshots", () => {
-  it("preserves the ordered file-only digest and declared metadata", async () => {
+  it("preserves the ordered file-only digest and skill-file candidate priority", async () => {
     const skillDir = await tempDirs.make("openclaw-skill-change-");
     const content = Buffer.from(
       "---\nname: Declared Name\ndescription: Test skill\nversion: 1.2.3\n---\n\n# 🦞\n",
@@ -38,18 +41,18 @@ describe("committed skill artifact snapshots", () => {
       await fs.writeFile(path.join(skillDir, excluded, "ignored.txt"), "ignored");
     }
     await fs.writeFile(path.join(skillDir, "z.bin"), binary);
-    await fs.writeFile(path.join(skillDir, "skills.md"), legacyContent);
+    await fs.writeFile(path.join(skillDir, "SKILL.MD"), legacyContent);
     await fs.writeFile(path.join(skillDir, "assets", "empty.txt"), "");
     await fs.writeFile(path.join(skillDir, "assets", ".clawhub", "retained.bin"), nestedMetadata);
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), content);
+    await fs.writeFile(path.join(skillDir, "skills.md"), content);
     await fs.writeFile(path.join(skillDir, "~", "support.txt"), literalTildeContent);
 
     const digest = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
     const expectedFiles = [
-      { path: "SKILL.md", sha256: digest(content), sizeBytes: content.byteLength },
+      { path: "SKILL.MD", sha256: digest(legacyContent), sizeBytes: legacyContent.byteLength },
       { path: "assets/.clawhub/retained.bin", sha256: digest(nestedMetadata), sizeBytes: 3 },
       { path: "assets/empty.txt", sha256: digest(""), sizeBytes: 0 },
-      { path: "skills.md", sha256: digest(legacyContent), sizeBytes: legacyContent.byteLength },
+      { path: "skills.md", sha256: digest(content), sizeBytes: content.byteLength },
       { path: "z.bin", sha256: digest(binary), sizeBytes: binary.byteLength },
       {
         path: "~/support.txt",
@@ -69,7 +72,7 @@ describe("committed skill artifact snapshots", () => {
       name: "Declared Name",
       skillKey: "installed-key",
       description: "Test skill",
-      skillFile: path.join(skillDir, "SKILL.md"),
+      skillFile: path.join(skillDir, "skills.md"),
       skillDir,
       source: "clawhub",
       revision: {
@@ -81,29 +84,51 @@ describe("committed skill artifact snapshots", () => {
     });
   });
 
-  it("rejects a hardlink substituted after entry inspection", async () => {
+  it.each(["SKILL.md", "asset.bin"])("rejects a hardlink added before reading %s", async (name) => {
     const parent = await tempDirs.make("openclaw-skill-change-race-");
     const skillDir = path.join(parent, "skill");
     const assetPath = path.join(skillDir, "asset.bin");
+    const targetPath = path.join(skillDir, name);
     const outsidePath = path.join(parent, "outside.bin");
     await fs.mkdir(skillDir);
     await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n");
     await fs.writeFile(assetPath, "original");
-    await fs.writeFile(outsidePath, "outside");
     const warn = vi.fn();
-    const lstat = fs.lstat.bind(fs);
-    let substituted = false;
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await lstat(...args);
-      if (String(args[0]) === assetPath) {
-        lstatSpy.mockRestore();
-        await fs.unlink(assetPath);
-        await fs.link(outsidePath, assetPath);
-        substituted = true;
-      }
-      return stat;
+    const read = vi.fn().mockRejectedValue(new Error("unexpected file read"));
+    let linked = false;
+    __setFsSafeTestHooksForTest({
+      beforeRootReadFinalFence: async (filePath, handle) => {
+        if (filePath === targetPath) {
+          __setFsSafeTestHooksForTest(undefined);
+          vi.spyOn(handle, "read").mockImplementation(read);
+          vi.spyOn(handle, "readFile").mockImplementation(read);
+          await fs.link(targetPath, outsidePath);
+          linked = true;
+        }
+      },
     });
-    try {
+
+    await expect(
+      snapshotCommittedSkillArtifactBestEffort({
+        skillDir,
+        skillKey: "installed-key",
+        source: "source-install",
+        logger: { warn },
+      }),
+    ).resolves.toBeUndefined();
+    expect(linked).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`hard-linked file "${name}"`));
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlink entries without following them",
+    async () => {
+      const skillDir = await tempDirs.make("openclaw-skill-change-link-");
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n");
+      await fs.symlink("missing", path.join(skillDir, "alias"));
+      const warn = vi.fn();
+
       await expect(
         snapshotCommittedSkillArtifactBestEffort({
           skillDir,
@@ -112,14 +137,9 @@ describe("committed skill artifact snapshots", () => {
           logger: { warn },
         }),
       ).resolves.toBeUndefined();
-      expect(substituted).toBe(true);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Could not snapshot committed skill change:"),
-      );
-    } finally {
-      lstatSpy.mockRestore();
-    }
-  });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('unsupported entry "alias"'));
+    },
+  );
 
   it("keeps metadata and the content hash on the same captured file version", async () => {
     const parent = await tempDirs.make("openclaw-skill-change-version-");
@@ -133,33 +153,55 @@ describe("committed skill artifact snapshots", () => {
     await fs.writeFile(skillFile, initialContent);
     await fs.writeFile(laterAsset, "asset");
     await fs.writeFile(replacement, replacementContent);
-    const lstat = fs.lstat.bind(fs);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await lstat(...args);
-      if (String(args[0]) === laterAsset) {
-        lstatSpy.mockRestore();
-        await fs.rename(replacement, skillFile);
-      }
-      return stat;
+    __setFsSafeTestHooksForTest({
+      beforeRootReadFinalFence: async (filePath) => {
+        if (filePath === laterAsset) {
+          __setFsSafeTestHooksForTest(undefined);
+          await fs.rename(replacement, skillFile);
+        }
+      },
     });
-    try {
-      await expect(
-        snapshotCommittedSkillArtifactBestEffort({
-          skillDir,
-          skillKey: "installed-key",
-          source: "source-install",
-        }),
-      ).resolves.toMatchObject({
-        name: "Before",
-        revision: {
-          declaredVersion: "1.0.0",
-          contentSha256: `sha256:${createHash("sha256").update(initialContent).digest("hex")}`,
-        },
-      });
-      await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(replacementContent);
-    } finally {
-      lstatSpy.mockRestore();
-    }
+
+    await expect(
+      snapshotCommittedSkillArtifactBestEffort({
+        skillDir,
+        skillKey: "installed-key",
+        source: "source-install",
+      }),
+    ).resolves.toMatchObject({
+      name: "Before",
+      revision: {
+        declaredVersion: "1.0.0",
+        contentSha256: `sha256:${createHash("sha256").update(initialContent).digest("hex")}`,
+      },
+    });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(replacementContent);
+  });
+
+  it("reports a descriptor close failure after reading the skill", async () => {
+    const skillDir = await tempDirs.make("openclaw-skill-change-close-");
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n");
+    const warn = vi.fn();
+    __setFsSafeTestHooksForTest({
+      beforeRootReadFinalFence: (_filePath, handle) => {
+        __setFsSafeTestHooksForTest(undefined);
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await close();
+          throw new Error("fixture close failure");
+        });
+      },
+    });
+
+    await expect(
+      snapshotCommittedSkillArtifactBestEffort({
+        skillDir,
+        skillKey: "installed-key",
+        source: "source-install",
+        logger: { warn },
+      }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("fixture close failure"));
   });
 });
 

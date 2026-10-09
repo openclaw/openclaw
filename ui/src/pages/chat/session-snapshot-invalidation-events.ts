@@ -1,8 +1,11 @@
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+
 export type SessionSnapshotInvalidationReason = "cache-eviction";
 
 type SnapshotInvalidation =
-  | { sessionKey: string; reason?: SessionSnapshotInvalidationReason }
-  | { sessionKey?: undefined; reason?: undefined };
+  | { sessionKey: string; scopePrefix?: undefined; reason?: SessionSnapshotInvalidationReason }
+  | { sessionKey?: undefined; scopePrefix: string; reason?: undefined }
+  | { sessionKey?: undefined; scopePrefix?: undefined; reason?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
@@ -11,7 +14,7 @@ const invalidationListeners = new Set<SnapshotInvalidationListener>();
 export let snapshotStoreGeneration = 0;
 
 function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
-  if (!invalidation.sessionKey) {
+  if (!invalidation.sessionKey && !invalidation.scopePrefix) {
     snapshotStoreGeneration += 1;
   }
   return Promise.all(
@@ -19,23 +22,13 @@ function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise
   ).then(() => undefined);
 }
 
-function broadcastSnapshotInvalidation(invalidation: SnapshotInvalidation): void {
-  try {
-    localStorage.setItem(SNAPSHOT_INVALIDATION_STORAGE_KEY, JSON.stringify(invalidation));
-    localStorage.removeItem(SNAPSHOT_INVALIDATION_STORAGE_KEY);
-  } catch {}
-}
-
 function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
   try {
-    const parsed: unknown = JSON.parse(value);
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "sessionKey" in parsed &&
-      typeof parsed.sessionKey === "string" &&
-      parsed.sessionKey
-    ) {
+    const parsed = asNullableObjectRecord(JSON.parse(value));
+    if (typeof parsed?.scopePrefix === "string" && parsed.scopePrefix.startsWith("scope:[")) {
+      return { scopePrefix: parsed.scopePrefix };
+    }
+    if (typeof parsed?.sessionKey === "string" && parsed.sessionKey) {
       return {
         sessionKey: parsed.sessionKey,
         ...("reason" in parsed && parsed.reason === "cache-eviction"
@@ -50,7 +43,10 @@ function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
 
 export function publishSnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
   const notified = notifySnapshotInvalidation(invalidation);
-  broadcastSnapshotInvalidation(invalidation);
+  try {
+    localStorage.setItem(SNAPSHOT_INVALIDATION_STORAGE_KEY, JSON.stringify(invalidation));
+    localStorage.removeItem(SNAPSHOT_INVALIDATION_STORAGE_KEY);
+  } catch {}
   return notified;
 }
 

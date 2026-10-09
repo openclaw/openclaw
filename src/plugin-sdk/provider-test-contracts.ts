@@ -69,7 +69,6 @@ export {
 export {
   describeProviderWizardChoiceResolutionContract,
   describeProviderWizardModelPickerContract,
-  describeProviderWizardSetupOptionsContract,
 } from "./test-helpers/provider-wizard-contract-suites.js";
 export { expectPassthroughReplayPolicy } from "./test-helpers/provider-replay-policy.js";
 export { createCapturedThinkingConfigStream } from "./test-helpers/stream-hooks.js";

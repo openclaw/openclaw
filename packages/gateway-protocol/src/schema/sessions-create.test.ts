@@ -6,6 +6,28 @@ import {
 } from "../index.js";
 
 describe("sessions.create schema", () => {
+  it("accepts only the dock presentation surface without accepting creator attribution", () => {
+    expect(validateSessionsCreateParams({ surface: "plugin-dock" })).toBe(true);
+    for (const surface of ["operator", "spawn", "internal", "plugin", "", null]) {
+      expect(validateSessionsCreateParams({ surface })).toBe(false);
+    }
+    expect(validateSessionsCreateParams({ createdVia: "plugin-dock" })).toBe(false);
+    expect(
+      validateSessionsCreateParams({ surface: "plugin-dock", createdActor: { type: "system" } }),
+    ).toBe(false);
+  });
+
+  it("accepts an explicit runtime but reserves null for patch reset", () => {
+    expect(
+      validateSessionsCreateParams({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" }),
+    ).toBe(true);
+    expect(validateSessionsCreateParams({ model: "openai/gpt-5.6-sol", agentRuntime: null })).toBe(
+      false,
+    );
+    expect(validateSessionsCreateParams({ model: "openai/gpt-5.6-sol", agentRuntime: "" })).toBe(
+      false,
+    );
+  });
   it.each([undefined, 0, 1800000])("accepts initial run timeout %s", (timeoutMs) => {
     expect(
       validateSessionsCreateParams({

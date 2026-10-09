@@ -5,6 +5,7 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+import * as iconLoader from "../plugins/icon-loader.ts";
 import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 
 const plugins: PluginListResult = {
@@ -14,7 +15,8 @@ const plugins: PluginListResult = {
     installed: true,
     enabled: true,
     state: "enabled",
-    hasIcon: id !== "iconless",
+    hasIcon: true,
+    hasActivityIcon: id !== "iconless",
   })),
   diagnostics: [],
   mutationAllowed: false,
@@ -87,12 +89,8 @@ function setup() {
     updateComplete: Promise.resolve(true),
   };
   const fetch = vi
-    .fn()
-    .mockImplementation(
-      async () => new Response(new Blob(["png"]), { headers: { "content-type": "image/png" } }),
-    );
-  vi.stubGlobal("fetch", fetch);
-  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:plugin-icon");
+    .spyOn(iconLoader, "fetchPluginActivityIconBlobUrl")
+    .mockResolvedValue("blob:plugin-icon");
   const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
   let session: { sessionKey: string; agentId: string } | undefined = {
     sessionKey: "agent:main:main",
@@ -212,7 +210,7 @@ describe("chat tool icon ownership", () => {
     expect(controller.icons.get("read")).toBeUndefined();
     expect(controller.icons.get("other")).toBeUndefined();
     expect(fetch).toHaveBeenCalledOnce();
-    expect(fetch.mock.calls[0]?.[0]).toContain("meetings");
+    expect(fetch.mock.calls[0]?.[0]).toMatchObject({ pluginId: "meetings", tool: undefined });
     controller.hostUpdate();
     await Promise.resolve();
     expect(request).toHaveBeenCalledTimes(2);
@@ -221,6 +219,72 @@ describe("chat tool icon ownership", () => {
     expect(controller.icons.get("meeting_status")).toBeUndefined();
     expect(controller.icons).not.toBe(previous);
     expect(revoke).toHaveBeenCalledWith("blob:plugin-icon");
+    controller.hostDisconnected();
+  });
+
+  it.each([true, false])(
+    "uses exact per-tool overrides with default availability %s",
+    async (defaultAvailable) => {
+      const { controller, request, fetch } = setup();
+      const names = ["mcp__meetings__browser", "mcp__meetings__list", "mcp__meetings__cancel"];
+      request.mockImplementation(async (method) =>
+        method === "plugins.list"
+          ? {
+              ...plugins,
+              plugins: plugins.plugins.map((plugin) =>
+                Object.assign({}, plugin, {
+                  hasActivityIcon: defaultAvailable,
+                  activityIconTools: [names[2]!, "browser"],
+                }),
+              ),
+            }
+          : {
+              ...catalog,
+              groups: [
+                {
+                  ...catalog.groups[0]!,
+                  tools: names.map((id) => Object.assign({}, catalog.groups[0]!.tools[0]!, { id })),
+                },
+              ],
+            },
+      );
+      fetch.mockImplementation(async ({ tool }) =>
+        tool ? "blob:cancel-glyph" : "blob:default-glyph",
+      );
+      controller.hostUpdate();
+      for (const name of names) {
+        controller.icons.get(name);
+      }
+      await vi.waitFor(() =>
+        expect(controller.icons.get(names[2]!)?.url).toBe("blob:cancel-glyph"),
+      );
+      expect(controller.icons.get(names[0]!)?.url).toBe(
+        defaultAvailable ? "blob:default-glyph" : undefined,
+      );
+      expect(controller.icons.get(names[1]!)?.url).toBe(
+        defaultAvailable ? "blob:default-glyph" : undefined,
+      );
+      expect(fetch.mock.calls.map(([params]) => [params.pluginId, params.tool])).toEqual([
+        ...(defaultAvailable ? [["meetings", undefined]] : []),
+        ["meetings", names[2]],
+      ]);
+      expect(request).toHaveBeenCalledTimes(2);
+      controller.hostDisconnected();
+    },
+  );
+
+  it("keeps unavailable activity artwork on the neutral fallback without fetching the package logo", async () => {
+    const { controller, fetch } = setup();
+    fetch.mockResolvedValue(null);
+    controller.hostUpdate();
+    controller.icons.get("meeting_status");
+    controller.icons.get("other");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(controller.icons.get("meeting_status")).toBeUndefined();
+    expect(controller.icons.get("meeting_list")).toBeUndefined();
+    expect(controller.icons.get("other")).toBeUndefined();
+    expect(fetch).toHaveBeenCalledOnce();
     controller.hostDisconnected();
   });
 
@@ -306,13 +370,13 @@ describe("chat tool icon ownership", () => {
 
   it("discards an icon response that finishes after the pane disconnects", async () => {
     const { controller, fetch, revoke } = setup();
-    const response = createDeferred<Response>();
+    const response = createDeferred<string | null>();
     fetch.mockReturnValueOnce(response.promise);
     controller.hostUpdate();
     controller.icons.get("meeting_status");
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     controller.hostDisconnected();
-    response.resolve(new Response(new Blob(["png"]), { headers: { "content-type": "image/png" } }));
+    response.resolve("blob:plugin-icon");
     await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:plugin-icon"));
     expect(controller.icons.get("meeting_status")).toBeUndefined();
   });

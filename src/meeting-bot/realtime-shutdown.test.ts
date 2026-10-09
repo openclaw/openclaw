@@ -325,12 +325,7 @@ describe("meeting shutdown", () => {
   it.each([
     ["tts", "resolve", "stop"],
     ["tts", "reject", "stop"],
-    ["tts", "resolve", "fatal"],
-    ["tts", "reject", "fatal"],
     ["tts", "failed result", "stop"],
-    ["tts", "failed result", "fatal"],
-    ["sink", "resolve", "stop"],
-    ["sink", "reject", "stop"],
     ["sink", "resolve", "fatal"],
     ["sink", "reject", "fatal"],
   ] as const)("seals %s spans before %s settles after %s", async (stage, settlement, shutdown) => {

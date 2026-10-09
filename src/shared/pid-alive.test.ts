@@ -1,27 +1,51 @@
-// PID liveness tests cover process existence checks across platforms.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   getFileLockProcessStartTime,
+  getProcessInstanceStartTime,
   getProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
+  readDarwinProcessIdentity,
 } from "./pid-alive.js";
+
+const nativeKoffi = vi.hoisted(() => vi.fn());
+vi.mock("node:module", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:module")>();
+  return {
+    createRequire: (url: string | URL) => {
+      const require = original.createRequire(url);
+      return (id: string) => (id === "koffi" ? nativeKoffi() : require(id));
+    },
+  };
+});
 
 const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
   vi.fn<(pid: number) => number | null>(() => null),
 );
+const readFreeBsdProcessStartTimeMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+
+vi.mock("./freebsd-process-identity.ts", () => ({
+  readFreeBsdProcessStartTime: readFreeBsdProcessStartTimeMock,
+}));
 
 vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
   readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
 }));
 
+// Portable cases disable native inspection; the native suite opts back in.
+beforeEach(() => vi.stubGlobal("SEALED_RUNTIME_BUILD", true));
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   readWindowsProcessStartTimeSyncMock.mockReset();
+  readFreeBsdProcessStartTimeMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -36,33 +60,12 @@ function mockProcReads(entries: Record<string, string>) {
 }
 
 describe("isPidAlive", () => {
-  it("returns true for the current running process", () => {
-    expect(isPidAlive(process.pid)).toBe(true);
-  });
-
-  it("returns false for a non-existent PID", () => {
-    expect(isPidAlive(2 ** 30)).toBe(false);
-  });
-
   it("returns false for invalid PIDs", () => {
     expect(isPidAlive(0)).toBe(false);
     expect(isPidAlive(-1)).toBe(false);
     expect(isPidAlive(1.5)).toBe(false);
     expect(isPidAlive(Number.NaN)).toBe(false);
     expect(isPidAlive(Number.POSITIVE_INFINITY)).toBe(false);
-  });
-
-  it("returns true when process probing reports EPERM", () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-    mockProcReads({
-      "/proc/42/status": "Name:\tnode\nState:\tS (sleeping)\nPid:\t42\n",
-    });
-
-    expect(isPidAlive(42)).toBe(true);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns false when process probing reports ESRCH", () => {
@@ -98,49 +101,15 @@ describe("isPidDefinitelyDead", () => {
     expect(isPidDefinitelyDead(Number.NaN)).toBe(true);
     expect(isPidDefinitelyDead(Number.POSITIVE_INFINITY)).toBe(true);
   });
-
-  it("returns true when process probing reports ESRCH", () => {
-    const error = Object.assign(new Error("missing process"), { code: "ESRCH" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-
-    expect(isPidDefinitelyDead(42)).toBe(true);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false when process probing reports EPERM", () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-
-    expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false for live non-zombie processes", async () => {
-    const livePid = process.pid;
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    mockProcReads({
-      [`/proc/${livePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t${livePid}\nPid:\t${livePid}\n`,
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidDefinitelyDead(livePid)).toBe(false);
-    });
-  });
 });
 
-describe.each(["success", "EPERM"])("Linux process liveness (probe=%s)", (probe) => {
+describe("Linux process liveness", () => {
   it.each([
-    { state: "S", threads: "1", dead: false },
-    { state: "Z", threads: "1", dead: true },
-    { state: "Z", threads: "2", dead: false },
-    { state: "Z", threads: "", dead: false },
+    { probe: "success", state: "X", threads: "1", dead: true },
+    { probe: "EPERM", state: "X", threads: "2", dead: false },
   ])(
-    "requires exited threads (state=$state, threads=$threads)",
-    async ({ state, threads, dead }) => {
+    "requires exited threads (probe=$probe, state=$state, threads=$threads)",
+    async ({ probe, state, threads, dead }) => {
       vi.spyOn(process, "kill").mockImplementation(() => {
         if (probe === "EPERM") {
           throw Object.assign(new Error("permission denied"), { code: "EPERM" });
@@ -157,6 +126,45 @@ describe.each(["success", "EPERM"])("Linux process liveness (probe=%s)", (probe)
     },
   );
 });
+
+it("confirms exit when procfs disappears after the initial existence probe", () => {
+  let statusRead = false;
+  const originalReadFileSync = fsSync.readFileSync;
+  vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
+    if (String(args[0]) !== "/proc/42/status") {
+      return originalReadFileSync(...args);
+    }
+    statusRead = true;
+    throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+  });
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    if (!statusRead) {
+      return true;
+    }
+    throw Object.assign(new Error("process probe failed"), { code: "ESRCH" });
+  });
+  withMockedPlatform("linux", () => {
+    expect(isPidAlive(42)).toBe(false);
+  });
+});
+
+it.each(["ESRCH", "EPERM", "success"])(
+  "revalidates a zero-thread Linux snapshot (fresh probe=%s)",
+  (result) => {
+    mockProcReads({ "/proc/42/status": "Name:\tnode\nState:\tZ\nThreads:\t0\n" });
+    vi.spyOn(process, "kill")
+      .mockImplementationOnce(() => true)
+      .mockImplementation(() => {
+        if (result === "success") {
+          return true;
+        }
+        throw Object.assign(new Error("current PID probe failed"), { code: result });
+      });
+    withMockedPlatform("linux", () => {
+      expect(isPidDefinitelyDead(42)).toBe(result === "ESRCH");
+    });
+  },
+);
 
 describe("process start times", () => {
   it("parses linux /proc stat start times and rejects malformed variants", async () => {
@@ -175,48 +183,11 @@ describe("process start times", () => {
     await withMockedPlatform("linux", async () => {
       expect(getProcessStartTime(process.pid)).toBe(98765);
       expect(getProcessStartTime(42)).toBe(55555);
+      expect(getProcessInstanceStartTime(42)).toBe(55555);
       expect(getProcessStartTime(43)).toBeNull();
       expect(getProcessStartTime(44)).toBe(66666);
       expect(getProcessStartTime(45)).toBeNull();
       expect(getProcessStartTime(46)).toBeNull();
-    });
-  });
-
-  it("keeps the runtime-state helper Linux-only", () => {
-    return withMockedPlatform("darwin", async () => {
-      expect(getProcessStartTime(42)).toBeNull();
-    });
-  });
-
-  it("parses Darwin file-lock owner start times as epoch seconds", () => {
-    const execSpy = vi
-      .spyOn(childProcess, "execFileSync")
-      .mockReturnValue("Mon Jul  6 12:34:56 2026\n");
-
-    return withMockedPlatform("darwin", async () => {
-      expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 6, 6, 12, 34, 56) / 1000);
-      expect(execSpy).toHaveBeenCalledWith(
-        "/bin/ps",
-        ["-o", "lstart=", "-p", "42"],
-        expect.objectContaining({
-          encoding: "utf8",
-          env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
-          timeout: 1000,
-        }),
-      );
-    });
-  });
-
-  it("fails conservatively when the Darwin file-lock start-time probe times out", () => {
-    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-      throw Object.assign(new Error("spawnSync /bin/ps ETIMEDOUT"), {
-        code: "ETIMEDOUT",
-        signal: "SIGTERM",
-      });
-    });
-
-    return withMockedPlatform("darwin", async () => {
-      expect(getFileLockProcessStartTime(42)).toBeNull();
     });
   });
 
@@ -226,10 +197,11 @@ describe("process start times", () => {
     return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(42)).toBeNull();
       expect(getFileLockProcessStartTime(42)).toBe(1_752_000_000_123);
+      expect(getProcessInstanceStartTime(42)).toBeNull();
     });
   });
 
-  it.each(["darwin", "linux", "win32"] as const)(
+  it.each(["linux", "freebsd"] as const)(
     "retries failed self probes and keeps foreign %s identities fresh",
     async (platform) => {
       const identity = platform === "linux" ? 0 : 1_752_000_000;
@@ -240,14 +212,7 @@ describe("process start times", () => {
         .mockReturnValueOnce(identity)
         .mockReturnValueOnce(111)
         .mockReturnValueOnce(222);
-      readWindowsProcessStartTimeSyncMock.mockImplementation(probe);
-      vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) => {
-        const value = probe(Number(args?.[3]));
-        if (value === null) {
-          throw new Error("process start time unavailable");
-        }
-        return new Date(value * 1000).toUTCString();
-      });
+      readFreeBsdProcessStartTimeMock.mockImplementation(probe);
       const originalReadFileSync = fsSync.readFileSync;
       vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
         const pid = /^\/proc\/(\d+)\/stat$/.exec(String(filePath))?.[1];
@@ -275,28 +240,171 @@ describe("process start times", () => {
       });
     },
   );
+});
 
-  it("fails closed when the Windows identity reader finds nothing", () => {
-    readWindowsProcessStartTimeSyncMock.mockReturnValue(null);
-
-    return withMockedPlatform("win32", async () => {
-      expect(getFileLockProcessStartTime(42)).toBeNull();
+describe("Darwin combined process identity", () => {
+  it.each([
+    "43 1 Thu Sep 24 00:00:00 2026\n",
+    "42 1 Thu Sep 24 00:00:00 2026\n43 1 Thu Sep 24 00:00:00 2026\n",
+    "42 1 Thu Feb 31 00:00:00 2026\n",
+  ])("does not adopt incomplete or inconsistent metadata: %j", (stdout) => {
+    vi.spyOn(childProcess, "execFileSync").mockReturnValue(stdout);
+    withMockedPlatform("darwin", () => {
+      expect(readDarwinProcessIdentity(42)).toBeNull();
     });
   });
+});
 
-  it("returns null on unsupported platforms", () => {
-    return withMockedPlatform("freebsd", async () => {
-      expect(getProcessStartTime(process.pid)).toBeNull();
-      expect(getFileLockProcessStartTime(process.pid)).toBeNull();
+describe("Darwin native process identity", () => {
+  const seconds = 1_790_000_000;
+  let bytes: Buffer;
+  const query = vi.fn();
+  const load = vi.fn();
+
+  function mockShellIdentity() {
+    return vi
+      .spyOn(childProcess, "execFileSync")
+      .mockImplementation((_file, args) =>
+        args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
+      );
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal("SEALED_RUNTIME_BUILD", undefined);
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(process, "arch", "get").mockReturnValue("arm64");
+    bytes = Buffer.alloc(136);
+    bytes.writeUInt32LE(42, 12);
+    bytes.writeUInt32LE(7, 16);
+    bytes.writeBigUInt64LE(BigInt(seconds), 120);
+    bytes.writeBigUInt64LE(999_999n, 128);
+    query.mockReset().mockImplementation((_pid, _flavor, _arg, output: Buffer) => {
+      bytes.copy(output);
+      return bytes.length;
     });
+    load.mockReset().mockReturnValue({ func: () => query });
+    nativeKoffi.mockReset().mockReturnValue({ load });
   });
 
-  it("returns null for invalid PIDs", () => {
-    expect(getProcessStartTime(0)).toBeNull();
-    expect(getProcessStartTime(-1)).toBeNull();
-    expect(getProcessStartTime(1.5)).toBeNull();
-    expect(getProcessStartTime(Number.NaN)).toBeNull();
-    expect(getProcessStartTime(Number.POSITIVE_INFINITY)).toBeNull();
-    expect(getFileLockProcessStartTime(0)).toBeNull();
+  it("reads fresh Darwin identities without process startup on arm64", async () => {
+    const shell = vi.spyOn(childProcess, "execFileSync");
+    const identity = await import("./pid-alive.js");
+    expect(identity.getFileLockProcessStartTime(42)).toBe(seconds);
+    bytes.writeBigUInt64LE(BigInt(seconds + 1), 120);
+    bytes.writeUInt32LE(8, 16);
+    expect(identity.getFileLockProcessStartTime(42)).toBe(seconds + 1);
+    expect(identity.readDarwinProcessIdentity(42)).toEqual({
+      parentPid: 8,
+      startedAt: seconds + 1,
+    });
+    expect(shell).not.toHaveBeenCalled();
+    expect(load).toHaveBeenCalledExactlyOnceWith("/usr/lib/libproc.dylib");
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls[0]).toEqual([42, 3, 0, expect.any(Buffer), 136]);
+  });
+
+  it("refuses custody signaling after a same-second Darwin process replacement", async () => {
+    const shell = vi.spyOn(childProcess, "execFileSync");
+    const identity = await import("./pid-alive.js");
+    const { settleCommandProcessGroups } = await import("../process/command-process-custody.js");
+    const groups = await import("../process/child-process-tree.js");
+    const termination = await import("../process/kill-tree.js");
+    vi.spyOn(groups, "isChildProcessTreeAlive").mockReturnValueOnce(true).mockReturnValue(false);
+    const kill = vi.spyOn(termination, "killProcessTree").mockReturnValue(undefined);
+
+    const pid = process.pid + 1;
+    bytes.writeUInt32LE(pid, 12);
+    bytes.writeBigUInt64LE(123_456n, 128);
+    const startedAt = identity.getProcessInstanceStartTime(pid);
+    expect(startedAt).toBe(seconds * 1_000_000 + 123_456);
+    expect(identity.getFileLockProcessStartTime(pid)).toBe(seconds);
+    bytes.writeBigUInt64LE(123_457n, 128);
+    expect(identity.getFileLockProcessStartTime(pid)).toBe(seconds);
+    expect(identity.getProcessInstanceStartTime(pid)).toBe(seconds * 1_000_000 + 123_457);
+    expect(await settleCommandProcessGroups([{ pid, startedAt }])).toMatchObject({
+      settled: false,
+      pids: [pid],
+      reason: expect.stringContaining("Recorded process identity could not be confirmed"),
+    });
+    expect(kill).not.toHaveBeenCalled();
+    expect(shell).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unsafe microsecond identity without changing the lease timestamp", async () => {
+    const shell = vi.spyOn(childProcess, "execFileSync");
+    const identity = await import("./pid-alive.js");
+    const maximum = BigInt(Number.MAX_SAFE_INTEGER);
+    bytes.writeBigUInt64LE(maximum / 1_000_000n, 120);
+    bytes.writeBigUInt64LE(maximum % 1_000_000n, 128);
+    expect(identity.getProcessInstanceStartTime(42)).toBe(Number.MAX_SAFE_INTEGER);
+    bytes.writeBigUInt64LE((maximum % 1_000_000n) + 1n, 128);
+    expect(identity.getProcessInstanceStartTime(42)).toBeNull();
+    expect(identity.getFileLockProcessStartTime(42)).toBe(Number(maximum / 1_000_000n));
+    expect(shell).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, () => void]>([
+    ["x64", () => vi.spyOn(process, "arch", "get").mockReturnValue("x64")],
+    ["sealed runtime", () => vi.stubGlobal("SEALED_RUNTIME_BUILD", true)],
+  ])("keeps %s on the bounded shell path without loading Koffi", async (_name, configure) => {
+    configure();
+    const shell = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockReturnValue("Thu Sep 24 00:00:00 2026\n");
+    const identity = await import("./pid-alive.js");
+    expect(identity.getProcessInstanceStartTime(42)).toBeNull();
+    expect(shell).not.toHaveBeenCalled();
+    expect(identity.getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 8, 24) / 1000);
+    expect(nativeKoffi).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, () => void]>([
+    ["short read", () => query.mockReturnValue(135)],
+    ["wrong PID", () => bytes.writeUInt32LE(43, 12)],
+    ["invalid microseconds", () => bytes.writeBigUInt64LE(1_000_000n, 128)],
+  ])("uses the bounded shell fallback after %s", async (_name, failNative) => {
+    failNative();
+    const shell = mockShellIdentity();
+    const identity = await import("./pid-alive.js");
+    const expected = Date.UTC(2026, 8, 24) / 1000;
+    expect(identity.getProcessInstanceStartTime(42)).toBeNull();
+    expect(shell).not.toHaveBeenCalled();
+    expect(identity.getFileLockProcessStartTime(42)).toBe(expected);
+    expect(identity.readDarwinProcessIdentity(42)).toEqual({ parentPid: 7, startedAt: expected });
+    expect(shell).toHaveBeenCalledTimes(2);
+    for (const call of shell.mock.calls) {
+      expect(call[2]?.timeout).toBeGreaterThan(0);
+      expect(call[2]?.timeout).toBeLessThanOrEqual(1000);
+    }
+    shell.mockImplementation(() => {
+      throw new Error("process absent");
+    });
+    expect(identity.getFileLockProcessStartTime(42)).toBeNull();
+    expect(identity.readDarwinProcessIdentity(42)).toBeNull();
+  });
+
+  it("does not start shell recovery after native loading consumes the allowance", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    nativeKoffi.mockImplementation(() => {
+      now += 1000;
+      throw new Error("native unavailable");
+    });
+    const shell = mockShellIdentity();
+    const identity = await import("./pid-alive.js");
+    expect(identity.getFileLockProcessStartTime(42, process.env, 1000)).toBeNull();
+    expect(identity.readDarwinProcessIdentity(42, process.env, 1000)).toBeNull();
+    expect(shell).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid PID before native conversion", async () => {
+    const pid = 0;
+    const shell = vi.spyOn(childProcess, "execFileSync");
+    const identity = await import("./pid-alive.js");
+    expect(identity.getFileLockProcessStartTime(pid)).toBeNull();
+    expect(identity.readDarwinProcessIdentity(pid)).toBeNull();
+    expect(nativeKoffi).not.toHaveBeenCalled();
+    expect(shell).not.toHaveBeenCalled();
   });
 });

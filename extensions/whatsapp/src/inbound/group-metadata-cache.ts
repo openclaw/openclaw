@@ -1,5 +1,5 @@
-// Whatsapp plugin module owns group metadata caching and hydration.
 import type { AnyMessageContent, BaileysEventMap, GroupMetadata, WASocket } from "baileys";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -65,13 +65,7 @@ function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEnt
   }
   cache.set(jid, entry);
 
-  while (cache.size > WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
 }
 
 function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
@@ -225,22 +219,16 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     jid: string,
     content: AnyMessageContent,
   ): Promise<AnyMessageContent> => {
-    if ("text" in content && typeof content.text === "string") {
-      const resolved = await resolveOutboundMentions(jid, content.text);
-      return addWhatsAppOutboundMentionsToContent(
-        { ...content, text: resolved.text } as AnyMessageContent,
-        resolved.mentionedJids,
-      );
+    const field = "text" in content && typeof content.text === "string" ? "text" : "caption";
+    const text = (content as { text?: unknown; caption?: unknown })[field];
+    if (typeof text !== "string") {
+      return content;
     }
-    const caption = (content as { caption?: unknown }).caption;
-    if (typeof caption === "string") {
-      const resolved = await resolveOutboundMentions(jid, caption);
-      return addWhatsAppOutboundMentionsToContent(
-        { ...content, caption: resolved.text } as AnyMessageContent,
-        resolved.mentionedJids,
-      );
-    }
-    return content;
+    const resolved = await resolveOutboundMentions(jid, text);
+    return addWhatsAppOutboundMentionsToContent(
+      { ...content, [field]: resolved.text } as AnyMessageContent,
+      resolved.mentionedJids,
+    );
   };
 
   const start = () => {

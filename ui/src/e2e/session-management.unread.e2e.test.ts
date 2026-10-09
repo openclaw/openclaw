@@ -19,13 +19,14 @@ const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it.each([
-    { visibility: "read-only", sharingRole: "viewer", restricted: true },
-    { visibility: "suggest", sharingRole: "viewer", restricted: true },
-    { visibility: "draft", sharingRole: "member", restricted: true },
-    { visibility: "shared", sharingRole: "viewer", restricted: false },
+    { visibility: "read-only", sharingRole: "viewer", restricted: true, acknowledgesRead: false },
+    { visibility: "suggest", sharingRole: "viewer", restricted: true, acknowledgesRead: false },
+    { visibility: "draft", sharingRole: "member", restricted: true, acknowledgesRead: false },
+    { visibility: "shared", sharingRole: "viewer", restricted: false, acknowledgesRead: false },
+    { visibility: "shared", sharingRole: "member", restricted: false, acknowledgesRead: true },
   ] as const)(
     "honors $visibility $sharingRole participation when acknowledging unread state",
-    async ({ visibility, sharingRole, restricted }) => {
+    async ({ visibility, sharingRole, restricted, acknowledgesRead }) => {
       const unreadKey = "agent:main:participation-read";
       const otherKey = "agent:main:participation-other";
       const marker = 1_800_000_000_001;
@@ -76,17 +77,24 @@ suite.define(() => {
           await pane
             .getByText("Only the session owner and members can act in this session.")
             .waitFor();
-          await expect
-            .poll(() => pane.locator(".agent-chat__composer-combobox textarea").isDisabled())
-            .toBe(true);
-        } else {
+        }
+        await expect
+          .poll(() => pane.locator(".agent-chat__composer-combobox textarea").isDisabled())
+          .toBe(restricted);
+        if (acknowledgesRead) {
           const acknowledgement = await gateway.waitForRequest("sessions.patch", { match });
           expect(acknowledgement.params).toMatchObject({ expectedMarkedUnreadAt: marker });
           await unreadBadge.waitFor({ state: "hidden" });
         }
         await captureUiProof(suite, page, `${visibility}-${sharingRole}-opened.png`);
-        await expectRequestCountStable(gateway, "sessions.patch", restricted ? 0 : 1, 500, match);
-        if (!restricted) {
+        await expectRequestCountStable(
+          gateway,
+          "sessions.patch",
+          acknowledgesRead ? 1 : 0,
+          500,
+          match,
+        );
+        if (acknowledgesRead) {
           return;
         }
         await unreadBadge.waitFor({ state: "visible" });

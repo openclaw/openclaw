@@ -1,6 +1,7 @@
 // Help tests cover command help generation and inherited help options.
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { configureProgramHelp } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 
@@ -35,24 +36,16 @@ vi.mock("../../infra/git-commit.js", () => ({
   resolveCommitHash: resolveCommitHashMock,
 }));
 
-vi.mock("./command-registry.js", () => ({
-  getCoreCliCommandsWithSubcommands: () => ["models", "message"],
-}));
-
-vi.mock("./register.subclis.js", () => ({
-  getSubCliCommandsWithSubcommands: () => ["gateway"],
-}));
-
 const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
-  let originalSuppressHelpBanner: string | undefined;
+  let originalEnv: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
-    originalSuppressHelpBanner = process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    originalEnv = captureEnv(["OPENCLAW_SUPPRESS_HELP_BANNER"]);
     hasEmittedCliBannerMock.mockReturnValue(false);
     resolveCommitHashMock.mockReturnValue("abc1234");
     delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
@@ -60,11 +53,7 @@ describe("configureProgramHelp", () => {
 
   afterEach(() => {
     process.argv = originalArgv;
-    if (originalSuppressHelpBanner === undefined) {
-      delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
-    } else {
-      process.env.OPENCLAW_SUPPRESS_HELP_BANNER = originalSuppressHelpBanner;
-    }
+    originalEnv.restore();
   });
 
   function makeProgramWithCommands() {
@@ -157,6 +146,7 @@ describe("configureProgramHelp", () => {
     expect(version).toBe(testProgramContext.programVersion);
     expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
+    expect(help).toContain("openclaw setup --baseline");
     expect(help).toContain("https://docs.openclaw.ai/cli");
   });
 

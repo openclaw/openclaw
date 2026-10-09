@@ -8,6 +8,10 @@ import {
   COMPUTER_USE_V2_ACTION_NAMES,
 } from "../plugins/computer-use-contract.js";
 import {
+  loadGatewayComputerStatus,
+  type GatewayComputerStatus,
+} from "./tools/computer-tool-gateway.js";
+import {
   COMPUTER_ACT_COMMAND,
   type ComputerToolTransport,
   SCREEN_SNAPSHOT_COMMAND,
@@ -17,6 +21,7 @@ import { listNodes, type NodeListNode } from "./tools/nodes-utils.js";
 export type PreparedPairedComputerUse = {
   actions: readonly ComputerUseV2ActionName[];
   guidanceCapabilities?: ComputerUseCapabilityDescriptor;
+  gateway?: GatewayComputerStatus;
 };
 
 export type PairedComputerUseAvailability = {
@@ -24,22 +29,7 @@ export type PairedComputerUseAvailability = {
   prepared?: PreparedPairedComputerUse;
 };
 
-/** Avoids node inventory unless the model will receive an ordinary paired computer tool. */
-function shouldLoadPairedComputerUseAvailability(params: {
-  computerAllowed: boolean;
-  modelHasVision?: boolean;
-  computerTransport?: ComputerToolTransport | null;
-  embeddedMode?: boolean;
-}): boolean {
-  return (
-    params.computerAllowed &&
-    params.modelHasVision !== false &&
-    params.embeddedMode !== true &&
-    params.computerTransport === undefined
-  );
-}
-
-/** Loads inventory only when an ordinary paired computer tool can reach the model. */
+/** Loads host and node inventory only when an ordinary computer tool can reach the model. */
 export async function loadPairedComputerUseAvailabilityForSurface(params: {
   computerAllowed: boolean;
   modelHasVision?: boolean;
@@ -47,10 +37,53 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   embeddedMode?: boolean;
   signal?: AbortSignal;
 }): Promise<PairedComputerUseAvailability | undefined> {
-  if (!shouldLoadPairedComputerUseAvailability(params)) {
+  if (
+    !params.computerAllowed ||
+    params.modelHasVision === false ||
+    params.embeddedMode === true ||
+    params.computerTransport !== undefined
+  ) {
     return undefined;
   }
-  return loadPairedComputerUseAvailability(params.signal);
+  const { signal } = params;
+  const [nodes, gateway] = await Promise.all([
+    listNodes({}, signal).catch(() => {
+      signal?.throwIfAborted();
+      return [];
+    }),
+    loadGatewayComputerStatus({}, signal).catch((error: unknown): GatewayComputerStatus => {
+      signal?.throwIfAborted();
+      return {
+        configured: true,
+        available: false,
+        error: error instanceof Error ? error.message : "Gateway computer discovery failed",
+      };
+    }),
+  ]);
+  signal?.throwIfAborted();
+  const eligible = nodes.filter(isEligibleComputerNode);
+  const cacheKey = stableStringify({
+    gateway,
+    nodes: eligible
+      .toSorted((a, b) => a.nodeId.localeCompare(b.nodeId))
+      .map(({ nodeId, computerUse }) => ({ nodeId, computerUse })),
+  });
+  const capabilities = [
+    ...eligible.map((node) => node.computerUse),
+    ...(gateway.configured && gateway.computerUse ? [gateway.computerUse] : []),
+  ];
+  const advertised = new Set(
+    capabilities.flatMap((capability) => capability?.actions ?? COMPUTER_USE_V1_ACTION_NAMES),
+  );
+  return {
+    cacheKey,
+    prepared: {
+      actions: COMPUTER_USE_V2_ACTION_NAMES.filter((action) => advertised.has(action)),
+      gateway,
+      // Per-provider guidance is only exact when there is one possible target.
+      guidanceCapabilities: capabilities.length === 1 ? capabilities[0] : undefined,
+    },
+  };
 }
 
 /** A paired target must support both observation and input to enter the computer tool pool. */
@@ -61,45 +94,4 @@ export function isEligibleComputerNode(node: NodeListNode): boolean {
     commands.includes(COMPUTER_ACT_COMMAND) &&
     commands.includes(SCREEN_SNAPSHOT_COMMAND)
   );
-}
-
-/** Projects effective paired-node descriptors into one honest pre-publication action surface. */
-function preparePairedComputerUse(
-  nodes: readonly NodeListNode[],
-): PreparedPairedComputerUse | undefined {
-  const eligible = nodes.filter(isEligibleComputerNode);
-  if (eligible.length === 0) {
-    return undefined;
-  }
-  const advertised = new Set<ComputerUseV2ActionName>();
-  for (const node of eligible) {
-    for (const action of node.computerUse?.actions ?? COMPUTER_USE_V1_ACTION_NAMES) {
-      advertised.add(action);
-    }
-  }
-  return {
-    actions: COMPUTER_USE_V2_ACTION_NAMES.filter((action) => advertised.has(action)),
-    // Per-provider guidance is only exact when there is one possible target.
-    guidanceCapabilities: eligible.length === 1 ? eligible[0]?.computerUse : undefined,
-  };
-}
-
-/** Loads current approved node facts before a model-facing tool catalog is serialized. */
-async function loadPairedComputerUseAvailability(
-  signal?: AbortSignal,
-): Promise<PairedComputerUseAvailability> {
-  const nodes = await listNodes({}, signal).catch(() => {
-    signal?.throwIfAborted();
-    return [];
-  });
-  signal?.throwIfAborted();
-  const eligible = nodes.filter(isEligibleComputerNode);
-  return {
-    cacheKey: stableStringify(
-      eligible
-        .toSorted((a, b) => a.nodeId.localeCompare(b.nodeId))
-        .map(({ nodeId, computerUse }) => ({ nodeId, computerUse })),
-    ),
-    prepared: preparePairedComputerUse(eligible),
-  };
 }

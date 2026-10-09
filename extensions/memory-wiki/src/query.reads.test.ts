@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as wikiWalk from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
+import * as wikiLinks from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -33,6 +33,78 @@ async function createReadVault(relativePath = "sources/alpha.md") {
 }
 
 describe("wiki query page reads", () => {
+  it("reads only compiled metadata candidates for distributed query tokens", async () => {
+    const { rootDir, config, targetPath, relativePath } = await createReadVault();
+    await fs.writeFile(
+      targetPath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.quartz",
+          title: "Cobalt",
+          aliases: ["amber"],
+          questions: ["lantern"],
+        },
+        body: "# Cobalt\n\nSelected evidence.\n",
+      }),
+    );
+    const unrelatedPath = path.join(rootDir, "sources", "unrelated.md");
+    await fs.writeFile(
+      unrelatedPath,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Unrelated" },
+        body: "# Unrelated\n",
+      }),
+    );
+    const query = "cobalt quartz amber lantern";
+    const liveResults = await searchMemoryWiki({ config, query, maxResults: 1 });
+    expect(liveResults[0]?.path).toBe(relativePath);
+    await compileMemoryWikiVault(config);
+    const openedPages: string[] = [];
+    __setFsSafeTestHooksForTest({
+      beforeOpen: (filePath) => {
+        if (filePath.endsWith(".md")) {
+          openedPages.push(filePath);
+        }
+      },
+    });
+
+    await expect(searchMemoryWiki({ config, query, maxResults: 1 })).resolves.toEqual(liveResults);
+    expect(openedPages).toContain(targetPath);
+    expect(openedPages).not.toContain(unrelatedPath);
+  });
+
+  it.each([false, true])(
+    "searches and reads without extracting unused links (compiled=%s)",
+    async (compiled) => {
+      const { config, targetPath, relativePath } = await createReadVault();
+      await fs.appendFile(
+        targetPath,
+        "\nCobalt lantern notes.\n[Guide](../concepts/guide.md)\n[[concepts/reference]]\n",
+      );
+      if (compiled) {
+        await compileMemoryWikiVault(config);
+      }
+      const extractLinks = vi.spyOn(wikiLinks, "extractWikiLinks");
+
+      for (const query of ["Alpha", "cobalt lantern", "concepts/reference"]) {
+        const results = await searchMemoryWiki({ config, query });
+        expect(results).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ path: relativePath, title: "Alpha", corpus: "wiki" }),
+          ]),
+        );
+      }
+      await expect(searchMemoryWiki({ config, query: "unmatched-orchid" })).resolves.toEqual([]);
+      for (const lookup of [relativePath, "alpha", "source.alpha"]) {
+        const result = await getMemoryWikiPage({ config, lookup });
+        expect(result?.path).toBe(relativePath);
+        expect(result?.content).toContain("[Guide](../concepts/guide.md)");
+      }
+      expect(extractLinks).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["sources/alpha.md", "sources/alpha.md"],
     ["  sources\\nested\\alpha.md  ", "sources/nested/alpha.md"],
@@ -140,43 +212,10 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it.each([
-    { owners: ["main"], visible: true },
-    { owners: ["secondary"], visible: false },
-    { owners: [], visible: false },
-  ])("keeps exact bridge-page visibility for $owners", async ({ owners, visible }) => {
-    const { config, targetPath, relativePath } = await createReadVault();
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha",
-          sourceType: "memory-bridge",
-          bridgeAgentIds: owners,
-        },
-        body: "# Alpha\n",
-      }),
-    );
-    const result = await getMemoryWikiPage({
-      config,
-      lookup: relativePath,
-      appConfig: { agents: { list: [{ id: "main", default: true }, { id: "secondary" }] } },
-      agentId: "main",
-      sandboxed: true,
-    });
-    if (visible) {
-      expect(result?.path).toBe(relativePath);
-    } else {
-      expect(result).toBeNull();
-    }
-  });
-
   it.each(["exact", "basename", "search"] as const)(
     "rejects a page swapped outside the vault during %s reads",
     async (route) => {
-      const { rootDir, config, targetPath, relativePath } = await createReadVault();
+      const { config, targetPath, relativePath } = await createReadVault();
       const outside = await createReadVault();
       const canonicalTarget = await fs.realpath(targetPath);
       await fs.writeFile(
@@ -195,24 +234,13 @@ describe("wiki query page reads", () => {
         await fs.unlink(targetPath);
         await fs.symlink(outside.targetPath, targetPath);
       };
-      if (route === "exact") {
-        __setFsSafeTestHooksForTest({
-          beforeOpen: async (filePath) => {
-            if (path.resolve(filePath) === canonicalTarget) {
-              await swap();
-            }
-          },
-        });
-      } else {
-        const walk = wikiWalk.walkMemoryWikiDirectory;
-        vi.spyOn(wikiWalk, "walkMemoryWikiDirectory").mockImplementation(async (...args) => {
-          const entries = await walk(...args);
-          if (args[0] === rootDir && entries.some((entry) => entry.relativePath === relativePath)) {
+      __setFsSafeTestHooksForTest({
+        beforeOpen: async (filePath) => {
+          if (path.resolve(filePath) === canonicalTarget) {
             await swap();
           }
-          return entries;
-        });
-      }
+        },
+      });
       const readdir = vi.spyOn(fs, "readdir");
       const read =
         route === "search"

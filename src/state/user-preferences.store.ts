@@ -1,14 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { USER_PREFS_PROFILE_KEY_LIMIT } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  USER_PREFS_PROFILE_KEY_LIMIT,
+} from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { publishUserPreferencesChange } from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
 } from "./user-preferences.types.js";
+import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
 
@@ -17,44 +23,26 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
   operationLabel: "users.preferences.schema.ensure",
 });
 
-export function mutateUserPreference(
-  database: DatabaseSync,
-  profileId: string,
-  key: string,
-  value?: boolean,
-): void {
+export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  return (
+    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+  );
+}
+
+export function deleteUserPreference(database: DatabaseSync, profileId: string, key: string): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
-  if (value === undefined) {
-    if (tableExists(database, "user_preferences")) {
-      executeSqliteQuerySync(
-        database,
-        db
-          .deleteFrom("user_preferences")
-          .where("profile_id", "=", profileId)
-          .where("pref_key", "=", key),
-      );
-    }
+  if (!tableExists(database, "user_preferences")) {
     return;
   }
-  const updatedAtMs = Date.now();
-  const valueJson = JSON.stringify(value);
   executeSqliteQuerySync(
     database,
     db
-      .insertInto("user_preferences")
-      .values({
-        profile_id: profileId,
-        pref_key: key,
-        value_json: valueJson,
-        updated_at_ms: updatedAtMs,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
-          value_json: valueJson,
-          updated_at_ms: updatedAtMs,
-        }),
-      ),
+      .deleteFrom("user_preferences")
+      .where("profile_id", "=", profileId)
+      .where("pref_key", "=", key),
   );
+  publishUserPreferencesChange(database);
 }
 
 export function selectUserPreferenceValues(
@@ -127,6 +115,7 @@ export function mergeUserPreferences(
     database,
     db.deleteFrom("user_preferences").where("profile_id", "=", sourceProfileId),
   );
+  publishUserPreferencesChange(database);
 }
 
 export function readUserPreferences(
@@ -157,8 +146,26 @@ export function readUserPreferences(
 export function writeUserPreferences(
   sqlite: DatabaseSync,
   profileId: string,
-  { serialized, deletionKeys }: PreparedUserPreferenceUpdate,
+  update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
+  const { serialized, deletionKeys, expected } = update;
+  if (expected.length > 0) {
+    const current = readUserPreferences(
+      sqlite,
+      profileId,
+      expected.map(({ prefKey }) => prefKey),
+    );
+    for (const { prefKey, valueJson } of expected) {
+      if (
+        valueJson === null
+          ? Object.hasOwn(current, prefKey)
+          : !Object.hasOwn(current, prefKey) ||
+            !isDeepStrictEqual(current[prefKey], JSON.parse(valueJson))
+      ) {
+        return err({ code: "conflict" });
+      }
+    }
+  }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
   const currentKeys = readPreferenceKeys(sqlite, profileId);
   const nextKeys = new Set(currentKeys);
@@ -181,24 +188,30 @@ export function writeUserPreferences(
     );
   }
   const updatedAtMs = Date.now();
-  for (const entry of serialized) {
+  if (serialized.length > 0) {
     executeSqliteQuerySync(
       sqlite,
       db
         .insertInto("user_preferences")
-        .values({
-          profile_id: profileId,
-          pref_key: entry.prefKey,
-          value_json: entry.valueJson,
-          updated_at_ms: updatedAtMs,
-        })
-        .onConflict((conflict) =>
-          conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
+        .values(
+          serialized.map((entry) => ({
+            profile_id: profileId,
+            pref_key: entry.prefKey,
             value_json: entry.valueJson,
             updated_at_ms: updatedAtMs,
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
+            value_json: (eb) => eb.ref("excluded.value_json"),
+            updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
           }),
         ),
     );
   }
+  if (updatesGitCoauthorPreference(update)) {
+    publishUserProfileAuthorityChange(sqlite, profileId);
+  }
+  publishUserPreferencesChange(sqlite);
   return ok(undefined);
 }
