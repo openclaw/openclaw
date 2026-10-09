@@ -26,7 +26,7 @@ export async function readNativeHookRelayClientBridgeRecord(params: {
   ]);
   const pool = new WorkerTaskPool<NativeHookRelayClientRead, NativeHookRelayClientReadResult>({
     workerUrl: resolveRuntimeProcessEntrypointUrl("nativeHookRelayClient"),
-    maxWorkers: 1,
+    workerClass: "singleton",
   });
   try {
     const result = await pool.run(input, {

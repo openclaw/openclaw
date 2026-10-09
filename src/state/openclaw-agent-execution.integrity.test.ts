@@ -4,11 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  assertAgentDatabaseAdmitted,
+  createAgentDatabaseInspectionRefusal,
+  failPendingAgentDatabase,
+  preparePendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+} from "./agent-database-admission.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -30,11 +38,12 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import * as verificationImplementation from "./openclaw-database-verify.impl.js";
@@ -114,6 +123,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+// Direct native fixtures hold their generation until their explicit close.
+const retainVerification = () => async () => {};
+
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
   async (outcome) => {
@@ -149,6 +161,7 @@ it.each(["confirmed close", "native exit"] as const)(
       assertCurrent,
       undefined,
       () => {},
+      retainVerification,
     );
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
@@ -157,15 +170,23 @@ it.each(["confirmed close", "native exit"] as const)(
     try {
       await expect(generation.run(source, async () => "opened")).resolves.toBe("opened");
       expect(leases()).toHaveLength(2);
+      const validation = getOpenClawAgentDatabaseValidation(database);
+      assert(validation, "native generation must publish validation before retirement");
       process.off("worker", observeWorker);
       if (outcome === "native exit") {
         expect(workers.length).toBeGreaterThan(0);
         await Promise.all(workers.map((worker) => worker.terminate()));
         expect(leases()).toHaveLength(2);
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(Atomics.load(new Int32Array(validation.valid), 0)).toBe(0);
+        expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
       }
       await generation.close();
       expect(leases()).toEqual(hostLeases);
       expect(cleanup).toHaveBeenCalledTimes(outcome === "confirmed close" ? 0 : 1);
+      if (outcome === "confirmed close") {
+        expect(Atomics.load(new Int32Array(validation.valid), 0)).toBe(1);
+      }
     } finally {
       process.off("worker", observeWorker);
       try {
@@ -356,6 +377,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
     assertCurrent,
     undefined,
     () => {},
+    retainVerification,
   );
   const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
@@ -491,6 +513,7 @@ it.each([
     assertCurrent,
     undefined,
     () => {},
+    retainVerification,
   );
   if (
     proof === "invalidated" ||
@@ -576,7 +599,11 @@ it.runIf(process.platform === "linux")(
       "background-foreign-write",
       "background-revoked",
       "background-closed",
+      "background-idle-swap",
+      "background-idle-timeout",
       "background-replaced",
+      "background-preparing",
+      "background-preparation-failed",
       "foreign-boot",
       "legacy-lease",
       "pid-reused",
@@ -621,7 +648,13 @@ it.runIf(process.platform === "linux")(
         agentId === "same-boot" ||
         agentId === "checkpointed-wal" ||
         agentId.startsWith("background-");
-      const durable = agentId === "same-boot" || agentId === "checkpointed-wal";
+      const idle = agentId.startsWith("background-idle-");
+      const pending = agentId.startsWith("background-prepar");
+      const durable =
+        agentId === "same-boot" ||
+        agentId === "checkpointed-wal" ||
+        agentId === "background-preparing" ||
+        idle;
       const held = shared.db
         .prepare(
           "SELECT lease_id, provenance, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
@@ -674,6 +707,7 @@ it.runIf(process.platform === "linux")(
       let current = true;
       const assertCurrent = () => {
         context.admission.assertCurrent();
+        assertAgentDatabaseAdmitted(agentId, { env });
         if (!current) {
           throw new Error("Crash fixture admission revoked");
         }
@@ -691,15 +725,24 @@ it.runIf(process.platform === "linux")(
           }, binding.attachment),
         }),
       };
-      const generation = createAgentDatabaseNativeGeneration(
-        agentId,
-        pathname,
-        context,
-        assertCurrent,
-        () => context.admission.assertCurrent(),
-        undefined,
-        () => {},
-      );
+      const execution = idle
+        ? captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env })
+        : undefined;
+      const generation = execution
+        ? {
+            run: execution.runExisting.bind(execution),
+            close: () => closeOpenClawAgentDatabaseByPathAsync(pathname),
+          }
+        : createAgentDatabaseNativeGeneration(
+            agentId,
+            pathname,
+            context,
+            assertCurrent,
+            () => context.admission.assertCurrent(),
+            undefined,
+            () => {},
+            retainVerification,
+          );
       const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
       try {
         if (agentId === "corrupt-page") {
@@ -711,14 +754,49 @@ it.runIf(process.platform === "linux")(
           continue;
         }
         const sessionKey = `agent:${agentId}:after-crash`;
-        await expect(
-          generation.run(source, (scope) => {
-            return scope.execute({
-              type: "session.transcript.initialize",
-              input: { sessionKey, sessionId: "after-crash" },
-            });
-          }),
-        ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+        const initialize = async () => {
+          await expect(
+            generation.run(source, (scope) => {
+              return scope.execute({
+                type: "session.transcript.initialize",
+                input: { sessionKey, sessionId: "after-crash" },
+              });
+            }),
+          ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+        };
+        const finishPreparation = createDeferredCore();
+        let preparing: Promise<void> | undefined;
+        if (pending) {
+          const opened = createDeferredCore();
+          const refusal = createAgentDatabaseInspectionRefusal({
+            agentId,
+            paths: [pathname],
+            pending: true,
+            reason: "Startup preparation is pending",
+          });
+          recordAgentDatabaseAdmissions([refusal], { env });
+          preparing = preparePendingAgentDatabase(
+            refusal,
+            {
+              env,
+              assertCurrent: () => context.admission.assertCurrent(),
+            },
+            async () => {
+              await initialize();
+              opened.resolve();
+              await finishPreparation.promise;
+              if (agentId === "background-preparation-failed") {
+                throw new Error("Synthetic startup preparation failed");
+              }
+            },
+          ).catch((error: unknown) => {
+            failPendingAgentDatabase(refusal, error, { env });
+            opened.reject(error);
+          });
+          await opened.promise;
+        } else {
+          await initialize();
+        }
         expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual(
           deferred ? [0, 0] : [1, 1],
         );
@@ -731,6 +809,19 @@ it.runIf(process.platform === "linux")(
             }),
           );
           expect(readOpenClawAgentIntegrityVerification(pathname, env)).toBeUndefined();
+
+          // Drop the foreground borrower while the check is still queued before startup.
+          if (agentId === "background-idle-timeout") {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            try {
+              await execution!.release();
+              await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+            } finally {
+              vi.useRealTimers();
+            }
+          } else {
+            await execution?.release();
+          }
 
           const applied = createDeferredCore();
           const applyResults = verificationImplementation.applyOpenClawDatabaseVerificationResults;
@@ -750,13 +841,50 @@ it.runIf(process.platform === "linux")(
                   current = false;
                 } else if (agentId === "background-closed") {
                   await generation.close();
+                } else if (agentId === "background-idle-swap") {
+                  // Exceed the four warm slots while the scan's proof is still unpublished.
+                  for (const siblingId of [
+                    "same-boot",
+                    "checkpointed-wal",
+                    "background-foreign-write",
+                    "background-revoked",
+                    "background-closed",
+                  ]) {
+                    const sibling = captureOpenClawAgentDatabaseExecution({
+                      agentId: siblingId,
+                      env,
+                    });
+                    try {
+                      await expect(sibling.runExisting(source, async () => "opened")).resolves.toBe(
+                        "opened",
+                      );
+                    } finally {
+                      await sibling.release();
+                    }
+                  }
                 } else if (agentId === "background-replaced") {
                   const replacement = `${pathname}.replacement`;
                   using reader = openNodeSqliteDatabase(pathname, { readOnly: true });
                   await requireNodeSqlite().backup(reader, replacement);
                   fs.renameSync(replacement, pathname);
                 }
-                await applyResults(options);
+                let settled = false;
+                const applying = applyResults(options).finally(() => {
+                  settled = true;
+                });
+                if (pending) {
+                  try {
+                    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+                    await vi.advanceTimersByTimeAsync(0);
+                    expect(settled, "verification must wait for startup admission").toBe(false);
+                    expect(readOpenClawAgentIntegrityVerification(pathname, env)).toBeUndefined();
+                  } finally {
+                    vi.useRealTimers();
+                    finishPreparation.resolve();
+                    await preparing;
+                  }
+                }
+                await applying;
               } catch (error) {
                 applicationError = error;
                 throw error;
@@ -776,9 +904,12 @@ it.runIf(process.platform === "linux")(
             await applied.promise;
             await verifier.stop();
             expect(applicationError).toBeUndefined();
-            expect(readOpenClawAgentIntegrityVerification(pathname, env)).toEqual(
+            expect(readOpenClawAgentIntegrityVerification(pathname, env), agentId).toEqual(
               durable
-                ? expect.objectContaining({ verified_at: expect.any(Number), clean_close: 0 })
+                ? expect.objectContaining({
+                    verified_at: expect.any(Number),
+                    clean_close: 0,
+                  })
                 : undefined,
             );
           } finally {
@@ -790,7 +921,12 @@ it.runIf(process.platform === "linux")(
         }
       } finally {
         integrityCheck.mockRestore();
+        await execution?.release();
         await generation.close();
+        if (idle) {
+          // Worker preloads capture the next case's counter at creation.
+          await closeOpenClawAgentDatabasesAsync();
+        }
       }
       if (deferred) {
         expect(readOpenClawAgentIntegrityVerification(pathname, env)).toEqual(
@@ -800,6 +936,7 @@ it.runIf(process.platform === "linux")(
         clearOpenClawAgentDatabaseValidationCache(pathname);
         counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
         current = true;
+        recordAgentDatabaseAdmissions([], { env });
         const successor = createAgentDatabaseNativeGeneration(
           agentId,
           pathname,
@@ -808,6 +945,7 @@ it.runIf(process.platform === "linux")(
           assertCurrent,
           undefined,
           () => {},
+          retainVerification,
         );
         try {
           await expect(successor.run(source, async () => "reopened")).resolves.toBe("reopened");

@@ -79,7 +79,7 @@ const GatewayGitHubEndpointSchema = z
       });
     }
   });
-const GatewayOperatorRoleDefinitionSchema = z.strictObject({
+export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({
     /** Maximum access to another person's sessions without explicit membership. */
     others: z.enum(["none", "view", "suggest", "write"]),

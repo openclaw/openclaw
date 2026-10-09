@@ -26,7 +26,6 @@ const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
 } as const;
 
-/** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
@@ -402,6 +401,21 @@ function createFeishuHttpInstance(
     });
   }
 
+  const createMethod =
+    (method: "get" | "delete" | "head" | "options"): Lark.HttpInstance["get"] =>
+    (url, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) => base[method](resolveRequestUrl(url), prepared)),
+      );
+  const createDataMethod =
+    (method: "post" | "put" | "patch"): Lark.HttpInstance["post"] =>
+    (url, data, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) =>
+          base[method](resolveRequestUrl(url), data, prepared),
+        ),
+      );
+
   return {
     request: (opts) =>
       // SDK message requests reach this seam after formatPayload/auth. Token
@@ -413,34 +427,13 @@ function createFeishuHttpInstance(
           ),
         "request",
       ),
-    get: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.get(resolveRequestUrl(url), prepared)),
-      ),
-    post: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.post(resolveRequestUrl(url), data, prepared)),
-      ),
-    put: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.put(resolveRequestUrl(url), data, prepared)),
-      ),
-    patch: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.patch(resolveRequestUrl(url), data, prepared)),
-      ),
-    delete: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.delete(resolveRequestUrl(url), prepared)),
-      ),
-    head: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.head(resolveRequestUrl(url), prepared)),
-      ),
-    options: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.options(resolveRequestUrl(url), prepared)),
-      ),
+    get: createMethod("get"),
+    post: createDataMethod("post"),
+    put: createDataMethod("put"),
+    patch: createDataMethod("patch"),
+    delete: createMethod("delete"),
+    head: createMethod("head"),
+    options: createMethod("options"),
   };
 }
 
@@ -497,10 +490,7 @@ type FeishuWsClientCallbacks = Pick<
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
-/**
- * Create a Feishu WebSocket client for an account.
- * Note: WSClient is not cached since each call creates a new connection.
- */
+/** WSClient is not cached since each call creates a new connection. */
 export async function createFeishuWSClient(
   account: ResolvedFeishuAccount,
   callbacks: FeishuWsClientCallbacks = {},

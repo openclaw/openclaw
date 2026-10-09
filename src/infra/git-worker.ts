@@ -30,12 +30,8 @@ import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./work
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
-type GitWorkerRuntime = {
-  reads?: GitPool;
-  content?: GitPool;
-  workspace?: GitPool;
-  worktrees?: GitPool;
-  worktreeMaintenance?: GitPool;
+const POOL_OWNERS = ["reads", "content", "workspace", "worktrees", "worktreeMaintenance"] as const;
+type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> & {
   pending: Set<Promise<unknown>>;
   closing?: Promise<void>;
 };
@@ -89,20 +85,12 @@ function runtime(): GitWorkerRuntime {
     () => ({ pending: new Set() }),
     (state) => {
       state.closing ??= (async () => {
-        await Promise.all([
-          state.reads?.close(),
-          state.content?.close(),
-          state.workspace?.close(),
-          state.worktrees?.close(),
-          state.worktreeMaintenance?.close(),
-        ]);
+        await Promise.all(POOL_OWNERS.map((owner) => state[owner]?.close() ?? Promise.resolve()));
         // Worker termination alone does not settle its parent-owned Git processes.
         await Promise.allSettled(state.pending);
-        state.reads = undefined;
-        state.content = undefined;
-        state.workspace = undefined;
-        state.worktrees = undefined;
-        state.worktreeMaintenance = undefined;
+        for (const owner of POOL_OWNERS) {
+          state[owner] = undefined;
+        }
       })().finally(() => {
         state.closing = undefined;
       });
@@ -136,10 +124,15 @@ function poolFor(
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
   return (state[owner] ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
-    maxWorkers:
-      owner === "content" || owner === "workspace"
-        ? Math.max(1, Math.min(2, os.availableParallelism() - 1))
-        : 1,
+    workerClass:
+      owner === "reads" || owner === "content"
+        ? "reader"
+        : owner === "workspace"
+          ? "compute"
+          : "writer",
+    // Overlay retains three maximum-size manifests plus its decoded result.
+    workerOptions:
+      owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
     sharedCompute: owner === "workspace",
     idleTimeoutMs: 30_000,
   }));
@@ -225,25 +218,53 @@ async function executeOperation(
   baseEnv: NodeJS.ProcessEnv,
   options: GitWorkerOperationOptions,
 ): Promise<GitWorkerResult> {
-  const contentRead =
-    command.type === "checkout.diff" ||
-    command.type === "checkout.baseline" ||
-    command.type === "pull-request.branch-facts";
-  const contentGit =
-    contentRead ||
-    command.type === "worktree.snapshot" ||
-    command.type === "worktree.snapshot-verify-exact";
+  const contentRoot =
+    command.type === "checkout.diff" || command.type === "checkout.baseline"
+      ? command.input.cwd
+      : command.type === "pull-request.branch-facts"
+        ? command.input.root
+        : undefined;
+  const contentRead = contentRoot !== undefined;
+  const snapshot =
+    command.type === "worktree.snapshot" || command.type === "worktree.snapshot-verify-exact";
+  const contentGit = contentRead || snapshot;
+  if (snapshot) {
+    // Missing snapshot objects must preserve the checkout, never start a promisor fetch.
+    baseEnv.GIT_NO_LAZY_FETCH = "1";
+    baseEnv.GIT_ALLOW_PROTOCOL = "";
+  }
   let gitCommandCount = 0;
   let summedGitWallMs = 0;
   let summedGitQueueWaitMs = 0;
-  const timing = contentRead
-    ? startGitOperationTiming("content-read", log, () => ({
-        operation: command.type,
-        gitCommandCount,
-        summedGitWallMs: Math.round(summedGitWallMs),
-        summedGitQueueWaitMs: Math.round(summedGitQueueWaitMs),
-      }))
-    : undefined;
+  let gitStdoutBytes = 0;
+  let gitStderrBytes = 0;
+  let gitTimeoutCount = 0;
+  let workerQueueWaitMs: number | null = null;
+  let slowestGitCommand:
+    | { command: string; diffMode?: string; durationMs: number; termination: string }
+    | undefined;
+  const timing =
+    contentRoot !== undefined
+      ? startGitOperationTiming("content-read", log, () => ({
+          operation: command.type,
+          checkoutId: createHash("sha256")
+            .update(path.resolve(contentRoot))
+            .digest("hex")
+            .slice(0, 16),
+          checkoutClass:
+            command.type === "pull-request.branch-facts" && command.input.refreshIndex
+              ? "managed"
+              : "unspecified",
+          gitCommandCount,
+          workerQueueWaitMs,
+          summedGitWallMs: Math.round(summedGitWallMs),
+          summedGitQueueWaitMs: Math.round(summedGitQueueWaitMs),
+          gitStdoutBytes,
+          gitStderrBytes,
+          gitTimeoutCount,
+          slowestGitCommand,
+        }))
+      : undefined;
   let firstHostRequest = true;
   let outcome: "returned" | "threw" = "threw";
   const hostWork = new Set<Promise<WorkerTaskResponse>>();
@@ -269,12 +290,13 @@ async function executeOperation(
         const queuedAt = timing ? performance.now() : 0;
         const execute = async () => {
           const startedAt = timing ? performance.now() : 0;
+          let termination = "threw";
           if (timing) {
             gitCommandCount++;
             summedGitQueueWaitMs += startedAt - queuedAt;
           }
           try {
-            return await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
+            const output = await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
               run(effect.input.cwd, effect.input.args, {
                 ...effect.input.options,
                 operation: SPAWN_OPERATIONS[command.type],
@@ -285,9 +307,47 @@ async function executeOperation(
                 lowerPriority: contentGit,
               }),
             );
+            if (timing) {
+              termination = output.termination;
+              gitStdoutBytes += output.stdout.byteLength;
+              gitStderrBytes += output.stderr.byteLength;
+              gitTimeoutCount += Number(termination === "timeout");
+            }
+            return output;
           } finally {
             if (timing) {
-              summedGitWallMs += performance.now() - startedAt;
+              const durationMs = Math.round(performance.now() - startedAt);
+              summedGitWallMs += durationMs;
+              if (!slowestGitCommand || durationMs > slowestGitCommand.durationMs) {
+                const args = effect.input.args;
+                let i = 0;
+                while (i < args.length && args[i]!.startsWith("-")) {
+                  i += args[i] === "-c" || args[i] === "-C" ? 2 : 1;
+                }
+                const name = args[i] ?? "";
+                slowestGitCommand = {
+                  // Only fixed command names may escape; never paths, refs, config, or stderr.
+                  command:
+                    /^(diff|ls-files|rev-parse|rev-list|merge-base|cat-file|symbolic-ref|for-each-ref|version|log|show|hash-object)$/.test(
+                      name,
+                    )
+                      ? name
+                      : "other",
+                  ...(name === "diff"
+                    ? {
+                        diffMode: args.includes("--no-index")
+                          ? "--no-index"
+                          : (args
+                              .slice(i + 1)
+                              .find((arg) =>
+                                /^(--shortstat|--raw|--patch|--name-status)$/.test(arg),
+                              ) ?? "other"),
+                      }
+                    : {}),
+                  durationMs,
+                  termination,
+                };
+              }
             }
           }
         };
@@ -328,7 +388,14 @@ async function executeOperation(
     }
   };
   try {
-    const reply = await poolFor(state, command, contentRead).run(command, {
+    const enqueuedAt = timing ? performance.now() : 0;
+    const input = timing
+      ? () => {
+          workerQueueWaitMs = Math.round(performance.now() - enqueuedAt);
+          return command;
+        }
+      : command;
+    const reply = await poolFor(state, command, contentRead).run(input, {
       inputBytes: options.inputBytes,
       transferList: options.transferList,
       signal: options.signal,

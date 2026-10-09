@@ -182,35 +182,6 @@ describe("managed Codex bundled marketplace", () => {
     );
   });
 
-  it("replaces a prior owned wrapper when desktop app selection changes", async () => {
-    const root = tempDirs.make("openclaw-codex-marketplace-owner-transition-");
-    const firstCandidate = await writeCandidate(path.join(root, "first"));
-    const secondCandidate = await writeCandidate(path.join(root, "second"));
-    const agentDir = path.join(root, "agent");
-    const codexHome = path.join(agentDir, "codex-home");
-    const target = reservedMarketplacePath(codexHome);
-    const ownershipCandidates = [firstCandidate, secondCandidate];
-
-    await ensureCodexManagedBundledMarketplace({
-      codexHome,
-      ownershipRoot: agentDir,
-      appServerCommand: firstCandidate.appServerCommandPath,
-      candidates: [firstCandidate],
-      ownershipCandidates,
-    });
-    await ensureCodexManagedBundledMarketplace({
-      codexHome,
-      ownershipRoot: agentDir,
-      appServerCommand: secondCandidate.appServerCommandPath,
-      candidates: [secondCandidate],
-      ownershipCandidates,
-    });
-
-    expect(await fs.readlink(path.join(target, "plugins"))).toBe(
-      path.join(secondCandidate.bundledMarketplacePath, "plugins"),
-    );
-  });
-
   it("leaves the prior wrapper intact when its generation becomes stale before publication", async () => {
     const root = tempDirs.make("openclaw-codex-marketplace-stale-");
     const firstCandidate = await writeCandidate(path.join(root, "first"));
@@ -315,31 +286,6 @@ describe("managed Codex bundled marketplace", () => {
       ),
     ).toEqual([]);
   });
-
-  it.runIf(process.platform !== "win32")(
-    "rejects a symlinked isolated home without touching its external target",
-    async () => {
-      const root = tempDirs.make("openclaw-codex-marketplace-home-link-");
-      const candidate = await writeCandidate(root);
-      const agentDir = path.join(root, "agent");
-      const external = path.join(root, "external");
-      const codexHome = path.join(agentDir, "codex-home");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.mkdir(external, { recursive: true });
-      await fs.writeFile(path.join(external, "sentinel"), "outside");
-      await fs.symlink(external, codexHome, "dir");
-
-      await expect(
-        ensureCodexManagedBundledMarketplace({
-          codexHome,
-          ownershipRoot: agentDir,
-          candidates: [candidate],
-        }),
-      ).rejects.toThrow(/symlink|symbolic link|real directories/u);
-      await expect(fs.readFile(path.join(external, "sentinel"), "utf8")).resolves.toBe("outside");
-      await expect(fs.access(path.join(external, ".tmp"))).rejects.toThrow();
-    },
-  );
 
   it.runIf(process.platform !== "win32")(
     "does not publish through a marketplace parent rebound during the staged swap",

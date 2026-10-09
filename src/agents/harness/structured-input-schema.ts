@@ -351,6 +351,7 @@ function readChoices(
   ) {
     return "declares both enum and oneOf choices.";
   }
+  let choices: Parameters<typeof normalizeChoices>[0];
   if (enumValue !== undefined && enumValue !== null) {
     if (!Array.isArray(enumValue)) {
       return "has an invalid enum.";
@@ -362,26 +363,23 @@ function readChoices(
     ) {
       return "has invalid enumNames.";
     }
-    return normalizeChoices(
-      enumValue.map((value, index) => ({
-        value,
-        label: Array.isArray(enumNames) ? enumNames[index] : value,
-      })),
-      options.minimumChoiceCount ?? 1,
-      options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
-    );
-  }
-  if (oneOfValue !== undefined && oneOfValue !== null) {
+    choices = enumValue.map((value, index) => ({
+      value,
+      label: Array.isArray(enumNames) ? enumNames[index] : value,
+    }));
+  } else if (oneOfValue !== undefined && oneOfValue !== null) {
     if (!Array.isArray(oneOfValue)) {
       return "has an invalid oneOf.";
     }
-    return normalizeChoices(
-      oneOfValue.map((entry) => readStructuredInputChoice(entry, options)),
-      options.minimumChoiceCount ?? 1,
-      options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
-    );
+    choices = oneOfValue.map((entry) => readStructuredInputChoice(entry, options));
+  } else {
+    return undefined;
   }
-  return undefined;
+  return normalizeChoices(
+    choices,
+    options.minimumChoiceCount ?? 1,
+    options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
+  );
 }
 
 function readArrayChoices(

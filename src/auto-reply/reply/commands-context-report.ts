@@ -1,4 +1,5 @@
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import {
@@ -32,22 +33,13 @@ function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
-function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized.startsWith("/context ")) {
-    return commandBodyNormalized.slice(8).trim();
-  }
-  return "";
-}
-
-function formatListTop(
-  entries: Array<{ name: string; value: number }>,
-  cap: number,
-): { lines: string[]; omitted: number } {
-  const sorted = entries.toSorted((a, b) => b.value - a.value);
-  const top = sorted.slice(0, cap);
-  const omitted = Math.max(0, sorted.length - top.length);
-  const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
-  return { lines, omitted };
+function formatListTop(entries: Array<{ name: string; value: number }>, noun = "tools"): string[] {
+  const top = entries.toSorted((a, b) => b.value - a.value).slice(0, 30);
+  const omitted = entries.length - top.length;
+  return [
+    ...top.map((entry) => `- ${entry.name}: ${formatCharsAndTokens(entry.value)}`),
+    ...(omitted ? [`… (+${omitted} more ${noun})`] : []),
+  ];
 }
 
 function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
@@ -155,7 +147,8 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const args = parseContextArgs(params.command.commandBodyNormalized);
+  const commandBody = params.command.commandBodyNormalized;
+  const args = commandBody.startsWith("/context ") ? commandBody.slice(8).trim() : "";
   const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
   if (!sub || sub === "help") {
@@ -283,31 +276,23 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const skillNames = [...new Set(report.skills.entries.map((s) => s.name))];
   const toolNames = report.tools.entries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
-    names.length <= cap
-      ? names.join(", ")
-      : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
+    names.length === 0
+      ? "(none)"
+      : names.length <= cap
+        ? names.join(", ")
+        : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
   const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
-  const skillsNamesLine = skillNames.length
-    ? `Skills: ${formatNameList(skillNames, 20)}`
-    : "Skills: (none)";
-  const toolsNamesLine = toolNames.length
-    ? `Tools: ${formatNameList(toolNames, 30)}`
-    : "Tools: (none)";
+  const skillsNamesLine = `Skills: ${formatNameList(skillNames, 20)}`;
+  const toolsNamesLine = `Tools: ${formatNameList(toolNames, 30)}`;
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
-    typeof report.bootstrapMaxChars === "number" &&
-    Number.isFinite(report.bootstrapMaxChars) &&
-    report.bootstrapMaxChars > 0
-      ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapMaxChars) ??
+    resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
-    typeof report.bootstrapTotalMaxChars === "number" &&
-    Number.isFinite(report.bootstrapTotalMaxChars) &&
-    report.bootstrapTotalMaxChars > 0
-      ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapTotalMaxChars) ??
+    resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -347,11 +332,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : [];
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
-  const totalsLine =
-    cachedContextUsageTokens != null
-      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
-      : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
-  const sharedContextLines = [
+  const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
+  const detailed = sub === "detail" || sub === "deep";
+  const lines = [
+    detailed ? "🧠 Context breakdown (detailed)" : "🧠 Context breakdown",
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
@@ -367,18 +351,16 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     skillsNamesLine,
   ];
 
-  if (sub === "detail" || sub === "deep") {
+  if (detailed) {
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
-      30,
+      "skills",
     );
     const perToolSchema = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.schemaChars })),
-      30,
     );
     const perToolSummary = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
-      30,
     );
     const toolPropsLines = report.tools.entries
       .filter((t) => t.propertiesCount != null)
@@ -413,50 +395,35 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       targetSessionEntry,
     );
 
-    return {
-      text: [
-        "🧠 Context breakdown (detailed)",
-        ...sharedContextLines,
-        ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
-        ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
-        "",
-        toolListLine,
-        toolSchemaLine,
-        toolsNamesLine,
-        "Top tools (schema size):",
-        ...perToolSchema.lines,
-        ...(perToolSchema.omitted ? [`… (+${perToolSchema.omitted} more tools)`] : []),
-        "",
-        "Top tools (summary text size):",
-        ...perToolSummary.lines,
-        ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
-        ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
-        "",
-        trackedPromptLine,
-        actualContextLine,
-        ...(overheadLine ? [overheadLine] : []),
-        ...transcriptCompactabilityLines,
-        "",
-        totalsLine,
-        "",
-        "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    };
-  }
-
-  return {
-    text: [
-      "🧠 Context breakdown",
-      ...sharedContextLines,
+    lines.push(
+      ...(perSkill.length ? ["Top skills (prompt entry size):", ...perSkill] : []),
+      "",
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,
+      "Top tools (schema size):",
+      ...perToolSchema,
       "",
-      totalsLine,
+      "Top tools (summary text size):",
+      ...perToolSummary,
+      ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
       "",
-      "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-    ].join("\n"),
+      trackedPromptLine,
+      actualContextLine,
+      ...(overheadLine ? [overheadLine] : []),
+      ...transcriptCompactabilityLines,
+    );
+  } else {
+    lines.push(toolListLine, toolSchemaLine, toolsNamesLine);
+  }
+
+  lines.push(
+    "",
+    totalsLine,
+    "",
+    "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+  );
+  return {
+    text: (detailed ? lines.filter(Boolean) : lines).join("\n"),
   };
 }

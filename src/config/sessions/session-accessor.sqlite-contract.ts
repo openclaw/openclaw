@@ -76,7 +76,6 @@ export type SqliteSessionReclamationDiagnostics = {
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
     | "lifecycle-projection-commit"
-    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
     | "maintenance-plan"
@@ -174,6 +173,7 @@ export type SessionTranscriptInstanceListOptions = {
   /** Include empty and internal windows when inspecting recorded source metadata. */
   includeAllWindows?: boolean;
   sessionId?: string;
+  sessionIds?: readonly string[];
 };
 
 export type TranscriptEventAppendOptions = {
@@ -208,7 +208,6 @@ export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,
   SessionAccessScope,
-  SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,

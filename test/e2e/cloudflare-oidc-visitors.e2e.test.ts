@@ -37,8 +37,8 @@ import {
 } from "../../src/plugins/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
 import { resolveUserProfileGitHubAttribution } from "../../src/state/user-profile-github-identity.js";
+import { getUserProfileListItem } from "../../src/state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../src/state/user-profile-list.js";
-import { getUserProfileListItem } from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { createDeferred, withinTest } from "../helpers/promise.js";
 

@@ -39,6 +39,7 @@ import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./de
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import {
+  messageActionRequesterMediaContext,
   resolveMessageActionOutcome,
   type MessageActionInput,
   type MessageActionResult,
@@ -56,7 +57,6 @@ import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
@@ -164,11 +164,10 @@ async function handleBroadcastAction(
     }
     return undefined;
   };
-  let attemptIndex = 0;
   let interrupted = false;
   for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     for (const target of rawTargets) {
-      const receiptDiscriminator = `broadcast:${attemptIndex++}`;
+      const receiptDiscriminator = `broadcast:${results.length}`;
       const hadAcceptedResult = !interrupted && hasAcceptedResult();
       if (!interrupted) {
         try {
@@ -250,34 +249,29 @@ async function handleBroadcastAction(
         }
         const interruption =
           err instanceof OutboundHandoffRejectedError ? err : captureInterruption();
+        let sentBeforeError: boolean | undefined;
         if (interruption) {
-          const sentBeforeError = errorSentBefore(err);
+          sentBeforeError = errorSentBefore(err);
           if (!hadAcceptedResult && !sentBeforeError) {
             throw err;
           }
           interrupted = true;
-          results.push({
-            channel: targetChannel,
-            to: target,
-            ok: false,
-            ...(!sentBeforeError && err instanceof OutboundHandoffRejectedError
-              ? {
-                  attempted: false as const,
-                  error: "Broadcast canceled before this target was attempted.",
-                }
-              : {
-                  error: formatErrorMessage(err),
-                  ...(sentBeforeError ? { sentBeforeError: true as const } : {}),
-                }),
-          });
-          continue;
         }
         results.push({
           channel: targetChannel,
           to: target,
           ok: false,
-          error: formatErrorMessage(err),
-          ...(errorSentBefore(err) ? { sentBeforeError: true as const } : {}),
+          ...(interruption && !sentBeforeError && err instanceof OutboundHandoffRejectedError
+            ? {
+                attempted: false as const,
+                error: "Broadcast canceled before this target was attempted.",
+              }
+            : {
+                error: formatErrorMessage(err),
+                ...((sentBeforeError ?? errorSentBefore(err))
+                  ? { sentBeforeError: true as const }
+                  : {}),
+              }),
         });
       }
     }
@@ -299,11 +293,7 @@ async function handleInternalSourceReplySendAction(
 ): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const agentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-      : undefined);
+  const agentId = input.agentId;
   let recommendations:
     | Awaited<
         ReturnType<typeof import("./clawhub-recommendations.js").resolveClawHubRecommendations>
@@ -325,7 +315,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!recommendations.cards.length || !normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message)) {
       params.message = recommendations.text;
     }
   }
@@ -336,14 +326,9 @@ async function handleInternalSourceReplySendAction(
       agentId,
       workspaceDir: input.workspaceDir,
       mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
+      ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
       accountId: input.sessionKey ? input.requesterAccountId : undefined,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
     });
   const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
     ? mediaAccess.readFile
@@ -362,7 +347,6 @@ async function handleInternalSourceReplySendAction(
     }),
   });
   const sourceReply = await buildMessagePayload({
-    cfg: input.cfg,
     actionParams: params,
     input,
     agentId,
@@ -388,7 +372,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Current-source media requires an agent workspace.");
     }
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     sourceReplyPayload = await createReplyMediaPathNormalizer({
       cfg: input.cfg,
       sessionKey: input.sessionKey,
@@ -421,7 +405,6 @@ async function handleInternalSourceReplySendAction(
   const sourceReplyMediaUrls = resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls;
   const sourceReplyMessage = sourceReplyPayload.text ?? sourceReply.message;
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
-  let persistedIdempotencyKey: string | undefined;
   let persistedTranscriptOwner = false;
   if (!dryRun) {
     await beforeMessageDeliveryAttempt(input);
@@ -462,7 +445,6 @@ async function handleInternalSourceReplySendAction(
     } else {
       await persist();
     }
-    persistedIdempotencyKey = idempotencyKey;
     persistedTranscriptOwner = true;
   }
   const payload = {
@@ -471,7 +453,7 @@ async function handleInternalSourceReplySendAction(
     channel: INTERNAL_MESSAGE_CHANNEL,
     target: "current-run",
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
-    ...(persistedIdempotencyKey ? { idempotencyKey: persistedIdempotencyKey } : {}),
+    ...(persistedTranscriptOwner && idempotencyKey ? { idempotencyKey } : {}),
     ...(persistedTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
     ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
     sourceReply: sourceReplyPayload,
@@ -480,20 +462,24 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
+  // have no viewer here, so claim no visible delivery.
+  const receipt = input.sourceReplyTranscriptOnly
+    ? payload.dryRun
+      ? "Prepared reply for the current session transcript."
+      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+    : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
   const recommendationSummary = cards.length
     ? cards
         .map((card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`)
         .join("\n")
-    : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
-      ? payload.sourceReply.text
-      : undefined;
+    : recommendations?.text;
   const { sourceReplyDeliveryMode, ...details } = payload;
   const toolResult = textResult(
-    `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    `${receipt}${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
     {
       ...details,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
@@ -531,7 +517,7 @@ async function runMessageActionWithAuthority(
       : undefined);
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "delivery");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
 
   const action = input.action;
   enforceMessageActionAllowlist({
@@ -594,14 +580,9 @@ async function runMessageActionWithAuthority(
               mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
                 structuredAttachments: structuredAttachmentMode,
               }),
-              workspaceMediaAccess: input.workspaceMediaAccess,
-              sessionKey: input.sessionKey,
+              ...messageActionRequesterMediaContext(input),
               messageProvider: input.sessionKey ? undefined : channel,
               accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-              requesterSenderId: input.requesterSenderId,
-              requesterSenderName: input.requesterSenderName,
-              requesterSenderUsername: input.requesterSenderUsername,
-              requesterSenderE164: input.requesterSenderE164,
             });
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile

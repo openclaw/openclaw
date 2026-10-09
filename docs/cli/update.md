@@ -17,6 +17,26 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+On Windows, update checks the Gateway Scheduled Task's principal and run level
+before staging or changing state. A per-user `LeastPrivilege` task for the current
+account can be updated from a non-elevated terminal, including a UAC-filtered
+administrator's terminal. A task for another account (including SYSTEM), a task
+that requires highest privileges, or a genuine Task Scheduler query denial needs
+an **elevated terminal** (Run as administrator), even if the Gateway is stopped.
+Unresolved or group principals defer to native permission checks. Task lookup has its
+own 60-second cold-start limit, and each `schtasks` command has a 15-second limit;
+a stalled operation names the check or command instead of using the update's full
+timeout.
+
+For a global npm installation, the manual recovery path is
+`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
+`openclaw doctor --fix`, then `openclaw gateway restart`. Replace `<target>` with
+the intended release and run service repair/restart from an elevated terminal
+if Task Scheduler denies access. OpenClaw prints this alternative; it does not
+run it automatically. Per-user Startup-folder installations do not require
+elevation for this check. An older installed updater keeps its previous behavior
+until replaced; use the elevated or manual path for that first upgrade.
+
 Custom npm prefixes such as `~/.npm-global` are recognized from npm's configured
 prefix and the installed OpenClaw launcher. A prefix configured in `~/.npmrc`
 does not need a matching `NPM_CONFIG_PREFIX` environment variable. If no owner
@@ -607,6 +627,13 @@ for channel, availability, and the latest durable update report. Gateway console
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
+With `--no-restart`, state verification blocked by another process is deferred,
+and the installed update is recorded with Gateway readiness unverified. That
+recorded contention also defers Gateway recovery verification. Restart the Gateway through its service
+owner, then run `openclaw update status` and `openclaw doctor`; keep recovery backups
+until verification completes. Other failures keep their recovery diagnostics;
+a genuine database incompatibility still fails.
+
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, activating,
 restarting, verifying, and finished. When output is piped or captured in a log,
@@ -637,7 +664,11 @@ inspect the checkout and recovery report before restarting it.
 For a profile without a runtime database, an older npm target initializes its
 compatible state before the updater records history. The selected release's
 Doctor runs before activation, including when npm's install hooks already created
-the database. Existing databases retain their downgrade protections.
+the database. Existing databases retain their downgrade protections. When the
+updater can read shared state, target-release preflight also checks configured,
+retired, and registered custom agent stores and names every incompatible store
+before changing the installation or stopping the Gateway. State newer than the
+updater can read retains a single install-compatible-build or restore-backup refusal.
 
 If database schema preflight cannot inspect the configured paths because the
 config is invalid, its refusal lists the config file and invalid fields. Run

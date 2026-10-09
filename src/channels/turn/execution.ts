@@ -220,6 +220,18 @@ async function runPreparedChannelTurnCoreInTrace<
   // path before the next group turn can replay stale context.
   try {
     const recordSessionKey = resolveRecordSessionKey(params);
+    const emitStage = (
+      stage: "record" | "dispatch",
+      event: "start" | "done" | "error",
+      error?: unknown,
+    ) =>
+      emit(params, {
+        stage,
+        event,
+        ...(stage === "record" ? { sessionKey: recordSessionKey } : {}),
+        admission: admission.kind,
+        ...(event === "error" ? { error } : {}),
+      });
     try {
       const agentId =
         params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
@@ -238,12 +250,7 @@ async function runPreparedChannelTurnCoreInTrace<
           storePath: params.storePath,
         });
       }
-      emit(params, {
-        stage: "record",
-        event: "start",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-      });
+      emitStage("record", "start");
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,
@@ -254,22 +261,11 @@ async function runPreparedChannelTurnCoreInTrace<
         onRecordError: params.record?.onRecordError ?? (() => undefined),
         trackSessionMetaTask: params.record?.trackSessionMetaTask,
       });
-      emit(params, {
-        stage: "record",
-        event: "done",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-      });
+      emitStage("record", "done");
       await params.afterRecord?.();
       await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
     } catch (err) {
-      emit(params, {
-        stage: "record",
-        event: "error",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-        error: err,
-      });
+      emitStage("record", "error", err);
       try {
         await params.onPreDispatchFailure?.(err);
       } catch {
@@ -278,11 +274,7 @@ async function runPreparedChannelTurnCoreInTrace<
       throw err;
     }
 
-    emit(params, {
-      stage: "dispatch",
-      event: "start",
-      admission: admission.kind,
-    });
+    emitStage("dispatch", "start");
     let dispatchResult: TDispatchResult;
     try {
       let processedOutcome: DispatchProcessedNote | undefined;
@@ -310,19 +302,10 @@ async function runPreparedChannelTurnCoreInTrace<
         processedOutcome,
       });
     } catch (err) {
-      emit(params, {
-        stage: "dispatch",
-        event: "error",
-        admission: admission.kind,
-        error: err,
-      });
+      emitStage("dispatch", "error", err);
       throw err;
     }
-    emit(params, {
-      stage: "dispatch",
-      event: "done",
-      admission: admission.kind,
-    });
+    emitStage("dispatch", "done");
 
     return {
       admission,

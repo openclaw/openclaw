@@ -51,7 +51,6 @@ function resolveActiveUserMessage(input: ItemParam[]): ResponseMessageItem | und
   return undefined;
 }
 
-/** Build the user message and optional system prompt from Responses API input. */
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;

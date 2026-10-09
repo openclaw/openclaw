@@ -77,6 +77,10 @@ describe("Terminal panel hosted tabs", () => {
   });
 
   afterEach(() => {
+    // This fixture has no destination panel to consume a queued docking handoff.
+    for (const panel of document.querySelectorAll<OpenClawTerminalPanel>(tagName)) {
+      panel.closeTerminalPanel();
+    }
     document.body.replaceChildren();
     createGhosttyTerminalMock.mockReset();
     vi.restoreAllMocks();
@@ -217,14 +221,6 @@ describe("Terminal panel hosted tabs", () => {
     );
     button(actions, "Add files to terminal").click();
     expect(inputClick).toHaveBeenCalledOnce();
-    const dock = vi.fn();
-    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
-    try {
-      button(actions, "Dock to bottom").click();
-      expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
-    } finally {
-      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
-    }
     expect(button(actions, "Add files to terminal").disabled).toBe(false);
     const pending = vi
       .spyOn(panel.terminalPanelUploadController, "hasPendingBatch")
@@ -237,6 +233,14 @@ describe("Terminal panel hosted tabs", () => {
     panel.requestUpdate();
     await panel.updateComplete;
     expect(button(actions, "Add files to terminal").disabled).toBe(true);
+    const dock = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
+    try {
+      button(actions, "Dock to bottom").click();
+      expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
+    } finally {
+      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
+    }
   });
 
   it("opens its shadow menu from light DOM and restores focus on Escape", async () => {

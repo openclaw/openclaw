@@ -13,7 +13,7 @@ import {
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessage,
+  appendTranscriptMessageSync,
   assignSessionOwner,
   cleanupPluginHostSessionStore,
   listSessionEntriesCore,
@@ -54,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 function createSessionScope(label: string) {
@@ -244,6 +245,7 @@ describe("SQLite session entry cache", () => {
     "cleans selected plugin metadata without materializing siblings or saved prompts (%s)",
     async (mode) => {
       const scope = createSessionScope("plugin-cleanup");
+      vi.stubEnv("OPENCLAW_STATE_DIR", scope.env.OPENCLAW_STATE_DIR);
       const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
       const { skillsSnapshot, systemPromptReport } = savedPrompts(
         "unneeded cleanup prompt".repeat(4096),
@@ -438,10 +440,12 @@ describe("SQLite session entry cache", () => {
     openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 
-    await appendTranscriptMessage(
-      { ...scope, sessionId: "first" },
-      { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
-    );
+    expect(
+      appendTranscriptMessageSync(
+        { ...scope, sessionId: "first" },
+        { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
+      ),
+    ).toMatchObject({ ok: true, value: { appended: true } });
     parseSessionEntryCalls.mockClear();
 
     const second = listingEntries(scope);

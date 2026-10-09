@@ -63,32 +63,14 @@ private struct NotificationPermissionGuidanceCard: View {
             }
 
             VStack(spacing: 10) {
-                Button {
-                    self.onOpenNotifications()
-                } label: {
-                    Text("Open Notifications Settings")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
+                approvalDialogButton(Text("Open Notifications Settings"), action: self.onOpenNotifications)
+                    .buttonStyle(.borderedProminent)
 
-                Button(role: .cancel) {
-                    self.onDismiss()
-                } label: {
-                    Text("Not Now")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Not Now"), role: .cancel, action: self.onDismiss)
+                    .buttonStyle(.bordered)
 
-                Button {
-                    self.onSuppressFuture()
-                } label: {
-                    Text("Don't show again")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Don't show again"), action: self.onSuppressFuture)
+                    .buttonStyle(.bordered)
             }
             .controlSize(.large)
             .frame(maxWidth: .infinity)

@@ -8,7 +8,6 @@ import {
   type UpdateRecoveryBackupManifest,
 } from "../commands/backup-verify-manifest.js";
 import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
-import { collectDoctorSkillWorkshopBackupResources } from "../commands/doctor-update-rehearsal-workshop.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
@@ -55,6 +54,7 @@ import {
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
+import { hasPendingUpdateRecoverySeal } from "./update-recovery-capture-seal.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 
@@ -244,12 +244,8 @@ export function captureUpdateRecoveryBaseline(params: {
             warnings,
             requireLocalResources: true,
           });
-          const workshop = await collectDoctorSkillWorkshopBackupResources({
-            config: snapshot.sourceConfig,
-            env,
-          });
           plugins.assertCurrent();
-          return [...plugins.resources, ...workshop];
+          return plugins.resources;
         },
         { env },
       );
@@ -660,16 +656,16 @@ export async function retireExpiredStandaloneDoctorCaptures(params: {
       if (!entry.isDirectory() || entry.isSymbolicLink()) {
         continue;
       }
-      let raw: string;
-      try {
-        raw = await fs.readFile(path.join(directory, "manifest.json"), "utf8");
-      } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          continue;
-        }
-        throw error;
+      if (
+        (await hasPendingUpdateRecoverySeal(directory)) ||
+        !(await statOrMissing(path.join(directory, "manifest.json")))
+      ) {
+        continue;
       }
-      const manifest = parseUpdateRecoveryBackupManifest(raw);
+      const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
+      const manifest = parseUpdateRecoveryBackupManifest(
+        await source.readText("manifest.json", { maxBytes: 128 * 1024 * 1024 }),
+      );
       const createdAt = Date.parse(manifest.createdAt);
       if (
         manifest.runId !== name ||
@@ -682,6 +678,9 @@ export async function retireExpiredStandaloneDoctorCaptures(params: {
           path: path.join(params.stateDir, "state", "openclaw.sqlite"),
         })) !== undefined
       ) {
+        continue;
+      }
+      if (await hasPendingUpdateRecoverySeal(directory)) {
         continue;
       }
       params.assertCurrent();

@@ -302,6 +302,14 @@ export function importAndRecordReceipt(params: {
     (database) => {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
+      const readWorkspace = () =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("workspace_setup_state")
+            .selectAll()
+            .where("workspace_key", "=", params.source.workspaceKey),
+        );
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
       // Revalidate the observed receipt before publishing a new backup or generation.
       if (
@@ -320,13 +328,7 @@ export function importAndRecordReceipt(params: {
         if (!params.source.workspaceDir) {
           throw new Error("legacy workspace setup has no workspace path");
         }
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const existing = readWorkspace();
         if (existing && existing.version != null) {
           if (
             existing.workspace_path !== params.source.workspaceDir ||
@@ -377,13 +379,7 @@ export function importAndRecordReceipt(params: {
           resolution = existing ? "merged" : "inserted";
           verifiedFingerprint = createWorkspaceSetupFingerprint(setupColumns);
         }
-        const verified = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const verified = readWorkspace();
         // Every setup import branch writes the source path, so a NULL path
         // here is a verification failure, not an attestation-only row.
         const actualFingerprint =
@@ -416,13 +412,7 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
-        const existingRow = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .selectAll()
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
+        const existingRow = readWorkspace();
         if (existingRow?.attested_at_ms != null) {
           const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
           const existingFingerprint = attestationFingerprint({

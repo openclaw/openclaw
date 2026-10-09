@@ -119,20 +119,18 @@ export class BrowserPanelStream {
     }
     this.close(false);
     const dimensions = this.dimensions();
-    let settle!: Attempt["settle"];
-    const firstFrame = new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (this.current(attempt)) {
-          this.recover(attempt);
-        } else if (this.attempt === attempt) {
-          this.close(false);
-        }
-      }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      settle = (received) => {
-        clearTimeout(timeout);
-        resolve(received);
-      };
-    });
+    const { promise: firstFrame, resolve } = Promise.withResolvers<boolean>();
+    const timeout = setTimeout(() => {
+      if (this.current(attempt)) {
+        this.recover(attempt);
+      } else if (this.attempt === attempt) {
+        this.close(false);
+      }
+    }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+    const settle = (received: boolean) => {
+      clearTimeout(timeout);
+      resolve(received);
+    };
     const attempt: Attempt = {
       targetId,
       client,

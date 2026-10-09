@@ -28,10 +28,9 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
 }
 
 describe("recorded automation input attribution", () => {
-  it.each([false, true])(
-    "keeps the automation source outside the agent run frame with completed answer=%s",
-    (withAnswer) => {
-      const sourceSessionKey = "agent:main:cron:daily:run:execution";
+  it.each(["agent:main:cron:daily:run:execution", "agent:main:main"])(
+    "keeps compact automation input outside the completed run: %s",
+    (sourceSessionKey) => {
       const container = renderChatView({
         sessionKey: "agent:main:main",
         messages: [
@@ -55,36 +54,26 @@ describe("recorded automation input attribution", () => {
               turnBoundary: true,
             },
           },
-          ...(withAnswer
-            ? [
-                {
-                  role: "assistant",
-                  content: "The queue is clear.",
-                  timestamp: 2_000,
-                  phase: "final_answer",
-                  __openclaw: { id: "cron-answer", seq: 2, runId: "execution" },
-                },
-              ]
-            : []),
+          {
+            role: "assistant",
+            content: "The queue is clear.",
+            timestamp: 2_000,
+            phase: "final_answer",
+            __openclaw: { id: "cron-answer", seq: 2, runId: "execution" },
+          },
         ],
       });
 
-      expect(container.querySelectorAll(".chat-group--forwarded")).toHaveLength(1);
+      expect(container.querySelectorAll(".chat-group--forwarded")).toHaveLength(0);
       const forwarded = expectDefined(
-        container.querySelector(".chat-group--forwarded"),
+        container.querySelector(".chat-session-activity"),
         "automation input",
       );
-      const source = forwarded.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      expect(source?.getAttribute("href")).toBe("/automations?job=daily&run=execution");
-      expect(source?.querySelector(".session-label")?.textContent).toBe("Daily report");
-      expect(source?.querySelector(".session-link-icon svg")?.namespaceURI).toBe(
-        "http://www.w3.org/2000/svg",
-      );
-      expect(forwarded.textContent).toContain("Check the queue.");
+      expect(forwarded.querySelector("summary")?.textContent).toContain("Daily report");
+      expect(forwarded.closest(".chat-agent-run-frame")).toBeNull();
+      expect(forwarded.textContent).not.toContain("Check the queue.");
       expect(forwarded.textContent).not.toContain("The queue is clear.");
-      if (withAnswer) {
-        expect(container.textContent).toContain("The queue is clear.");
-      }
+      expect(container.textContent).toContain("The queue is clear.");
     },
   );
 });

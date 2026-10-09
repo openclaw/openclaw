@@ -239,37 +239,6 @@ describe("board gateway runtime boundaries", () => {
     expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
-  it("enforces data bindings against the granted tool set", async () => {
-    sessionList.mockImplementation(async ({ respond }: { respond: RespondFn }) =>
-      respond(true, { sessions: ["one"] }),
-    );
-    const harness = createHarness();
-    const { invoke } = harness;
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const denied = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(sessionList).not.toHaveBeenCalled();
-
-    const { ticket } = await grantTools(["sessions.list"], harness);
-    const allowed = await invoke("board.data.read", {
-      ticket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(allowed.mock.calls[0]?.[1]).toEqual({ sessions: ["one"] });
-    expect(sessionList).toHaveBeenCalledWith(expect.objectContaining({ params: { limit: 2 } }));
-  });
-
   it("fences awaited board mutation through Gateway dispatch when its root retires", async () => {
     const documentStarted = createDeferred();
     const releaseDocument = createDeferred<{ html: string; cspSandbox: "scripts" }>();

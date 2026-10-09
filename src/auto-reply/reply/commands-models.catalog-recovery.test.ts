@@ -207,11 +207,13 @@ describe("/models browse catalog recovery", () => {
         current = false;
         return { availability: true, routeResolution: null };
       });
-      const createDecisions = modelDecisions.createModelCatalogDecisions;
-      vi.spyOn(modelDecisions, "createModelCatalogDecisions").mockImplementation((params) => ({
-        ...createDecisions(params),
-        evaluateEntry: evaluateModelAuth,
-      }));
+      const prepareDecisions = modelDecisions.prepareModelCatalogDecisions;
+      vi.spyOn(modelDecisions, "prepareModelCatalogDecisions").mockImplementation(
+        async (params) => ({
+          ...(await prepareDecisions(params)),
+          evaluateEntry: evaluateModelAuth,
+        }),
+      );
       catalogMocks.readSnapshot.mockReturnValueOnce({
         entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Retired model" }],
         routeVariants: [],
@@ -241,13 +243,13 @@ describe("/models browse catalog recovery", () => {
   });
 
   it.each([
-    { nativeAuth: true, providerKey: false, disabled: false, visible: true },
-    { nativeAuth: false, providerKey: false, disabled: false, visible: false },
-    { nativeAuth: false, providerKey: true, disabled: false, visible: false },
-    { nativeAuth: true, providerKey: true, disabled: true, visible: false },
+    { nativeAuth: true, providerKey: false, disabled: false, available: true },
+    { nativeAuth: false, providerKey: false, disabled: false, available: false },
+    { nativeAuth: false, providerKey: true, disabled: false, available: false },
+    { nativeAuth: true, providerKey: true, disabled: true, available: false },
   ])(
     "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled",
-    async ({ nativeAuth, providerKey, disabled, visible }) => {
+    async ({ nativeAuth, providerKey, disabled, available }) => {
       vi.stubEnv("ANTHROPIC_API_KEY", providerKey ? "synthetic-provider-key" : "");
       cliBackendsTesting.setDepsForTest({
         resolveRuntimeCliBackends: () => [
@@ -300,7 +302,11 @@ describe("/models browse catalog recovery", () => {
         agentId: "main",
       });
 
-      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6")).toBe(visible);
+      expect(reply?.text).toContain("- anthropic/claude-sonnet-4-6");
+      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6 (Sign-in needed")).toBe(
+        !available,
+      );
+      expect(reply?.text?.includes("run claude auth login on the Gateway host")).toBe(!available);
       expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
       expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
     },

@@ -60,6 +60,8 @@ Current iOS builds restore three independent input caches: verified Mermaid asse
 
 Current iOS Debug builds log CPU count, memory, machine model, booted simulators, and timestamps immediately around Xcode execution. The read-only hardware and simulator checks each have a five-second limit; unavailable diagnostics do not block the build. These markers distinguish simulator-query delays from Xcode startup, package resolution, and compilation.
 
+Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
+
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
@@ -103,6 +105,22 @@ Core lint discovers separate source and UI TypeScript projects, retaining shared
 
 Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proof#local-equivalents), with caller overrides and the full architecture check sequence retained.
 
+Full Release Validation's Docker seed child uses the 16-class Blacksmith runner
+when no release runner group is configured, prepares the existing smoke package,
+and retains serial weighted lane admission. Hosted outage overrides and retries
+keep their recovery route. Ordinary manual dispatches retain hosted
+serial execution. All six lanes remain selected. The three long, unfitted hosted
+test rows (`core-runtime-config`, `agentic-cli-process`, and
+`agentic-control-plane-agent-chat`) have a 90-minute job cap until complete timing
+observations allow the release planner to split them. The targeted
+`update-restart-auth` lane has a 62-minute budget and a 75-minute job cap.
+Release-path migration matrices isolate channel switching and each published
+baseline on separate runners when multiple baselines are selected; per-host
+weighted resource limits and exact-candidate artifact checks remain unchanged.
+Package Acceptance admits its long standalone upgrade lanes before expanded
+scenario jobs and orders pinned baseline cohorts newest first, without changing
+its matrix cap or scenario coverage.
+
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
@@ -119,7 +137,9 @@ Windows keeps its complete explicit test inventory in five [measured project-ali
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
-Control UI CI installs the Chromium revision pinned by Playwright even when the browser cache misses. Current targets use the installer's `--require-playwright-chromium` mode; historical targets retain their existing installer. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+
+Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 
@@ -131,6 +151,10 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 canonical configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Known indivisible-file costs remain a floor when selected subsets are priced;
+older complete-group measurements cannot cap those costs. Process-heavy worktree
+and updater suites carry explicit case-cost weights so they do not share a row
+on the default per-file estimate.
 
 Plugin-sensitive PRs select their owner tests, transitive import consumers,
 protected regressions, and policy watches. The existing Plugin Prerelease workflow retains complete
@@ -215,7 +239,8 @@ concurrency limits. Missing group capacity queues jobs. Shared workflows receive
 an optional `runner_group` from their release caller, including `docker-release.yml`
 and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
 ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
-Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker,
+and GitHub App-backed release dispatch)
 keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
 only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.

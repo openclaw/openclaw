@@ -128,7 +128,7 @@ function insertSandboxRegistryRowInDatabase(db: DatabaseSync, row: SandboxRegist
   );
 }
 
-export function assertSandboxRegistryReservationCurrent(
+function assertSandboxRegistryReservationCurrent(
   current: SandboxRegistryEntry | null,
   expected: Pick<SandboxRegistryEntry, "backendId" | "sessionKey">,
 ): asserts current is SandboxRegistryEntry {
@@ -142,6 +142,21 @@ export function assertSandboxRegistryReservationCurrent(
     throw new Error(
       "Sandbox runtime was removed or is being removed; retry after sandbox recreate completes.",
     );
+  }
+}
+
+export function assertSandboxRegistryGenerationCurrent(
+  current: SandboxRegistryEntry | null,
+  expected: SandboxRegistryEntry,
+): asserts current is SandboxRegistryEntry {
+  assertSandboxRegistryReservationCurrent(current, expected);
+  if (
+    current.createdAtMs !== expected.createdAtMs ||
+    current.workspaceDir !== expected.workspaceDir ||
+    current.configHash !== expected.configHash ||
+    !isDeepStrictEqual(current.backendTarget, expected.backendTarget)
+  ) {
+    throw new Error("Sandbox runtime generation changed");
   }
 }
 
@@ -207,7 +222,7 @@ export function writeSandboxRegistryInDatabase(
     insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry, existing));
     return;
   }
-  assertSandboxRegistryReservationCurrent(existing, entry);
+  assertSandboxRegistryGenerationCurrent(existing, entry);
   if (write.retired) {
     removeRegistryRowInDatabase(db, "container", entry.containerName);
   } else {
@@ -247,22 +262,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
     runtimeState: entry.runtimeState ?? existing?.runtimeState,
     workspaceDir: existing?.workspaceDir ?? entry.workspaceDir,
   };
-  return {
-    registry_kind: "container",
-    container_name: next.containerName,
-    session_key: next.sessionKey,
-    backend_id: next.backendId ?? null,
-    runtime_label: next.runtimeLabel ?? null,
-    image: next.image,
-    created_at_ms: next.createdAtMs,
-    last_used_at_ms: next.lastUsedAtMs,
-    config_label_kind: next.configLabelKind ?? null,
-    config_hash: next.configHash ?? null,
-    cdp_port: null,
-    no_vnc_port: null,
-    entry_json: JSON.stringify(next),
-    updated_at: Date.now(),
-  } satisfies SandboxRegistryInsert;
+  return registryEntryToRow({ kind: "container", next });
 }
 
 function browserEntryToRow(
@@ -276,19 +276,28 @@ function browserEntryToRow(
     configHash: entry.configHash ?? existing?.configHash,
     workspaceDir: entry.workspaceDir ?? existing?.workspaceDir,
   };
+  return registryEntryToRow({ kind: "browser", next });
+}
+
+function registryEntryToRow({
+  kind,
+  next,
+}:
+  | { kind: "container"; next: SandboxRegistryEntry }
+  | { kind: "browser"; next: SandboxBrowserRegistryEntry }) {
   return {
-    registry_kind: "browser",
+    registry_kind: kind,
     container_name: next.containerName,
     session_key: next.sessionKey,
-    backend_id: null,
-    runtime_label: null,
+    backend_id: kind === "container" ? (next.backendId ?? null) : null,
+    runtime_label: kind === "container" ? (next.runtimeLabel ?? null) : null,
     image: next.image,
     created_at_ms: next.createdAtMs,
     last_used_at_ms: next.lastUsedAtMs,
-    config_label_kind: null,
+    config_label_kind: kind === "container" ? (next.configLabelKind ?? null) : null,
     config_hash: next.configHash ?? null,
-    cdp_port: next.cdpPort,
-    no_vnc_port: next.noVncPort ?? null,
+    cdp_port: kind === "browser" ? next.cdpPort : null,
+    no_vnc_port: kind === "browser" ? (next.noVncPort ?? null) : null,
     entry_json: JSON.stringify(next),
     updated_at: Date.now(),
   } satisfies SandboxRegistryInsert;

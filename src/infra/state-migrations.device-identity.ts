@@ -404,18 +404,13 @@ export async function migrateLegacyDeviceIdentity(params: {
           ],
         };
       }
-      const activePath = hasSource
-        ? params.detected.sourcePath
-        : hasClaim
-          ? params.detected.claimPath
-          : null;
-      if (!activePath) {
+      if (!hasSource && !hasClaim) {
         return { changes: [], warnings: [] };
       }
 
       let snapshot: LegacySourceSnapshot;
       try {
-        snapshot = await source.read(activePath === params.detected.claimPath);
+        snapshot = await source.read(!hasSource);
       } catch (error) {
         return {
           changes: [],
@@ -425,7 +420,7 @@ export async function migrateLegacyDeviceIdentity(params: {
 
       let result: ReturnType<typeof importAndRecordReceipt>;
       try {
-        if (activePath === params.detected.sourcePath) {
+        if (hasSource) {
           snapshot = await source.claim({
             snapshot,
             mismatchMessage: "legacy device identity changed before Doctor could claim it",

@@ -33,10 +33,8 @@ import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
-    cfg,
     commentaryPayloadsEnabled,
     ctx,
-    deliveryChannel,
     deferFinalTtsText,
     dispatcher,
     failDispatchReplyOperation,
@@ -55,12 +53,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     params,
     reasoningPayloadsEnabled,
     replyConfig,
-    replyRoute,
     resolveToolDeliveryPayload,
     runWithDispatchLifecycleAdmission,
     sendPayloadAsync,
-    sessionAgentId,
-    sessionTtsAuto,
     shouldForwardProgressCallback,
     shouldRouteToOriginating,
     trackDispatchLifecycleWork,
@@ -314,15 +309,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   if (
                     toolResultProgressCallback &&
-                    forceToolResultProgress &&
-                    !isFastModeAutoProgress
-                  ) {
-                    return;
-                  }
-                  if (
-                    toolResultProgressCallback &&
-                    isFastModeAutoProgress &&
-                    (toolResultProgressVisible || !shouldDeliverFastModeAutoProgress)
+                    (isFastModeAutoProgress
+                      ? toolResultProgressVisible || !shouldDeliverFastModeAutoProgress
+                      : forceToolResultProgress)
                   ) {
                     return;
                   }
@@ -349,23 +338,15 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   if (!visibleToolPayload) {
                     return;
                   }
-                  const ttsPayload = await maybeApplyTtsWithFinalizationLease({
-                    payload: visibleToolPayload,
-                    cfg,
-                    channel: deliveryChannel,
-                    kind: "tool",
-                    ttsAuto: sessionTtsAuto,
-                    agentId: sessionAgentId,
-                    accountId: replyRoute.accountId,
-                  });
+                  const ttsPayload = await maybeApplyTtsWithFinalizationLease(
+                    visibleToolPayload,
+                    "tool",
+                  );
                   const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                   const deliveryPayload = bypassToolSummarySuppression
                     ? normalizedPayload
                     : await resolveToolDeliveryPayload(normalizedPayload);
-                  if (!deliveryPayload) {
-                    return;
-                  }
-                  if (isDispatchOperationAborted()) {
+                  if (!deliveryPayload || isDispatchOperationAborted()) {
                     return;
                   }
                   if (
@@ -396,7 +377,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   state.assertProgressCurrent();
                   if (shouldRouteToOriginating) {
-                    await sendPayloadAsync(deliveryPayload, undefined, false);
+                    await sendPayloadAsync(deliveryPayload);
                   } else {
                     const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
                     if (hasAskUserPayload(deliveryPayload)) {

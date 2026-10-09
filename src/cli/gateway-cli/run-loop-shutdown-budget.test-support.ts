@@ -31,14 +31,6 @@ const shutdownBudgetCases: {
     shutdownStopMs,
     inspectionMs: 500,
   })),
-  {
-    signal: "SIGUSR2",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "foreground" },
-  { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
   { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
 ];
 
@@ -119,7 +111,13 @@ export function registerShutdownBudgetTests({
         await runLoopWithStart({ start, runtime });
         await waitForStart(started);
         const host = start.mock.calls[0]?.[0]?.hostLifecycle;
-        const active = createActiveWorkSnapshot({ embeddedRuns: 1 });
+        const active = createActiveWorkSnapshot({ embeddedRuns: 1, rootRequests: 1 }, [
+          {
+            kind: "root-request",
+            count: 1,
+            message: "1 active gateway request(s): heartbeat:wake",
+          },
+        ]);
         createGatewayActiveWorkSnapshot.mockReturnValue(active);
         waitForGatewayActiveWork.mockImplementationOnce(async (timeoutMs, options) => {
           options?.onSnapshot?.(active);
@@ -194,7 +192,7 @@ export function registerShutdownBudgetTests({
           if (!honorsAbort) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
               expect.stringMatching(
-                /abandoning.*embeddedRuns=1.*pending close steps: shutdown.received-connection-work=\d+ms/,
+                /abandoning.*embeddedRuns=1.*pending owners: 1 active gateway request\(s\): heartbeat:wake.*pending close steps: shutdown.received-connection-work=\d+ms/,
               ),
             );
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(

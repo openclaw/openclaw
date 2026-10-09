@@ -221,21 +221,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   });
 
   if (discordProviderRuntime.shouldLogVerbose()) {
-    const allowFromSummary = summarizeStringEntries({
-      entries: allowFrom,
-      limit: 4,
-      emptyText: "any",
-    });
-    const groupDmChannelSummary = summarizeStringEntries({
-      entries: groupDmChannels ?? [],
-      limit: 4,
-      emptyText: "any",
-    });
-    const guildSummary = summarizeStringEntries({
-      entries: Object.keys(guildEntries ?? {}),
-      limit: 4,
-      emptyText: "any",
-    });
+    const summarize = (entries: readonly string[] | undefined) =>
+      summarizeStringEntries({ entries, limit: 4, emptyText: "any" });
+    const allowFromSummary = summarize(allowFrom);
+    const groupDmChannelSummary = summarize(groupDmChannels);
+    const guildSummary = summarize(Object.keys(guildEntries ?? {}));
     logVerbose(
       `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=on threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
@@ -330,7 +320,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       }
       if (uncertainProbeKeys.size > 0) {
         logVerbose(
-          `discord: ACP thread-binding health probe uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
+          `discord: ACP thread-binding health check uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
         );
       }
     }
@@ -423,6 +413,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       runtime,
       logStartupPhase,
     });
+    const monitorOptions = {
+      readPolicy,
+      client,
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId,
+    };
     let voiceManager: DiscordVoiceManager | null = null;
     if (voiceEnabled) {
       const {
@@ -433,14 +432,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
         DiscordVoiceStateUpdateListener,
       } = await discordProviderRuntime.loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
+        ...monitorOptions,
         scheduler,
-        readPolicy,
-        client,
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        runtime,
-        botUserId,
       });
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
@@ -453,17 +446,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
-      readPolicy,
-      client,
-      cfg,
-      discordConfig: discordCfg,
-      accountId: account.accountId,
+      ...monitorOptions,
       token,
-      runtime,
       buildContext: pluginChannelRuntime?.inbound.buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
-      botUserId,
       guildHistories,
       historyLimit,
       mediaMaxBytes,
@@ -487,13 +474,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
         }
       : undefined;
     stopMonitorListeners = registerDiscordMonitorListeners({
-      readPolicy,
-      cfg,
-      client,
-      accountId: account.accountId,
-      discordConfig: discordCfg,
-      runtime,
-      botUserId,
+      ...monitorOptions,
       dmEnabled,
       groupDmEnabled,
       groupDmChannels,

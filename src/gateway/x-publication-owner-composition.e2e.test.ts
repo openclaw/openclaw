@@ -53,6 +53,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
@@ -434,6 +435,7 @@ describe("X publication production-owner composition", () => {
         controlUiBasePath: "",
         getRuntimeConfig: cfg,
         getGatewayRequestContext: () => gateway,
+        httpRequestLifetime: gateway,
       },
     });
     const channel = api.runtime.channel;
@@ -530,7 +532,32 @@ describe("X publication production-owner composition", () => {
               loadSessionEntry({ agentId: "main", sessionKey: key, storePath: sessionStore }),
               "committed child row",
             );
-            expect(resolveSessionPublicShare(entry)?.sessionId).toBe(entry.sessionId);
+            const publication = expectDefined(
+              resolveSessionPublicShare(entry),
+              "committed child publication",
+            );
+            expect(publication.sessionId).toBe(entry.sessionId);
+            // The append checkpoint precedes the run's final session metadata writes.
+            const childReleased = getSessionWorkAdmissionRelease({
+              scope: sessionStore,
+              identities: [key, entry.sessionId],
+            });
+            if (childReleased) {
+              await withinTest(childReleased, signal);
+            }
+            await withinTest(projection.prepareMembership(), signal);
+            expect(
+              isPublicSessionShareActive(
+                cfg(),
+                {
+                  agentId: "main",
+                  sessionKey: key,
+                  sessionId: publication.sessionId,
+                  shareId: publication.id,
+                },
+                projection,
+              ),
+            ).toBe(true);
             const response = await sendRequest(http, {
               path: new URL(
                 expectDefined(
@@ -541,7 +568,7 @@ describe("X publication production-owner composition", () => {
               host: "localhost",
               remoteAddress: "127.0.0.1",
             });
-            expect(response.res.statusCode).toBe(200);
+            expect(response.res.statusCode, response.getBody()).toBe(200);
             expect(response.getBody()).toContain(
               "X publication composition: durable child answer.",
             );

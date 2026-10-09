@@ -711,17 +711,12 @@ export function toStreamingMarkdownParts(
     return [stableHtml, ""];
   }
   // The whole input was classified above; an isolated tail is not block art.
-  const tailHtml =
+  const tailHtml = renderSanitizedMarkdown(
     tailRepairStart === null
-      ? renderSanitizedMarkdown(
-          streamingTail,
-          { ...renderOptions, streamingOpenFence: true },
-          false,
-        )
-      : renderSanitizedMarkdown(
-          repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-          renderOptions,
-          false,
-        );
+      ? streamingTail
+      : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
+    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
+    false,
+  );
   return [stableHtml, tailHtml];
 }

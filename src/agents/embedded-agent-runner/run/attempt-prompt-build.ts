@@ -37,7 +37,7 @@ import {
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
-  cloneToolResultPromptProjectionState,
+  createToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
 import {
@@ -371,11 +371,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         ? " to prevent consecutive user turns. "
         : " without removing the active session leaf. ") +
       `runId=${attempt.runId} sessionId=${attempt.sessionId} trigger=${attempt.trigger}`;
-    if (shouldWarnOnOrphanedUserRepair(attempt.trigger)) {
-      log.warn(message);
-    } else {
-      log.debug(message);
-    }
+    log[shouldWarnOnOrphanedUserRepair(attempt.trigger) ? "warn" : "debug"](message);
   }
 
   if (leasedSteering && leasedSteeringPrompt) {
@@ -499,13 +495,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     contextTokenBudget,
     promptToolResultMaxChars,
     promptToolResultAggregateMaxChars,
-    cloneToolResultPromptProjectionState(input.toolResultPromptProjectionState),
+    createToolResultPromptProjectionState(input.toolResultPromptProjectionState),
   );
   const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
   const { aggregatePressureEngaged } = promptToolResultTruncation;
-  if (promptHistoryChanged) {
-    sessionMessages = promptToolResultTruncation.messages;
-  }
+  sessionMessages = promptToolResultTruncation.messages;
   if (promptHistoryChanged || aggregatePressureEngaged) {
     const sessionLogKey = attempt.sessionKey ?? attempt.sessionId ?? "unknown";
     const truncationLog =

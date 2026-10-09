@@ -541,6 +541,73 @@ describe("legacy provider catalog retention", () => {
     expect(result.entries).toContainEqual(expect.objectContaining(starter));
     expect(result.authoritative).toBe(false);
   });
+
+  describe("failed provider discovery retry", () => {
+    const unavailable: ModelCatalogSnapshot = {
+      entries: [],
+      routeVariants: [],
+      staticEntries: [starter],
+      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+    };
+    const ready: ModelCatalogSnapshot = {
+      entries: [learned],
+      routeVariants: [learned],
+      providerOutcomes: [{ provider: "custom", status: "ready" }],
+    };
+    const worker = mocks.runPreparedModelCatalogWorker;
+    const publishFailedOwner = async () => {
+      worker.mockResolvedValue(unavailable);
+      const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+      const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+        catalogMode: "static",
+        provenance: "standalone",
+      });
+      const failed = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(failed.entries.map(({ id }) => id)).toEqual(["starter"]);
+      return { owner, calls: worker.mock.calls.length };
+    };
+
+    it("retries with backoff without a read or explicit refresh", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const { owner, calls } = await publishFailedOwner();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 1);
+        worker.mockResolvedValue(ready);
+        await vi.advanceTimersByTimeAsync(59_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 1);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 2);
+        await vi.waitFor(() =>
+          expect(owner.readFullModelCatalog!()?.entries.map(({ id }) => id)).toEqual(["learned"]),
+        );
+        // A recovered provider returns to its ordinary renewal contract.
+        await vi.advanceTimersByTimeAsync(30 * 60_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("measures a new failure episode from its own failure", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const { owner, calls } = await publishFailedOwner();
+        await vi.advanceTimersByTimeAsync(10_000);
+        worker.mockResolvedValue(ready);
+        await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+        await vi.advanceTimersByTimeAsync(10_000);
+        worker.mockResolvedValue(unavailable);
+        await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+        await vi.advanceTimersByTimeAsync(29_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 2);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 it("preserves the primary publication error when terminal generation cleanup also fails", async () => {

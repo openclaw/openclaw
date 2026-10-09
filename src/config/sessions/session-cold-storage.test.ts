@@ -33,8 +33,8 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,

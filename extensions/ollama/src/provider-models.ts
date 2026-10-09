@@ -1,5 +1,6 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -155,12 +156,7 @@ function buildOllamaModelShowCacheKey(
 }
 
 function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
-  if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
-    const oldestKey = ollamaModelShowInfoCache.keys().next().value;
-    if (typeof oldestKey === "string") {
-      ollamaModelShowInfoCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(ollamaModelShowInfoCache, MAX_OLLAMA_SHOW_CACHE_ENTRIES - 1);
   ollamaModelShowInfoCache.set(key, value);
 }
 

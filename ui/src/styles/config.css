@@ -239,7 +239,8 @@
   color: var(--accent);
 }
 
-.settings-theme-card__icon svg {
+.settings-theme-card__icon svg,
+.settings-accent-swatch__check svg {
   width: 18px;
   height: 18px;
 }
@@ -487,11 +488,6 @@
   color: var(--accent-foreground);
 }
 
-.settings-accent-swatch__check svg {
-  width: 18px;
-  height: 18px;
-}
-
 .settings-accent-swatch--custom {
   position: relative;
   overflow: hidden;
@@ -534,7 +530,8 @@
   color: var(--theme-chip-bg);
 }
 
-.settings-accent-swatch__reset svg {
+.settings-accent-swatch__reset svg,
+.config-accordion-group__icon svg {
   width: 16px;
   height: 16px;
 }
@@ -556,7 +553,8 @@
   width: 100%;
 }
 
-.settings-theme-import__copy {
+.settings-theme-import__copy,
+.settings-theme-import__meta {
   display: grid;
   gap: 4px;
 }
@@ -648,11 +646,6 @@
   gap: 8px;
 }
 
-.settings-theme-import__meta {
-  display: grid;
-  gap: 4px;
-}
-
 .settings-theme-import__meta-value {
   font-size: 12px;
   color: var(--text);
@@ -676,7 +669,8 @@
   color: var(--text);
 }
 
-.settings-text-scale {
+.settings-text-scale,
+.cfg-collection-draft__controls {
   display: grid;
   gap: 8px;
   width: 100%;
@@ -797,12 +791,6 @@
 .cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
   flex: 1 1 auto;
   width: auto;
-}
-
-.cfg-collection-draft__controls {
-  display: grid;
-  gap: 8px;
-  width: 100%;
 }
 
 .cfg-collection-draft__actions {
@@ -1003,11 +991,6 @@
   align-items: center;
   color: var(--accent);
   opacity: 0.7;
-}
-
-.config-accordion-group__icon svg {
-  width: 16px;
-  height: 16px;
 }
 
 .config-accordion-group__chevron {

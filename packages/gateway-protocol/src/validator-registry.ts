@@ -473,23 +473,11 @@ export const validateSkillsUploadCommitParams = compile(S.SkillsUploadCommitPara
 export const validateSkillsUpdateParams = compile(S.SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = compile(S.SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = compile(S.SkillsDetailParamsSchema);
-export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusParamsSchema);
-export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
-export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
+export const validateSkillsWorkshopListParams = compile(S.SkillsWorkshopListParamsSchema);
+export const validateSkillsWorkshopChangesParams = compile(S.SkillsWorkshopChangesParamsSchema);
 export const validateSkillsWorkshopReadParams = compile(S.SkillsWorkshopReadParamsSchema);
-export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
-export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
-export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
-export const validateSkillsProposalReviseParams = compile(S.SkillsProposalReviseParamsSchema);
-export const validateSkillsProposalRequestRevisionParams = compile(
-  S.SkillsProposalRequestRevisionParamsSchema,
-);
-export const validateSkillsProposalDecisionParams = compile(S.SkillsProposalDecisionParamsSchema);
-export const validateSkillsProposalActionParams = compile(S.SkillsProposalActionParamsSchema);
-export const validateSkillsProposalEvaluateParams = compile(S.SkillsProposalEvaluateParamsSchema);
-export const validateSkillsProposalEventsListParams = compile(
-  S.SkillsProposalEventsListParamsSchema,
-);
+export const validateSkillsWorkshopArchiveParams = compile(S.SkillsWorkshopArchiveParamsSchema);
+export const validateSkillsWorkshopRestoreParams = compile(S.SkillsWorkshopRestoreParamsSchema);
 export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);

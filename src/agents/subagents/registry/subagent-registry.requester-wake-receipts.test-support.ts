@@ -57,7 +57,8 @@ function createRequesterWakeReceiptHolds(
     outcome: { entered: createDeferred<CapturedMember[]>(), release: createDeferred() },
     reconcile: { entered: createDeferred<CapturedMember[]>(), release: createDeferred() },
   };
-  const mutate = completionStore.mutateRequesterSettleWakeBatch;
+  const mutate = vi.mocked(completionStore.mutateRequesterCompletionBatch).getMockImplementation();
+  assert(mutate, "Requester receipt observation requires its registered settlement fixture");
   const publications = {
     transition: createDeferred<Awaited<ReturnType<typeof mutate>>>(),
     complete: createDeferred<Awaited<ReturnType<typeof mutate>>>(),
@@ -68,42 +69,35 @@ function createRequesterWakeReceiptHolds(
     entries: readonly SubagentRunRecord[];
     phase: keyof typeof holds;
   }>();
-  vi.spyOn(completionStore, "mutateRequesterSettleWakeBatch").mockImplementation((params) =>
-    mutationScope.run(
-      { entries: params.entries, phase: params.committed ? "reconcile" : params.operation.kind },
-      async () => {
-        const publication = publications[params.committed ? "reconcile" : params.operation.kind];
-        try {
-          const result = await mutate({
-            ...params,
-            onPublished() {
-              params.onPublished();
-              if (params.operation.kind === "complete" && failCompletePublication) {
-                failCompletePublication = false;
-                throw new Error("Synthetic published retirement callback failure");
-              }
-            },
-          });
-          publication.resolve(result);
-          return result;
-        } catch (error) {
-          publication.reject(error);
-          throw error;
-        }
-      },
-    ),
-  );
-  const settle = vi.mocked(completionStore.settleRequesterCompletionBatch).getMockImplementation();
-  assert(settle, "Requester receipt observation requires its registered settlement fixture");
-  vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation((params) =>
-    mutationScope.run(
-      {
-        entries: params.entries.map(({ subagent }) => subagent),
-        phase: params.committed ? "reconcile" : "outcome",
-      },
-      () => settle(params),
-    ),
-  );
+  vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation((params) => {
+    if (params.operation.kind === "settle") {
+      return mutationScope.run(
+        { entries: params.entries, phase: params.committed ? "reconcile" : "outcome" },
+        () => mutate(params),
+      );
+    }
+    const phase = params.committed ? "reconcile" : params.operation.kind;
+    return mutationScope.run({ entries: params.entries, phase }, async () => {
+      const publication = publications[phase];
+      try {
+        const result = await mutate({
+          ...params,
+          onPublished() {
+            params.onPublished?.();
+            if (params.operation.kind === "complete" && failCompletePublication) {
+              failCompletePublication = false;
+              throw new Error("Synthetic published retirement callback failure");
+            }
+          },
+        });
+        publication.resolve(result);
+        return result;
+      } catch (error) {
+        publication.reject(error);
+        throw error;
+      }
+    });
+  });
   if (!options.holdOutcome) {
     holds.outcome.release.resolve();
   }

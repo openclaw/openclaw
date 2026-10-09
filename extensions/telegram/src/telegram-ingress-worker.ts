@@ -80,24 +80,6 @@ export type TelegramIngressWorkerFactory = (
   options: TelegramIngressWorkerOptions,
 ) => TelegramIngressWorkerHandle;
 
-async function stopTelegramIngressWorker(params: {
-  requestStop: () => void;
-  task: Promise<void>;
-  terminate: () => Promise<number>;
-}): Promise<void> {
-  // Forced termination is replay-safe because updates advance only after the
-  // parent durably spools and acknowledges them.
-  await raceWithTimeout(
-    () => {
-      params.requestStop();
-      return params.task.catch(() => undefined);
-    },
-    TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS,
-    () => params.terminate().then(() => undefined),
-    { ref: false },
-  );
-}
-
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
   const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
   const worker = createCpuTrackedWorker(
@@ -144,13 +126,16 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       }
     },
     async stop() {
-      await stopTelegramIngressWorker({
-        requestStop: () => {
+      // Forced termination is replay-safe: the parent commits each update before its ACK.
+      await raceWithTimeout(
+        () => {
           worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);
+          return taskPromise.catch(() => undefined);
         },
-        task: taskPromise,
-        terminate: () => worker.terminate(),
-      });
+        TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS,
+        () => worker.terminate().then(() => undefined),
+        { ref: false },
+      );
     },
     task() {
       return taskPromise;

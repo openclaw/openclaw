@@ -40,6 +40,11 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import {
+  createGoalChatStartRequest,
+  readGoalChatUserMessages,
+  registerGoalChatRestartSettlementCase,
+} from "./server.chat-goal.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -145,30 +150,10 @@ function scope() {
   return { agentId: "main", sessionKey, sessionId, storePath };
 }
 
-function userMessages() {
-  const transcriptScope = {
-    ...scope(),
-    sessionId: loadSessionEntry(scope())?.sessionId ?? sessionId,
-  };
-  return loadTranscriptEventsSync(transcriptScope).flatMap((event) => {
-    if (!event || typeof event !== "object" || !("message" in event)) {
-      return [];
-    }
-    const message = event.message;
-    return message && typeof message === "object" && "role" in message && message.role === "user"
-      ? [message]
-      : [];
-  });
-}
+const userMessages = () => readGoalChatUserMessages(scope());
 
 function goalStart(message: string, idempotencyKey: string = randomUUID()) {
-  return {
-    sessionKey,
-    sessionId,
-    message,
-    idempotencyKey,
-    intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
-  };
+  return createGoalChatStartRequest(scope(), message, idempotencyKey);
 }
 
 function freshGoalStart(message: string, idempotencyKey?: string) {
@@ -262,6 +247,19 @@ async function waitForModelRun(count = 1) {
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalChatRestartSettlementCase({
+    scope,
+    createStorePath() {
+      storePath = path.join(
+        temporaryDirs.make("openclaw-fresh-goal-chat-"),
+        "openclaw-agent.sqlite",
+      );
+      testState.sessionStorePath = storePath;
+      return storePath;
+    },
+    send: (request) => rpc("chat.send", request),
+    assertNoModelRun: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+  });
   it("starts the first message as a Goal with an ACP-scoped hook and replays without a second session or run", async () => {
     await useFreshSessionStore();
     const acpDispatch = installReplyDispatchHook(["acp"]);

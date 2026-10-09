@@ -22,7 +22,6 @@ import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
-import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import {
@@ -350,7 +349,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     }
     child.on("error", (error: Error) => {
       ACTIVE_CHILD_KILLERS.delete(killChild);
-      reject(toErrorObject(error, "Non-Error rejection"));
+      reject(error);
     });
     child.on("close", (status: number | null, signal: ChildSignal) => {
       if (timeout) {
@@ -435,16 +434,12 @@ async function finishTimedOutProcessTree(
   }
 }
 
-function childHasExited(child: ProcessTreeChild) {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
 function processTreeIsAlive(child: ProcessTreeChild, useProcessGroup: boolean) {
-  if (!child || typeof child.pid !== "number") {
+  if (typeof child.pid !== "number") {
     return false;
   }
   if (!useProcessGroup) {
-    return !childHasExited(child);
+    return child.exitCode === null && child.signalCode === null;
   }
   try {
     process.kill(-child.pid, 0);
@@ -780,7 +775,7 @@ function parseIpv4(address: string): Ipv4Octets | null {
   if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
     return null;
   }
-  return [octets[0], octets[1], octets[2], octets[3]];
+  return octets;
 }
 
 function ipv4ToInt(octets: Ipv4Octets) {
@@ -1042,7 +1037,6 @@ export async function loadTrustedPackageSource(
     throw new Error("source=trusted-url requires --trusted-source-id");
   }
   const absolutePolicyPath = path.resolve(ROOT_DIR, policyPath);
-  const sourceId = id;
   let policy: unknown;
   try {
     policy = JSON.parse(await fs.readFile(absolutePolicyPath, "utf8"));
@@ -1058,10 +1052,10 @@ export async function loadTrustedPackageSource(
   if (!isJsonRecord(sources)) {
     throw new Error(`Trusted package source policy must define sources: ${policyPath}`);
   }
-  if (!Object.hasOwn(sources, sourceId)) {
-    throw new Error(`Unknown trusted package source: ${sourceId}`);
+  if (!Object.hasOwn(sources, id)) {
+    throw new Error(`Unknown trusted package source: ${id}`);
   }
-  return normalizeTrustedPackageSource(sourceId, sources[sourceId]);
+  return normalizeTrustedPackageSource(id, sources[id]);
 }
 
 function validateTrustedPackageDownloadUrl(
@@ -1408,7 +1402,7 @@ async function appendGithubOutputs(file: string, outputs: Record<string, unknown
 
 async function resolveCandidate(options: PackageCandidateOptions) {
   const outputDir = path.resolve(ROOT_DIR, options.outputDir);
-  const target = path.join(outputDir, options.outputName || DEFAULT_OUTPUT_NAME);
+  const target = path.join(outputDir, options.outputName);
   await fs.mkdir(outputDir, { recursive: true });
   await fs.rm(target, { force: true });
   let packageRef = "";
@@ -1444,7 +1438,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
         "--output-dir",
         outputDir,
         "--output-name",
-        options.outputName || DEFAULT_OUTPUT_NAME,
+        options.outputName,
       ]);
     } else if (options.source === "npm") {
       const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
@@ -1457,11 +1451,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
         shell: npmPackRunner.shell,
         windowsVerbatimArguments: npmPackRunner.windowsVerbatimArguments,
       });
-      await moveNewestPackedTarball(
-        outputDir,
-        packOutput,
-        options.outputName || DEFAULT_OUTPUT_NAME,
-      );
+      await moveNewestPackedTarball(outputDir, packOutput, options.outputName);
     } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
         throw new Error(`${options.source} requires --package-url`);
@@ -1594,7 +1584,7 @@ async function resolveCandidate(options: PackageCandidateOptions) {
   const metadata = {
     name: pkg.name,
     packageRef,
-    packageSpec: options.packageSpec || "",
+    packageSpec: options.packageSpec,
     packageSourceSha,
     packageTrustedReason,
     pluginRegistryManifestSha256: pluginRegistryIdentity?.manifestSha256 ?? "",

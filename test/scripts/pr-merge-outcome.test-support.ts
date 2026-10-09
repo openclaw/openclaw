@@ -147,6 +147,7 @@ export function createMergeOutcomeFixtureHarness() {
       restPolicy: "classic",
       restReadFailure: "",
       restDispatchChange: "",
+      restMergeCommit: "",
       pooledMergeBlocked: false,
       restReadFailuresRemaining: 0,
       restReadFailureAtMainReads: [] as number[],
@@ -253,6 +254,7 @@ export function createMergeOutcomeFixtureHarness() {
       unavailable: false,
       stale: false,
       drift: false,
+      strictDrift: false,
       crash: "",
       comment: "success",
       admin: false,
@@ -476,6 +478,8 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
     mergeable:pendingDispatchProjection?null:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:pendingDispatchProjection?"unknown":s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
+  if(s.restMergeCommit==="missing") delete record.merge_commit_sha;
+  else if(s.restMergeCommit) record.merge_commit_sha=({null:null,empty:"",malformed:"not-a-commit"})[s.restMergeCommit];
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main")) {
@@ -766,7 +770,7 @@ pr_gh_plain() {
 sleep() { if [ "$#" = 1 ] && { [ "$1" = 1 ] || [ "$1" = 2 ]; }; then command node "$FIXTURE_GH" sleep "$1"; else command sleep "$@"; fi; }
 verify_crabbox_admin_merge_bypass() {
   [ "$(command jq -r .admin "$FIXTURE_STATE")" = true ] || return 1
-  command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
+  command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,finalMainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
 }
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
@@ -892,6 +896,7 @@ fi
             ...env,
             FIXTURE_REAL_GH: String(Boolean(state().quotaAt || state().restReadFailure)),
             OPENCLAW_PR_MERGE_METHOD: method,
+            OPENCLAW_PR_STRICT_DRIFT: state().strictDrift ? "1" : "",
           },
           encoding: "utf8",
           timeout: 20_000,

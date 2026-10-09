@@ -25,7 +25,7 @@ export async function withMSTeamsSqliteMutationLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const scopedMutationKey = path.join(getMSTeamsRuntime().state.resolveStateDir(), mutationKey);
-  return await sqliteMutationLocks.enqueue(scopedMutationKey, async () => {
-    return await withFileLock(scopedMutationKey, MSTEAMS_MUTATION_LOCK_OPTIONS, fn);
-  });
+  return await sqliteMutationLocks.enqueue(scopedMutationKey, () =>
+    withFileLock(scopedMutationKey, MSTEAMS_MUTATION_LOCK_OPTIONS, fn),
+  );
 }

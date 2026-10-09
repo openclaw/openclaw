@@ -122,10 +122,6 @@ export async function measureGatewayBootstrapStep<T>(
   }
 }
 
-function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim());
-}
-
 export function createGatewayDispatchStartupTrace(
   argv: string[],
   source: GatewayStartupTraceSource,
@@ -141,15 +137,14 @@ export function createGatewayDispatchStartupTrace(
   }
   let last = started;
   let lineFormatter: GatewayStartupTraceLineFormatter | null = null;
-  let pendingMessages: string[] = [];
-  const timelineModule = hasDiagnosticsTimelinePath(process.env)
+  const pendingMessages: string[] = [];
+  const timelineModule = process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim()
     ? import("../infra/diagnostics-timeline.js").catch(() => null)
     : null;
   let timelineActivation: "unknown" | "enabled" | "disabled" = timelineModule
     ? "unknown"
     : "disabled";
   let timelineConfig: OpenClawConfig | undefined;
-  let timelineConfigResolved = false;
   const pendingTimelineEvents: PendingTimelineEvent[] = [];
   let pendingTimelineWrites = Promise.resolve();
   const timelineName = (name: string) => `${source}.${name}`;
@@ -166,7 +161,7 @@ export function createGatewayDispatchStartupTrace(
       timelineActivation = "enabled";
       return timelineActivation;
     }
-    if (timelineConfigResolved) {
+    if (timelineConfig !== undefined) {
       timelineActivation = module.isDiagnosticsTimelineEnabled({
         config: timelineConfig,
         env: process.env,
@@ -237,9 +232,7 @@ export function createGatewayDispatchStartupTrace(
     });
   };
   const flushPending = (formatter: GatewayStartupTraceLineFormatter) => {
-    const queued = pendingMessages;
-    pendingMessages = [];
-    for (const message of queued) {
+    for (const message of pendingMessages.splice(0)) {
       process.stderr.write(`${formatter(message)}\n`);
     }
   };
@@ -283,7 +276,6 @@ export function createGatewayDispatchStartupTrace(
     },
     async configureDiagnosticsTimeline(config: OpenClawConfig) {
       timelineConfig = config;
-      timelineConfigResolved = true;
       await flushPendingTimelineEvents();
       await pendingTimelineWrites;
     },

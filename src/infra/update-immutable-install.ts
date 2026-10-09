@@ -25,44 +25,50 @@ import type { UpdateStepResult } from "./update-step-result.js";
 const SHA = /^[a-f0-9]{40}$/u;
 const SOURCE = "https://github.com/openclaw/openclaw.git";
 
+function inspectEntry(file: string, allowNotDirectory = false) {
+  return fs.lstat(file).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT") || (allowNotDirectory && hasErrnoCode(error, "ENOTDIR"))) {
+      return null;
+    }
+    throw error;
+  });
+}
+
 export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateImmutableInstall {
   const { descriptor, prepared } = record;
-  return {
+  const result: UpdateImmutableInstall = {
     root: descriptor.root,
     currentSha: descriptor.current.sha,
     currentPath: descriptor.current.path,
     ...(descriptor.activationEnabled ? { activationEnabled: true } : {}),
-    ...(record.activation?.operation
-      ? {
-          activation: {
-            operationId: record.activation.operation.operationId,
-            phase: record.activation.operation.phase,
-            previousSha: record.activation.operation.previous.sha,
-            candidateSha: record.activation.operation.candidate.sha,
-          },
-        }
-      : {}),
-    ...(record.activation?.lastResult
-      ? {
-          lastActivation: {
-            operationId: record.activation.lastResult.operationId,
-            outcome: record.activation.lastResult.outcome,
-            selectedSha: record.activation.lastResult.selectedSha,
-            verifiedAtMs: record.activation.lastResult.verifiedAtMs,
-          },
-        }
-      : {}),
-    ...(prepared
-      ? {
-          prepared: {
-            sha: prepared.sha,
-            path: prepared.path,
-            buildDigest: prepared.buildDigest,
-            preparedAtMs: prepared.preparedAtMs,
-          },
-        }
-      : {}),
   };
+  const operation = record.activation?.operation;
+  if (operation) {
+    result.activation = {
+      operationId: operation.operationId,
+      phase: operation.phase,
+      previousSha: operation.previous.sha,
+      candidateSha: operation.candidate.sha,
+    };
+  }
+  const lastResult = record.activation?.lastResult;
+  if (lastResult) {
+    result.lastActivation = {
+      operationId: lastResult.operationId,
+      outcome: lastResult.outcome,
+      selectedSha: lastResult.selectedSha,
+      verifiedAtMs: lastResult.verifiedAtMs,
+    };
+  }
+  if (prepared) {
+    result.prepared = {
+      sha: prepared.sha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: prepared.preparedAtMs,
+    };
+  }
+  return result;
 }
 
 async function installationRoot(input: string): Promise<string | null> {
@@ -74,31 +80,16 @@ async function installationRoot(input: string): Promise<string | null> {
     return path.dirname(path.dirname(root));
   }
   if (path.basename(root) === "current") {
-    const stat = await fs.lstat(root).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    });
+    const stat = await inspectEntry(root);
     if (stat?.isSymbolicLink()) {
       return path.dirname(root);
     }
   }
-  const current = await fs.lstat(path.join(root, "current")).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await inspectEntry(path.join(root, "current"), true);
   if (!current) {
     return null;
   }
-  const releases = await fs.lstat(path.join(root, "releases")).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const releases = await inspectEntry(path.join(root, "releases"));
   return releases ? root : null;
 }
 
@@ -412,13 +403,15 @@ export async function prepareImmutableUpdate(params: {
         assertOwner();
         assertImmutableDescriptorCurrent(descriptor);
       };
+      const verifyService = () =>
+        verifyImmutableService(
+          descriptor.service,
+          descriptor.root,
+          descriptor.current.path,
+          descriptor.runtime.path,
+        );
       assertCurrent();
-      await verifyImmutableService(
-        descriptor.service,
-        descriptor.root,
-        descriptor.current.path,
-        descriptor.runtime.path,
-      );
+      await verifyService();
       const current = await verifyImmutableGeneration(
         descriptor.current.path,
         descriptor.current.sha,
@@ -432,17 +425,7 @@ export async function prepareImmutableUpdate(params: {
         return result("already-current");
       }
       const destination = path.join(descriptor.root, "releases", selectedSha);
-      if (
-        await fs.lstat(destination).then(
-          () => true,
-          (error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return false;
-            }
-            throw error;
-          },
-        )
-      ) {
+      if (await inspectEntry(destination)) {
         if (record.prepared?.sha !== selectedSha) {
           throw new Error(
             "Generation already exists without a matching preparation receipt; preserved for inspection.",
@@ -547,12 +530,7 @@ export async function prepareImmutableUpdate(params: {
             await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
             await sealImmutableGeneration(candidate);
             const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyImmutableService(
-              descriptor.service,
-              descriptor.root,
-              descriptor.current.path,
-              descriptor.runtime.path,
-            );
+            await verifyService();
             assertCurrent();
             // Native publishers hold this lock; preexisting generations are never rebuilt.
             if (fsSync.existsSync(destination)) {

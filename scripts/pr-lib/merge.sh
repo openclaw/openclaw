@@ -220,6 +220,26 @@ verify_merge_candidate_tree() {
   fi
 }
 
+# A recalculated projection can change after main advances. Recheck the selected
+# route rather than treating its old projection as policy or changing routes.
+verify_merge_route_projection() {
+  local pr="$1" observation="$2" route="$3" allowed_status="not DIRTY"
+  if [ "${4:-false}" = true ] && ! printf '%s\n' "$observation" | jq -e '.pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"' >/dev/null; then
+    merge_outcome_stop "qualified refusal recovery requires MERGEABLE/CLEAN immediate admission"; return 1
+  fi
+  if printf '%s\n' "$observation" | jq -e --arg route "$route" '
+    .pr | .mergeable == "MERGEABLE" and .mergeStateStatus != "UNKNOWN" and
+    (.isMergeQueueEnabled or
+      (.mergeStateStatus != "DIRTY" and
+       ($route != "immediate" or (.mergeStateStatus | IN("BLOCKED", "BEHIND") | not))))
+  ' >/dev/null; then
+    return 0
+  fi
+  [ "$route" != immediate ] || allowed_status="not BLOCKED|BEHIND|DIRTY"
+  merge_outcome_diagnose "$pr" "$observation" null "$allowed_status" "MERGEABLE"
+  merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
+}
+
 merge_verify() {
   if [ "$#" -ne 2 ]; then
     echo "merge_verify requires a PR number and verification options." >&2
@@ -842,8 +862,8 @@ merge_run() {
     fi
   fi
 
-  local crabbox_final_main_sha="" route=immediate
-  local MERGE_ADMISSION_ACTIVE=true MERGE_PRIOR_CI_OBSERVED_MAIN=""
+  local crabbox_final_main_sha="" crabbox_verified_main="" route=immediate
+  local MERGE_ADMISSION_ACTIVE=true MERGE_OBSERVED_MAIN=""
   local admission_attempt previous_observation=""
   # Only fresh admission waits for calculation; retained intent reconciles immediately.
   # Pin PR/policy facts and each projection as soon as it becomes known.
@@ -868,14 +888,14 @@ merge_run() {
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
     fi
-    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
-      def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
-        if $admin then . else del(.main) end;
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+      def facts: del(.main,.pr.mergeable,.pr.mergeStateStatus);
       (if .transport != $previous.transport then
          (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
        else facts == ($previous | facts) end) and
-      ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
-      ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
+      (.main != $previous.main or
+       (($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
+        ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)))
     ' >/dev/null; then
       local pinned_observation
       pinned_observation=$(printf '%s\n' "$previous_observation" | jq -c --argjson current "$MERGE_OBSERVATION" '
@@ -886,11 +906,9 @@ merge_run() {
       merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
       return 1
     fi
-    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ]; then
-      verify_prior_ci_main_advance \
-        "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
-        "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
-    fi
+    verify_merge_main_advance \
+      "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
+      "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
       break
     fi
@@ -966,21 +984,7 @@ merge_run() {
     merge_outcome_stop "ordinary squash requires the captured merge body; queue policy changed during admission"
     return 1
   fi
-  if [ "$qualified_refusal" = true ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"' >/dev/null; then
-    merge_outcome_stop "qualified refusal recovery requires MERGEABLE/CLEAN immediate admission"; return 1
-  fi
-  # gh skips local status refusals for queue-enabled PRs; admin bypasses BLOCKED/BEHIND.
-  # Reject known client-side refusals before recording non-retryable intent.
-  if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg route "$route" '
-    .pr | .isMergeQueueEnabled == false and
-    (.mergeStateStatus == "DIRTY" or ($route == "immediate" and (.mergeStateStatus | IN("BLOCKED", "BEHIND"))))
-  ' >/dev/null; then
-    local allowed_status="not DIRTY"
-    [ "$route" != immediate ] || allowed_status="not BLOCKED|BEHIND|DIRTY"
-    merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" null "$allowed_status"
-    merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
-    return 1
-  fi
+  verify_merge_route_projection "$pr" "$MERGE_OBSERVATION" "$route" "$qualified_refusal" || return 1
   local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
   if [ "$merge_method" = squash ] && [ "$route" != queue ]; then
@@ -994,13 +998,6 @@ merge_run() {
   # Special routes retain their separate admission and admin authority windows.
   if [ "$route" != immediate ] || [ "$merge_method" != squash ]; then
     merge_outcome_stable "$pr" || return 1
-  fi
-  if [ "$route" = admin ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" != true ]; then
-    verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
-    crabbox_final_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
-    [ "$crabbox_final_main_sha" = "$observed_main" ] || {
-      merge_outcome_stop "main changed during final admin admission"; return 1;
-    }
   fi
   fetch_clawsweeper_review_comments "$pr" "$MERGE_REPO_NAME" "$MERGE_REPO_HOST" || return 1
   if ! merge_outcome_stable "$pr"; then
@@ -1051,9 +1048,32 @@ merge_run() {
     [ "$correction_gates_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
-  if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF"
+  if [ "$route" = admin ]; then
+    local authority_round authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF" crabbox_main_sha
     for authority_round in 1 2 3; do
+      if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
+        # Materialization and projection settlement invalidate live authority.
+        # Reuse the bounded qualification loop and finish with the full verifier.
+        rm -f .local/merge-crabbox-bypass.json || return 1
+        merge_outcome_stable "$pr" false "" "$crabbox_verified_main" || return 1
+        verify_crabbox_admin_merge_bypass "$pr" "$PREP_HEAD_SHA" || return 1
+        crabbox_main_sha=$(jq -er '.mainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+        crabbox_final_main_sha=$(jq -er '.finalMainSha | select(type == "string" and test("^[0-9a-f]{40}$"))' .local/merge-crabbox-bypass.json) || return 1
+        if [ "$crabbox_main_sha" = "$MERGE_OBSERVED_MAIN" ] && [ "$crabbox_final_main_sha" = "$MERGE_OBSERVED_MAIN" ]; then
+          break
+        fi
+        # Discard this decision before any fetch or candidate-tree work.
+        rm -f .local/merge-crabbox-bypass.json || return 1
+        if [ "$authority_round" -eq 3 ]; then
+          merge_outcome_stop "Crabbox main kept advancing after 3 authority rounds; stopped before intent/dispatch"
+          return 1
+        fi
+        verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$crabbox_main_sha" || return 1
+        verify_merge_main_advance "$crabbox_main_sha" "$crabbox_final_main_sha" || return 1
+        crabbox_verified_main="$crabbox_final_main_sha"
+        echo "Requalifying Crabbox admission after main $crabbox_verified_main (round $((authority_round + 1))/3)."
+        continue
+      fi
       # Retain only the equality fingerprint, never a prior live authority decision.
       MERGE_PRIOR_CI_PROOF=""
       merge_outcome_stable "$pr" false requalify-prior-ci || return 1
@@ -1072,7 +1092,7 @@ merge_run() {
         fi
         echo "Requalifying prior-CI admission after main $MERGE_PRIOR_CI_REMATERIALIZE_MAIN (round $((authority_round + 1))/3)."
         # The previous authority decision is discarded before any materialization.
-        verify_prior_ci_main_advance "$MERGE_PRIOR_CI_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
+        verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
         continue
       fi
       [ "$authority_result" -eq 0 ] || return 1
@@ -1081,9 +1101,11 @@ merge_run() {
       fi
       break
     done
-    # No awaited operation may replace the operator's bytes after validation.
-    node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
-      "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+      # No awaited operation may replace the operator's bytes after validation.
+      node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
+        "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
+    fi
     crabbox_final_main_sha="$observed_main"
   fi
   if [ -n "$provider_rejection" ] &&

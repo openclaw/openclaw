@@ -1,4 +1,6 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -6,8 +8,8 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
-import { messageRecoveryKey } from "../chat-message-recovery.ts";
-import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
+import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -213,7 +215,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       }
       const markdown =
         result?.ok && result.message && typeof result.message === "object"
-          ? extractTextCached(result.message)
+          ? (extractTextCached(result.message) ?? "")
           : null;
       setExpansionState(
         expandedAssistantMessages,
@@ -228,6 +230,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       sessionKey: props.sessionKey,
       ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
       messageId,
+      ...(props.messages.some(
+        (message) =>
+          resolveSourceMessageId(message) === messageId &&
+          asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.reason === "oversized",
+      )
+        ? { maxChars: CHAT_MESSAGE_MAX_CHARS }
+        : {}),
     }).then(completeLoad, () => completeLoad(null));
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
@@ -246,7 +255,44 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
-  const turnRecapByGroupKey = new Map<string, TurnRecap>();
+  const resolvedRecap = resolveTurnRecap(state, {
+    sessionKey: props.sessionKey,
+    agentId: props.currentAgentId,
+    gatewayClient: props.gatewayClient,
+    indicator: workingIndicator,
+    row: activeSession,
+    usageByRun: props.runUsageById,
+  });
+  // Default disclosure belongs only to a settled assistant at the transcript
+  // tail; any newer visible row returns the prior answer to hover/tap behavior.
+  const lastTranscriptItem = transcriptItems.at(-1);
+  const tailStatusOwner =
+    lastTranscriptItem?.kind === "agent-run-frame" &&
+    lastTranscriptItem.outcome.kind === "completed" &&
+    lastTranscriptItem.outcome.actionOwner !== null
+      ? lastTranscriptItem
+      : lastTranscriptItem?.kind === "group" &&
+          assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
+        ? lastTranscriptItem
+        : null;
+  // An unwatched background run must not inherit the visible turn's recap.
+  const turnRecap =
+    resolvedRecap && (!tailStatusOwner?.runId || tailStatusOwner.runId === resolvedRecap.runId)
+      ? resolvedRecap
+      : null;
+  // Latest ownership crosses rows: the former owner must rerender when a
+  // newer answer arrives even if its own message object stays stable.
+  const latestAssistantItemKey =
+    !props.runActive &&
+    !props.runWorking &&
+    !searchFiltering &&
+    tailStatusOwner &&
+    (tailStatusOwner.kind !== "group" || !tailStatusOwner.isStreaming)
+      ? tailStatusOwner.key
+      : null;
+  const recapAttached = turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId;
+  const recapForGroup = (key: string) =>
+    recapAttached && key === tailStatusOwner?.key ? (turnRecap ?? undefined) : undefined;
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     entryRefFor: transcript.entryAnimations.refFor,
@@ -297,9 +343,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;
-  // Latest ownership crosses rows: the former owner must rerender when a
-  // newer answer arrives even if its own message object stays stable.
-  let latestAssistantItemKey: string | null = null;
   const renderGroupOptions = (item: MessageGroup) => {
     const continuation = continuations.get(item.key);
     const lastMessage = item.messages.at(-1)?.message;
@@ -362,7 +405,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       activeContinuation: continuation
         ? { parts: continuation, options: streamGroupOptions }
         : undefined,
-      turnRecap: turnRecapByGroupKey.get(item.key),
+      turnRecap: recapForGroup(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
       searchResult: searchFiltering,
     } satisfies Parameters<typeof renderMessageGroup>[1];
@@ -371,35 +414,31 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   // without one keep memoizing across usage and child-roster patches.
   const workingUsageKey = JSON.stringify([runOutputTokens, subagents.statusKey]);
   const liveStatusSignature = (item: ChatRenderItem): string => {
+    if (item.kind === "stream-run") {
+      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
+    }
+    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
+      return "";
+    }
+    const recap = recapForGroup(item.key);
+    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
+    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
     if (item.kind === "agent-run-frame") {
       const hasWorkingIndicator = item.parts.some(
         (part) =>
           part.kind === "stream-run" &&
           part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
       );
-      const recap = turnRecapByGroupKey.get(item.key);
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${
-        recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
-      }|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    }
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group") {
-      return "";
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
     }
     const continuation = continuations.get(item.key);
-    const recap = turnRecapByGroupKey.get(item.key);
     // Part keys stand in for the rest of the continuation: its remaining
     // options mirror props that already invalidate every row through the
     // shared render context.
     const continuationKey = continuation
       ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
       : "";
-    const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    return `${continuationKey}|${recapKey}|${
-      item.key === latestAssistantItemKey ? "latest-assistant" : ""
-    }|${searchFiltering ? "search-result" : ""}`;
+    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
   };
   const rowPresentationDependencies = (item: ChatRenderItem): readonly unknown[] => {
     const dependencies: unknown[] = [liveStatusSignature(item)];
@@ -448,7 +487,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
         onToggleWork: toggleToolCardExpanded,
-        turnRecap: turnRecapByGroupKey.get(item.key),
+        turnRecap: recapForGroup(item.key),
       });
     }
     if (item.kind === "group") {
@@ -461,56 +500,21 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     }
     return nothing;
   });
-  const resolvedRecap = resolveTurnRecap(state, {
-    sessionKey: props.sessionKey,
-    agentId: props.currentAgentId,
-    gatewayClient: props.gatewayClient,
-    indicator: workingIndicator,
-    row: activeSession,
-    usageByRun: props.runUsageById,
-  });
-  // Default disclosure belongs only to a settled assistant at the transcript
-  // tail; any newer visible row returns the prior answer to hover/tap behavior.
-  const lastTranscriptItem = transcriptItems.at(-1);
-  const tailStatusOwner =
-    lastTranscriptItem?.kind === "agent-run-frame" &&
-    lastTranscriptItem.outcome.kind === "completed" &&
-    lastTranscriptItem.outcome.actionOwner !== null
-      ? lastTranscriptItem
-      : lastTranscriptItem?.kind === "group" &&
-          assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
-        ? lastTranscriptItem
-        : null;
-  // An unwatched background run must not inherit the visible turn's recap.
-  const turnRecap =
-    resolvedRecap && (!tailStatusOwner?.runId || tailStatusOwner.runId === resolvedRecap.runId)
-      ? resolvedRecap
-      : null;
-  latestAssistantItemKey =
-    !props.runActive &&
-    !props.runWorking &&
-    !searchFiltering &&
-    tailStatusOwner &&
-    (tailStatusOwner.kind !== "group" || !tailStatusOwner.isStreaming)
-      ? tailStatusOwner.key
-      : null;
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
-  if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
-    turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
-  }
   const transcriptRows: TranscriptRow<ChatRenderItem>[] = workPreviews.size ? [] : rows.slice();
+  const appendContent = (key: string, content: unknown) =>
+    transcriptRows.push({ kind: "content", key, content });
   for (const row of workPreviews.size ? rows : []) {
     transcriptRows.push(row);
     const previews = workPreviews.get(row.key);
     if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
-      transcriptRows.push({
-        kind: "content",
-        key: `work-previews:${row.key}`,
-        content: html`<div class="chat-group tool chat-group--turn-block">
+      appendContent(
+        `work-previews:${row.key}`,
+        html`<div class="chat-group tool chat-group--turn-block">
           <div class="chat-group-messages">${previews}</div>
         </div>`,
-      });
+      );
     }
   }
   // Voice captions reconcile against unfiltered immutable history, not the
@@ -529,25 +533,16 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     }),
   });
   if (realtimeConversation !== nothing) {
-    transcriptRows.push({
-      kind: "content",
-      key: "realtime-talk",
-      content: realtimeConversation,
-    });
+    appendContent("realtime-talk", realtimeConversation);
   }
-  if (turnRecap !== null && turnRecapByGroupKey.size === 0 && !isEmpty && !showLoadingSkeleton) {
-    transcriptRows.push({
-      kind: "content",
-      key: "turn-recap",
-      content: renderTurnRecapRow(turnRecap),
-    });
+  if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
+    appendContent("turn-recap", renderTurnRecapRow(turnRecap));
   }
   if (subagentWait && !subagents.placedWait && !searchFiltering) {
-    transcriptRows.push({
-      kind: "content",
-      key: "waiting-subagents",
-      content: renderUnplacedSubagentWait(props.sessionKey, subagentWait, streamGroupOptions),
-    });
+    appendContent(
+      "waiting-subagents",
+      renderUnplacedSubagentWait(props.sessionKey, subagentWait, streamGroupOptions),
+    );
   }
   const typingIndicator = renderChatTypingIndicator(
     props.typingActors,
@@ -555,7 +550,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     props.typingOverflow,
   );
   if (typingIndicator) {
-    transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
+    appendContent("presence:typing", typingIndicator);
   }
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();

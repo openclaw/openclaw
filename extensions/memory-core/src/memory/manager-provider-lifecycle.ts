@@ -8,7 +8,6 @@ import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-s
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
-  resolveAgentDir,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -21,7 +20,6 @@ import type {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
-  createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
@@ -208,12 +206,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       return false;
     }
     if (!this.provider) {
-      const nextFailure: MemoryEmbeddingBootstrapDebug = {
-        ...failure,
-        reason: this.providerUnavailableReason ?? failure.reason,
-      };
-      this.embeddingBootstrapFailure = nextFailure;
-      this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+      const nextFailure = this.refreshEmbeddingBootstrapFailure(failure);
       onDebug?.({ backend: "builtin", embeddingBootstrap: nextFailure });
       return true;
     }
@@ -248,18 +241,23 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     return true;
   }
 
+  protected refreshEmbeddingBootstrapFailure(failure: MemoryEmbeddingBootstrapDebug) {
+    const nextFailure = { ...failure, reason: this.providerUnavailableReason ?? failure.reason };
+    this.embeddingBootstrapFailure = nextFailure;
+    this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+    return nextFailure;
+  }
+
   protected clearEmbeddingBootstrapFailureAfterRecovery(): void {
     this.embeddingBootstrapFailure = undefined;
     this.providerUnavailableReason = undefined;
     if (this.provider) {
-      this.providerLifecycle = this.fallbackFrom
-        ? {
-            mode: "fallback-active",
-            providerId: this.provider.id,
-            fallbackFrom: this.fallbackFrom,
-            reason: this.fallbackReason ?? "fallback activated",
-          }
-        : { mode: "active", providerId: this.provider.id };
+      this.providerLifecycle = resolveMemoryProviderLifecycle({
+        provider: this.provider,
+        requestedProvider: this.settings.provider,
+        fallbackFrom: this.fallbackFrom,
+        fallbackReason: this.fallbackReason,
+      });
     }
     this.embeddingProbeCache.delete(this.cacheKey);
   }
@@ -347,11 +345,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const recovery = (async () => {
       let candidate: EmbeddingProvider | null = null;
       try {
-        const result = await createEmbeddingProvider({
-          createProvider: this.createProvider,
-          config: this.cfg,
-          agentDir: resolveAgentDir(this.cfg, this.agentId),
-          ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+        const result = await this.createConfiguredEmbeddingProvider({
           ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
           fallback: "none",
         });
@@ -432,13 +426,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         if (this.closed) {
           return;
         }
-        const providerResult = await createEmbeddingProvider({
-          createProvider: this.createProvider,
-          config: this.cfg,
-          agentDir: resolveAgentDir(this.cfg, this.agentId),
-          ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-          ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
-        });
+        const providerResult = await this.createConfiguredEmbeddingProvider();
         this.applyProviderResult(providerResult);
       })();
     }
@@ -588,13 +576,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     providerKeyKnown?: boolean;
     indexState?: MemoryRetrievalIndexState;
   }) {
+    // Provider retirement preserves configured identity for both search and status.
     const provider =
       this.settings.provider === "none"
         ? null
-        : this.providerInitialized
+        : this.providerInitialized && this.providerLifecycle.mode !== "degraded"
           ? this.provider
-            ? { id: this.provider.id, model: this.provider.model }
-            : null
           : undefined;
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
@@ -663,9 +650,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   async probeVectorStoreAvailability(): Promise<boolean> {
-    return await this.withManagerOperation(
-      async () => await this.probeVectorStoreAvailabilityAdmitted(),
-    );
+    return await this.withManagerOperation(() => this.probeVectorStoreAvailabilityAdmitted());
   }
 
   private async probeVectorStoreAvailabilityAdmitted(): Promise<boolean> {

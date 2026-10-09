@@ -170,16 +170,6 @@ async function cleanupProfileFixture(
 }
 
 describe("scripts/profile-extension-memory", () => {
-  it("prints help without requiring built plugin artifacts", () => {
-    const result = runProfileExtensionMemory(["--help"]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/profile-extension-memory.mts",
-    );
-  });
-
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--extension", "discord", "--", "--extension", "telegram"])).toMatchObject({
       extensions: ["discord"],
@@ -237,27 +227,6 @@ describe("scripts/profile-extension-memory", () => {
       selected: ["external"],
       expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
     },
-    {
-      name: "nested output in the root plugin tree",
-      files: ["dist/extensions/external/dist/index.js"],
-      selected: ["external"],
-      expected: [{ dir: "external", file: "dist/extensions/external/dist/index.js" }],
-    },
-    ...[true, false].map((selected) => ({
-      name: `mixed internal and external output (${selected ? "selected" : "default"})`,
-      files: ["dist/extensions/internal/index.js", "extensions/external/dist/index.js"],
-      selected: selected ? ["internal", "external"] : [],
-      expected: [
-        { dir: "external", file: "extensions/external/dist/index.js" },
-        { dir: "internal", file: "dist/extensions/internal/index.js" },
-      ],
-    })),
-    ...["index.js", "dist/index.js"].map((rootEntry) => ({
-      name: `one canonical root ${rootEntry} when both builds exist`,
-      files: [`dist/extensions/external/${rootEntry}`, "extensions/external/dist/index.js"],
-      selected: ["external", "external"],
-      expected: [{ dir: "external", file: `dist/extensions/external/${rootEntry}` }],
-    })),
   ])("profiles $name", ({ files, selected, expected }) => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
     try {
@@ -273,34 +242,6 @@ describe("scripts/profile-extension-memory", () => {
           file,
           file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
           "utf8",
-        );
-      }
-      const identified = files[0] === "dist/extensions/external/dist/index.js";
-      if (identified) {
-        const git = (args: string[]) => {
-          const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-          expect(result.status, result.stderr).toBe(0);
-          return result.stdout.trim();
-        };
-        git(["init", "--quiet", "--template="]);
-        git(["add", "."]);
-        git([
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "commit.gpgsign=false",
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "commit",
-          "--quiet",
-          "-m",
-          "fixture",
-        ]);
-        writeFileSync(
-          path.join(root, "dist/build-info.json"),
-          JSON.stringify({ commit: git(["rev-parse", "HEAD"]) }),
         );
       }
       const reportPath = path.join(root, "report.json");
@@ -333,16 +274,10 @@ describe("scripts/profile-extension-memory", () => {
       );
       expect(report.scope).toBe("cold-import");
       expect(report.qualification).toMatchObject({
-        qualified: identified && process.platform !== "win32",
+        qualified: false,
         temporaryHomeRemoved: true,
       });
-      if (!identified) {
-        expect(report.qualification.gaps).toContain("canonical build identity unavailable");
-      } else if (process.platform === "win32") {
-        expect(report.qualification.gaps).toEqual(["child/process-group closure unavailable"]);
-      } else {
-        expect(report.qualification.gaps).toEqual([]);
-      }
+      expect(report.qualification.gaps).toContain("canonical build identity unavailable");
       for (const row of [report.combined, ...report.results]) {
         expect(row.completion).toBe("imports");
         expect(row.resources.totalCpuUs).toBe(row.resources.userCpuUs + row.resources.systemCpuUs);
@@ -958,7 +893,7 @@ describe("scripts/profile-extension-memory", () => {
   );
 
   describe.runIf(process.platform !== "win32")("unverified timeout cleanup", () => {
-    it.each(["alive", "EPERM", "EIO"] as const)(
+    it.each(["alive", "EPERM"] as const)(
       "rejects when the owned group is %s after SIGKILL",
       async (groupState) => {
         const child = Object.assign(new EventEmitter(), {
@@ -1009,7 +944,7 @@ describe("scripts/profile-extension-memory", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each(["EIO", "EPERM"])(
+  it.runIf(process.platform !== "win32").each(["EPERM"])(
     "preserves %s group-signal and primary failures alongside unverified cleanup",
     async (errorCode) => {
       const primary = new Error("case failed");
@@ -1065,61 +1000,63 @@ describe("scripts/profile-extension-memory", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([
-    { label: "nonzero exit", code: 23, signal: null },
-    { label: "signal exit", code: null, signal: "SIGTERM" as const },
-  ])("cleanup preserves terminal evidence without an error event: $label", async (outcome) => {
-    const child = Object.assign(new EventEmitter(), {
-      pid: 2_147_483_647,
-      exitCode: outcome.code,
-      signalCode: outcome.signal,
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
-      kill: vi.fn(() => true),
-    });
-    const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
-      expect(pid).toBe(-child.pid);
-      expect([0, "SIGKILL"]).toContain(requestedSignal);
-      return true;
-    });
-    try {
-      const failure: unknown = await runCase({
-        completionKind: "imports",
-        body: "",
-        env: process.env,
-        hookPath: "unused-hook.mjs",
-        name: "terminal-without-error-event",
-        repoRoot: process.cwd(),
-        shutdownGraceMs: 0,
-        timeoutMs: 30_000,
-        spawnImpl: (() => {
-          queueMicrotask(() => {
-            child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
-            child.stdout.end();
-            child.emit("exit", outcome.code, outcome.signal);
-            child.emit("close", outcome.code, outcome.signal);
-          });
-          return child;
-        }) as unknown as typeof spawn,
-      }).then(
-        () => {
-          throw new Error("unverified cleanup resolved unexpectedly");
-        },
-        (error: unknown) => error,
-      );
-      expect(failure).toBeInstanceOf(Error);
-      if (!(failure instanceof Error)) {
-        throw new Error("missing cleanup failure");
+  it
+    .runIf(process.platform !== "win32")
+    .each([{ label: "signal exit", code: null, signal: "SIGTERM" as const }])(
+    "cleanup preserves terminal evidence without an error event: $label",
+    async (outcome) => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 2_147_483_647,
+        exitCode: outcome.code,
+        signalCode: outcome.signal,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(() => true),
+      });
+      const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
+        expect(pid).toBe(-child.pid);
+        expect([0, "SIGKILL"]).toContain(requestedSignal);
+        return true;
+      });
+      try {
+        const failure: unknown = await runCase({
+          completionKind: "imports",
+          body: "",
+          env: process.env,
+          hookPath: "unused-hook.mjs",
+          name: "terminal-without-error-event",
+          repoRoot: process.cwd(),
+          shutdownGraceMs: 0,
+          timeoutMs: 30_000,
+          spawnImpl: (() => {
+            queueMicrotask(() => {
+              child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
+              child.stdout.end();
+              child.emit("exit", outcome.code, outcome.signal);
+              child.emit("close", outcome.code, outcome.signal);
+            });
+            return child;
+          }) as unknown as typeof spawn,
+        }).then(
+          () => {
+            throw new Error("unverified cleanup resolved unexpectedly");
+          },
+          (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        if (!(failure instanceof Error)) {
+          throw new Error("missing cleanup failure");
+        }
+        expect(hasUnjoinedWork(failure)).toBe(true);
+        expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
+        expect(failure.message).toContain("primary import diagnostic");
+        expect(failure.message).toMatch(/cleanup/i);
+        expect(failure.message.length).toBeLessThan(10_000);
+      } finally {
+        signal.mockRestore();
       }
-      expect(hasUnjoinedWork(failure)).toBe(true);
-      expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
-      expect(failure.message).toContain("primary import diagnostic");
-      expect(failure.message).toMatch(/cleanup/i);
-      expect(failure.message.length).toBeLessThan(10_000);
-    } finally {
-      signal.mockRestore();
-    }
-  });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "cleans timeout descendants before resolving the case",

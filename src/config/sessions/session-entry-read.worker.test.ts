@@ -9,6 +9,7 @@ import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -28,7 +29,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import {
+  captureCanonicalSessionReaderContinuation,
+  markCanonicalSessionValidationPending,
+} from "./session-canonical-key.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
@@ -637,6 +641,7 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
         projection: "list",
       });
     expect((await read()).entries).toHaveLength(1);
+    markCanonicalSessionValidationPending(database, [sibling]);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
         sessionId: sibling,
@@ -804,7 +809,10 @@ it.each(["durable", "incognito"] as const)(
         const queries = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
         try {
           authority.assertCurrent();
-          expect(queries.counts.all).toBe(0);
+          // Native writers can share a handle with raw SDK writes; one final row read certifies it.
+          expect(queries.counts.all).toBe(kind === "durable" ? 1 : 0);
+          authority.assertCurrent();
+          expect(queries.counts.all).toBe(kind === "durable" ? 1 : 0);
         } finally {
           queries.restore();
         }
@@ -978,7 +986,9 @@ it("refuses an ordered result when its database closes during reader cleanup", a
       ([read]) => {
         read!.assertCurrent();
         queueMicrotask(() => {
-          closing = closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+          closing = runInDetachedAsyncContext(() =>
+            closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId),
+          );
         });
         return read!.result.entries[0]?.entry;
       },

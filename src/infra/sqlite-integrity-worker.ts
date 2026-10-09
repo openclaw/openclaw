@@ -266,7 +266,7 @@ function assertSqliteIntegrityWithProcess(
       clearInterval(heartbeat);
       signal.removeEventListener("abort", onAbort);
       worker.off("message", onMessage);
-      worker.off("close", onClose);
+      worker.off("close", finish);
       if (timing) {
         // In a reused child, lifetime measures this request through native close.
         timing.workerLifetimeElapsedMs = performance.now() - startedAt;
@@ -318,8 +318,6 @@ function assertSqliteIntegrityWithProcess(
         }
       }
     };
-    const onClose = (code: number | null, closeSignal: NodeJS.Signals | null) =>
-      finish(code, closeSignal);
     const onMessage = (message: SqliteIntegrityWorkerMessage) => {
       if ("type" in message && message.type === "phase") {
         if (
@@ -344,7 +342,7 @@ function assertSqliteIntegrityWithProcess(
       }
     };
     worker.on("message", onMessage);
-    worker.once("close", onClose);
+    worker.once("close", finish);
     if (scope) {
       signal.addEventListener("abort", onAbort, { once: true });
       if (!isSqliteInspectionDeadlineOwnedByCaller()) {

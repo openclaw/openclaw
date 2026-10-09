@@ -1,6 +1,7 @@
 // Announce loop-guard tests prove deferred delivery retries through its time
 // window, then gives up instead of looping forever after repeated failures.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { SessionEntry } from "../../../config/sessions.js";
 import {
   configureMockSubagentRegistryPersistence,
   type MockSubagentRegistryRows,
@@ -8,10 +9,24 @@ import {
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const sessionStore = vi.hoisted(() => ({
+const sessionStore = vi.hoisted((): Record<string, SessionEntry> => ({
   "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
   "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
   "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+}));
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../config/sessions/session-entry-read-runtime.js")
+  >()),
+  readSessionEntryReadOnlyInWorker: vi.fn<
+    typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+  >(async (scope, assertCurrent) => {
+    assertCurrent?.();
+    const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
+    assertCurrent?.();
+    return entry;
+  }),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -94,15 +109,11 @@ vi.mock("../../timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-    runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
-  };
-});
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+  runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+}));
 vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
@@ -113,6 +124,7 @@ describe("announce loop guard (#18264)", () => {
   async function hydrateAndActivateRegistry() {
     await registry.initSubagentRegistry();
     const recoveryRuntime = {
+      prepareRestartRecovery: () => undefined,
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(async () => ({ status: "pending" })),
       sendRecoveryNotice: vi.fn(),

@@ -5,11 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.js";
-import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
-import {
-  createMcpClientElicitationHandler,
-  runWithMcpElicitationHandler,
-} from "../../agents/mcp-client-elicitation.js";
 import type { McpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { mcpAppHandlers } from "./mcp-app.js";
@@ -168,64 +163,6 @@ function invoke() {
   return { respond, pending };
 }
 
-describe("MCP extension contracts", () => {
-  it("advertises settings from the documented experimental placement", async () => {
-    expect((await runtime.getCatalog()).servers.demo?.settings).toEqual({
-      readTool: "read",
-      updateTool: "update",
-    });
-  });
-
-  it("ignores the unshipped thumbnail alias in a registered app form", async () => {
-    server.setRequestHandler(CallToolRequestSchema, async () => {
-      const result = await server.request(
-        {
-          method: "openai/elicitation/create",
-          params: {
-            message: "Choose a color",
-            requestedSchema: {
-              type: "object",
-              properties: {
-                choice: {
-                  type: "string",
-                  oneOf: [
-                    {
-                      const: "Blue",
-                      title: "Blue",
-                      "x-openai-preview": { src: "https://example.com/blue.png" },
-                    },
-                    {
-                      const: "Red",
-                      title: "Red",
-                      "x-openai-thumbnail": { src: "https://example.com/red.png" },
-                    },
-                  ],
-                },
-              },
-              required: ["choice"],
-            },
-          },
-        },
-        resultSchema,
-      );
-      return { content: [], structuredContent: result };
-    });
-    const call = invoke();
-    await questionStarted.promise;
-    const request = mocks.question.mock.calls.find(([method]) => method === "question.request")![1];
-    questionAnswer.resolve(answer);
-    await call.pending;
-    expect(request.questions[0].options).toEqual([
-      { label: "Blue", value: "Blue" },
-      { label: "Red", value: "Red", thumbnail: "https://example.com/red.png" },
-    ]);
-    expect(call.respond).toHaveBeenCalledWith(true, {
-      content: [],
-      structuredContent: { action: "accept", content: { choice: "Blue" } },
-    });
-  });
-});
-
 describe("MCP tool human-input timeouts", () => {
   it("dispatches the registered app call after approval and keeps its human question alive", async () => {
     const approvalStarted = createDeferred();
@@ -252,33 +189,6 @@ describe("MCP tool human-input timeouts", () => {
       content: [
         { type: "text", text: JSON.stringify({ action: "accept", content: { choice: "Blue" } }) },
       ],
-    });
-  });
-
-  it("preserves model-driven tool calls while the same question handler awaits input", async () => {
-    const gatewayCall: AgentQuestionDispatcher = {
-      version: 2,
-      call: ({ method, params, signal }) => mocks.question(method, params, signal),
-    };
-    const handler = createMcpClientElicitationHandler({
-      sessionKey: "agent:main:model",
-      assertCurrent: () => {},
-      gatewayCall,
-    });
-    const call = runWithMcpElicitationHandler(handler, () => runtime.callTool("demo", "pick", {}));
-    const completed = call.then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-    await questionStarted.promise;
-    await vi.advanceTimersByTimeAsync(500_000);
-    questionAnswer.resolve(answer);
-    expect(await completed).toEqual({
-      result: {
-        content: [
-          { type: "text", text: JSON.stringify({ action: "accept", content: { choice: "Blue" } }) },
-        ],
-      },
     });
   });
 

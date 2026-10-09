@@ -1,4 +1,3 @@
-// Normalizes Chrome MCP profile options and subprocess arguments.
 import { createRequire } from "node:module";
 import {
   hasNonEmptyString,

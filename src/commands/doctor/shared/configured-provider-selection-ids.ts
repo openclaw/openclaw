@@ -14,6 +14,12 @@ export function collectConfiguredModelProviderSelectionIds(
       ids.add(id.toLowerCase());
     }
   };
+  const addModelRef = (value: string) => {
+    const slash = value.indexOf("/");
+    if (slash > 0) {
+      add(value.slice(0, slash));
+    }
+  };
   for (const profile of Object.values(asNullableRecord(cfg.auth?.profiles) ?? {})) {
     add(asNullableRecord(profile)?.provider);
   }
@@ -27,19 +33,13 @@ export function collectConfiguredModelProviderSelectionIds(
       if (typeof modelRef !== "string") {
         continue;
       }
-      const slash = modelRef.indexOf("/");
-      if (slash > 0) {
-        add(modelRef.slice(0, slash));
-      }
+      addModelRef(modelRef);
     }
   }
   for (const { value } of collectConfiguredModelRefs(cfg, {
     includeChannelModelOverrides: false,
   })) {
-    const slash = value.indexOf("/");
-    if (slash > 0) {
-      add(value.slice(0, slash));
-    }
+    addModelRef(value);
   }
   return ids;
 }

@@ -166,7 +166,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
     if (action.kind === "stop-cloud-worker") {
-      return this.reclaimHeaderPlacement(row);
+      return this.changeHeaderPlacement(row, "reclaim");
     }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;
@@ -290,6 +290,17 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             scope.sessions.state.result?.sessions ?? [],
           ),
       };
+      const assignCategory = (category: string | null) =>
+        operations.assignSessionCategory(
+          host,
+          session,
+          category,
+          scope,
+          {},
+          {
+            resolveSession: resolveCurrentSession,
+          },
+        );
       switch (action.kind) {
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
@@ -328,16 +339,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           await operations.forkSession(host, session, scope);
           break;
         case "move-to-group":
-          await operations.assignSessionCategory(
-            host,
-            session,
-            action.category,
-            scope,
-            {},
-            {
-              resolveSession: resolveCurrentSession,
-            },
-          );
+          await assignCategory(action.category);
           break;
         case "new-group": {
           const { showInputDialog } = await import("../../components/input-dialog.ts");
@@ -348,14 +350,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             requireValue: true,
           });
           if (name && this.isHeaderSessionActionCurrent(scope, owner)) {
-            await operations.assignSessionCategory(
-              host,
-              session,
-              name,
-              scope,
-              {},
-              { resolveSession: resolveCurrentSession },
-            );
+            await assignCategory(name);
           }
           break;
         }
@@ -508,7 +503,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     this.headerRenameValue = this.headerRenameInitialValue;
-    this.headerEditing = true;
     void this.updateComplete.then(() => {
       const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();
@@ -517,24 +511,22 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected cancelHeaderRename(): void {
-    this.headerEditing = false;
     this.headerRenameSession = null;
   }
 
   protected commitHeaderRename(): void {
-    if (!this.headerEditing) {
+    const session = this.headerRenameSession;
+    if (!session) {
       return;
     }
-    const session = this.headerRenameSession;
     const patch = resolveSessionRenamePatch(
       this.headerRenameValue,
       this.headerRenameInitialValue,
-      session?.label,
+      session.label,
     );
-    this.headerEditing = false;
     this.headerRenameSession = null;
     const state = this.state;
-    if (!session || !state || !patch) {
+    if (!state || !patch) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
@@ -579,7 +571,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (worktreeId && !immediateRoot) {
       const entry = this.headerWorktreePaths.get(worktreeId) ?? {};
       this.headerWorktreePaths.set(worktreeId, entry);
-      if (!entry.loaded && !entry.loading) {
+      if (entry.path === undefined && !entry.loading) {
         entry.loading = true;
         loads.push(
           client
@@ -589,11 +581,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
                 result.worktrees.find(
                   (candidate) => candidate.id === worktreeId && candidate.removedAt === undefined,
                 )?.path ?? null;
-              entry.loaded = true;
             })
             .catch(() => {
-              entry.path = null;
-              entry.loaded = false;
+              entry.path = undefined;
             })
             .finally(() => {
               entry.loading = false;

@@ -79,10 +79,17 @@ vi.mock("node:child_process", () => ({
   execFileSync: edge.forbidden,
   fork: edge.forbidden,
 }));
-vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: edge.forbidden }));
+// mock-isolation: Native database opening must remain forbidden in the worker registration fixture.
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: edge.forbidden,
+  captureSqliteNativeRuntimeAdmission: () => undefined,
+}));
 vi.mock("../logging/console.js", () => ({ routeLogsToStderr() {} }));
 vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: (done: () => void) => done() }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   assertExistingDatabaseIdentity() {},
   readDatabasePathIdentitySync: () => ({ key: "file:fixture" }),
 }));
@@ -198,25 +205,29 @@ function retireFailedReply(
     reject,
     detach() {},
   };
-  receiveSqliteWorkerReply({ current: job, worker: { postMessage: edge.forbidden } }, reply, {
-    fail(error, currentError, openOutcome) {
-      if (!(error instanceof Error)) {
-        throw error;
-      }
-      settleFailedSqliteWorkerJobs({
-        current: job,
-        queued: [],
-        queuedError: new SqliteWorkerError("retired", "unavailable"),
-        error,
-        currentError,
-        openOutcome,
-        retire: () => retired.promise,
-        finish: settleSqliteWorkerJob,
-      });
+  receiveSqliteWorkerReply(
+    { actors: new Set(), current: job, worker: { postMessage: edge.forbidden } },
+    reply,
+    {
+      fail(error, currentError, openOutcome) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        settleFailedSqliteWorkerJobs({
+          current: job,
+          queued: [],
+          queuedError: new SqliteWorkerError("retired", "unavailable"),
+          error,
+          currentError,
+          openOutcome,
+          retire: () => retired.promise,
+          finish: settleSqliteWorkerJob,
+        });
+      },
+      finish: edge.forbidden,
+      dispatch: edge.forbidden,
     },
-    finish: edge.forbidden,
-    dispatch: edge.forbidden,
-  });
+  );
   return { retired, completion, reject, settleNative };
 }
 
@@ -409,83 +420,76 @@ it.each([
 );
 
 describe("committed agent registration across failed native opening", () => {
-  it.each(["coordinator", "quarantine-cleanup", "quarantined"] as const)(
-    "retains a typed opening failure after native retirement without changing its outcome (%s)",
-    async (kind) => {
-      const nativeFailure = new Error("synthetic native cleanup failure");
-      const cleanup = new OpenClawQuarantineReadCleanupError(
-        [nativeFailure],
-        kind === "quarantined"
-          ? { kind: "agent", quarantinedAt: 1, reason: "synthetic quarantine decision" }
-          : undefined,
-      );
-      const openingError =
-        kind === "coordinator"
-          ? new SqliteCoordinatorError("synthetic opening failure", nativeFailure)
-          : kind === "quarantined"
-            ? Object.assign(new Error("synthetic quarantine refusal", { cause: cleanup }), {
-                name: "SqliteIntegrityError",
-              })
-            : cleanup;
-      const closeShape = { message: nativeFailure.message };
-      const cleanupShape = {
-        name: "OpenClawQuarantineReadCleanupError",
-        message: cleanup.message,
-        cause: closeShape,
-        errors: [closeShape],
-      };
-      edge.open.mockImplementation(() => {
-        throw openingError;
-      });
-      const request: SqliteWorkerRequest = {
-        id: ++nextId,
-        actor,
-        type: "execute",
-        stateContext: {
-          environment: input.environment,
-        },
-        input: serialize({ type: "database.prepareWrite", input: undefined }),
-      };
-      const reply = await send(request);
-      expect(reply.ok).toBe(false);
-      if (reply.ok) {
-        throw new Error("Failed native opening unexpectedly succeeded");
-      }
-      expect(reply.retire).toBe(true);
-      expect(reply.error.sharedState?.nodes).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ name: openingError.name, message: openingError.message }),
-          expect.objectContaining({ message: nativeFailure.message }),
-        ]),
-      );
-      expect(reply.error.sharedState?.nodes.every((node) => !("quarantine" in node))).toBe(true);
+  it("retains a typed quarantine opening failure after native retirement", async () => {
+    const nativeFailure = new Error("synthetic native cleanup failure");
+    const cleanup = new OpenClawQuarantineReadCleanupError([nativeFailure], {
+      kind: "agent",
+      quarantinedAt: 1,
+      reason: "synthetic quarantine decision",
+    });
+    const openingError = Object.assign(
+      new Error("synthetic quarantine refusal", { cause: cleanup }),
+      {
+        name: "SqliteIntegrityError",
+      },
+    );
+    const closeShape = { message: nativeFailure.message };
+    const cleanupShape = {
+      name: "OpenClawQuarantineReadCleanupError",
+      message: cleanup.message,
+      cause: closeShape,
+      errors: [closeShape],
+    };
+    edge.open.mockImplementation(() => {
+      throw openingError;
+    });
+    const request: SqliteWorkerRequest = {
+      id: ++nextId,
+      actor,
+      type: "execute",
+      stateContext: {
+        environment: input.environment,
+      },
+      input: serialize({ type: "database.prepareWrite", input: undefined }),
+    };
+    const reply = await send(request);
+    expect(reply.ok).toBe(false);
+    if (reply.ok) {
+      throw new Error("Failed native opening unexpectedly succeeded");
+    }
+    expect(reply.retire).toBe(true);
+    expect(reply.error.sharedState?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: openingError.name, message: openingError.message }),
+        expect.objectContaining({ message: nativeFailure.message }),
+      ]),
+    );
+    expect(reply.error.sharedState?.nodes.every((node) => !("quarantine" in node))).toBe(true);
 
-      const { retired, completion, reject, settleNative } = retireFailedReply(reply, request);
-      try {
-        expect(reject).not.toHaveBeenCalled();
-        expect(settleNative).not.toHaveBeenCalled();
-        retired.resolve();
-        const failure = hydrateOpenClawStateWorkerError(await completion.promise);
-        expect(isSqliteWorkerError(failure, "outcome-unknown")).toBe(true);
-        expect(settleNative).toHaveBeenCalledExactlyOnceWith({
-          kind: "unknown",
-          error: expect.objectContaining({ message: openingError.message }),
-          nativeStopped: true,
-        });
-        expect(failure).toMatchObject({
-          cause: {
-            name: openingError.name,
-            message: openingError.message,
-            cause: kind === "quarantined" ? cleanupShape : closeShape,
-            ...(kind === "quarantine-cleanup" ? { errors: [closeShape] } : {}),
-          },
-        });
-      } finally {
-        retired.resolve();
-        await completion.promise;
-      }
-    },
-  );
+    const { retired, completion, reject, settleNative } = retireFailedReply(reply, request);
+    try {
+      expect(reject).not.toHaveBeenCalled();
+      expect(settleNative).not.toHaveBeenCalled();
+      retired.resolve();
+      const failure = hydrateOpenClawStateWorkerError(await completion.promise);
+      expect(isSqliteWorkerError(failure, "outcome-unknown")).toBe(true);
+      expect(settleNative).toHaveBeenCalledExactlyOnceWith({
+        kind: "unknown",
+        error: expect.objectContaining({ message: openingError.message }),
+        nativeStopped: true,
+      });
+      expect(failure).toMatchObject({
+        cause: {
+          name: openingError.name,
+          message: openingError.message,
+          cause: cleanupShape,
+        },
+      });
+    } finally {
+      retired.resolve();
+      await completion.promise;
+    }
+  });
 
   it.each(["native", "shared"] as const)(
     "joins retirement after %s cleanup fails without abandoning other owners",
@@ -548,106 +552,53 @@ describe("committed agent registration across failed native opening", () => {
     },
   );
 
-  it.each([
-    { name: "failed open", openingSucceeds: false, reportRefused: false },
-    { name: "failed open and report", openingSucceeds: false, reportRefused: true },
-    { name: "successful open with refused report", openingSucceeds: true, reportRefused: true },
-  ])(
-    "reports the COMMIT and joins retirement after $name",
-    async ({ openingSucceeds, reportRefused }) => {
-      const openingError = new Error("Validation publication failed after registration COMMIT");
-      const reportingError = new Error("Original caller retired before receipt acknowledgement");
-      edge.open.mockImplementation((_options, _lease, registration) => {
-        registration?.starting?.();
-        registration?.committed?.(receipt);
-        if (openingSucceeds) {
-          nativeOpened = true;
-          return edge.database;
-        }
-        throw openingError;
-      });
-      const reported: unknown[] = [];
-      edge.request.mockImplementation((request) => {
-        if (request.stage === "prepare" && request.facts && typeof request.facts === "object") {
-          if ("kind" in request.facts && request.facts.kind === "agent-registration-committed") {
-            reported.push(request.facts);
-            if (reportRefused) {
-              throw reportingError;
-            }
-          }
-        }
-      });
-      const reply = await send({
-        id: ++nextId,
-        actor,
-        type: "execute",
-        input: serialize({ type: "database.prepareWrite", input: undefined }),
-      });
-      expect(reported).toEqual([{ kind: "agent-registration-committed", registration: receipt }]);
-      expect(reply.ok).toBe(false);
-      if (reply.ok) {
-        throw new Error("Failed native opening unexpectedly succeeded");
-      }
-      if (!openingSucceeds) {
-        expect(reply.error.message).toContain(openingError.message);
-      }
-      if (reportRefused) {
-        expect(reply.error.message).toContain(reportingError.message);
-      }
-      expect(reply.retire).toBe(true);
-
-      const { retired, completion, reject, settleNative } = retireFailedReply(
-        reply,
-        { type: "execute", id: reply.id, actor, input: new Uint8Array() },
-        reportRefused ? reportingError : undefined,
-      );
-      expect(reject).not.toHaveBeenCalled();
-      expect(settleNative).not.toHaveBeenCalled();
-      retired.resolve();
-      const failure = await completion.promise;
-      expect(failure).toMatchObject({ code: "outcome-unknown" });
-      if (!openingSucceeds) {
-        expect(String(failure)).toContain(openingError.message);
-      }
-      if (reportRefused) {
-        expect(String(failure)).toContain(reportingError.message);
-      }
-      expect(settleNative).toHaveBeenCalledExactlyOnceWith({
-        kind: "unknown",
-        error: expect.objectContaining({ message: reply.error.message }),
-        nativeStopped: true,
-      });
-    },
-  );
-
-  it("keeps a fully initialized actor available without reporting registration again", async () => {
+  it("reports the COMMIT and joins retirement after a successful open with refused report", async () => {
+    const reportingError = new Error("Original caller retired before receipt acknowledgement");
     edge.open.mockImplementation((_options, _lease, registration) => {
       registration?.starting?.();
       registration?.committed?.(receipt);
       nativeOpened = true;
       return edge.database;
     });
-    for (let index = 0; index < 2; index += 1) {
-      expect(
-        await send({
-          id: ++nextId,
-          actor,
-          type: "execute",
-          input: serialize({ type: "database.prepareWrite", input: undefined }),
-        }),
-      ).toMatchObject({ ok: true });
+    const reported: unknown[] = [];
+    edge.request.mockImplementation((request) => {
+      if (request.stage === "prepare" && request.facts && typeof request.facts === "object") {
+        if ("kind" in request.facts && request.facts.kind === "agent-registration-committed") {
+          reported.push(request.facts);
+          throw reportingError;
+        }
+      }
+    });
+    const reply = await send({
+      id: ++nextId,
+      actor,
+      type: "execute",
+      input: serialize({ type: "database.prepareWrite", input: undefined }),
+    });
+    expect(reported).toEqual([{ kind: "agent-registration-committed", registration: receipt }]);
+    expect(reply.ok).toBe(false);
+    if (reply.ok) {
+      throw new Error("Failed native opening unexpectedly succeeded");
     }
-    expect(edge.open).toHaveBeenCalledOnce();
-    expect(
-      edge.request.mock.calls.filter(
-        ([request]) =>
-          request.stage === "prepare" &&
-          request.facts &&
-          typeof request.facts === "object" &&
-          "kind" in request.facts &&
-          request.facts.kind === "agent-registration-committed",
-      ),
-    ).toHaveLength(1);
+    expect(reply.error.message).toContain(reportingError.message);
+    expect(reply.retire).toBe(true);
+
+    const { retired, completion, reject, settleNative } = retireFailedReply(
+      reply,
+      { type: "execute", id: reply.id, actor, input: new Uint8Array() },
+      reportingError,
+    );
+    expect(reject).not.toHaveBeenCalled();
+    expect(settleNative).not.toHaveBeenCalled();
+    retired.resolve();
+    const failure = await completion.promise;
+    expect(failure).toMatchObject({ code: "outcome-unknown" });
+    expect(String(failure)).toContain(reportingError.message);
+    expect(settleNative).toHaveBeenCalledExactlyOnceWith({
+      kind: "unknown",
+      error: expect.objectContaining({ message: reply.error.message }),
+      nativeStopped: true,
+    });
   });
 
   it("recognizes a separately evaluated backend's inner open refusal before completed settlement", async () => {

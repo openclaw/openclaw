@@ -93,7 +93,8 @@ Use **Edit board** to change a board's name, icon, and color. **Reset to default
 clears the icon and color when you save; canceling leaves the saved board unchanged.
 For Sessions boards, the same dialog also edits column labels, colors,
 descriptions, column order, and the fallback column. Ask the Board agent to edit
-column rules.
+column rules. Saving only the name, icon, or color leaves the saved columns unchanged,
+including column edits made by another operator while the dialog was open.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear

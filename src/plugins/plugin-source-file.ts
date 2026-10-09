@@ -4,6 +4,12 @@ import path from "node:path";
 import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
@@ -68,13 +74,17 @@ export function copyPluginSourceFile(
   source: string,
   boundary: string,
   target: string,
-  options: { hashCopiedContent?: boolean; preserveSourceMode?: boolean } = {},
+  options: {
+    hashCopiedContent?: boolean;
+    preserveSourceMode?: boolean;
+    copyFile?: typeof copyRootFileSync;
+  } = {},
 ) {
   return withPluginSourceFile(source, boundary, (fd) => {
     const admitted = fs.fstatSync(fd, { bigint: true });
     try {
       // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
-      using copied = copyRootFileSync({
+      using copied = (options.copyFile ?? copyRootFileSync)({
         source: { rootPath: boundary, absolutePath: source },
         destination: { rootPath: path.dirname(target), absolutePath: target },
         expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
@@ -93,6 +103,18 @@ export function copyPluginSourceFile(
           }
         : undefined;
     } catch (error) {
+      // fs-safe wraps native failures; retain the disk-full code and detail that
+      // plugin-load diagnostics use to explain how to recover.
+      if (
+        error instanceof FsSafeError &&
+        collectErrorGraphCandidates(error, readErrorCauses).some(
+          (cause) => extractErrorCode(cause) === "ENOSPC",
+        )
+      ) {
+        throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+          code: "ENOSPC",
+        });
+      }
       if (error instanceof FsSafeError && error.code === "too-large") {
         throw new Error(
           "Plugin source changed while preparing its reload; retry after the edit finishes.",

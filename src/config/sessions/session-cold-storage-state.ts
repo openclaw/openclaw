@@ -9,6 +9,19 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
 
+export const sessionColdArchiveMetadataColumns = [
+  "session_id",
+  "generation",
+  "archive_name",
+  "archive_sha256",
+  "event_count",
+  "raw_bytes",
+  "archive_bytes",
+  "last_seq",
+  "archived_at",
+  "storage",
+] as const;
+
 function createColdTranscriptQueries(db: DatabaseSync) {
   const kysely = getNodeSqliteKysely<DB>(db);
   return {
@@ -17,18 +30,7 @@ function createColdTranscriptQueries(db: DatabaseSync) {
       (parameter) =>
         kysely
           .selectFrom("session_transcript_cold_archives")
-          .select([
-            "session_id",
-            "generation",
-            "archive_name",
-            "archive_sha256",
-            "event_count",
-            "raw_bytes",
-            "archive_bytes",
-            "last_seq",
-            "archived_at",
-            "storage",
-          ])
+          .select(sessionColdArchiveMetadataColumns)
           .where(
             "session_id",
             "=",

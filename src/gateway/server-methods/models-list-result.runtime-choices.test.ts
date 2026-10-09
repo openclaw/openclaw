@@ -311,8 +311,9 @@ describe("models.list configured runtime choices", () => {
       initialReadiness: "throws",
     },
     {
+      // A registered harness still cannot serve a provider it is incompatible with.
       provider: "picker-fixture",
-      runtime: "picker-native",
+      runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "ready",
     },

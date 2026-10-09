@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
@@ -371,6 +372,24 @@ describe("Gateway service lifecycle", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
+  it("reports startup recovery instead of install hints when restart cannot verify a serving owner", async () => {
+    writeGatewayRestartIntentSync.mockImplementationOnce(() => {
+      throw new GatewayRestartPreparationError("serving-owner");
+    });
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        renderStartHints: () => ["openclaw gateway install"],
+      }),
+    ).rejects.toThrow("__exit__:1");
+    const payload = readJsonLog<{ hints: string[] }>();
+    expect(payload.hints).toEqual([
+      "openclaw gateway status --deep",
+      "Fix the reported startup failure, then run `openclaw gateway start` to wait for readiness without restarting the process.",
+    ]);
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("clears restart intent when service-manager restart fails before signaling", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
     writeGatewayRestartIntentSync.mockReturnValueOnce(true);
@@ -385,6 +404,58 @@ describe("Gateway service lifecycle", () => {
       }),
     );
     expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
+  });
+
+  it.each(["ready", "still-starting", "failed"] as const)(
+    "checks an already-running service before reporting start %s",
+    async (outcome) => {
+      service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+      const postStartCheck: NonNullable<
+        Parameters<typeof runServiceStart>[0]["postStartCheck"]
+      > = async ({ fail }) => {
+        if (outcome !== "ready") {
+          fail(
+            "Gateway listener is unavailable.",
+            [],
+            outcome === "still-starting" ? outcome : undefined,
+          );
+        }
+      };
+      const start = runServiceStart({ ...createServiceRunArgs(), postStartCheck });
+      if (outcome === "ready") {
+        await start;
+        expect(readJsonLog()).toMatchObject({ ok: true, result: "already-running" });
+      } else {
+        await expect(start).rejects.toThrow(`__exit__:${outcome === "still-starting" ? 2 : 1}`);
+        expect(readJsonLog()).toMatchObject({
+          ok: false,
+          error: "Gateway listener is unavailable.",
+        });
+        if (outcome === "still-starting") {
+          expect(readJsonLog()).toMatchObject({ result: "still-starting" });
+        }
+      }
+      expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
+      expect(service.start).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the readiness failure and exit code after starting a stopped service", async () => {
+    await expect(
+      runServiceStart({
+        ...createServiceRunArgs(),
+        postStartCheck: async ({ fail }) =>
+          fail("Gateway is still starting.", [], "still-starting"),
+      }),
+    ).rejects.toThrow("__exit__:2");
+    expect(readJsonLog()).toMatchObject({
+      ok: false,
+      result: "still-starting",
+      error: "Gateway is still starting.",
+    });
+    expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
+    expect(service.start).toHaveBeenCalledOnce();
   });
 
   it.each([["Gateway", "", "", "openclaw gateway", "restart"]] as const)(

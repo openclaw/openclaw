@@ -8,6 +8,17 @@ read_when:
 
 ## Local equivalents
 
+Strict managed commands join their process group and captured output before
+releasing temporary resources. A leader can exit before an unreferenced helper
+finishes responding to stdin EOF, so normal POSIX exit reserves half the existing
+cleanup budget for natural group drainage and half for forced cleanup. Requiring
+forced cleanup still fails the command; live or uninspectable groups and output
+that remains open never count as successful completion. Zombie-only groups are
+already terminated, even when their new parent has not reaped them yet.
+Cancellation during natural drainage forwards its signal immediately; its grace
+ends no later than the original halfway point, preserving the recovery allowance
+and total cleanup deadline.
+
 The complete channels test lane prepares its native worker artifacts before
 starting the test process. Cold compilation therefore does not consume the
 test-output watchdog's deadline. Focused channel selections retain lazy
@@ -315,6 +326,35 @@ file before raising the limit; for example, share byte-identical runner
 expressions, steps, and scripts through YAML anchors and aliases.
 
 ## Local check gates and changed routing
+
+### Assertion inventory reports
+
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a deterministic JSON
+inventory to stdout without changing the assertion baseline. The ref selects the
+committed source and baseline, including files omitted by a sparse checkout.
+Ordinary ratchet checks still inspect worktree or staged content; their `--base`
+option selects comparison ancestry, not source bytes.
+
+The report records source Git object IDs, SHA-256 hashes of the executing
+collector and policy files, and the installed parser and Node versions. It lists
+zero-count files, excluded declaration/test-support files, missing baseline paths,
+syntax diagnostics, and every parsed assertion's current policy exemption.
+Positions use one-based lines/columns and half-open source-text spans.
+
+Unused allowance means the baseline exceeds the observed policy count. It is
+accounting evidence, not proof of a repair: adding a SAFETY marker can reduce
+the count while retaining the assertion. Exemptions describe the existing guard's
+decision; they do not validate the stated invariant. Assertion fingerprints hash
+the exact assertion text, so repeated hashes are ambiguous and whitespace changes
+can change a hash. The report does not match sites between revisions or classify
+assertions semantically.
+
+Exit zero means inventory coverage is complete, not that the ratchet passed or
+debt was repaired. Parse failures or caught collection errors produce incomplete
+coverage and a nonzero exit; unknown counts and unused allowances stay `null`.
+Successful file records remain available when other files fail. A killed process
+can produce no report; absent or truncated output is incomplete evidence. Qualify
+the reported source, tooling and dependency inputs before comparing separate runs.
 
 ### Config baseline count ratchet
 

@@ -17,6 +17,7 @@ import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderConfigApiOwnerHint } from "../../plugins/provider-config-owner.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -38,7 +39,7 @@ export type AgentHarnessPluginSelection = {
   agentId?: string;
 };
 
-export type RuntimePluginLoadPurpose = "agent" | "model-catalog";
+export type RuntimePluginLoadPurpose = "agent" | "model-catalog" | "isolated-completion";
 
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
   const allow = config?.plugins?.allow ?? [];
@@ -191,9 +192,17 @@ function resolveSelectedProviderOwnerPluginIds(params: {
   workspaceDir: string;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
-  const providerOwnerPluginIds = normalizeUniqueStringEntries(
+  let providerOwnerPluginIds = normalizeUniqueStringEntries(
     resolveOwningPluginIdsForProviderRef(params) ?? [],
   );
+  if (providerOwnerPluginIds.length === 0) {
+    const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
+    if (apiOwnerHint) {
+      providerOwnerPluginIds = normalizeUniqueStringEntries(
+        resolveOwningPluginIdsForProviderRef({ ...params, provider: apiOwnerHint }) ?? [],
+      );
+    }
+  }
   if (providerOwnerPluginIds.length === 0) {
     return [];
   }
@@ -365,7 +374,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   purpose?: RuntimePluginLoadPurpose;
 }): { config?: OpenClawConfig; pluginIds?: string[] } {
   let config = params.config;
-  const includeAgentOwners = params.purpose !== "model-catalog";
+  const includeAgentOwners = params.purpose === undefined || params.purpose === "agent";
   const memoryPluginIds = includeAgentOwners
     ? resolveSelectedMemoryPluginIds({
         config: params.config,

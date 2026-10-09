@@ -117,6 +117,17 @@ instead. Any OpenAI-compatible endpoint resolved as a local endpoint (loopback h
 fallback, which covers other local backends such as vLLM, SGLang, llama.cpp, LocalAI, Jan, TabbyAPI,
 and text-generation-webui.
 
+### Gemma 4 tool-call recovery
+
+For Gemma 4 models using `openai-completions`, OpenClaw recovers complete standalone
+`<|tool_call>call:...<tool_call|>` batches if the server returns them as text,
+including when the call is the last content before `finish_reason: "stop"`.
+Recovery preserves raw string arguments and requires complete argument objects;
+incomplete calls, prose, and code examples remain text. Truncated, filtered,
+cancelled, or unterminated streams do not authorize recovered calls. If native
+tool calls also appear in the stream, they remain authoritative and raw text is
+not promoted.
+
 ### Thinking compatibility
 
 When LM Studio's `/api/v1/models` discovery reports model-specific reasoning options, OpenClaw
@@ -125,6 +136,11 @@ model compat metadata. Some LM Studio builds advertise a binary UI option (`allo
 "on"]`) while rejecting those literal values on `/v1/chat/completions`; OpenClaw normalizes that
 binary shape to the six-level scale before sending requests, including for older saved config that
 still has `off`/`on` reasoning maps.
+
+For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
+advertised canonical effort, regardless of option order. For example, `off`, `low`, `medium`
+maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
+configuration; rerun LM Studio setup to regenerate them from current server metadata.
 
 ### Explicit configuration
 
