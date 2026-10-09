@@ -43,6 +43,11 @@ import {
   WorkspaceBootstrapSeedConflictError,
 } from "./workspace-bootstrap-publish.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
+import {
+  type ExtraBootstrapResolution,
+  patternWalkRootStaysInWorkspace,
+  resolveExtraBootstrapPatternPaths as resolveLocalExtraBootstrapPatternPaths,
+} from "./workspace-extra-bootstrap-walker.js";
 import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import {
   isTransientWorkspaceReadError,
@@ -1089,21 +1094,19 @@ async function* walkWorkspaceFiles(
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
-): Promise<string[]> {
-  if (!getAgentWorkspaceAccess(workspaceDir) && typeof fs.glob === "function") {
-    try {
-      const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        matches.push(match);
-      }
-      return matches;
-    } catch {
-      // Fall through to the local matcher before treating the pattern as literal.
-    }
+): Promise<ExtraBootstrapResolution> {
+  // Discovery owner splits on workspace access. A local workspace uses the
+  // hardened walker module (fs.glob where present, a Minimatch symlink-descent
+  // fallback where absent) with realpath containment and per-match failure
+  // isolation. A remote workspace stays bridge-owned — never local fs — and lists
+  // directories through access.bridge.readDirectory via walkWorkspaceFiles, which
+  // rechecks the binding after each awaited listing.
+  if (!getAgentWorkspaceAccess(workspaceDir)) {
+    return resolveLocalExtraBootstrapPatternPaths(workspaceDir, pattern);
   }
 
   if (typeof path.matchesGlob !== "function") {
-    return [pattern];
+    return { matches: [pattern], failures: [] };
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
@@ -1116,7 +1119,7 @@ async function resolveExtraBootstrapPatternPaths(
   )) {
     matches.push(candidate);
   }
-  return matches.length > 0 ? matches : [pattern];
+  return { matches: matches.length > 0 ? matches : [pattern], failures: [] };
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(
@@ -1130,10 +1133,24 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     return { files: [], diagnostics: [] };
   }
   const resolvedDir = resolveUserPath(dir);
+  // Remote workspaces are bridge-owned: the Gateway host cannot canonicalize
+  // remote paths, so the realpath-aware containment pre-gate runs only for local
+  // workspaces. Remote patterns use lexical containment here and the bridge
+  // discovery path enforces the rest.
+  const access = getAgentWorkspaceAccess(resolvedDir);
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   const resolvedPaths = new Set<string>();
+  // Failure paths already surfaced as an `io` diagnostic. Dedupe on the same
+  // workspace-relative key `resolvedPaths` uses for matches, so a file that faults
+  // under two overlapping patterns — or a fallback double-yield within one —
+  // surfaces a single diagnostic, keeping the handler's "failed for N path(s)" a
+  // true distinct-path count rather than a pattern/yield multiple.
+  const failedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (!isPathInside(resolvedDir, path.resolve(resolvedDir, resolveGlobWalkRoot(pattern)))) {
+    const walkRootContained = access
+      ? isPathInside(resolvedDir, path.resolve(resolvedDir, resolveGlobWalkRoot(pattern)))
+      : await patternWalkRootStaysInWorkspace(resolvedDir, pattern);
+    if (!walkRootContained) {
       diagnostics.push({
         path: path.resolve(resolvedDir, pattern),
         reason: "security",
@@ -1143,9 +1160,23 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
+        const { matches, failures } = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
         for (const match of matches) {
           resolvedPaths.add(match);
+        }
+        // Per-match isolation: a readable match loads normally while each match
+        // that failed canonicalization surfaces as its own `io` diagnostic keyed
+        // to that path, instead of one failing match discarding the whole pattern.
+        for (const failure of failures) {
+          if (failedPaths.has(failure.path)) {
+            continue;
+          }
+          failedPaths.add(failure.path);
+          diagnostics.push({
+            path: path.resolve(resolvedDir, failure.path),
+            reason: "io",
+            detail: failure.detail,
+          });
         }
       } else {
         resolvedPaths.add(pattern);

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import {
   type createStageTimingTracker,
@@ -66,4 +67,23 @@ export function logEmbeddedRunStageSummary(
 export function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
   const stages = formatStageTimings(summary.stages);
   return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;
+}
+
+/**
+ * Awaits `fn` and records its wall-clock duration under `name` via `record` in a
+ * `finally`, so the recorded substage time includes the awaited work. A plain
+ * sync wrapper that returns the promise would record ~0ms before the awaited
+ * work settles, misleading the slow-bootstrap diagnostic.
+ */
+export async function measureBootstrapSubstage<T>(
+  record: (name: string, durationMs: number) => void,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await fn();
+  } finally {
+    record(name, performance.now() - startedAt);
+  }
 }
