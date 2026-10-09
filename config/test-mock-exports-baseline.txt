@@ -1860,7 +1860,6 @@
 ["packages/gateway-client/src/client.device-auth.test.ts","./websocket.js","9d6af3bbe3402e9e1fb873c29808c3e356c336a8eecc461384b1c182d641f2f7",1]
 ["packages/memory-host-sdk/src/host/batch-http.test.ts","./remote-http.js","6abc326846f4c624c6c2f91449c82075610650375501a798f11e1fbe22fcb60a",1]
 ["packages/memory-host-sdk/src/host/batch-upload.test.ts","./remote-http.js","6abc326846f4c624c6c2f91449c82075610650375501a798f11e1fbe22fcb60a",1]
-["packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts","./post-json.js","efc1a6e9703b9af26e31b363d3190271ce9bdabe37e3263f647cd3d0a93650e2",1]
 ["packages/memory-host-sdk/src/host/embeddings-remote-provider.test.ts","./embeddings-remote-fetch.js","7d287a6c48e775f503172185b444c719ceaf990ab4c7552dac6c15cd3c6b8cc4",1]
 ["packages/memory-host-sdk/src/host/post-json.test.ts","./remote-http.js","6abc326846f4c624c6c2f91449c82075610650375501a798f11e1fbe22fcb60a",1]
 ["packages/memory-host-sdk/src/host/sqlite-vec.test.ts","./sqlite-vec-platform-variant.js","3669bf77cbb28588792d989d0bb97f3f2dd3a590d77ccbebb861f71f19d7aaa5",1]

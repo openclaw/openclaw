@@ -228,8 +228,24 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           }
         });
       }
+      const position = embeddings.findIndex(
+        (embedding) => !isValidMemoryEmbedding(embedding, dimensions),
+      );
+      const embedding = embeddings[position];
+      let condition = `expected ${candidates.length} vectors, got ${embeddings.length}`;
+      if (embeddings.length === candidates.length) {
+        if (!Array.isArray(embedding)) {
+          condition = `missing embedding array at position ${position}`;
+        } else if (embedding.length === 0) {
+          condition = `empty embedding at position ${position}`;
+        } else if (embedding.length !== dimensions) {
+          condition = `expected ${dimensions} dimensions, got ${embedding.length} at position ${position}`;
+        } else {
+          condition = `non-finite or non-numeric coordinate at position ${position}`;
+        }
+      }
       throw new Error(
-        "memory embeddings: malformed vector response (count, dimensions, or coordinates)",
+        `${generation.provider.id} embeddings failed (model: ${generation.provider.model}, batch size: ${candidates.length}): ${condition}`,
       );
     }
     generation.embeddingDimensions = dimensions;
