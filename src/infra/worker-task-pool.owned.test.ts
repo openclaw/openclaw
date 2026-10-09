@@ -75,6 +75,68 @@ beforeEach(() => {
   workers.splice(0);
 });
 
+it("retires burst workers without extending the first worker's idle lifetime", async () => {
+  vi.useFakeTimers();
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 5_000 });
+  try {
+    const first = pool.run("first", {});
+    const burst = pool.run("burst", {});
+    const primary = workerFor("first");
+    const surplus = workerFor("burst");
+    reply(primary, "first");
+    reply(surplus, "burst");
+    await Promise.all([first, burst]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(surplus.terminate).toHaveBeenCalledOnce();
+    expect(primary.terminate).not.toHaveBeenCalled();
+    expect(pool.getSnapshot().workers).toBe(1);
+
+    const reused = pool.run("reused", {});
+    expect(workerFor("reused")).toBe(primary);
+    reply(primary, "reused");
+    await reused;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(primary.terminate).toHaveBeenCalledOnce();
+    expect(pool.getSnapshot().workers).toBe(0);
+  } finally {
+    await pool.close();
+    vi.useRealTimers();
+  }
+});
+
+it("keeps the remaining worker's original idle deadline while the first worker stops", async () => {
+  vi.useFakeTimers();
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000, burstIdleTimeoutMs: 5_000 });
+  const controller = new AbortController();
+  const first = pool.run("first", { signal: controller.signal });
+  const native = holdExit(workerFor("first"));
+  const cancellation = expect(first).rejects.toThrow("cancel first");
+  try {
+    const burst = pool.run("burst", {});
+    const survivor = workerFor("burst");
+    reply(survivor, "burst");
+    await burst;
+    controller.abort(new Error("cancel first"));
+    await native.entered;
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(survivor.terminate).not.toHaveBeenCalled();
+    expect(pool.getSnapshot().workers).toBe(2);
+    native.release();
+    await cancellation;
+    expect(pool.getSnapshot().workers).toBe(1);
+    await vi.advanceTimersByTimeAsync(55_000);
+    expect(survivor.terminate).toHaveBeenCalledOnce();
+    expect(pool.getSnapshot().workers).toBe(0);
+  } finally {
+    native.release();
+    await pool.close();
+    await cancellation;
+    vi.useRealTimers();
+  }
+});
+
 it("retires only idle slots on critical pressure, after result and resource custody settle", async () => {
   const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
   const pressure = diagnosticsChannel("openclaw.memory.critical");
