@@ -23,6 +23,7 @@ import {
   PROVIDER_ID,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
@@ -155,7 +156,11 @@ it.for([
   },
 );
 
-async function createGatewayNativeAdmissionFixture(gateCount: number, signal: AbortSignal) {
+async function createGatewayNativeAdmissionFixture(
+  gateCount: number,
+  signal: AbortSignal,
+  importPhase?: "before" | "after",
+) {
   const fixture = await createCatalogFixture(makeTempDir, 0);
   const pluginRoot = path.join(fixture.root, "plugin");
   const dependency = path.join(pluginRoot, "node_modules", "native-fixture");
@@ -179,6 +184,15 @@ const receipts = new BroadcastChannel(${JSON.stringify(broadcastName)});
 receipts.unref();
 let native;
 if (threadId !== ${threadId}) {
+  const holdImport = () => {
+    const used = ${JSON.stringify(path.join(fixture.root, "import-held"))};
+    if (fs.existsSync(used)) return;
+    fs.writeFileSync(used, "");
+    const gate = new Int32Array(new SharedArrayBuffer(8));
+    receipts.postMessage(gate.buffer);
+    Atomics.wait(gate, 0, 0);
+  };
+  if (${JSON.stringify(importPhase)} === "before") holdImport();
   const { realpathSync: realpath, linkSync: link, symlinkSync: symlink } = fs;
   const referenceDirectories = new Map();
   let elapsed = 0;
@@ -215,6 +229,7 @@ if (threadId !== ${threadId}) {
   } finally {
     Object.assign(fs, { realpathSync: realpath, linkSync: link, symlinkSync: symlink });
   }
+  if (${JSON.stringify(importPhase)} === "after") holdImport();
 }
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Admission fixture", auth: [],
@@ -246,7 +261,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
 } };`,
   });
   const makeGate = () => createDeferred<Int32Array<SharedArrayBuffer>>();
-  const entered = Array.from({ length: gateCount }, makeGate);
+  const entered = Array.from({ length: gateCount + Number(Boolean(importPhase)) }, makeGate);
   const gates: Int32Array<SharedArrayBuffer>[] = [];
   const providerEntered = createDeferred();
   const authEntered = createDeferred();
@@ -314,6 +329,12 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   const clock = vi.spyOn(performance, "now").mockImplementation(() => started + fakeNow());
   return {
     snapshot,
+    currentSnapshot: () =>
+      getPreparedModelRuntimeSnapshot({
+        agentId: fleet.agentIds[0]!,
+        agentDir: fleet.entries[fleet.agentIds[0]!]!.agentDir,
+        config: fleet.config,
+      }),
     failures,
     entered,
     release,
@@ -417,3 +438,24 @@ it("does not count host sleep toward the native admission stall", async ({ signa
   expect(catalog.entries).toContainEqual(catalogEntry("native-admitted"));
   expect(fixture.failures).toEqual([]);
 });
+
+it.for(["before", "after"] as const)(
+  "recovers catalog preparation stalled $0 native verification",
+  async (phase, { signal }) => {
+    await using fixture = await createGatewayNativeAdmissionFixture(0, signal, phase);
+    const first = fixture.refresh();
+    await fixture.wait(fixture.entered[0]!.promise, first.completed, "Plugin import did not enter");
+    await checkpoint();
+    await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS + 1_000);
+    const failure = await first.completed.catch((error: unknown) => error);
+    expect(failure).not.toMatchObject({ name: "PreparedModelCatalogAdmissionStalledError" });
+    const replacement = fixture.currentSnapshot();
+    expect(replacement).toBeDefined();
+    expect(replacement).not.toBe(fixture.snapshot);
+    const recovered = await fixture.settled(
+      replacement!.loadFullModelCatalog!({ refresh: true, wait: true }),
+    );
+    expect(recovered.entries).toContainEqual(catalogEntry("native-admitted"));
+    expect(readCatalogWorkers().length).toBeGreaterThan(1);
+  },
+);

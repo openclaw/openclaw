@@ -506,10 +506,12 @@ export function createPreparedModelCatalogWorker(
           contexts.delete(context.workspaceDir);
           // The existing budget now bounds idle admission, renewed only by verified members.
           expire = () => {
-            const failure = new PreparedModelCatalogAdmissionStalledError(
-              progress?.pluginId,
-              PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-            );
+            const failure = progress?.active
+              ? new PreparedModelCatalogAdmissionStalledError(
+                  progress.pluginId,
+                  PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+                )
+              : new WorkerTaskError("worker task timed out", "timeout");
             borrower.notifyRecovery(failure);
             void requestPool!
               .close(failure)

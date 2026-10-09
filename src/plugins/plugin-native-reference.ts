@@ -21,7 +21,7 @@ import {
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
 
-export type NativeReferenceProgress = { pluginId: string; completed: number };
+export type NativeReferenceProgress = { pluginId: string; completed: number; active: boolean };
 export const nativeReferenceProgress = channel("openclaw.plugin-native-reference");
 let verifiedMembers = 0;
 
@@ -91,6 +91,11 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
     );
     const placement = `${directory}\0${path.dirname(target)}`;
     let verdict = admitted.get(namespace);
+    nativeReferenceProgress.publish({
+      pluginId,
+      completed: verifiedMembers,
+      active: true,
+    } satisfies NativeReferenceProgress);
     try {
       if (!verdict?.placements.has(placement)) {
         if (!verdict) {
@@ -99,10 +104,6 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
         }
         const admittedMembers = verdict.members;
         // Hardlinks and copies keep bytes but not realpath parents; require a coherent directory.
-        nativeReferenceProgress.publish({
-          pluginId,
-          completed: verifiedMembers,
-        } satisfies NativeReferenceProgress);
         for (const [name, member] of Object.entries(namespace.members)) {
           if (!isPathInside(directory, name || ".")) {
             continue;
@@ -143,6 +144,7 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
           nativeReferenceProgress.publish({
             pluginId,
             completed: ++verifiedMembers,
+            active: true,
           } satisfies NativeReferenceProgress);
         }
         verdict.placements.add(placement);
@@ -158,6 +160,12 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
         "Native plugin companions cannot be preserved without file symlinks. Enable file symlink support for this filesystem, then reload the plugin.",
         { cause },
       );
+    } finally {
+      nativeReferenceProgress.publish({
+        pluginId,
+        completed: verifiedMembers,
+        active: false,
+      } satisfies NativeReferenceProgress);
     }
   };
 }
