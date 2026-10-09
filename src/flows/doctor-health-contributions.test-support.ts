@@ -108,3 +108,12 @@ export function createGatewayWriterFixture(token: string) {
   ) => options.writeConfig(config);
   return { config, repair };
 }
+
+/** Resolved no-op doubles for the recall module, including the dreaming note. */
+export function recallMocks() {
+  return {
+    maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+    noteDreamingHealth: vi.fn().mockResolvedValue(undefined),
+    noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  };
+}

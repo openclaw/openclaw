@@ -1,11 +1,12 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import {
-  resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
-} from "../memory-host-sdk/dreaming.js";
+  loadCronJobsStoreWithConfigJobsReadOnly,
+  resolveCronJobsStorePathFromConfig,
+} from "../cron/store.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { formatDoctorDreamingSummary } from "../memory-host-sdk/dreaming-doctor-summary.js";
 import {
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
@@ -62,13 +63,27 @@ function buildMemoryArtifactIssueNote(
   ].join("\n");
 }
 
+/** Search-independent dreaming status. Informational only; structured lint does not collect it. */
+export async function noteDreamingHealth(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  let cron: Parameters<typeof formatDoctorDreamingSummary>[0]["cron"];
+  try {
+    const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(
+      resolveCronJobsStorePathFromConfig(cfg, env),
+      env,
+    );
+    cron = { available: true, jobs: loaded.store.jobs };
+  } catch {
+    cron = { available: false };
+  }
+  note(formatDoctorDreamingSummary({ cfg, cron }), "Dreaming");
+}
+
 export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const labelAgents = scopes.length > 1;
-  const dreaming = resolveMemoryDreamingConfig({
-    cfg,
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-  });
   for (const scope of scopes) {
     const report = (message: string) =>
       note(formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message), "Memory search");
@@ -102,10 +117,6 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
       }
     } catch (err) {
       report(`Memory recall audit could not be completed: ${formatErrorMessage(err)}`);
-    } finally {
-      report(
-        `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
-      );
     }
   }
 }

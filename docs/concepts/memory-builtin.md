@@ -290,7 +290,9 @@ BM25 keyword search only.
 ## Troubleshooting
 
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
-detected, set one explicitly or add an API key.
+detected, set one explicitly or add an API key. That status is separate from
+memory-core dreaming. `openclaw doctor` reports dreaming on its own, including
+whether it is enabled, the last dreaming run, and the next scheduled run.
 
 **Local provider not detected?** Run the interactive
 [llama.cpp](/plugins/llama-cpp) setup once with `openclaw onboard`, confirm the

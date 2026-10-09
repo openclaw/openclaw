@@ -377,10 +377,11 @@ vi.mock("../commands/doctor-auth.js", () => ({
   noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
-vi.mock("../commands/doctor-memory-recall.js", () => ({
-  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
-  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
-}));
+// mock-isolation: contribution order tests replace recall side effects and must not read cron or memory state
+vi.mock("../commands/doctor-memory-recall.js", async () => {
+  const { recallMocks } = await import("./doctor-health-contributions.test-support.js");
+  return recallMocks();
+});
 
 vi.mock("../commands/doctor-memory-search.js", () => ({
   noteMemorySearchHealth: mocks.noteMemorySearchHealth,

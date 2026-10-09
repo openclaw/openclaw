@@ -3,12 +3,9 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import { summarizeManagedDreamingCronJobs } from "../../memory-host-sdk/dreaming-doctor-summary.js";
 import {
-  MANAGED_MEMORY_DREAMING_CRON_NAME,
-  MANAGED_MEMORY_DREAMING_CRON_TAG,
-  MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
@@ -289,48 +286,13 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   };
 }
 
-type ManagedDreamingCronStatus = {
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
-};
-
-function isManagedDreamingJob(job: CronJob): boolean {
-  const description = normalizeOptionalString(job.description);
-  if (description?.includes(MANAGED_MEMORY_DREAMING_CRON_TAG)) {
-    return true;
-  }
-  // Older managed jobs may lack the tag, so fall back to the exact system-event signature.
-  const name = normalizeOptionalString(job.name);
-  return (
-    name === MANAGED_MEMORY_DREAMING_CRON_NAME &&
-    job.payload.kind === "systemEvent" &&
-    normalizeOptionalString(job.payload.text) === MEMORY_DREAMING_SYSTEM_EVENT_TEXT
-  );
-}
+type ManagedDreamingCronStatus = ReturnType<typeof summarizeManagedDreamingCronJobs>;
 
 async function resolveManagedDreamingCronStatus(
   context: Pick<GatewayRequestContext, "cron">,
 ): Promise<ManagedDreamingCronStatus> {
   try {
-    const jobs = await context.cron.list({ includeDisabled: true });
-    const managed = jobs.filter(isManagedDreamingJob);
-    let nextRunAtMs: number | undefined;
-    for (const job of managed) {
-      if (!job.enabled) {
-        continue;
-      }
-      const candidate = job.state?.nextRunAtMs;
-      if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
-        continue;
-      }
-      if (nextRunAtMs === undefined || candidate < nextRunAtMs) {
-        nextRunAtMs = candidate;
-      }
-    }
-    return {
-      managedCronPresent: managed.length > 0,
-      ...(nextRunAtMs !== undefined ? { nextRunAtMs } : {}),
-    };
+    return summarizeManagedDreamingCronJobs(await context.cron.list({ includeDisabled: true }));
   } catch {
     return { managedCronPresent: false };
   }

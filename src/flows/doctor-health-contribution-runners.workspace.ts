@@ -141,7 +141,7 @@ export const runHeartbeatTaskMigrationHealth = workspaceMigration(async () => {
 export async function runMemorySearchHealthContribution(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
-  const { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } =
+  const { maybeRepairMemoryRecallHealth, noteDreamingHealth, noteMemoryRecallHealth } =
     await import("../commands/doctor-memory-recall.js");
   const { noteMemorySearchHealth } = await import("../commands/doctor-memory-search.js");
   if (ctx.prompter.shouldRepair) {
@@ -151,6 +151,7 @@ export async function runMemorySearchHealthContribution(
     env: ctx.env,
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
+  await noteDreamingHealth(ctx.cfg, ctx.env);
   if (ctx.options.deep === true) {
     await noteMemoryRecallHealth(ctx.cfg);
   }

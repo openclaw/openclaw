@@ -182,13 +182,12 @@ describe("memory recall doctor integration", () => {
       expect(auditShortTermPromotionArtifacts).toHaveBeenCalledWith({
         workspaceDir: "/tmp/agent-default/workspace",
       });
-      expect(note).toHaveBeenCalledTimes(2);
+      expect(note).toHaveBeenCalledOnce();
       expectFirstNoteContains(
         "Memory recall artifacts need attention:",
         "doctor --fix",
         "memory status --fix",
       );
-      expect(String(note.mock.calls[1]?.[0] ?? "")).toContain("Dreaming: enabled");
     },
   );
 
