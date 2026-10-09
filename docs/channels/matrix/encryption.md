@@ -16,6 +16,11 @@ In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image p
 
 All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (machine-readable output), and `--account <id>` (multi-account setups). Output is concise by default.
 
+Stop the local Gateway through its service owner before running these commands,
+including diagnostics, then restart it afterward. Commands refuse while the
+Gateway owns local state because account preparation and shutdown can persist
+crypto data. Offline commands retain exclusive ownership through that cleanup.
+
 ### Enable encryption
 
 ```bash
@@ -37,7 +42,7 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config; restart the Gateway after the command completes. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
 
 Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
 

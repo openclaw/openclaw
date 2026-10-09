@@ -10,6 +10,13 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 
 Node remains the recommended runtime. Matrix also accepts the [opt-in Bun runtime](/install/bun); E2EE requires the Matrix SDK's native crypto bindings to be available for your platform.
 
+`openclaw matrix` commands require the local Gateway to be stopped, including
+verification and device diagnostics: preparing the account can update its crypto
+state. Stop the Gateway through its service owner, run the command, then restart
+the Gateway. Commands refuse before loading account state when a Gateway owns
+the state directory. Offline ownership lasts through crypto persistence and
+client shutdown.
+
 <CardGroup cols={3}>
   <Card title="Setup" icon="download" href="/channels/matrix/setup">
     Install the plugin and connect a homeserver account.

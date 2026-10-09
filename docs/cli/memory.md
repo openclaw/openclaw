@@ -16,6 +16,13 @@ provenance-based deletion.
 Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
 `memory-core` by default. Other memory plugins expose their own CLI namespaces.
 
+These commands require the local Gateway to be stopped. Search records recalls,
+and diagnostics and previews can initialize writable stores. Stop the Gateway
+through its service owner, run the command, then restart the Gateway. A command
+refuses before opening those stores when a Gateway owns the state directory;
+offline execution retains exclusive ownership through manager and worker cleanup.
+For memory search while the Gateway is running, use the agent's memory tools.
+
 When another plugin owns the memory slot and `memory-core` runs only as the
 dreaming consolidation sidecar:
 

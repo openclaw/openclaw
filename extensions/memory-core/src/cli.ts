@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -54,6 +55,17 @@ function collectMemoryCliValues(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
+function runMemoryCliCommand(run: () => Promise<void>): Promise<void> {
+  // Search and diagnostics can initialize stores or record recalls too.
+  return runWithLocalStateOwner({
+    method: "memory.cli",
+    params: {},
+    target: "memory stores",
+    onForeignOwner: "refuse",
+    runLocal: run,
+  });
+}
+
 export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRuntimeHost) {
   if (hostOptions?.openKeyedStore) {
     configureMemoryCoreDreamingState(hostOptions.openKeyedStore);
@@ -70,8 +82,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
         | "runMemorySessionBackfill",
     ) =>
     async (opts: MemoryCommandOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime[name](opts, hostOptions);
+      await runMemoryCliCommand(async () => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime[name](opts, hostOptions);
+      });
     };
   const memory = program
     .command("memory")
@@ -182,8 +196,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       if (!query) {
         throw new Error("Missing search query. Provide a positional query or use --query <text>.");
       }
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemorySearch(query, opts, hostOptions);
+      await runMemoryCliCommand(async () => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMemorySearch(query, opts, hostOptions);
+      });
     });
 
   agentCommand("forget", "Delete memories and derived artifacts from selected sessions")
@@ -214,8 +230,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
           "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
         );
       }
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryForget(opts);
+      await runMemoryCliCommand(async () => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMemoryForget(opts);
+      });
     });
 
   agentCommand("promote", "Rank short-term recalls and optionally append top entries to MEMORY.md")
@@ -252,8 +270,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       if (!selector) {
         throw new Error("Memory promote-explain requires a non-empty selector.");
       }
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryPromoteExplain(selector, opts, hostOptions);
+      await runMemoryCliCommand(async () => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMemoryPromoteExplain(selector, opts, hostOptions);
+      });
     });
 
   agentCommand(

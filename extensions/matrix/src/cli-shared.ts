@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -242,13 +243,17 @@ export async function runMatrixCliAccountCommand<TResult>(
     onText: (result: TResult, verbose: boolean, accountId: string) => void;
   },
 ): Promise<void> {
-  const context = resolveMatrixCliAccountContext(options.account);
+  let accountId = normalizeAccountId(options.account);
   await runMatrixCliCommand(options, {
     ...config,
-    run: () => config.run(context),
+    run: () => {
+      const context = resolveMatrixCliAccountContext(options.account);
+      accountId = context.accountId;
+      return config.run(context);
+    },
     onText: (result, verbose) => {
-      printAccountLabel(context.accountId);
-      config.onText(result, verbose, context.accountId);
+      printAccountLabel(accountId);
+      config.onText(result, verbose, accountId);
     },
   });
 }
@@ -262,7 +267,14 @@ export async function runMatrixCliCommand<TResult>(
   setMatrixSdkLogMode(verbose ? "default" : "quiet");
   setMatrixConsoleLogging(verbose);
   try {
-    const result = await config.run();
+    // Even diagnostics can initialize crypto and persist its final snapshot.
+    const result = await runWithLocalStateOwner({
+      method: "matrix.cli",
+      params: {},
+      target: "Matrix account state",
+      onForeignOwner: "refuse",
+      runLocal: config.run,
+    });
     if (json) {
       printJson(config.onJson ? config.onJson(result) : result);
     } else {
