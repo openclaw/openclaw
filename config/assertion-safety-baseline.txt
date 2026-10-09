@@ -704,7 +704,7 @@ extensions/qa-lab/src/live-transports/discord/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/discord/scenario-environment.ts	3
 extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-environment.ts	6
-extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.ts	7
+extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.ts	6
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-config.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.ts	2
@@ -728,7 +728,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.approval-checkpoint.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.capture.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.codex-approval.ts	2
 extensions/qa-lab/src/live-transports/slack/slack-live.config.ts	2
-extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
+extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	6
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
