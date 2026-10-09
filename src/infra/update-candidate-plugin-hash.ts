@@ -1,6 +1,6 @@
-import { availableParallelism } from "node:os";
 import { hashFileMutationSnapshotSync, type FileMutationMetadata } from "./file-descriptor.js";
 import type { UpdateCandidatePluginFileReply } from "./update-candidate-plugin-file.js";
+import { resolveUpdateHashWorkerCount } from "./worker-pool-sizing.js";
 import type { WorkerTaskPool } from "./worker-task-pool.js";
 
 export type UpdateCandidatePluginHashRequest = {
@@ -18,25 +18,6 @@ export type UpdateCandidatePluginFileHasher = (
   expected: FileMutationMetadata,
 ) => Promise<string>;
 
-const HASH_WORKER_BUDGET_BYTES = 256 * 1024 * 1024;
-
-function availableHashWorkers(): number {
-  // Bun/Linux reports host MemAvailable, ignoring the process's cgroup limit.
-  // Keep hashing in-process until that runtime can admit additional isolates.
-  if (process.versions.bun && process.platform === "linux") {
-    return 0;
-  }
-  const available = process.availableMemory();
-  if (!Number.isSafeInteger(available) || available <= 0) {
-    return 0;
-  }
-  // Reserve half the remaining memory for inventory growth and the updater parent.
-  return Math.max(
-    0,
-    Math.min(4, availableParallelism() - 1, Math.floor(available / 2 / HASH_WORKER_BUDGET_BYTES)),
-  );
-}
-
 /** The inventory owner drains its four-file read window before retiring these workers. */
 export async function withUpdateCandidatePluginFileHashing<T>(
   operation: (hashFile: UpdateCandidatePluginFileHasher) => Promise<T>,
@@ -53,7 +34,7 @@ export async function withUpdateCandidatePluginFileHashing<T>(
       if (++files < 1024) {
         return hashFileMutationSnapshotSync(filePath, expected);
       }
-      workers ??= availableHashWorkers();
+      workers ??= resolveUpdateHashWorkerCount();
       if (workers === 0) {
         return hashFileMutationSnapshotSync(filePath, expected);
       }

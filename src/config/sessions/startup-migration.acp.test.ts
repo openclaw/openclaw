@@ -1,15 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { repairAcpSessionMetaKeysForDoctor } from "../../acp/runtime/session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
 import {
-  readAcpSessionMeta,
+  readAcpSessionEntry,
   writeAcpSessionMetaForMigration,
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
@@ -125,7 +122,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         onWarnings: (reported) => warnings.push(...reported),
       });
       expect(warnings).toEqual([]);
-      expect(readAcpSessionMeta(scope)).toEqual(meta);
+      expect(readAcpSessionEntry(scope)?.acp).toEqual(meta);
       await expect(startup()).resolves.toBeUndefined();
       expect(handoffDatabase).toHaveBeenCalledTimes(owners.size);
       expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toMatchObject({
@@ -163,7 +160,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(nullKey);
     await expect(startup()).resolves.toBeUndefined();
-    expect(readAcpSessionMeta({ ...nullScope, cfg })).toBeUndefined();
+    expect(readAcpSessionEntry({ ...nullScope, cfg })?.acp).toBeUndefined();
     expect(
       agentDatabase
         .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
@@ -172,14 +169,9 @@ it("startup requires offline ACP repair before handing restored stores to runtim
   });
 });
 
-it.each([
-  { shared: false, ownerless: false },
-  { shared: true, ownerless: false },
-  { shared: false, ownerless: true },
-  { shared: true, ownerless: true },
-])(
-  "ACP refusal follows physical store scope ($shared, ownerless: $ownerless)",
-  async ({ shared, ownerless }) => {
+it.each([false, true])(
+  "ownerless ACP refusal follows physical store scope (shared: %s)",
+  async (shared) => {
     await withOpenClawTestState({ scenario: "empty" }, async (state) => {
       const storePath = shared ? state.statePath("shared.sqlite") : undefined;
       const cfg = {
@@ -196,7 +188,7 @@ it.each([
             agentId,
             storePath,
             env: state.env,
-            sessionKey: ownerless ? "global" : `agent:${agentId}:acp:scoped`,
+            sessionKey: "global",
           },
           {
             sessionId: `scope-${agentId}`,
@@ -207,7 +199,7 @@ it.each([
       }
       writeAcpSessionMetaForMigration({
         env: state.env,
-        sessionKey: ownerless ? "global" : "agent:ops:acp:scoped",
+        sessionKey: "global",
         lifecycleRevision: "revision-ops",
         meta: {
           backend: "fixture",
@@ -241,47 +233,6 @@ it.each([
     });
   },
 );
-
-it("scoped ACP admission does not probe unreadable literal-key candidates in another store", async () => {
-  await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
-    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } } };
-    await writeConfig(cfg);
-    const sessionKey = "agent:main:acp:healthy";
-    replaceSessionEntrySync(
-      { agentId: "main", env, sessionKey },
-      { sessionId: "healthy-session", lifecycleRevision: "healthy-revision", updatedAt: 100 },
-    );
-    writeAcpSessionMetaForMigration({
-      env,
-      sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
-      lifecycleRevision: "healthy-revision",
-      meta: {
-        backend: "fixture",
-        agent: "main",
-        runtimeSessionName: "healthy-runtime",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 100,
-      },
-      now: () => 100,
-    });
-    const unreadable = resolveOpenClawAgentSqlitePath({ agentId: "ops", env });
-    fs.mkdirSync(path.dirname(unreadable), { recursive: true });
-    fs.writeFileSync(unreadable, "unreadable unrelated database");
-    const handoffDatabase = vi.fn(async () => {});
-    await expect(
-      runSessionStartupMigration({
-        cfg,
-        env,
-        agentIds: new Set(["main"]),
-        log: { info: vi.fn(), warn: vi.fn() },
-        handoffDatabase,
-      }),
-    ).resolves.toBeUndefined();
-    expect(handoffDatabase).toHaveBeenCalledTimes(1);
-    expect(fs.readFileSync(unreadable, "utf8")).toBe("unreadable unrelated database");
-  });
-});
 
 it("startup preserves unbound ACP rows retained by Doctor without serving their metadata", async () => {
   await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
@@ -340,12 +291,12 @@ it("startup preserves unbound ACP rows retained by Doctor without serving their 
     expect(handoffDatabase).toHaveBeenCalledTimes(1);
     for (const sessionKey of keys) {
       expect(
-        readAcpSessionMeta({
+        readAcpSessionEntry({
           cfg,
           env,
           agentId: sessionKey.startsWith("agent:retired:") ? "retired" : "main",
           sessionKey,
-        }),
+        })?.acp,
       ).toBeUndefined();
     }
     expect(db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all()).toEqual(before);

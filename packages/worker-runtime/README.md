@@ -150,6 +150,13 @@ queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
 
+The caller's execution deadline also bounds host exchanges. Responses may
+shorten that deadline, never renew it. Code Mode explicitly uses
+`hostTimeout: "owner"` because its host budget already accounts for approval
+pauses; its response rearms the pool clock with the remaining execution budget.
+Timeout aborts the host signal without claiming that accepted host effects have
+settled. Those effects remain under their existing owner's cleanup contract.
+
 ### Async context lifetime
 
 Each task captures its caller with an `OpenClaw.WorkerTask` `AsyncResource`.

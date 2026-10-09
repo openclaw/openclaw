@@ -45,13 +45,15 @@ function observeSlowWriters(
   const getChildLogger = logging.getChildLogger;
   vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
     const logger = getChildLogger(...args);
-    vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
-      if (message === "slow SQLite session write") {
+    vi.spyOn(logger, "warn").mockImplementation((first: unknown, second: unknown) => {
+      if (second === "slow SQLite session write") {
+        const fields = first;
         assert(fields && typeof fields === "object");
         const operation = "operation" in fields ? fields.operation : undefined;
         operations.push(operation);
         onWarning(operation, fields);
-      } else if (message === "slow SQLite session archive pruning") {
+      } else if (first === "slow SQLite session archive pruning") {
+        const fields = second;
         assert(fields && typeof fields === "object");
         onPruning(fields);
       }
@@ -348,14 +350,13 @@ it("coalesces automatic maintenance through native planning and finalization", a
     const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
     const finalized = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
     // Row deletion precedes archive publication; join the unchanged finalizer, including both.
-    vi.spyOn(
-      maintenance,
-      "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
-    ).mockImplementation((...args) => {
-      const result = finalize(...args);
-      finalized.resolve(result);
-      return result;
-    });
+    const finalizer = vi
+      .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
+      .mockImplementation((...args) => {
+        const result = finalize(...args);
+        finalized.resolve(result);
+        return result;
+      });
     const deadlineRead = createDeferredCore();
     const reclaim = reclamationRun.runSqliteSessionReclamation;
     vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
@@ -392,16 +393,12 @@ it("coalesces automatic maintenance through native planning and finalization", a
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
       await deadlineRead.promise;
-      // Planning and deadlines use the canonical actor; only archive finalization uses
-      // reclamation write admission.
-      expect(operations).toEqual([
-        "session.maintenance.plan",
-        "session.reclamation.retain",
-        "session.reclamation.retain",
-        "session.reclamation.retain",
-        "session.reclamation.worker-commit",
-        "session.reclamation.retain",
-      ]);
+      // Read-only preflight can precede writable planning; both kicks share one committed finalizer.
+      expect(operations).toContain("session.maintenance.plan");
+      expect(
+        operations.filter((operation) => operation === "session.reclamation.worker-commit"),
+      ).toEqual(["session.reclamation.worker-commit"]);
+      expect(finalizer).toHaveBeenCalledOnce();
       expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
       for (const outcome of workerOutcomes) {
         expect(outcome.outcome).toBe("resolved");

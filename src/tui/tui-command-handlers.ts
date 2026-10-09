@@ -258,11 +258,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       models = next;
       const { modelProvider, model } = state.sessionInfo;
-      selector.setItems(
-        modelSelectItems(models),
-        emptyMessage,
-        modelProvider && model ? modelKey(modelProvider, model) : undefined,
-      );
+      const currentRef = modelProvider && model ? modelKey(modelProvider, model) : undefined;
+      selector.setItems(modelSelectItems(models, currentRef), emptyMessage, currentRef);
       tui.requestRender();
     };
     request.refreshModels = (scope) => {

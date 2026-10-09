@@ -4,6 +4,7 @@ import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
@@ -18,7 +19,6 @@ import {
 } from "./overview.js";
 import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
-  resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
@@ -51,21 +51,6 @@ export type RunSystemAgentOptions = {
 
 /** User-supplied command options before the inference gate binds the run. */
 export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
-
-async function requireVerifiedInference(opts: RunSystemAgentOptions): Promise<void> {
-  if (!opts.verifiedInference) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference, opts.deps);
-    if (route) {
-      return;
-    }
-  } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
-  }
-  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
-}
 
 async function requirePersistentApplyInference(
   opts: RunSystemAgentOptions,
@@ -103,7 +88,7 @@ async function runOneShot(
   }
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
-  await requireVerifiedInference(opts);
+  await requireSystemAgentInferenceRoute(opts.verifiedInference, opts.deps, "conversation");
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
     await requirePersistentApplyInference(opts, runtime);
@@ -186,7 +171,11 @@ async function runBoundSystemAgent(
   boundOpts: RunSystemAgentOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await requireVerifiedInference(boundOpts);
+  await requireSystemAgentInferenceRoute(
+    boundOpts.verifiedInference,
+    boundOpts.deps,
+    "conversation",
+  );
   if (boundOpts.json) {
     const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
     writeRuntimeJson(runtime, overview);

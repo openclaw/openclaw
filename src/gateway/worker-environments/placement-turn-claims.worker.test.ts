@@ -10,7 +10,7 @@ import {
 } from "../../agents/session-placement-forced-terminal-settlement.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
@@ -424,6 +424,77 @@ it("claims and strictly releases durable turns without host SQLite", async () =>
   expect(placements.get("placement-worker-sql-free")?.turnClaim).toBeNull();
 });
 
+it.each(["committed", "unknown", "reentrant"] as const)(
+  "certifies local projection facts across %s claim settlement",
+  async (outcome) => {
+    const requested = input(`projection-${outcome}`);
+    // The fault belongs to the claim admission, not the worker's first open admission.
+    await placements.releaseTurn(await placements.claimTurn(requested));
+    const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
+    const changes: SessionRowChange[] = [];
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === requested.sessionKey) {
+        changes.push(change);
+        snapshots.push(placements.readPublishedProjection(change));
+      }
+    });
+    let replaced = false;
+    const stopReplacement = sessionChanges.subscribeFacts((change) => {
+      if (
+        outcome !== "reentrant" ||
+        replaced ||
+        !("sessionKey" in change) ||
+        change.sessionKey !== requested.sessionKey
+      ) {
+        return;
+      }
+      replaced = true;
+      const native = createPlacementTurnClaimOps({
+        path: database.path,
+        instanceId: "reentrant-placement-fixture",
+        now: () => 1_001,
+        read: () => database.db,
+        write: (operation) =>
+          runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
+      });
+      native.releaseTurn({ ...requested, placementGeneration: 0 });
+      native.claimTurn(requested);
+    });
+    const corrupted =
+      outcome === "reentrant" ? undefined : losePlacementReply(requested.sessionId, outcome);
+    try {
+      const claim = await placements.claimTurn(requested);
+      if (corrupted) {
+        expect(corrupted()).toBe(1);
+      }
+      if (outcome === "committed") {
+        expect(snapshots).toHaveLength(1);
+        expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim?.claimId).toBe(
+          requested.claimId,
+        );
+      } else if (outcome === "unknown") {
+        expect(snapshots).toEqual([undefined]);
+      } else {
+        expect(replaced).toBe(true);
+        expect(placements.get(requested.sessionId)).toMatchObject({
+          updatedAtMs: 1_001,
+          turnClaim: { claimId: requested.claimId },
+        });
+        expect(snapshots).toEqual([undefined, undefined, undefined]);
+      }
+      expect(
+        changes.every((change) => placements.readPublishedProjection(change) === undefined),
+      ).toBe(true);
+      stop();
+      stopReplacement();
+      await placements.releaseTurn(claim);
+    } finally {
+      stop();
+      stopReplacement();
+    }
+  },
+);
+
 it("preserves same-session FIFO and cannot conditionally release a successor", async () => {
   const first = input("fifo");
   const successor = { ...first, claimId: "claim-fifo-next", runId: "run-fifo-next" };
@@ -611,6 +682,12 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   const deliver = await replyArrived.promise;
   let delivered = false;
   let next: Awaited<ReturnType<typeof placements.prepareTurnClaimAuthority>> | undefined;
+  const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
+  const stop = sessionChanges.subscribeProjection((change) => {
+    if ("sessionKey" in change && change.sessionKey === requested.sessionKey) {
+      snapshots.push(placements.readPublishedProjection(change));
+    }
+  });
   try {
     expect(previous.isCurrent()).toBe(false);
     const native = createPlacementTurnClaimOps({
@@ -632,8 +709,11 @@ it("keeps a later same-byte native claim authoritative when the old release repl
     expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({
       claimId: requested.claimId,
     });
+    expect(snapshots.filter((snapshot) => snapshot !== undefined)).toEqual([]);
+    stop();
     await placements.releaseTurn(replacement);
   } finally {
+    stop();
     if (!delivered) {
       deliver();
     }

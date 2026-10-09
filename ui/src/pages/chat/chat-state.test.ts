@@ -145,11 +145,12 @@ describe("canonical session message recovery", () => {
       const text = "I am checking the files and will report the result.";
       const partial = text.slice(0, text.indexOf(" will report"));
       const { state } = createSessionEventState({ chatRunId: runId });
-      const delta = (value: string) =>
+      const delta = (value: string, replace = false) =>
         emitGatewayEvent(state, "chat", {
           sessionKey: state.sessionKey,
           runId,
           state: "delta",
+          ...(replace ? { deltaText: value, replace: true } : {}),
           message: { role: "assistant", content: [{ type: "text", text: value }] },
         });
       const item = (seq: number) =>
@@ -202,6 +203,7 @@ describe("canonical session message recovery", () => {
         delta(partial);
         expect(visible()).toEqual([{ role: "assistant", text: partial }]);
       }
+      delta("", true);
       item(10);
       expect(visible()).toEqual(single);
       if (persistence === "before tool") {
@@ -221,10 +223,10 @@ describe("canonical session message recovery", () => {
         persist();
         expect(visible()).toEqual(single);
       }
-      delta(`${partial} will report`);
+      item(11);
       expect(visible()).toEqual(single);
-      // The final chunk also brings a distinct, identically worded occurrence.
-      delta(`${text}\n\n${text}`);
+      // The next assistant message is a distinct, identically worded occurrence.
+      delta(text);
       expect(visible()).toEqual([...single, ...single]);
       if (persistence === "after final delta") {
         persist();
@@ -243,11 +245,12 @@ describe("canonical session message recovery", () => {
       const runId = "active-run";
       const { state } = createSessionEventState({ chatRunId: runId });
       let seq = 0;
-      const delta = (text: string) =>
+      const delta = (text: string, replace = false) =>
         emitGatewayEvent(state, "chat", {
           sessionKey: state.sessionKey,
           runId,
           state: "delta",
+          ...(replace ? { deltaText: text, replace: true } : {}),
           message: { role: "assistant", content: text },
         });
       const tool = (id: string) =>
@@ -260,7 +263,8 @@ describe("canonical session message recovery", () => {
           data: { phase: "start", toolCallId: id, name: "read", args: {} },
         });
       const first = "First observation.";
-      const persist = () =>
+      const persist = () => {
+        delta("", true);
         emitGatewayEvent(state, "session.message", {
           sessionKey: state.sessionKey,
           sessionId: state.currentSessionId,
@@ -274,6 +278,7 @@ describe("canonical session message recovery", () => {
             __openclaw: { id: "saved-first", seq: 1, runId },
           },
         });
+      };
       delta(first);
       if (persistFirst) {
         persist();
@@ -286,7 +291,7 @@ describe("canonical session message recovery", () => {
         persist();
       }
       for (const text of ["Next", "Next observation", "Next observation continues."]) {
-        delta(first + "\n\n" + text);
+        delta(text);
         tool("overlap-" + seq);
         expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
           { role: "assistant", text: first },
@@ -589,6 +594,7 @@ describe("canonical session message recovery", () => {
         chatRunId: runId,
       });
       let agentSeq = 0;
+      let persisted = false;
       const delta = (snapshot: string, deltaText: string) => {
         emitGatewayEvent(state, "agent", {
           sessionKey: state.sessionKey,
@@ -598,6 +604,9 @@ describe("canonical session message recovery", () => {
           stream: "assistant",
           data: { text: snapshot, delta: deltaText },
         });
+        if (persisted) {
+          return;
+        }
         emitGatewayEvent(state, "chat", {
           sessionKey: state.sessionKey,
           runId,
@@ -606,7 +615,15 @@ describe("canonical session message recovery", () => {
           message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
         });
       };
-      const persist = () =>
+      const persist = () => {
+        emitGatewayEvent(state, "chat", {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "delta",
+          deltaText: "",
+          replace: true,
+          message: { role: "assistant", content: [] },
+        });
         emitGatewayEvent(state, "session.message", {
           sessionKey: state.sessionKey,
           runId,
@@ -619,6 +636,8 @@ describe("canonical session message recovery", () => {
             __openclaw: { id: "durable-answer", seq: 2, runId },
           },
         });
+        persisted = true;
+      };
       if (persistence === "before-stream") {
         persist();
       }
@@ -655,7 +674,7 @@ describe("canonical session message recovery", () => {
       expect(state.chatRunId).toBe(runId);
       expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
 
-      // Replayed cumulative deltas must not revive the retired projection.
+      // Late raw assistant events have no new Gateway chat tail after persistence.
       delta(text, text.slice(partial.length));
       expect(renderedTranscript(state).filter((entry) => entry.text)).toEqual([
         { role: "assistant", text },
@@ -732,7 +751,7 @@ describe("canonical session message recovery", () => {
         deltaCursor: "during-tool",
         inFlightRun: {
           runId,
-          text: commentary,
+          text: "",
           startedAt: 1,
           events: [
             {
@@ -744,7 +763,7 @@ describe("canonical session message recovery", () => {
               data: {
                 kind: "preamble",
                 itemId: "commentary-1",
-                progressText: commentary.replace(/\s+/gu, " "),
+                progressText: commentary,
               },
             },
             {
@@ -846,7 +865,7 @@ describe("canonical session message recovery", () => {
           seq: index + 4,
           state: "delta",
           deltaText: index === 0 ? partial : answer.slice(partial.length),
-          message: { role: "assistant", content: [{ type: "text", text: commentary + text }] },
+          message: { role: "assistant", content: [{ type: "text", text }] },
         });
         if (secondTool && index === 0) {
           for (const phase of ["start", "result"]) {
@@ -869,6 +888,14 @@ describe("canonical session message recovery", () => {
         }
       }
       if (persistence === "before-final") {
+        emitGatewayEvent(state, "chat", {
+          sessionKey: state.sessionKey,
+          runId,
+          state: "delta",
+          deltaText: "",
+          replace: true,
+          message: { role: "assistant", content: [] },
+        });
         emitGatewayEvent(state, "session.message", persistedPayload(savedAnswer));
       }
       for (const [index, phase] of ["finishing", "end"].entries()) {
@@ -883,7 +910,7 @@ describe("canonical session message recovery", () => {
       }
       const terminalMessage = {
         role: "assistant",
-        content: [{ type: "text", text: commentary + answer }],
+        content: [{ type: "text", text: answer }],
       };
       emitGatewayEvent(state, "chat", {
         sessionKey: state.sessionKey,
@@ -898,7 +925,7 @@ describe("canonical session message recovery", () => {
         { role: "assistant", text: answer },
       ];
       expect(visibleText()).toEqual(expected);
-      expect(terminalMessage.content).toEqual([{ type: "text", text: commentary + answer }]);
+      expect(terminalMessage.content).toEqual([{ type: "text", text: answer }]);
       if (persistence === "after-final") {
         emitGatewayEvent(state, "session.message", persistedPayload(savedAnswer));
         expect(visibleText()).toEqual(expected);
@@ -933,14 +960,18 @@ describe("canonical session message recovery", () => {
         data: { kind: "preamble", itemId, progressText: text },
       });
     }
-    const stream = (snapshot: string) =>
+    const stream = (snapshot: string, replace = false) =>
       emitGatewayEvent(state, "chat", {
         sessionKey: state.sessionKey,
         runId,
         state: "delta",
+        ...(replace ? { deltaText: snapshot, replace: true } : {}),
         message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
       });
-    const persist = (id: string, seq: number, itemId?: string) =>
+    const persist = (id: string, seq: number, itemId?: string) => {
+      if (!itemId) {
+        stream("", true);
+      }
       emitGatewayEvent(state, "session.message", {
         sessionKey: state.sessionKey,
         runId,
@@ -955,12 +986,13 @@ describe("canonical session message recovery", () => {
             : {}),
         },
       });
+    };
     persist("durable-commentary", 1, "commentary-one");
     stream(text);
     expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
     persist("first-answer", 2);
     expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text]);
-    stream(`${text} ${text}`);
+    stream(text);
     expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
     persist("second-answer", 3);
     expect(renderedTranscript(state).map((entry) => entry.text)).toEqual([text, text, text, text]);
@@ -969,7 +1001,7 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([false, true])(
-    "keeps cumulative output ordered across a steer (later commentary=%s)",
+    "keeps whole server messages above a steer (later commentary=%s)",
     (laterCommentary) => {
       const activeRunId = "active-run";
       const steerRunId = "steer-request";
@@ -1004,6 +1036,30 @@ describe("canonical session message recovery", () => {
       ]);
       expect(state.chatRunId).toBe(activeRunId);
       expect(state.chatQueue).toEqual([]);
+      if (laterCommentary) {
+        // Embedded turns commit the prior assistant before admitting a durable steer.
+        emitGatewayEvent(state, "chat", {
+          sessionKey: state.sessionKey,
+          runId: activeRunId,
+          state: "delta",
+          deltaText: "",
+          replace: true,
+          message: { role: "assistant", content: [] },
+        });
+        emitGatewayEvent(state, "session.message", {
+          sessionKey: state.sessionKey,
+          runId: activeRunId,
+          hasActiveRun: true,
+          messageId: "saved-before-steer",
+          messageSeq: 2,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Before steer." }],
+            timestamp: 101,
+            __openclaw: { id: "saved-before-steer", seq: 2, runId: activeRunId },
+          },
+        });
+      }
       reduceChatSessionProjection(state, {
         type: "sendPending",
         runId: steerRunId,
@@ -1024,7 +1080,7 @@ describe("canonical session message recovery", () => {
           clientRunId: activeRunId,
           hasActiveRun: true,
           messageId: "persisted-steer-user",
-          messageSeq: 2,
+          messageSeq: laterCommentary ? 3 : 2,
           message: {
             role: "user",
             content: [{ type: "text", text: "Steer prompt" }],
@@ -1032,7 +1088,7 @@ describe("canonical session message recovery", () => {
             __openclaw: {
               id: "persisted-steer-user",
               idempotencyKey: `${steerRunId}:user`,
-              seq: 2,
+              seq: laterCommentary ? 3 : 2,
               steerTargetRunId: activeRunId,
             },
           },
@@ -1041,7 +1097,6 @@ describe("canonical session message recovery", () => {
       handlePageGatewayEvent(state, steerEvent);
       expect(state.chatRunId).toBe(activeRunId);
       const segmentsAfterRequestBoundary = state.chatStreamSegments;
-      expect(segmentsAfterRequestBoundary.at(-1)?.boundaryRunId).toBe(steerRunId);
       expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
       expect(
         state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),
@@ -1050,24 +1105,41 @@ describe("canonical session message recovery", () => {
         sessionKey: state.sessionKey,
         runId: activeRunId,
         state: "delta",
-        deltaText: " After steer.",
+        deltaText: laterCommentary ? "After steer." : " After steer.",
         message: {
           role: "assistant",
-          content: [{ type: "text", text: "Before steer. After steer." }],
+          content: [
+            {
+              type: "text",
+              text: laterCommentary ? "After steer." : "Before steer. After steer.",
+            },
+          ],
         },
       });
 
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
-        { role: "assistant", text: "Before steer." },
+        ...(laterCommentary
+          ? [
+              { role: "assistant", text: "Before steer." },
+              { role: "assistant", text: "After steer." },
+            ]
+          : [{ role: "assistant", text: "Before steer. After steer." }]),
         { role: "user", text: "Steer prompt" },
-        { role: "assistant", text: "After steer." },
       ]);
 
       handlePageGatewayEvent(state, steerEvent);
       expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
 
       if (laterCommentary) {
+        emitGatewayEvent(state, "chat", {
+          sessionKey: state.sessionKey,
+          runId: activeRunId,
+          state: "delta",
+          deltaText: "",
+          replace: true,
+          message: { role: "assistant", content: [] },
+        });
         emitGatewayEvent(state, "agent", {
           sessionKey: state.sessionKey,
           runId: activeRunId,
@@ -1085,16 +1157,18 @@ describe("canonical session message recovery", () => {
           runId: activeRunId,
           hasActiveRun: true,
           messageId: "saved-commentary",
-          messageSeq: 3,
+          messageSeq: 4,
           message: {
             role: "assistant",
             content: [{ type: "text", text: "After steer." }],
             openclawStreamFallback: { source: "segment", itemId: "after-steer-commentary" },
-            __openclaw: { id: "saved-commentary", seq: 3, runId: activeRunId },
+            __openclaw: { id: "saved-commentary", seq: 4, runId: activeRunId },
           },
         });
       }
-      const terminalText = "Before steer. After steer. Final unseen suffix.";
+      const terminalText = laterCommentary
+        ? "Before steer. Final unseen suffix."
+        : "Before steer. After steer. Final unseen suffix.";
       const terminalMessage = {
         role: "assistant",
         content: [{ type: "text", text: terminalText }],
@@ -1107,14 +1181,14 @@ describe("canonical session message recovery", () => {
       });
       expect(renderedTranscript(state)).toEqual([
         { role: "user", text: "Original prompt" },
-        { role: "assistant", text: "Before steer." },
-        { role: "user", text: "Steer prompt" },
         ...(laterCommentary
           ? [
+              { role: "assistant", text: "Before steer." },
               { role: "assistant", text: "After steer." },
-              { role: "assistant", text: " Final unseen suffix." },
             ]
-          : [{ role: "assistant", text: "After steer. Final unseen suffix." }]),
+          : []),
+        { role: "assistant", text: terminalText },
+        { role: "user", text: "Steer prompt" },
       ]);
       expect(terminalMessage.content).toEqual([{ type: "text", text: terminalText }]);
     },
@@ -1398,6 +1472,15 @@ describe("canonical session message recovery", () => {
       request.mockResolvedValue({
         messages: [originalPrompt, abandonedPartial, localUser, localFinal],
         sessionId: state.currentSessionId,
+      });
+      emitGatewayEvent(state, "chat", {
+        sessionKey: state.sessionKey,
+        runId,
+        seq: 5,
+        state: "delta",
+        replace: true,
+        deltaText: "",
+        message: { role: "assistant", content: [] },
       });
       emitGatewayEvent(state, "session.message", {
         sessionKey: state.sessionKey,
@@ -2017,7 +2100,7 @@ describe("canonical session message recovery", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
-  it("keeps pre-steer output above an earlier ordinary queued user", () => {
+  it("keeps the whole live message above ordinary queued input and its later steer", () => {
     const activeRunId = "active-run";
     const originalPrompt = {
       role: "user",
@@ -2092,10 +2175,9 @@ describe("canonical session message recovery", () => {
 
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Original prompt" },
-      { role: "assistant", text: "Before steer." },
+      { role: "assistant", text: "Before steer. After steer." },
       { role: "user", text: "Queued follow-up" },
       { role: "user", text: "Steer prompt" },
-      { role: "assistant", text: "After steer." },
     ]);
   });
 

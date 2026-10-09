@@ -181,6 +181,13 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
+Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
+standalone tool-protocol markup outside a code example, OpenClaw discards that
+partial reply instead of saving it in conversation history. Completed replies keep
+their existing validation, including support for discussing incomplete markup.
+Stopping a turn does not let the Gateway save a buffered copy of a partial reply
+that the CLI runner rejected.
+
 The bundled Anthropic plugin communicates directly with the installed Claude Code
 executable over its structured stdio protocol. Claude Code owns its existing local login and
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
@@ -327,6 +334,8 @@ register a small wrapper backend plugin.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default. `/reset` and explicit daily or idle `session.reset` policies still cut them.
 - Fresh CLI sessions can recover OpenClaw history from the canonical session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared. Recovery includes saved tool-result text and error markers. It does not execute past tools. The current user turn is sent once, outside the recovered history.
 - Helper runs with a caller-owned in-memory transcript use that history for hooks, bounded session notes, and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume. Resumed turns send the current prompt and bounded session notes without replaying the conversation history.
+
+Warm processes belong to the conversation, including when turns alternate between a channel and `chat.send`. A different inbound account or auth profile retires the previous process and waits for cleanup before starting its replacement. Account-private standing approvals do not carry into the replacement.
 
 When prompt content changes, a compatible CLI session can resume with an OpenClaw
 context note before the current user prompt. Chat history first matches imported

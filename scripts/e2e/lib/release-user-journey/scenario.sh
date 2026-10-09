@@ -6,14 +6,7 @@ export NO_COLOR=1
 
 source scripts/lib/openclaw-e2e-instance.sh
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-openclaw_e2e_install_trash_shim
-
-export NPM_CONFIG_PREFIX="$HOME/.npm-global"
-export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-export npm_config_loglevel=error
-export npm_config_fund=false
-export npm_config_audit=false
+source scripts/e2e/lib/release-scenarios/setup.sh
 export OPENAI_API_KEY="sk-openclaw-release-user-journey"
 export OPENCLAW_GATEWAY_TOKEN="release-user-journey-token"
 export CLICKCLACK_BOT_TOKEN="clickclack-release-token"
@@ -25,31 +18,32 @@ SUCCESS_MARKER="OPENCLAW_E2E_OK_RELEASE_USER_JOURNEY"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-user-journey.XXXXXX")"
 LOG_DIR="$scenario_tmp/logs"
 mkdir -p "$LOG_DIR"
-INSTALL_LOG="$LOG_DIR/install.log"
-ONBOARD_LOG="$LOG_DIR/onboard.log"
-OPENAI_LOG="$LOG_DIR/openai.log"
-AGENT_LOG="$LOG_DIR/agent.log"
-PLUGIN_A_INSTALL_LOG="$LOG_DIR/plugin-a-install.log"
-PLUGIN_A_CLI_LOG="$LOG_DIR/plugin-a-cli.log"
-PLUGIN_A_UNINSTALL_LOG="$LOG_DIR/plugin-a-uninstall.log"
-PLUGIN_B_INSTALL_LOG="$LOG_DIR/plugin-b-install.log"
-PLUGIN_B_CLI_LOG="$LOG_DIR/plugin-b-cli.log"
+openclaw_release_scenario_logs \
+  INSTALL_LOG "$LOG_DIR/install.log" \
+  ONBOARD_LOG "$LOG_DIR/onboard.log" \
+  OPENAI_LOG "$LOG_DIR/openai.log" \
+  MOCK_REQUEST_LOG "$scenario_tmp/openai-requests.jsonl" \
+  AGENT_LOG "$LOG_DIR/agent.log" \
+  PLUGIN_A_INSTALL_LOG "$LOG_DIR/plugin-a-install.log" \
+  PLUGIN_A_CLI_LOG "$LOG_DIR/plugin-a-cli.log" \
+  PLUGIN_A_UNINSTALL_LOG "$LOG_DIR/plugin-a-uninstall.log" \
+  PLUGIN_B_INSTALL_LOG "$LOG_DIR/plugin-b-install.log" \
+  PLUGIN_B_CLI_LOG "$LOG_DIR/plugin-b-cli.log" \
+  CLICKCLACK_PLUGIN_INSTALL_LOG "$LOG_DIR/clickclack-plugin-install.log" \
+  CLICKCLACK_SERVER_LOG "$LOG_DIR/clickclack-server.log" \
+  CLICKCLACK_OUTBOUND_JSON "$LOG_DIR/clickclack-outbound.json" \
+  GATEWAY_1_LOG "$LOG_DIR/gateway-1.log" \
+  GATEWAY_2_LOG "$LOG_DIR/gateway-2.log" \
+  STATUS_JSON "$LOG_DIR/status.json" \
+  STATUS_AFTER_RESTART_JSON "$LOG_DIR/status-after-restart.json" \
+  DOCTOR_LOG "$LOG_DIR/doctor.log" \
+  CLICKCLACK_STATE "$scenario_tmp/clickclack.json"
 PLUGIN_B_AFTER_RESTART_JSON="$LOG_DIR/plugin-b-after-restart.json"
-CLICKCLACK_PLUGIN_INSTALL_LOG="$LOG_DIR/clickclack-plugin-install.log"
-CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
-CLICKCLACK_OUTBOUND_JSON="$LOG_DIR/clickclack-outbound.json"
 CLICKCLACK_OUTBOUND_ERR="$LOG_DIR/clickclack-outbound.err"
-GATEWAY_1_LOG="$LOG_DIR/gateway-1.log"
-GATEWAY_2_LOG="$LOG_DIR/gateway-2.log"
-STATUS_JSON="$LOG_DIR/status.json"
 STATUS_ERR="$LOG_DIR/status.err"
-STATUS_AFTER_RESTART_JSON="$LOG_DIR/status-after-restart.json"
 STATUS_AFTER_RESTART_ERR="$LOG_DIR/status-after-restart.err"
-DOCTOR_LOG="$LOG_DIR/doctor.log"
 PLUGIN_A_INSTALL_PATH_FILE="$scenario_tmp/plugin-a-install-path.txt"
 PLUGIN_A_SOURCE_PATH_FILE="$scenario_tmp/plugin-a-source-path.txt"
-MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
-CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
 
 mock_pid=""
@@ -67,26 +61,7 @@ trap cleanup EXIT
 dump_debug_logs() {
   local status="$1"
   echo "release user journey failed with exit code $status" >&2
-  openclaw_e2e_dump_logs \
-    "$INSTALL_LOG" \
-    "$ONBOARD_LOG" \
-    "$OPENAI_LOG" \
-    "$MOCK_REQUEST_LOG" \
-    "$AGENT_LOG" \
-    "$PLUGIN_A_INSTALL_LOG" \
-    "$PLUGIN_A_CLI_LOG" \
-    "$PLUGIN_A_UNINSTALL_LOG" \
-    "$PLUGIN_B_INSTALL_LOG" \
-    "$PLUGIN_B_CLI_LOG" \
-    "$CLICKCLACK_PLUGIN_INSTALL_LOG" \
-    "$CLICKCLACK_SERVER_LOG" \
-    "$CLICKCLACK_OUTBOUND_JSON" \
-    "$GATEWAY_1_LOG" \
-    "$GATEWAY_2_LOG" \
-    "$STATUS_JSON" \
-    "$STATUS_AFTER_RESTART_JSON" \
-    "$DOCTOR_LOG" \
-    "$CLICKCLACK_STATE"
+  openclaw_e2e_dump_logs "${OPENCLAW_RELEASE_DIAGNOSTIC_LOGS[@]}"
 }
 openclaw_e2e_enable_failure_diagnostics
 

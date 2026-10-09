@@ -3,6 +3,7 @@ import {
   asOptionalObjectRecord,
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -13,15 +14,30 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
-import type { CronJob, CronJobPatch } from "../../cron/types.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
+import type { GatewayClient } from "./types.js";
+
+export function requiresExplicitAgentRuntimeToolsAllow(params: {
+  job: Pick<CronJob, "payload" | "trigger">;
+  callerScope: CronCallerScope | undefined;
+}): boolean {
+  return (
+    params.callerScope !== undefined &&
+    !params.callerScope.manageAll &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow === undefined
+  );
+}
 
 // Published clients send "deliver"; translate only the already-snapshotted request.
 function normalizeCronRequestDeliveryMode(input: CronJobPatch | null): void {
@@ -191,23 +207,50 @@ export function assertCronDoesNotTargetAgentHarness(input: {
   throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 }
 
-export function createCronCreatorSessionGuard(
+export function captureCronCreatorSession(
+  job: CronJobCreate,
   callerScope: CronCallerScope | undefined,
-  creatorSession: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"],
-): () => void {
+  client: GatewayClient | null,
+) {
+  const isolatedAgentTurn = job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
+  const sessionKey = callerScope?.sessionKey ?? (isolatedAgentTurn ? job.sessionKey : undefined);
+  const agentId = callerScope?.agentId ?? job.agentId;
+  const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
+  const creatorSession = loaded?.entry;
+  const sourceConversation =
+    isolatedAgentTurn && loaded && creatorSession?.sessionId
+      ? {
+          sessionKey: loaded.canonicalKey,
+          sessionId: creatorSession.sessionId,
+          lifecycleRevision: creatorSession.lifecycleRevision,
+        }
+      : undefined;
+  // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
+  const actor = callerScope
+    ? creatorSession?.createdActor
+    : resolveOperatorSessionCreation(client).actor;
+  const actorId = normalizeOptionalString(actor?.id);
+  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
-  return () => {
-    if (creatorSession && callerScope?.sessionKey) {
-      const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-        agentId: callerScope.agentId,
-      }).entry;
-      if (
-        latest?.sessionId !== creatorSession.sessionId ||
-        latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
-        JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
-      ) {
-        throw new Error("Creator session changed before scheduling; retry from the current turn.");
+  return {
+    ...(sourceConversation ? { sourceConversation } : {}),
+    ...(createdActor ? { createdActor } : {}),
+    ...(callerScope && creatorSession?.skillLibrarySelections
+      ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
+      : {}),
+    assertCurrent: () => {
+      if (creatorSession && sessionKey) {
+        const latest = loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry;
+        if (
+          latest?.sessionId !== creatorSession.sessionId ||
+          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+        ) {
+          throw new Error(
+            "Creator session changed before scheduling; retry from the current turn.",
+          );
+        }
       }
-    }
+    },
   };
 }

@@ -126,20 +126,13 @@ export function normalizeLegacyStreamingAliases(
     streaming.mode === undefined
   ) {
     streaming.mode = params.resolvedMode;
-    if (hadLegacyStreamMode) {
-      movedStreamMode = true;
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
-      );
-    } else if (typeof beforeStreaming === "boolean") {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
-      );
-    } else if (typeof beforeStreaming === "string") {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
-      );
-    }
+    movedStreamMode = hadLegacyStreamMode;
+    const source = hadLegacyStreamMode
+      ? "streamMode"
+      : `streaming (${typeof beforeStreaming === "boolean" ? "boolean" : "scalar"})`;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.${source} → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
+    );
     changed = true;
   }
   if (hadLegacyStreamMode) {
@@ -160,13 +153,14 @@ export function normalizeLegacyStreamingAliases(
     target: Record<string, unknown>,
     slot: string,
     nestedPath: string,
+    value = updated[flatKey],
   ) => {
     if (updated[flatKey] === undefined) {
       return;
     }
     const nested = `${params.pathPrefix}.streaming.${nestedPath}`;
     if (target[slot] === undefined) {
-      target[slot] = updated[flatKey];
+      target[slot] = value;
       params.changes.push(`Moved ${params.pathPrefix}.${flatKey} → ${nested}.`);
     } else {
       params.changes.push(`Removed ${params.pathPrefix}.${flatKey} (${nested} already set).`);
@@ -181,18 +175,13 @@ export function normalizeLegacyStreamingAliases(
   }
   moveOrRemoveAlias("blockStreamingCoalesce", block, "coalesce", "block.coalesce");
   if (updated.nativeStreaming !== undefined && params.resolvedNativeTransport !== undefined) {
-    if (streaming.nativeTransport === undefined) {
-      streaming.nativeTransport = params.resolvedNativeTransport;
-      params.changes.push(
-        `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
-      );
-    } else {
-      params.changes.push(
-        `Removed ${params.pathPrefix}.nativeStreaming (${params.pathPrefix}.streaming.nativeTransport already set).`,
-      );
-    }
-    delete updated.nativeStreaming;
-    changed = true;
+    moveOrRemoveAlias(
+      "nativeStreaming",
+      streaming,
+      "nativeTransport",
+      "nativeTransport",
+      params.resolvedNativeTransport,
+    );
   } else if (
     typeof beforeStreaming === "boolean" &&
     streaming.nativeTransport === undefined &&
@@ -461,6 +450,12 @@ export function normalizeLegacyChannelAliases(params: {
         const accountStreamingObject = asObjectRecord(accountEntry.streaming);
         if (accountStreamingObject) {
           let seededAccount = accountStreamingObject;
+          const setNestedSlot = (section: "block" | "preview", key: string, value: unknown) => {
+            seededAccount = {
+              ...seededAccount,
+              [section]: { ...asObjectRecord(seededAccount[section]), [key]: value },
+            };
+          };
           if (
             rootFlatDeliverySeed.chunkMode !== undefined &&
             seededAccount.chunkMode === undefined
@@ -473,13 +468,7 @@ export function normalizeLegacyChannelAliases(params: {
             rootFlatBlockEnabled !== undefined &&
             asObjectRecord(seededAccount.block)?.enabled === undefined
           ) {
-            seededAccount = {
-              ...seededAccount,
-              block: {
-                ...asObjectRecord(seededAccount.block),
-                enabled: rootFlatBlockEnabled,
-              },
-            };
+            setNestedSlot("block", "enabled", rootFlatBlockEnabled);
           }
           const rootFlatCoalesce = asObjectRecord(rootFlatBlock?.coalesce);
           if (rootFlatCoalesce) {
@@ -489,13 +478,7 @@ export function normalizeLegacyChannelAliases(params: {
               ...structuredClone(accountCoalesce ?? {}),
             };
             if (JSON.stringify(mergedCoalesce) !== JSON.stringify(accountCoalesce ?? {})) {
-              seededAccount = {
-                ...seededAccount,
-                block: {
-                  ...asObjectRecord(seededAccount.block),
-                  coalesce: mergedCoalesce,
-                },
-              };
+              setNestedSlot("block", "coalesce", mergedCoalesce);
             }
           }
           const rootFlatPreviewChunk = asObjectRecord(rootFlatDeliverySeed.preview)?.chunk;
@@ -504,13 +487,7 @@ export function normalizeLegacyChannelAliases(params: {
             rootFlatPreviewChunk !== undefined &&
             asObjectRecord(seededAccount.preview)?.chunk === undefined
           ) {
-            seededAccount = {
-              ...seededAccount,
-              preview: {
-                ...asObjectRecord(seededAccount.preview),
-                chunk: structuredClone(rootFlatPreviewChunk),
-              },
-            };
+            setNestedSlot("preview", "chunk", structuredClone(rootFlatPreviewChunk));
           }
           if (seededAccount !== accountStreamingObject) {
             accountEntry = { ...accountEntry, streaming: seededAccount };

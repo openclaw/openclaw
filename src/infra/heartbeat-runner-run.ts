@@ -62,7 +62,10 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     return { status: "skipped", reason: "alerts-disabled" };
   }
   const policy = createHeartbeatDispatch(opts, wake, prepared);
-  const state: ReplyOperationRunState = { heartbeat: policy };
+  const state: ReplyOperationRunState = {
+    heartbeat: policy,
+    sessionEventDelivery: prepared.canRelayToUser ? undefined : false,
+  };
   const execRequestOwners = [
     ...new Set(
       prepared.inspectedSystemEventsToConsume.flatMap(

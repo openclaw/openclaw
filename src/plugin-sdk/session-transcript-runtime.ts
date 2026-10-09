@@ -100,6 +100,7 @@ export function composeSessionTranscriptWriteAssertion(
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
     // A plugin's wrapper remains opaque even when all of its children are prepared.
+    hasOpaqueCheck: check !== undefined,
     preparedCheck: (assertSources) => assertSources(),
   });
 }
@@ -550,6 +551,9 @@ export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
 
 /**
  * Publishes a transcript update by scoped transcript target.
+ * `update.assistantItemIds` retires exact native display occurrences only after
+ * their row commits. It is internal provenance, not terminal/run authorization,
+ * and must be omitted for independently owned commentary and async rows.
  */
 export async function publishSessionTranscriptUpdateByIdentity(
   params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },

@@ -210,20 +210,20 @@ function applyFollowupQueueOverflow(
         throw new Error("followup queue summary source lost its elided line");
       }
       const contextKey = resolveFollowupDeliveryStorageKey(item);
-      const lastElision = queue.summaryElisions.at(-1);
+      let elision = queue.summaryElisions.at(-1);
       const compactSource = createOverflowSummaryRetrySource(item);
-      if (lastElision?.contextKey === contextKey) {
-        lastElision.sources.push(compactSource);
-        lastElision.summaryLines.push(summaryLine);
-        lastElision.sourceRefs.set(item, compactSource);
-      } else {
-        queue.summaryElisions.push({
+      if (elision?.contextKey !== contextKey) {
+        elision = {
           contextKey,
-          sources: [compactSource],
-          summaryLines: [summaryLine],
-          sourceRefs: new WeakMap([[item, compactSource]]),
-        });
+          sources: [],
+          summaryLines: [],
+          sourceRefs: new WeakMap<FollowupRun, FollowupRun>(),
+        };
+        queue.summaryElisions.push(elision);
       }
+      elision.sources.push(compactSource);
+      elision.summaryLines.push(summaryLine);
+      elision.sourceRefs.set(item, compactSource);
       if (queue.activeSummarySources.has(item)) {
         queue.activeSummarySources.add(compactSource);
       }

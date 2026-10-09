@@ -336,7 +336,7 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unkno
           aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
           aria-label=${t("nav.customize")}
           @click=${(event: MouseEvent) =>
-            host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
+            host.sidebarMenus.togglePositionedMenu("more", event.currentTarget as HTMLElement)}
         >
           ${icons.penLine}
         </button>

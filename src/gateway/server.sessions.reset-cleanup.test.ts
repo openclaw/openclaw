@@ -8,7 +8,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
@@ -467,7 +467,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   });
 
   expect(reset.ok).toBe(true);
-  expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+  expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
   expect(prepareFreshSession).not.toHaveBeenCalled();
 });
 

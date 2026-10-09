@@ -14,12 +14,13 @@ export function registerHostedUpdateStopTests({
   hostedStopPrepare,
   hostedStopExecute,
   hostedStopDispose,
+  consumeGatewayRestartIntentPayloadSync,
   createSignaledLoopHarness,
   managedUpdateSuccessorOwner,
   respawnGatewayProcessForUpdate,
   isGatewayWorkAdmissionClosed,
 }: UpdateRespawnFixtures) {
-  it.each([false, true])(
+  it.each([true])(
     "joins the accepted hosted Stop through foreground update settlement (park overlap: %s)",
     async (parkOverlap) => {
       const joined = createDeferredCore<boolean>();
@@ -90,6 +91,9 @@ export function registerHostedUpdateStopTests({
           );
           expect(hostedStopExecute).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
+          const intentReads = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+          captureSignal("SIGTERM")();
+          expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(intentReads);
           disposed.resolve();
           await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);

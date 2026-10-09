@@ -91,28 +91,78 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   );
 }
 
-function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
-  if (validatedSqliteModule === sqlite) {
-    return;
-  }
-  const runtime = {
+function sqliteNativeRuntimeIdentity() {
+  return {
     pid: process.pid,
     executable: process.execPath,
     nodeVersion: process.versions.node,
     bunVersion: process.versions.bun,
     library: ensureSqliteLibrarySelected(),
   };
-  const inherited: unknown = isMainThread
-    ? undefined
-    : getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY);
-  // Worker isolates share the selected native library; another process must probe its own load.
+}
+
+type SqliteNativeRuntimeAdmission = {
+  format: 1;
+  runtime: ReturnType<typeof sqliteNativeRuntimeIdentity>;
+  version: string;
+  extensionLoadingSupported: boolean;
+};
+
+function parseSqliteNativeRuntimeAdmission(
+  value: unknown,
+): SqliteNativeRuntimeAdmission | undefined {
   if (
-    isRecord(inherited) &&
-    inherited.format === 1 &&
-    isDeepStrictEqual(inherited.runtime, runtime) &&
-    typeof inherited.version === "string" &&
-    typeof inherited.extensionLoadingSupported === "boolean"
+    !isRecord(value) ||
+    value.format !== 1 ||
+    typeof value.version !== "string" ||
+    typeof value.extensionLoadingSupported !== "boolean"
   ) {
+    return undefined;
+  }
+  const runtime = sqliteNativeRuntimeIdentity();
+  if (!isDeepStrictEqual(value.runtime, runtime)) {
+    return undefined;
+  }
+  return {
+    format: 1,
+    runtime,
+    version: value.version,
+    extensionLoadingSupported: value.extensionLoadingSupported,
+  };
+}
+
+function safeSqliteNativeRuntimeAdmission(value: unknown) {
+  try {
+    const admission = parseSqliteNativeRuntimeAdmission(value);
+    return admission && isSqliteWalResetSafeVersion(admission.version) ? admission : undefined;
+  } catch {
+    // Optional transport facts must not replace an already completed database outcome.
+    return undefined;
+  }
+}
+
+/** Reuse a validated isolate fact without opening SQLite or probing the native library. */
+export function captureSqliteNativeRuntimeAdmission(): SqliteNativeRuntimeAdmission | undefined {
+  return safeSqliteNativeRuntimeAdmission(getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY));
+}
+
+/** Publish to later sibling workers; database authority remains with its existing owners. */
+export function installSqliteNativeRuntimeAdmission(value: unknown): void {
+  const admission = safeSqliteNativeRuntimeAdmission(value);
+  if (admission) {
+    setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, admission);
+  }
+}
+
+function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
+  if (validatedSqliteModule === sqlite) {
+    return;
+  }
+  const inherited = isMainThread
+    ? undefined
+    : parseSqliteNativeRuntimeAdmission(getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY));
+  // Worker isolates share the selected native library; another process must probe its own load.
+  if (inherited) {
     assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);
     jsonbSupported = (compareValidSemver(inherited.version, "3.45.0") ?? -1) >= 0;
     walCheckpointNoopSupported = (compareValidSemver(inherited.version, "3.53.0") ?? -1) >= 0;
@@ -143,7 +193,7 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
   validatedSqliteModule = sqlite;
   setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, {
     format: 1,
-    runtime,
+    runtime: sqliteNativeRuntimeIdentity(),
     version,
     extensionLoadingSupported: extensions,
   });

@@ -126,19 +126,16 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   }
-  const scheduleParkedFallback = () => {
-    const owner = replyRunRegistry.get(queueKey);
-    if (owner) {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: owner,
-        queueKey,
-        runFollowup,
-      });
-    } else {
-      scheduleFollowupDrain(queueKey, runFollowup);
-    }
-  };
-  scheduleParkedFallback();
+  const owner = replyRunRegistry.get(queueKey);
+  if (owner) {
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: owner,
+      queueKey,
+      runFollowup,
+    });
+  } else {
+    scheduleFollowupDrain(queueKey, runFollowup);
+  }
   releaseAdmissionTicket();
   const fallback = async (
     reason: ActiveReplySteerFallbackReason,

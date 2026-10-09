@@ -428,9 +428,7 @@ export async function handleCompactCommand(
     contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);
-  const line = reason
-    ? `${compactLabel}: ${reason} • ${contextSummary}`
-    : `${compactLabel} • ${contextSummary}`;
+  const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
   runtime.enqueueSystemEvent(line, {
     sessionKey: resolveSystemEventQueueKey(params.sessionKey, sessionAgentId),
   });

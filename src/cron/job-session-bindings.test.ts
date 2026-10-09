@@ -4,7 +4,7 @@ import {
   disableCronJobsBoundToSessions,
   resolveCronJobBoundSessionKeys,
 } from "./job-session-bindings.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 const cfg = {} as OpenClawConfig;
 
@@ -95,7 +95,7 @@ describe("resolveCronJobBoundSessionKeys", () => {
 });
 
 describe("disableCronJobsBoundToSession", () => {
-  function job(partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob {
+  function job(partial: Partial<CronStoredJob> & Pick<CronJob, "id">): CronStoredJob {
     return { enabled: true, sessionTarget: "isolated", ...partial } as CronJob;
   }
 
@@ -115,6 +115,10 @@ describe("disableCronJobsBoundToSession", () => {
   test("disables only enabled jobs bound to the archived session", async () => {
     const jobs = [
       job({ id: "bound" }),
+      job({
+        id: "created-here",
+        sourceConversation: { sessionKey: "agent:main:cron:bound", sessionId: "creator" },
+      }),
       job({ id: "other", sessionTarget: "session:agent:main:other" }),
       // Bound to the same session but already disabled; must not be re-patched.
       job({ id: "already-off", enabled: false, sessionKey: "cron:bound" }),
@@ -129,8 +133,8 @@ describe("disableCronJobsBoundToSession", () => {
       cfg,
       sessionKey: "agent:main:cron:bound",
     });
-    expect(disabled).toEqual(["bound"]);
-    expect(update).toHaveBeenCalledTimes(1);
+    expect(disabled).toEqual(["bound", "created-here"]);
+    expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
   });
 

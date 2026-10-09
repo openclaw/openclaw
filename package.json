@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.9.8",
+  "version": "2026.9.9",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "schemaVersions": {
@@ -1898,6 +1898,7 @@
     "perf:source:summary": "node --import ./scripts/tsx.mjs scripts/openclaw-performance-source-summary.mts",
     "plugin-sdk:api:diff": "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-api-diff.mts",
     "plugin-sdk:check-exports": "node --import ./scripts/tsx.mjs scripts/sync-plugin-sdk-exports.mts --check",
+    "plugin-sdk:shipped-surface:gen": "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-shipped-surface.mts",
     "plugin-sdk:surface": "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-surface-report.mts",
     "plugin-sdk:surface:check": "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-surface-report.mts --check",
     "plugin-sdk:sync-exports": "node --import ./scripts/tsx.mjs scripts/sync-plugin-sdk-exports.mts",

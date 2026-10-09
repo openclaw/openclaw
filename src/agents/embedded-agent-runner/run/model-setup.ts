@@ -1,7 +1,9 @@
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -130,6 +132,26 @@ async function prepareNativeSessionRuntime(
       };
       if (isIncognitoSessionKey(admission.sessionKey)) {
         return consume(loadSessionEntryReadOnly(admission), () => {});
+      }
+      const reader = getReplyOperationSessionReader(runParams.replyOperation);
+      if (reader) {
+        publication.prepareSource(
+          reader.database,
+          readDatabasePathIdentitySync(reader.database.path),
+        );
+        return await reader.withRead(
+          {
+            sessionKeys: [admission.sessionKey],
+            lifecycleSessionKey: admission.sessionKey,
+            snapshotFields: [],
+          },
+          assertCallerCurrent,
+          (read, assertCurrent) =>
+            consume(
+              read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+              assertCurrent,
+            ),
+        );
       }
       return await withSessionEntriesFromStoresInWorker(
         [
@@ -345,13 +367,15 @@ export async function resolveEmbeddedRunModelSetup(params: {
   let nativeCatalogFailure: { error: unknown } | undefined;
   const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
+  const hasSelectedNativeModel = () =>
+    catalog?.entries.some(ownsSelectedNativeModel) === true ||
+    catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
     agentHarness.loadModelCatalog &&
     params.preparedModelRuntime?.loadNativeModelCatalog &&
-    !catalog?.entries.some(ownsSelectedNativeModel) &&
-    !catalog?.routeVariants.some(ownsSelectedNativeModel)
+    !hasSelectedNativeModel()
   ) {
     try {
       catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
@@ -369,10 +393,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
   const nativeModelOwned =
-    nativeSessionRuntime !== undefined ||
-    (pluginHarnessOwnsTransport &&
-      (catalog?.entries.some(ownsSelectedNativeModel) === true ||
-        catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
+    nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
   const modelConfigProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {

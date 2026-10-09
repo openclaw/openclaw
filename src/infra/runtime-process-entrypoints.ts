@@ -29,6 +29,7 @@ export const runtimeProcessEntrypoints = {
   fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
   attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
   gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
+  gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
   fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
   sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
   authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),

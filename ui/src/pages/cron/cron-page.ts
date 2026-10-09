@@ -479,18 +479,21 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
+  private resetEditor(createOpen: boolean) {
+    this.clearHeartbeatScratch();
+    this.pendingRouteData = null;
+    // Retire the outgoing editor's discovery before resetting its form so
+    // late saves, deletions, and directory failures cannot affect its successor.
+    this.deliveryDirectory.retireEditor();
+    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
+    this.cron.cronCreateOpen = createOpen;
+  }
+
   private openCreate(patch?: Partial<CronFormState>) {
     if (!this.canManageCron) {
       return;
     }
-    this.clearHeartbeatScratch();
-    this.pendingRouteData = null;
-    // Opening the create form exits whatever editor was open, so the outgoing
-    // editor's directory retires with it and a delete or save still awaiting
-    // from that editor can no longer clear this one's.
-    this.deliveryDirectory.retireEditor();
-    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
-    this.cron.cronCreateOpen = true;
+    this.resetEditor(true);
     if (patch) {
       this.patchForm(patch);
       return;
@@ -576,13 +579,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private closePanel() {
-    this.clearHeartbeatScratch();
-    this.pendingRouteData = null;
-    // Back is a confirmed editor exit: retire discovery so a pending or
-    // published directory failure cannot surface on the overview.
-    this.deliveryDirectory.retireEditor();
-    cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
-    this.cron.cronCreateOpen = false;
+    this.resetEditor(false);
     this.requestCronUpdate();
     void this.runCronTask(async (cronState) => {
       updateCronRunsFilter(cronState, { cronRunsScope: "all" });

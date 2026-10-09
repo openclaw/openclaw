@@ -1,4 +1,4 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
@@ -139,8 +139,7 @@ export function countSettledTurnDeliveryPayloads(params: {
 }
 
 export function hasPositiveOutputTokenUsage(message: AssistantMessage | null): boolean {
-  const output = asFiniteNumber(message?.usage?.output);
-  return output !== undefined && output > 0;
+  return asPositiveFiniteNumber(message?.usage?.output) !== undefined;
 }
 
 export function isIncompleteTerminalAssistantTurn(params: {

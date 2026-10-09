@@ -272,27 +272,37 @@ it("keeps refresh ownership after a rejected release until deletion commits", as
   const root = tempDirs.make("openclaw-usage-lock-release-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
     const agentId = "usage-test";
-    const owner = prepareSessionCostUsageRefreshLock(agentId);
-    const contender = prepareSessionCostUsageRefreshLock(agentId);
-    expect(await Promise.all([owner.acquire(), contender.acquire()])).toEqual([true, false]);
-    await contender.release();
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-    const database = openOpenClawAgentDatabase({ agentId });
-    database.db.exec(`
+    const first = prepareSessionCostUsageRefreshLock(agentId);
+    const second = prepareSessionCostUsageRefreshLock(agentId);
+    let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+    let replacement: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
+    try {
+      const acquired = await Promise.all([first.acquire(), second.acquire()]);
+      expect(acquired.filter(Boolean)).toHaveLength(1);
+      const owner = acquired[0] ? first : second;
+      const contender = acquired[0] ? second : first;
+      await contender.release();
+      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
+      database = openOpenClawAgentDatabase({ agentId });
+      database.db.exec(`
       CREATE TRIGGER reject_refresh_release BEFORE DELETE ON cache_entries
       WHEN OLD.scope = 'session-cost-usage' AND OLD.key = 'refresh-lock'
       BEGIN SELECT RAISE(ABORT, 'release rejected'); END;
     `);
-    await expect(owner.release()).rejects.toThrow("release rejected");
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-    database.db.exec("DROP TRIGGER reject_refresh_release");
-    await owner.release();
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-    const replacement = prepareSessionCostUsageRefreshLock(agentId);
-    expect(await replacement.acquire()).toBe(true);
-    await owner.release();
-    expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-    await replacement.release();
+      await expect(owner.release()).rejects.toThrow("release rejected");
+      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
+      database.db.exec("DROP TRIGGER reject_refresh_release");
+      await owner.release();
+      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(false);
+      replacement = prepareSessionCostUsageRefreshLock(agentId);
+      expect(await replacement.acquire()).toBe(true);
+      await owner.release();
+      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
+      await replacement.release();
+    } finally {
+      database?.db.exec("DROP TRIGGER IF EXISTS reject_refresh_release");
+      await Promise.all([first.release(), second.release(), replacement?.release()]);
+    }
   });
 });
 

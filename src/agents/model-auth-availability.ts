@@ -356,12 +356,8 @@ export function createModelAuthAvailabilityResolver(
     }
     return envCache.get(normalized);
   };
-  const profileOrder = (
-    provider: string,
-    forModel?: string,
-    preferredProfileId?: string,
-    pinnedProfileId?: string,
-  ) => {
+  const profileOrder = (provider: string, ref: ModelAuthAvailabilityRef) => {
+    const { modelId: forModel, preferredProfileId, pinnedProfileId } = ref;
     const normalized = normalizeProvider(provider);
     const cacheKey = `${normalized}\u0000${forModel ?? ""}\u0000${preferredProfileId ?? ""}\u0000${pinnedProfileId ?? ""}`;
     const cached = orderCache.get(cacheKey);
@@ -877,12 +873,7 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return undefined;
     }
-    const orderResolution = profileOrder(
-      provider,
-      ref.modelId,
-      ref.preferredProfileId,
-      ref.pinnedProfileId,
-    );
+    const orderResolution = profileOrder(provider, ref);
     const plan = sourcePlanForTarget(provider, ref, policy, orderResolution, () => target);
     const decision = selectProviderModelAuthSources({ provider, plan });
     return decision.kind === "rejected"
@@ -901,10 +892,9 @@ export function createModelAuthAvailabilityResolver(
   const resolveProviderEvaluation = (
     rawProvider: string,
     ref: ModelAuthAvailabilityRef = {},
-    preparedTarget?: AuthTarget,
   ): AuthSourceEvaluation => {
     const provider = normalizeProviderIdForAuth(rawProvider);
-    const target = preparedTarget ?? prepareAuthTarget(provider, ref);
+    const target = prepareAuthTarget(provider, ref);
     const profileLock = ref.requiredProfileId?.trim();
     if (invalidProfilePin(provider, ref)) {
       return { availability: false, unavailableReason: "auth-failed", evidence: "profile" };
@@ -913,12 +903,7 @@ export function createModelAuthAvailabilityResolver(
     if (!profileLock && policy.binding.kind === "profile-incompatible") {
       return { availability: false, unavailableReason: "auth-failed", evidence: "profile" };
     }
-    const orderResolution = profileOrder(
-      provider,
-      ref.modelId,
-      ref.preferredProfileId,
-      ref.pinnedProfileId,
-    );
+    const orderResolution = profileOrder(provider, ref);
     const boundProfileId =
       !profileLock && policy.binding.kind === "profile" ? policy.binding.profileId : undefined;
     const sourcePlan = sourcePlanForTarget(provider, ref, policy, orderResolution, () => target, {
@@ -991,12 +976,7 @@ export function createModelAuthAvailabilityResolver(
     if (!modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile-incompatible") {
       return { availability: false, unavailableReason: "auth-failed", routeResolution };
     }
-    const orderResolution = profileOrder(
-      provider,
-      ref.modelId,
-      ref.preferredProfileId,
-      ref.pinnedProfileId,
-    );
+    const orderResolution = profileOrder(provider, ref);
     const materializedModelId = normalizeModelIdForProvider(provider, ref.modelId ?? "");
     const materializationMatchesRoute = (
       fact: RuntimeAuthMaterialization,

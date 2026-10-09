@@ -241,11 +241,12 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
+      timeoutMs = 60_000,
     ) => {
       assertCurrent();
-      const deadline = performance.now() + 60_000;
       let sequence = 0;
       let retirement: Promise<void> | undefined;
+      const hostEffects = new Set<Promise<WorkerTaskResponse>>();
       try {
         const reply = await lane.pool.run(
           () => {
@@ -258,19 +259,26 @@ export function retainSessionHistoryWorkerDatabase(
           },
           {
             inputBytes,
-            timeoutMs: 60_000,
+            timeoutMs,
             signal,
             onRequest: onRequest
-              ? async (value, context) => {
-                  context.signal.throwIfAborted();
-                  assertCurrent();
-                  onRequest(value);
-                  assertCurrent();
-                  const remaining = deadline - performance.now();
-                  if (remaining <= 0) {
-                    throw new WorkerTaskError("worker task timed out", "timeout");
-                  }
-                  return { input: null, timeoutMs: remaining };
+              ? (value, context) => {
+                  const effect = (async () => {
+                    context.signal.throwIfAborted();
+                    assertCurrent();
+                    const response = await onRequest(value, context.signal);
+                    context.signal.throwIfAborted();
+                    assertCurrent();
+                    return response ?? { input: null, timeoutMs };
+                  })();
+                  hostEffects.add(effect);
+                  owned.hostEffects.add(effect);
+                  const releaseEffect = () => {
+                    hostEffects.delete(effect);
+                    owned.hostEffects.delete(effect);
+                  };
+                  void effect.then(releaseEffect, releaseEffect);
+                  return effect;
                 }
               : undefined,
             onExecutionSettled: ({ retired }) => {
@@ -288,6 +296,7 @@ export function retainSessionHistoryWorkerDatabase(
           !Array.isArray(received) &&
           (received.kind === "session-entry-read" ||
             received.kind === "session-entry-list" ||
+            received.kind === "session-cleanup" ||
             received.kind === "session-exact-entries" ||
             received.kind === "session-entry-current" ||
             received.kind === "session-runtime-target" ||
@@ -322,6 +331,9 @@ export function retainSessionHistoryWorkerDatabase(
           }
         }
         throw error;
+      } finally {
+        // Cancellation removes queued effects; accepted writes still retain settlement custody.
+        await Promise.allSettled(hostEffects);
       }
     };
     const owner: SessionHistoryWorkerDatabase = {

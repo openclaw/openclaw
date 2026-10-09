@@ -9,6 +9,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent-runner/run.js";
+import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
+import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
@@ -17,11 +22,16 @@ import {
   connectWebchatClient,
   createGatewaySuiteHarness,
   cronIsolatedRun,
+  gatewayReplyMock,
   installGatewayTestHooks,
   rpcReq,
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
+
+// mock-isolation: Both Gateway barrel instances share this inference boundary; admission stays real.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const hookModel = vi.mocked(runEmbeddedAgent);
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -73,7 +83,30 @@ async function writeReloadableHooksConfig(hooks: Record<string, unknown>): Promi
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
   await fs.writeFile(
     configPath,
-    `${JSON.stringify({ gateway: { reload: { mode: "hybrid" } }, hooks }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        gateway: { reload: { mode: "hybrid" } },
+        agents: {
+          defaults: {
+            skipBootstrap: true,
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.test/v1",
+              apiKey: "synthetic-fixture-key",
+              models: [{ id: "gpt-5.6-luna", name: "Hook fixture model" }],
+            },
+          },
+        },
+        hooks,
+      },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
 }
@@ -213,7 +246,11 @@ async function createBlockedHookTransform(moduleName: string): Promise<{
 function withRevokedHook(
   mode: "disable" | "rotate",
   { signal }: Pick<TestContext, "signal">,
-  afterRotation?: (port: number, socket: Parameters<typeof rpcReq>[0]) => Promise<void>,
+  afterRotation?: (
+    port: number,
+    socket: Parameters<typeof rpcReq>[0],
+    waitForEvent: (text: string) => Promise<void>,
+  ) => Promise<void>,
 ): Promise<void> {
   return fixtureLifetime.run(async () => {
     const moduleName = `${mode}-reload.mjs`;
@@ -238,6 +275,47 @@ function withRevokedHook(
           await server.startupSettled;
           const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
           const mainSessionKey = resolveMainSessionKeyFromConfig();
+          const receipts = new Map<
+            string,
+            ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>
+          >();
+          const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+          const eventObserver = vi
+            .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+            .mockImplementation((text, options) => {
+              const receipt = enqueue(text, options);
+              if (options.source === "hook") {
+                receipts.set(text, receipt);
+              }
+              return receipt;
+            });
+          // Admission, native session creation, and reload authority remain real.
+          gatewayReplyMock.mockImplementation((ctx, options, config) =>
+            getReplyFromConfig(
+              ctx,
+              options,
+              withFullRuntimeReplyConfig(config ?? getRuntimeConfig()),
+            ),
+          );
+          const model = hookModel.mockReset().mockImplementation(async (params) => {
+            assert(params.preparedRunAdmission, "expected ordinary reply admission");
+            await params.preparedRunAdmission.admit("gateway", params.runId);
+            params.onExecutionPhase?.({ phase: "model_call_started" });
+            await params.onExecutionStarted?.();
+            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+            return { payloads: [{ text: "Hook event observed" }], meta: { durationMs: 1 } };
+          });
+          const waitForEvent = async (text: string) => {
+            const receipt = receipts.get(text);
+            assert(receipt, `expected admitted hook occurrence: ${text}`);
+            await expect(receipt.accepted).resolves.toEqual({ ok: true });
+            const outcome = await receipt.settled;
+            expect(outcome, JSON.stringify(outcome)).toMatchObject({
+              status: "completed",
+              executionStarted: true,
+            });
+            expect(model.mock.calls.some(([params]) => params.prompt.includes(text))).toBe(true);
+          };
           try {
             const current = await postHook(
               port,
@@ -245,17 +323,8 @@ function withRevokedHook(
               { text: "before-reload" },
               "before",
             );
-            expect(current.status).toBe(200);
-            await expect
-              .poll(
-                () =>
-                  peekSystemEventEntries(mainSessionKey).some((event) =>
-                    event.text.includes("before-reload"),
-                  ),
-                { timeout: 2_000, interval: 10 },
-              )
-              .toBe(true);
-            drainSystemEvents(mainSessionKey);
+            expect(current.status, await current.clone().text()).toBe(200);
+            await waitForEvent("before-reload");
             const revoked = postHook(port, "/hooks/revoked", { text: "after-reload" }, "revoked");
             let response: Response;
             try {
@@ -307,8 +376,19 @@ function withRevokedHook(
                 event.text.includes("after-reload"),
               ),
             ).toBe(false);
-            await afterRotation?.(port, socket);
+            expect(receipts.has("after-reload")).toBe(false);
+            expect(
+              model.mock.calls.some(([params]) => params.prompt.includes("after-reload")),
+            ).toBe(false);
+            await afterRotation?.(port, socket, waitForEvent);
           } finally {
+            for (const receipt of receipts.values()) {
+              receipt.cancel();
+            }
+            await Promise.allSettled([...receipts.values()].map((receipt) => receipt.settled));
+            eventObserver.mockRestore();
+            model.mockReset();
+            gatewayReplyMock.mockReset();
             socket.close();
           }
         } finally {
@@ -341,8 +421,7 @@ describe("gateway hook admission", () => {
   });
 
   test("rotates hook credentials and preserves replay across production hot reloads", async (context) => {
-    await withRevokedHook("rotate", context, async (port, socket) => {
-      const mainSessionKey = resolveMainSessionKeyFromConfig();
+    await withRevokedHook("rotate", context, async (port, socket, waitForEvent) => {
       const authorized = await postHook(
         port,
         "/hooks/wake",
@@ -350,17 +429,8 @@ describe("gateway hook admission", () => {
         "current-after-rotation",
         ROTATED_HOOK_TOKEN,
       );
-      expect(authorized.status).toBe(200);
-      await expect
-        .poll(
-          () =>
-            peekSystemEventEntries(mainSessionKey).some((event) =>
-              event.text.includes("current-after-rotation"),
-            ),
-          { timeout: 2_000, interval: 10 },
-        )
-        .toBe(true);
-      drainSystemEvents(mainSessionKey);
+      expect(authorized.status, await authorized.clone().text()).toBe(200);
+      await waitForEvent("current-after-rotation");
       cronIsolatedRun.mockClear();
       cronIsolatedRun.mockImplementation(async (params: unknown) => {
         (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();

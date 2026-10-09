@@ -89,11 +89,23 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     const instance = getPluginInstance(record);
     assert(instance);
     const draining = createDeferredCore();
+    let ordinaryCallsQuiesced = false;
+    const quiesce = instance.quiesce.bind(instance);
+    drainObservations.push(
+      vi.spyOn(instance, "quiesce").mockImplementation(() => {
+        const accepting = quiesce();
+        ordinaryCallsQuiesced = true;
+        return accepting;
+      }),
+    );
     const wait = instance.waitForRetainedWork.bind(instance);
     drainObservations.push(
       vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
         const pending = wait(...args);
-        draining.resolve();
+        // The earlier retained-work wait preserves ordinary call admission.
+        if (args[1]?.includeCalls) {
+          draining.resolve();
+        }
         return pending;
       }),
     );
@@ -122,7 +134,7 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
         .spyOn(cleanupTimeout, "withPluginHostCleanupTimeout")
         .mockImplementation(
           <T>(label: string, cleanup: () => T | Promise<T>, timeoutMs?: number) =>
-            label === "retained plugin work"
+            label === "retained plugin work" && ordinaryCallsQuiesced
               ? deadlineScope.run(true, () => withCleanupDeadline(label, cleanup, timeoutMs))
               : withCleanupDeadline(label, cleanup, timeoutMs),
         ),

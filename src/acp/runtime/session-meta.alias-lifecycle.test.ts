@@ -14,7 +14,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import {
-  readAcpSessionMeta,
+  readAcpSessionEntry,
   readAcpSessionMetaBatch,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -111,7 +111,7 @@ describe("ACP raw alias lifecycle", () => {
         );
         expect(after.sources).toEqual(before.sources);
         expect(after.runs).toEqual(before.runs);
-        expect(readAcpSessionMeta(fixture.scope)).toEqual(
+        expect(readAcpSessionEntry(fixture.scope)?.acp).toEqual(
           operation === "close" ? undefined : updated,
         );
         if (operation === "update") {
@@ -120,7 +120,7 @@ describe("ACP raw alias lifecycle", () => {
         expect(fixture.snapshot().rows).toEqual(retainedRows);
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
-        expect(readAcpSessionMeta(fixture.scope)).toBeUndefined();
+        expect(readAcpSessionEntry(fixture.scope)?.acp).toBeUndefined();
         expect(
           readAcpSessionMetaBatch({
             cfg: fixture.scope.cfg,
@@ -169,7 +169,7 @@ describe("ACP raw alias lifecycle", () => {
           expect(mutate).toHaveBeenCalledOnce();
           expect(fixture.snapshot()).toEqual(before);
           expect(sessionAccessor.loadExactSessionEntry(fixture.scope)).toEqual(entryBefore);
-          expect(readAcpSessionMeta(fixture.scope)).toEqual(CANONICAL_META);
+          expect(readAcpSessionEntry(fixture.scope)?.acp).toEqual(CANONICAL_META);
           expect(changes).toEqual([]);
         } finally {
           unsubscribe();
@@ -199,7 +199,7 @@ describe("ACP raw alias lifecycle", () => {
         const retainedRows = fixture.snapshot().rows.filter((row) => row.session_key === aliasKey);
         await upsertAcpSessionMeta({ ...fixture.scope, mutate: () => null });
         expect(fixture.snapshot().rows).toEqual(retainedRows);
-        expect(readAcpSessionMeta(fixture.scope)).toBeUndefined();
+        expect(readAcpSessionEntry(fixture.scope)?.acp).toBeUndefined();
       });
     },
   );

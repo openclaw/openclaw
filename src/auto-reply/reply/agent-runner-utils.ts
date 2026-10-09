@@ -40,7 +40,6 @@ import type { FollowupRun } from "./queue.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 
-const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 type EmbeddedReplyRoute = Pick<
   FollowupRun,
   | "originatingChannel"
@@ -174,11 +173,12 @@ export function buildThreadingToolContext(params: {
   };
 }
 
-export const isBunFetchSocketError = (message?: string) =>
-  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
-
-export const formatBunFetchSocketError = () =>
-  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+export function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
+  return queued.run.inputProvenance?.kind === "internal_system" &&
+    queued.run.inputProvenance.sourceTool === "restart-sentinel"
+    ? queued.originatingReplyToId
+    : queued.messageId;
+}
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(
@@ -311,6 +311,10 @@ export function mintReplyMessageActionTurnCapability(
   >,
   runId: string,
 ): string | undefined {
+  // An event's captured delivery route is not a new trusted channel turn.
+  if (turn.followupRun.run.internalEventExecution) {
+    return undefined;
+  }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
   if (
