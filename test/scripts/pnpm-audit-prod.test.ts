@@ -646,7 +646,7 @@ snapshots:
               throw new Error("Expected a JSON request body");
             }
             expect(Object.keys(JSON.parse(init.body))).toHaveLength(401);
-            return await response();
+            return response();
           },
           stdout: {
             write: (chunk: string) => {

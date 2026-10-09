@@ -1187,8 +1187,6 @@ fs.renameSync = (source, destination) => {
       name: "rejects ClawHub install paths that resolve outside the managed extensions root",
       escaped: true,
       recordOverrides: {},
-      errorPrefix: null,
-      pathError: false,
     },
     {
       name: "rejects an npm peer linked to a different host",
@@ -1216,103 +1214,87 @@ fs.renameSync = (source, destination) => {
       },
       optionalDependency: "escaped",
     },
-  ])(
-    "$name",
-    ({ escaped, recordOverrides, errorPrefix, pathError, wrongPeerTarget, optionalDependency }) => {
-      const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
-      const home = path.join(root, "home");
-      const scratchRoot = path.join(root, "scratch");
-      const extensionsRoot = path.join(home, ".openclaw", "extensions");
-      const installPath = escaped
-        ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
-        : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
-      mkdirSync(extensionsRoot, { recursive: true });
-      mkdirSync(installPath, { recursive: true });
-      const record = {
-        artifactFormat: "zip",
-        artifactKind: "legacy-zip",
-        clawhubFamily: "code-plugin",
-        clawhubPackage: "@openclaw/kitchen-sink",
-        installPath,
-        source: "clawhub",
-        spec: "clawhub:@openclaw/kitchen-sink",
-        ...recordOverrides,
-      };
-      if (record.artifactKind === "npm-pack") {
-        mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
-        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
-        if (wrongPeerTarget) {
-          mkdirSync(peerTarget);
-        }
-        symlinkSync(
-          peerTarget,
-          path.join(installPath, "node_modules", "openclaw"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        if (optionalDependency) {
-          const dependencyPath = path.join(installPath, "node_modules", "is-number");
-          const dependencyTarget =
-            optionalDependency === "escaped" ? path.join(root, "other-dependency") : dependencyPath;
-          writeJson(path.join(dependencyTarget, "package.json"), { name: "is-number" });
-          if (optionalDependency === "escaped") {
-            symlinkSync(
-              dependencyTarget,
-              dependencyPath,
-              process.platform === "win32" ? "junction" : "dir",
-            );
-          }
+  ])("$name", ({ escaped, recordOverrides, wrongPeerTarget, optionalDependency }) => {
+    const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const extensionsRoot = path.join(home, ".openclaw", "extensions");
+    const installPath = escaped
+      ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
+      : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
+    mkdirSync(extensionsRoot, { recursive: true });
+    mkdirSync(installPath, { recursive: true });
+    const record = {
+      artifactFormat: "zip",
+      artifactKind: "legacy-zip",
+      clawhubFamily: "code-plugin",
+      clawhubPackage: "@openclaw/kitchen-sink",
+      installPath,
+      source: "clawhub",
+      spec: "clawhub:@openclaw/kitchen-sink",
+      ...recordOverrides,
+    };
+    if (record.artifactKind === "npm-pack") {
+      mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
+      if (wrongPeerTarget) {
+        mkdirSync(peerTarget);
+      }
+      symlinkSync(
+        peerTarget,
+        path.join(installPath, "node_modules", "openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      if (optionalDependency) {
+        const dependencyPath = path.join(installPath, "node_modules", "is-number");
+        const dependencyTarget =
+          optionalDependency === "escaped" ? path.join(root, "other-dependency") : dependencyPath;
+        writeJson(path.join(dependencyTarget, "package.json"), { name: "is-number" });
+        if (optionalDependency === "escaped") {
+          symlinkSync(
+            dependencyTarget,
+            dependencyPath,
+            process.platform === "win32" ? "junction" : "dir",
+          );
         }
       }
+    }
 
-      writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
-        plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
-      });
-      writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
-        plugin: { id: "openclaw-kitchen-sink-fixture" },
-      });
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {
-          "openclaw-kitchen-sink-fixture": record,
-        },
-      });
+    writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
+      plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
+    });
+    writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
+      plugin: { id: "openclaw-kitchen-sink-fixture" },
+    });
+    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+      installRecords: {
+        "openclaw-kitchen-sink-fixture": record,
+      },
+    });
 
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-          HOME: home,
-          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        },
-      });
+    const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+      },
+    });
 
-      if (escaped) {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("ClawHub install path resolved outside");
-      } else if (pathError) {
-        expect(result.status).toBe(1);
-        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-          "missing ClawHub install path for openclaw-kitchen-sink-fixture",
-        );
-      } else if (wrongPeerTarget || optionalDependency === "escaped") {
-        expect(result.status).toBe(1);
-        const expectedError = wrongPeerTarget
-          ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
-          : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
-        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
-      } else if (errorPrefix) {
-        expect(result.status).toBe(1);
-        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-          `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
-        );
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-      }
-    },
-  );
+    expect(result.status).toBe(1);
+    if (escaped) {
+      expect(result.stderr).toContain("ClawHub install path resolved outside");
+    } else {
+      const expectedError = wrongPeerTarget
+        ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
+        : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
+    }
+  });
 
   it("times out stalled ClawHub package metadata requests", ({ signal }) =>
     fixtures.run(async () => {
