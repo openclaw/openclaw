@@ -490,27 +490,23 @@ export async function repairDoctorSqliteNoCow(params: {
           { kind: "data-at-risk", reason: "incomplete-migration" },
         );
       }
-      for (const candidate of [
+      for (const { pathname, identity } of [
         ...(backup && backupIdentity ? [{ pathname: backup, identity: backupIdentity }] : []),
         ...(snapshotRoot && snapshotIdentity && snapshotsCompleted === 0
           ? [{ pathname: snapshotRoot, identity: snapshotIdentity }]
           : []),
       ]) {
         try {
-          await removeUninstalledDirectory(
-            candidate.pathname,
-            candidate.identity,
-            params.assertCurrent,
-          );
-          if (candidate.pathname === backup) {
+          await removeUninstalledDirectory(pathname, identity, params.assertCurrent);
+          if (pathname === backup) {
             backup = undefined;
           }
-          if (candidate.pathname === snapshotRoot) {
+          if (pathname === snapshotRoot) {
             snapshotRoot = undefined;
           }
         } catch (cleanupError) {
           result.warnings.push(
-            `NOCOW staging cleanup failed; retained ${candidate.pathname}: ${String(cleanupError)}`,
+            `NOCOW staging cleanup failed; retained ${pathname}: ${String(cleanupError)}`,
           );
         }
       }

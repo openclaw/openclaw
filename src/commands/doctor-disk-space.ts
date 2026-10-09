@@ -1,5 +1,5 @@
 import os from "node:os";
-import { expectDefined, formatByteSize } from "@openclaw/normalization-core";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -40,60 +40,55 @@ function collectDiskSpaceWarnings() {
   // If we cannot determine free space (no existing ancestor, unsupported FS,
   // or permission error), skip silently — other contributions already
   // handle missing directories.
-  if (!snapshot) {
+  if (!snapshot || !(snapshot.availableBytes < WARNING_BYTES)) {
     return null;
   }
 
   const displayStateDir = shortenHomePath(stateDir);
   const { availableBytes } = snapshot;
   const displayFreeSpace = formatBytes(availableBytes);
-  const warnings =
-    availableBytes < CRITICAL_BYTES
-      ? [
-          `- CRITICAL: only ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
-          "- Config writes, session transcripts, and log rotation may fail silently.",
-          "- Free up disk space immediately to avoid data loss.",
-        ]
-      : availableBytes < WARNING_BYTES
-        ? [
-            `- Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
-            "- Consider freeing space to prevent future config/session write failures.",
-          ]
-        : [];
+  const critical = availableBytes < CRITICAL_BYTES;
   return {
-    availableBytes,
+    critical,
     stateDir,
-    warnings,
+    displayFreeSpace,
+    message: critical
+      ? `CRITICAL: only ${displayFreeSpace} free on the partition containing ${displayStateDir}.`
+      : `Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
+    details: critical
+      ? [
+          "Config writes, session transcripts, and log rotation may fail silently.",
+          "Free up disk space immediately to avoid data loss.",
+        ]
+      : ["Consider freeing space to prevent future config/session write failures."],
   };
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
 export function collectDiskSpaceHealthFindings(): readonly HealthFinding[] {
   const result = collectDiskSpaceWarnings();
-  if (!result || result.warnings.length === 0) {
+  if (!result) {
     return [];
   }
 
-  const [message, ...details] = result.warnings;
-  const critical = result.availableBytes < CRITICAL_BYTES;
   return [
     {
       checkId: DISK_SPACE_CHECK_ID,
-      severity: critical ? "error" : "warning",
-      message: expectDefined(message, "disk-space warning message").replace(/^- /, ""),
+      severity: result.critical ? "error" : "warning",
+      message: result.message,
       path: result.stateDir,
-      target: formatBytes(result.availableBytes),
-      requirement: critical ? "critical-free-space" : "low-free-space",
-      fixHint: details.map((line) => line.replace(/^- /, "")).join(" "),
+      target: result.displayFreeSpace,
+      requirement: result.critical ? "critical-free-space" : "low-free-space",
+      fixHint: result.details.join(" "),
     },
   ];
 }
 
 export function noteDiskSpace(): void {
   const result = collectDiskSpaceWarnings();
-  if (!result || result.warnings.length === 0) {
+  if (!result) {
     return;
   }
 
-  note(result.warnings.join("\n"), "Disk space");
+  note([result.message, ...result.details].map((line) => `- ${line}`).join("\n"), "Disk space");
 }
