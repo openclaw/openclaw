@@ -106,6 +106,7 @@ export async function prepareAgentCatalogSource(
       : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
+    ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
     ...(catalogMode === "static"
       ? {
           providerDiscoveryEntriesOnly: true as const,
@@ -120,7 +121,6 @@ export async function prepareAgentCatalogSource(
       const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
         ...options,
         ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
-        ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
       });
       return {
         modelsJsonContents: source.modelsJsonContents,
@@ -129,10 +129,7 @@ export async function prepareAgentCatalogSource(
       };
     }
     if (!input.readOnly) {
-      await ensureOpenClawModelsJson(input.config, input.agentDir, {
-        ...options,
-        ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
-      });
+      await ensureOpenClawModelsJson(input.config, input.agentDir, options);
     }
     // Capture immediately after the serialized write. Another owner may share this directory and
     // publish a different workspace generation before full-catalog parsing begins.

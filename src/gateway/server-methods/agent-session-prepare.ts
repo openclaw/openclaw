@@ -196,15 +196,15 @@ async function prepareAdmittedAgentSession(
     );
     return undefined;
   }
-  if (
-    respondDeletedAgentSession({
-      cfg,
-      canonicalKey,
-      entry,
-      acpMetadataSessionKey: legacyKey,
-      respond: params.respond,
-    })
-  ) {
+  const deleted = respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+    assertCurrent: params.assertCurrent,
+  });
+  if (deleted instanceof Promise ? await deleted : deleted) {
     return undefined;
   }
   const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);

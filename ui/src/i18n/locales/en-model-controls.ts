@@ -93,6 +93,7 @@ const enModelControls = {
       restrictedModelsHelp: "Your administrator centrally configures the models available here.",
       emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
+      allModels: "All models ({count})",
       useDefaultReasoning: "Use default reasoning ({level})",
       fastResponsesAria: "Fast responses: {state}",
     },

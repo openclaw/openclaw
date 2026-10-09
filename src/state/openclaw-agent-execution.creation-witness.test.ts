@@ -863,7 +863,7 @@ it.skipIf(process.platform === "win32")(
         execution.runExisting(requestSource, (scope) =>
           scope.execute({
             type: "session.entry.read",
-            input: { sessionKey: "agent:main:missing" },
+            input: { sessionKeys: ["agent:main:missing"] },
           }),
         ),
       ).rejects.toThrow(/identity changed/);

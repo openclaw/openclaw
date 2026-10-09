@@ -1,6 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sessionEntryReaders from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
@@ -125,7 +129,7 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const key = "agent:main:concurrent-metadata";
     const scope = { agentId: "main", sessionKey: key, env };
-    await replaceSessionEntry(scope, {
+    replaceSessionEntrySync(scope, {
       sessionId: "same-session",
       updatedAt: 1,
       label: "initial",

@@ -36,6 +36,34 @@ export function readSqliteVersionObservation(database: DatabaseSync, previousDat
   };
 }
 
+export type SqliteSchemaMarkers = { readonly schemaVersion: number; readonly userVersion: number };
+
+export function readChangedSqliteSchemaMarkers(
+  database: DatabaseSync,
+  facts: SqliteSchemaMarkers,
+  observation?: ReturnType<typeof readSqliteVersionObservation>,
+): SqliteSchemaMarkers | undefined {
+  if (observation) {
+    const matches =
+      facts.schemaVersion === observation.schemaVersion &&
+      facts.userVersion === observation.userVersion;
+    return matches
+      ? undefined
+      : {
+          schemaVersion: Number(observation.schemaVersion),
+          userVersion: Number(observation.userVersion),
+        };
+  }
+  return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
+    const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
+      s.get(),
+    );
+    const matches =
+      facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
+    return matches ? undefined : { schemaVersion, userVersion: Number(userVersion?.user_version) };
+  });
+}
+
 /** Pin an implicit read snapshot without requiring transaction-control authorization. */
 export function runSqlitePinnedReadSnapshotSync<T>(
   db: DatabaseSync,

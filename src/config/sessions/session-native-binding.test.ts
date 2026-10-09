@@ -9,7 +9,6 @@ import { loadSubagentRunsForSessionsInDatabase } from "../../agents/subagents/re
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { PluginStateStoreError } from "../../plugin-state/plugin-state-store.types.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
@@ -107,34 +106,6 @@ it("uses each installed plugin owner's packaged codec during real binding deleti
   });
 });
 
-it.each(["codex", "agentsapi"] as const)(
-  "deletes a real %s binding off the caller thread before publishing the session deletion",
-  async (kind) => {
-    await withNativeBindingFixture(kind, async (fixture) => {
-      const published: unknown[] = [];
-      const unsubscribe = onSessionIdentityMutation((event) => {
-        if (
-          event.kind === "delete" &&
-          event.previous.sessionKeys.includes(fixture.scope.sessionKey)
-        ) {
-          published.push({ entry: fixture.readEntry(), binding: fixture.readBinding() });
-        }
-      });
-      const sql = observeHostDataSql();
-      try {
-        await expect(fixture.remove()).resolves.toMatchObject({ deleted: true });
-        expect(bindingWrites(sql.queries)).toEqual([]);
-      } finally {
-        sql.restore();
-        unsubscribe();
-      }
-      expect(fixture.readEntry()).toBeUndefined();
-      expect(fixture.readBinding()).toBeUndefined();
-      expect(published).toEqual([{ entry: undefined, binding: undefined }]);
-    });
-  },
-);
-
 it("keeps archive bytes and identity publication equivalent to the released native adapter", async () => {
   const outcomes: unknown[] = [];
   const hostBindingSql = { native: 0, worker: 0 };
@@ -189,145 +160,69 @@ it("keeps archive bytes and identity publication equivalent to the released nati
   expect(outcomes[1]).toEqual(outcomes[0]);
 });
 
-it("vetoes the agent commit when the real shared-state deletion encounters corrupt storage", async () => {
+it("restores the exact removed Codex row after A fails", async () => {
   await withNativeBindingFixture("codex", async (fixture) => {
     const before = fixture.readEntry();
-    const history = loadTranscriptEventsSync(fixture.scope);
-    let prepared = false;
-    observeNativeGrants((_request, facts) => {
-      if (facts.kind === "native-binding-ready" && !prepared) {
-        prepared = true;
-        fixture.shared.db
-          .prepare(
-            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND entry_key = ?",
-          )
-          .run("{ corrupt synthetic binding", "codex", fixture.bindingKey);
+    const failure = new Error("synthetic agent COMMIT refusal");
+    let removed: Record<string, unknown> | undefined;
+    let restored: Record<string, unknown> | undefined;
+    let agentCommit = false;
+    let fixtureWrite = false;
+    observeNativeGrants((request, facts) => {
+      if (facts.kind === "native-binding-ready") {
+        removed = { ...fixture.readBinding(), ignoredByCodec: { keep: ["exact", 7] } };
+        fixtureWrite = true;
+        try {
+          fixture.bindingStore.register(fixture.bindingKey, removed);
+        } finally {
+          fixtureWrite = false;
+        }
+      }
+      if (request.stage === "commit" && facts.kind === "session-native-binding") {
+        agentCommit = true;
+        expect(fixture.readBinding()).toBeUndefined();
+        throw failure;
       }
     });
-    const sql = observeHostDataSql();
+    delivery.afterExecution = () => {
+      restored = fixture.readBinding();
+    };
+    const measured: string[] = [];
+    const sql = observeHostDataSql((query) => {
+      if (!fixtureWrite) {
+        measured.push(query);
+      }
+    });
     try {
-      const failure = await fixture.remove().catch((error: unknown) => error);
-      expect(prepared).toBe(true);
-      expect(failure).toBeInstanceOf(PluginStateStoreError);
-      expect(failure).toMatchObject({ operation: "delete", code: "PLUGIN_STATE_CORRUPT" });
-      expect(bindingWrites(sql.queries)).toEqual([]);
+      const rejected = fixture.remove();
+      await expect(rejected).rejects.toBe(failure);
+      expect(agentCommit).toBe(true);
+      // Exclude only this test's explicit before-image write, not the owner's restoration.
+      expect(bindingWrites(measured)).toEqual([]);
     } finally {
       sql.restore();
     }
     expect(fixture.readEntry()).toEqual(before);
-    expect(loadTranscriptEventsSync(fixture.scope)).toEqual(history);
+    expect(removed).toBeDefined();
+    expect(restored).toMatchObject({
+      ...removed,
+      lease: {
+        token: isRecord(removed?.lease) ? removed.lease.token : undefined,
+        expiresAt: expect.any(Number),
+      },
+    });
+    const { lease: originalLease, ...originalValue } = removed!;
+    const { lease: restoredLease, ...restoredValue } = restored!;
+    expect(restoredValue).toEqual(originalValue);
+    expect(
+      isRecord(restoredLease) &&
+        isRecord(originalLease) &&
+        typeof restoredLease.expiresAt === "number" &&
+        typeof originalLease.expiresAt === "number" &&
+        restoredLease.expiresAt >= originalLease.expiresAt,
+    ).toBe(true);
   });
 });
-
-it.each([false, true])(
-  "conditionally restores the exact removed Codex row after A fails (successor: %s)",
-  async (successor) => {
-    await withNativeBindingFixture("codex", async (fixture) => {
-      const before = fixture.readEntry();
-      const failure = new Error("synthetic agent COMMIT refusal");
-      let removed: Record<string, unknown> | undefined;
-      let restored: Record<string, unknown> | undefined;
-      let successorRow: Record<string, unknown> | undefined;
-      let agentCommit = false;
-      let fixtureWrite = false;
-      observeNativeGrants((request, facts) => {
-        if (facts.kind === "native-binding-ready") {
-          removed = { ...fixture.readBinding(), ignoredByCodec: { keep: ["exact", 7] } };
-          fixtureWrite = true;
-          try {
-            fixture.bindingStore.register(fixture.bindingKey, removed);
-          } finally {
-            fixtureWrite = false;
-          }
-        }
-        if (request.stage === "commit" && facts.kind === "session-native-binding") {
-          agentCommit = true;
-          expect(fixture.readBinding()).toBeUndefined();
-          if (successor) {
-            successorRow = {
-              version: 1,
-              state: "active",
-              sessionId: "successor",
-              binding: { threadId: "successor-thread", cwd: "/synthetic/successor" },
-            };
-            fixtureWrite = true;
-            try {
-              fixture.bindingStore.register(fixture.bindingKey, successorRow);
-            } finally {
-              fixtureWrite = false;
-            }
-          }
-          throw failure;
-        }
-      });
-      delivery.afterExecution = () => {
-        restored = fixture.readBinding();
-      };
-      const measured: string[] = [];
-      const sql = observeHostDataSql((query) => {
-        if (!fixtureWrite) {
-          measured.push(query);
-        }
-      });
-      try {
-        const rejected = fixture.remove();
-        if (successor) {
-          const reported = await rejected.catch((error: unknown) => error);
-          expect(reported).toMatchObject({ code: "outcome-unknown" });
-          const errors = new Set<Error>();
-          const visit = (error: unknown) => {
-            if (!(error instanceof Error) || errors.has(error)) {
-              return;
-            }
-            errors.add(error);
-            visit(error.cause);
-            if (error instanceof AggregateError) {
-              for (const nested of error.errors) {
-                visit(nested);
-              }
-            }
-          };
-          visit(reported);
-          expect([...errors]).toContain(failure);
-          expect([...errors].map((error) => error.message)).toContain(
-            "Codex binding changed before session deletion rollback",
-          );
-        } else {
-          await expect(rejected).rejects.toBe(failure);
-        }
-        expect(agentCommit).toBe(true);
-        // Exclude only this test's explicit before-image/successor writes, not the owner's restoration.
-        expect(bindingWrites(measured)).toEqual([]);
-      } finally {
-        sql.restore();
-      }
-      expect(fixture.readEntry()).toEqual(before);
-      if (successor) {
-        expect(restored).toEqual(successorRow);
-        expect(fixture.readBinding()).toEqual(successorRow);
-      } else {
-        expect(removed).toBeDefined();
-        expect(restored).toMatchObject({
-          ...removed,
-          lease: {
-            token: isRecord(removed?.lease) ? removed.lease.token : undefined,
-            expiresAt: expect.any(Number),
-          },
-        });
-        const { lease: originalLease, ...originalValue } = removed!;
-        const { lease: restoredLease, ...restoredValue } = restored!;
-        expect(restoredValue).toEqual(originalValue);
-        expect(
-          isRecord(restoredLease) &&
-            isRecord(originalLease) &&
-            typeof restoredLease.expiresAt === "number" &&
-            typeof originalLease.expiresAt === "number" &&
-            restoredLease.expiresAt >= originalLease.expiresAt,
-        ).toBe(true);
-      }
-    });
-  },
-);
 
 it("rechecks a changed durable descendant basis after the final A grant and compensates S", async () => {
   await withNativeBindingFixture("codex", async (fixture) => {

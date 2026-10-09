@@ -47,28 +47,22 @@ export function assertExecApprovalsMutationAllowed(params: {
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
-  const agentIds = new Set([
-    ...Object.keys(current.agents ?? {}),
-    ...Object.keys(next.agents ?? {}),
-  ]);
-  const state = getNodeSqliteKysely<ExecApprovalsDatabase>(params.db);
-  for (const agentId of agentIds) {
-    const currentPolicy = current.agents?.[agentId];
-    const nextPolicy = next.agents?.[agentId];
-    if (isDeepStrictEqual(currentPolicy, nextPolicy)) {
-      continue;
-    }
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const journal = executeSqliteQueryTakeFirstSync(
-      params.db,
-      state
-        .selectFrom("agent_deletion_journal")
-        .select("operation_id")
-        .where("agent_id", "=", normalizedAgentId),
-    );
-    if (!journal) {
-      continue;
-    }
+  const changed = [
+    ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
+  ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
+  const agentIds = new Set(changed.map(normalizeAgentId));
+  if (agentIds.size === 0) {
+    return;
+  }
+  const journal = executeSqliteQueryTakeFirstSync(
+    params.db,
+    getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
+      .selectFrom("agent_deletion_journal")
+      .select("agent_id")
+      .where("agent_id", "in", [...agentIds])
+      .limit(1),
+  );
+  if (journal) {
     throw new ExecApprovalsMutationFencedError();
   }
 }

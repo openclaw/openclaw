@@ -33,7 +33,11 @@ export function assertClawPackageLifecycleWriteArtifact(
 export function withClawPackageDeletionLease<T>(
   artifact: ClawPackageLifecycleArtifact,
   deletion: AgentDeletionWorkerAuthority,
-  operation: (lease: OpenClawStateAsyncLeaseContext, assertCurrentHost: () => void) => Promise<T>,
+  operation: (
+    lease: OpenClawStateAsyncLeaseContext,
+    assertCurrentHost: () => void,
+    assertCurrentFinal: () => void,
+  ) => Promise<T>,
 ): Promise<T> {
   const capturedArtifact = { ...artifact };
   return deletion.withStateLease(
@@ -45,9 +49,9 @@ export function withClawPackageDeletionLease<T>(
       leaseLabel: "Claw package lifecycle",
       operationLabel: "claw.package.lifecycle",
     },
-    (lease, assertCurrentHost) => {
+    (lease, assertCurrentHost, assertCurrentFinal) => {
       artifacts.set(lease, capturedArtifact);
-      return operation(lease, assertCurrentHost);
+      return operation(lease, assertCurrentHost, assertCurrentFinal);
     },
   );
 }

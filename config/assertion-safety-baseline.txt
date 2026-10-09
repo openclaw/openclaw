@@ -633,7 +633,7 @@ extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	4
-extensions/ollama/index.ts	7
+extensions/ollama/index.ts	6
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
 extensions/ollama/src/discovery-shared.ts	1
@@ -1327,7 +1327,7 @@ src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts	3
 src/agents/embedded-agent-runner/run/message-transform-stream-wrapper.ts	3
 src/agents/embedded-agent-runner/run/recovery-message-action-capability.ts	1
-src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
+src/agents/embedded-agent-runner/run/session-bootstrap.ts	1
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
@@ -1887,7 +1887,7 @@ src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	4
+src/config/sessions/session-accessor.sqlite-read.ts	3
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
@@ -1908,7 +1908,6 @@ src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	13
 src/config/sessions/types.ts	1
-src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2
@@ -2604,7 +2603,7 @@ src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	1
-src/state/openclaw-quarantine-store.ts	2
+src/state/openclaw-quarantine-store.ts	1
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	4
 src/state/openclaw-state-db-schema-helpers.ts	1

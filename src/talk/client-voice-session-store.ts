@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { z } from "zod";
+import type { TrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   getSqliteReadOperationRevision,
@@ -11,6 +12,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
 import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
@@ -18,7 +20,7 @@ const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
 export const VOICE_SESSION_RECORD_VERSION = 1;
 export const VOICE_SESSION_STALE_AFTER_MS = 6 * 60 * 60_000;
 
-export type ClientVoiceToolEffect = {
+type ClientVoiceToolEffect = {
   runId: string;
   toolCallId?: string;
   toolName: string;
@@ -126,9 +128,10 @@ export function parseStoredVoiceSessionRecord(
 export function readVoiceSessionRecord(
   agentId: string,
   voiceSessionId: string,
+  options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
 ): ClientVoiceSessionRecord | undefined {
   return readVoiceSessionRecordInTransaction(
-    openOpenClawAgentDatabase({ agentId }),
+    openOpenClawAgentDatabase({ ...options, agentId }),
     voiceSessionId,
   );
 }
@@ -212,6 +215,15 @@ export function readVoiceSessionFacts(
   );
 }
 
+export function readOwnedVoiceSessionFacts(params: ClientVoiceRunBinding): VoiceSessionFacts {
+  const record = readVoiceSessionFacts(params.agentId, params.voiceSessionId);
+  if (!record) {
+    throw new Error("voice session not found");
+  }
+  assertVoiceSessionOwnership(record, params);
+  return record;
+}
+
 export type VoiceSessionLookup =
   | { kind: "legacy"; agentId: string; sessionKey: string }
   | { kind: "stale"; agentId: string; updatedBefore: number; excludeVoiceSessionId?: string };
@@ -241,6 +253,78 @@ export function writeVoiceSessionRecordInTransaction(
   );
   // sqlite-allow-raw: Compiled SQL preserves native preparation before JSON evaluation.
   database.db.prepare(compiled.sql).run(...bind(record));
+}
+
+function effectStatus(
+  event: Exclude<TrustedToolExecutionEvent, { type: "tool.execution.started" }>,
+): ClientVoiceToolEffect["status"] {
+  if (event.type === "tool.execution.completed") {
+    return "succeeded";
+  }
+  if (event.type === "tool.execution.blocked") {
+    return "blocked";
+  }
+  return event.terminalReason === "cancelled" ? "cancelled" : "failed";
+}
+
+export function recordVoiceToolEffectInTransaction(
+  database: OpenClawAgentDatabase,
+  binding: ClientVoiceRunBinding,
+  runId: string,
+  event: TrustedToolExecutionEvent,
+  now = Date.now(),
+): ClientVoiceSessionRecord | undefined {
+  const record = readVoiceSessionRecordInTransaction(database, binding.voiceSessionId);
+  if (!record) {
+    return undefined;
+  }
+  assertVoiceSessionOwnership(record, binding);
+  const existing = event.toolCallId
+    ? record.effects.find(
+        (effect) => effect.runId === runId && effect.toolCallId === event.toolCallId,
+      )
+    : record.effects.findLast(
+        (effect) =>
+          effect.runId === runId &&
+          effect.toolName === event.toolName &&
+          effect.status === "started",
+      );
+  if (event.type !== "tool.execution.started" && !existing) {
+    return record;
+  }
+  if (event.type !== "tool.execution.started" && existing) {
+    existing.status = effectStatus(event);
+    existing.finishedAt = event.ts;
+  } else if (event.mutatingAction === true && (!event.toolCallId || !existing)) {
+    record.effects.push({
+      runId,
+      ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+      toolName: event.toolName,
+      startedAt: event.ts,
+      status: "started",
+    });
+  }
+  record.updatedAt = now;
+  writeVoiceSessionRecordInTransaction(database, record);
+  return record;
+}
+
+export function registerVoiceConsultRunInTransaction(
+  database: OpenClawAgentDatabase,
+  params: ClientVoiceRunBinding & { runId: string; now?: number },
+): ClientVoiceSessionRecord {
+  const record = readVoiceSessionRecordInTransaction(database, params.voiceSessionId);
+  if (!record) {
+    throw new Error("voice session not found");
+  }
+  assertVoiceSessionOwnership(record, params);
+  // A close can race the ACK: the accepted run still owns its effects.
+  if (!record.consultRunIds.includes(params.runId)) {
+    record.consultRunIds.push(params.runId);
+    record.updatedAt = params.now ?? Date.now();
+    writeVoiceSessionRecordInTransaction(database, record);
+  }
+  return record;
 }
 
 export function assertVoiceSessionOwnership(

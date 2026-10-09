@@ -2,6 +2,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parseLaneSelection } from "./lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "./lib/docker-e2e-scenarios.mts";
 import { createPluginPrereleaseTestPlan } from "./lib/plugin-prerelease-test-plan.mts";
+import { parseUpgradeSurvivorBaselineSpecs } from "./lib/upgrade-survivor-policy.mjs";
 import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups.mjs";
 
 export const RELEASE_PACKAGE_ACCEPTANCE_LANES =
@@ -421,8 +422,9 @@ export function createReleaseSourceSelection(options = {}) {
         profile: "release-path",
         releaseProfile,
         chunk: row.chunk_id,
+        ...(row.docker_lanes ? { lanes: parseLaneSelection(row.docker_lanes) } : {}),
         includeOpenWebUI,
-        baselines,
+        baselines: row.published_upgrade_survivor_baselines ?? baselines,
         scenarios,
       });
     }
@@ -507,11 +509,38 @@ export function createReleaseWorkflowMatrixPlan(options = {}) {
         options.liveSuiteFilter === entry.suite_id ||
         options.liveSuiteFilter === entry.suite_group),
   );
+  const baselines = parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines);
+  // Keep the npm-weighted host envelope intact: baseline upgrades get separate
+  // runners instead of raising the resource limits on one migration runner.
+  const dockerChunks = DOCKER_E2E_CHUNKS.flatMap((entry) => {
+    if (entry.chunk_id !== "package-update-migrations" || baselines.length < 2) {
+      return [entry];
+    }
+    const shards = [
+      Object.assign({}, entry, {
+        label: "package/update channel switching",
+        shard_id: `${entry.chunk_id}-channel-switch`,
+        docker_lanes: "update-channel-switch",
+        published_upgrade_survivor_baselines: "",
+      }),
+    ];
+    for (const [index, baseline] of baselines.entries()) {
+      shards.push(
+        Object.assign({}, entry, {
+          label: `package/update migration ${baseline}`,
+          shard_id: `${entry.chunk_id}-baseline-${index + 1}`,
+          docker_lanes: "published-upgrade-survivor",
+          published_upgrade_survivor_baselines: baseline,
+        }),
+      );
+    }
+    return shards;
+  });
 
   return {
     liveDocker: { count: liveDocker.length, matrix: { include: liveDocker } },
     dockerE2e: planProfileMatrix(
-      DOCKER_E2E_CHUNKS,
+      dockerChunks,
       releaseProfile,
       dockerE2eEnabled,
       "release-path Docker E2E chunks disabled by input selection",
@@ -581,6 +610,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     liveModelsOnly: process.env.LIVE_MODELS_ONLY,
     prepareOnly: process.env.PREPARE_ONLY,
     releaseProfile: process.env.RELEASE_TEST_PROFILE || undefined,
+    upgradeSurvivorBaselines: process.env.PUBLISHED_UPGRADE_SURVIVOR_BASELINES,
   });
 
   writeOutputs(plan);

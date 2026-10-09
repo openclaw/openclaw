@@ -45,6 +45,7 @@ export async function prepareAgentRequestRouting(params: {
     sessionId?: string;
   }) => void;
   clearDedupe: () => void;
+  assertCurrent?: () => void;
 }) {
   const rejectInvalidRequest = (message: string): undefined => {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -153,18 +154,29 @@ export async function prepareAgentRequestRouting(params: {
   if (expectedSessionTargetError) {
     return rejectInvalidRequest(expectedSessionTargetError);
   }
-  if (
-    requestedSessionKey &&
-    respondUnavailableAgentSessionForKey({
+  if (requestedSessionKey) {
+    const unavailable = respondUnavailableAgentSessionForKey({
       sessionKey: requestedSessionKey,
       requestedSessionId,
       isRawModelRun: params.isRawModelRun,
       agentId,
       respond: params.respond,
-    })
-  ) {
-    params.clearDedupe();
-    return undefined;
+      assertCurrent: params.assertCurrent,
+    });
+    if (unavailable instanceof Promise) {
+      // Only the free ACP metadata read yields here. Reserve before that read
+      // settles so another invocation cannot claim this idempotency key.
+      params.reserveDedupe(requestedSessionKey, agentId);
+    }
+    try {
+      if (unavailable instanceof Promise ? await unavailable : unavailable) {
+        params.clearDedupe();
+        return undefined;
+      }
+    } catch (error) {
+      params.clearDedupe();
+      throw error;
+    }
   }
   if (params.execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
     const expectedSessionId = normalizeOptionalString(

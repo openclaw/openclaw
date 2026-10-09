@@ -4,8 +4,34 @@ import { clawInstallRecordFromRow } from "../claws/provenance-read.kernel.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { createOpenClawStateLeaseLostError } from "./openclaw-state-lease-error.js";
+import {
+  verifyOpenClawStateLeaseOwnership,
+  type OpenClawStateLeaseOwnerIdentity,
+} from "./openclaw-state-lease-storage.js";
+
+/** Foreign package writers require a current read immediately before filesystem effects. */
+export function assertAgentDeletionLeaseFinal(
+  identity: OpenClawStateLeaseOwnerIdentity,
+  options: OpenClawStateDatabaseOptions,
+  assertCurrentHost: () => void,
+): void {
+  assertCurrentHost();
+  const found = withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      verifyOpenClawStateLeaseOwnership({ ...identity, transaction: db });
+      return true;
+    },
+    { ...options, allowNativeRead: true },
+  );
+  if (!found) {
+    throw createOpenClawStateLeaseLostError(identity);
+  }
+  assertCurrentHost();
+}
 
 /** The minted host owner surrounds this current point read; comparison fields alone grant nothing. */
 export function assertAgentDeletionFinalInDatabase(

@@ -12,7 +12,11 @@ import type { DomainScope } from "./openclaw-state-worker-store.types.js";
 export type AgentDeletionWorkerAuthority = AgentDeletionCleanupWorkerAuthority & {
   withStateLease<T>(
     options: Parameters<typeof withOpenClawStateLeaseAsync>[0],
-    run: (lease: OpenClawStateAsyncLeaseContext, assertCurrentHost: () => void) => Promise<T>,
+    run: (
+      lease: OpenClawStateAsyncLeaseContext,
+      assertCurrentHost: () => void,
+      assertCurrentFinal: () => void,
+    ) => Promise<T>,
   ): Promise<T>;
   runWithWorker<T>(
     operation: (

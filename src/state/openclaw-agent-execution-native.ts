@@ -23,7 +23,6 @@ import {
   isSqliteWorkerStoreAvailable,
   openAgentDatabaseSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
-  type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import {
@@ -41,6 +40,7 @@ import {
   captureOpenClawAgentDatabaseAdmissionPublication,
   getOpenClawAgentDatabaseValidationForTransfer,
   invalidateOpenClawAgentDatabaseValidation,
+  retireReplacedAgentValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   cleanupRetiredAgentDatabaseLease,
@@ -53,6 +53,7 @@ import type {
   AgentDatabaseFileExecutionOpen,
   AgentDatabaseExecutionScope,
   AgentDatabaseNativeGeneration,
+  AgentDatabaseNativeStore as Store,
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
@@ -61,7 +62,6 @@ import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-
 import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-type Store = SqliteWorkerStore<AgentDatabaseOperations>;
 /** A logical execution owner can replace this generation only after its native close settles. */
 export function createAgentDatabaseNativeGeneration(
   agentId: string,
@@ -394,6 +394,7 @@ export function createAgentDatabaseNativeGeneration(
     source.assertCurrent();
     assertCallerCurrent?.();
     opening ??= (async () => {
+      retireReplacedAgentValidation(agentId, pathname, expectedIdentity);
       const registration = createIfMissing
         ? captureOpenClawAgentDatabaseRegistration({
             agentId,

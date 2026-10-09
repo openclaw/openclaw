@@ -2,6 +2,7 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import type { SessionEntryCohortRequest } from "../config/sessions/session-entry-read.types.js";
 import type {
   SessionTranscriptExecutionReadInputs,
   SessionTranscriptExecutionReadResult,
@@ -312,10 +313,18 @@ export async function loadAgentRestartRecoveryOperations() {
 }
 
 export async function loadAgentEntryReadOperations() {
-  const kernel = await import("../config/sessions/session-accessor.sqlite-entry-read.js");
+  const kernel = await import("../config/sessions/session-entry-read.worker.js");
+  const { readSessionEntryCohort, readSessionEntryDataInDatabase } =
+    await import("../config/sessions/session-entry-cohort.worker.js");
   return {
-    "session.entry.read": (input: { sessionKey: string }, { open }) =>
-      kernel.readSessionEntryRow(open(), input.sessionKey)?.entry,
+    "session.entry.read": (input: { sessionKey: string } | SessionEntryCohortRequest, { open }) => {
+      const database = open();
+      return "sessionKeys" in input
+        ? readSessionEntryCohort(database, input, (request) =>
+            kernel.readExactSessionEntriesWithLifecycle(request, database),
+          )
+        : readSessionEntryDataInDatabase(database, input.sessionKey);
+    },
   } satisfies Handlers;
 }
 

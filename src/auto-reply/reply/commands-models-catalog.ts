@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
 } from "../../agents/model-catalog-decisions.js";
 import {
@@ -170,11 +171,15 @@ export async function loadModelsProviderData(
     profileProvider: options.sessionEntry?.providerOverride ?? options.sessionEntry?.modelProvider,
     runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
   };
-  const decisions = createModelCatalogDecisions(decisionParams);
+  const decisions = await prepareModelCatalogDecisions(decisionParams);
   // Selecting the default clears the session runtime pin; other model callbacks retain it.
   const defaultDecisions =
     decisionParams.runtimeOverride && resolveModelRuntimeRoute(resolvedDefault.provider)
-      ? createModelCatalogDecisions({ ...decisionParams, runtimeOverride: undefined })
+      ? createModelCatalogDecisions({
+          ...decisionParams,
+          preparedPersonalCatalog: decisions.preparedPersonalCatalog,
+          runtimeOverride: undefined,
+        })
       : decisions;
   const decisionsForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     normalizeProviderId(entry.provider) === resolvedDefault.provider &&

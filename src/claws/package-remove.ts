@@ -439,6 +439,7 @@ async function applyClawPackageRemovalsUnlocked(
     const run = async (
       packageLease: OpenClawStateWorkerLeaseContext,
       assertPackageCurrent: () => void,
+      assertPackageCurrentFinal: () => void = assertPackageCurrent,
     ) => {
       let claimed = false;
       let claimedRef: PersistedClawPackageRef | undefined;
@@ -448,7 +449,8 @@ async function applyClawPackageRemovalsUnlocked(
         assertPackageCurrent();
       };
       const assertCurrentFinal = () => {
-        assertCurrent();
+        options.assertCurrent?.();
+        assertPackageCurrentFinal();
         options.assertCurrentFinal?.();
       };
       const assertCurrentAsync = async () => {
@@ -619,7 +621,7 @@ async function applyClawPackageRemovalsUnlocked(
             decision.skillPlan,
             {
               beforePersistentApply: assertCurrentFinal,
-              beforeRollback: assertPackageCurrent,
+              beforeRollback: assertPackageCurrentFinal,
             },
           );
           if (!removed.ok) {

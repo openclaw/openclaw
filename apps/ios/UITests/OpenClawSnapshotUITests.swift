@@ -108,6 +108,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testAssistantRepliesNameTheSpeakerWhenTheAvatarIsHidden() throws {
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let reply = app.descendants(matching: .any)["chat-assistant-message-body"].firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        let run = app.descendants(matching: .any)["chat-assistant-run"].firstMatch
+        let named = run.exists ? run : reply
+        let avatar = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Molty avatar")).firstMatch
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertFalse(avatar.exists, "A compact width shows no avatar beside a reply")
+        }
+        // The reply names the assistant exactly where no avatar does.
+        XCTAssertEqual(named.label, avatar.exists ? "" : "Molty")
+    }
+
     func testReleaseAgentScreenshot() {
         self.captureReleaseScreenshot(Self.agentScreenshotTarget)
     }
@@ -667,6 +683,64 @@ final class OpenClawSnapshotUITests: XCTestCase {
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
                 .firstMatch.waitForExistence(timeout: 8))
         self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
+    }
+
+    func testVoiceRenditionsStayVisibleBesideConsultAnswers() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "voice-consult-rows"),
+            additionalArguments: ["--openclaw-voice-consult-rows-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "VOICE_SPOKEN_AFTER"))
+            .firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let question = app.staticTexts["Which build is on my phone?"]
+        for _ in 0..<6 where !question.isHittable {
+            app.swipeDown()
+        }
+        self.attachScreenshot(named: "voice-consult-rows")
+        let spokenFirst = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "VOICE_SPOKEN_FIRST"))
+            .firstMatch
+        XCTAssertTrue(spokenFirst.exists, "SPOKEN_ROW_FOLDED_INTO_WORK")
+    }
+
+    func testSystemNoticesExpandAndCollapseWithoutLosingTheirBody() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat", initialDestination: "chat", name: "system-notices"),
+            additionalArguments: ["--openclaw-system-notices-fixture", "--openclaw-no-reactions-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["Notice fixture ready."].waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "system-notices-collapsed")
+
+        for (label, start, end) in [
+            ("injected context", "CONTEXT_START", "CONTEXT_END"),
+            ("background task", "TASK_START", "TASK_END"),
+        ] {
+            let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch
+            let body = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", start)).firstMatch
+            XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+            XCTAssertFalse(body.exists, "System payload should start collapsed")
+            for _ in 0..<4 where !disclosure.isHittable {
+                app.swipeDown()
+            }
+            XCTAssertTrue(disclosure.isHittable)
+            disclosure.tap()
+            XCTAssertTrue(body.waitForExistence(timeout: 5))
+            XCTAssertTrue(body.label.contains(end), "Expanded disclosure must expose the complete payload")
+            self.attachScreenshot(named: "system-notice-expanded-\(start)")
+            for _ in 0..<4 where !disclosure.isHittable {
+                app.swipeDown()
+            }
+            XCTAssertTrue(disclosure.isHittable)
+            disclosure.tap()
+            XCTAssertTrue(body.waitForNonExistence(timeout: 5))
+        }
+        self.attachScreenshot(named: "system-notices-recollapsed")
     }
 
     func testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend() throws {

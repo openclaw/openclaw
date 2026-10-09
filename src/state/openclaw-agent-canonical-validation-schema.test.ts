@@ -4,12 +4,10 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { RuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
-import {
-  createSqliteReadOnlyWorkerScope,
-  runSqliteReadOnlyOperation,
-} from "../infra/sqlite-readonly-worker.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
@@ -282,32 +280,29 @@ DatabaseSync.prototype.prepare = function(sql) {
 };`,
       );
       const preloadEnv = sqliteWorkerPreloadEnv(preload);
-      const expectedIdentity = readDatabasePathIdentitySync(pathname).key;
+      const expectedIdentity = readDatabasePathIdentitySync(pathname);
       await withEnvAsync(preloadEnv, async () => {
         for (const carry of [false, true]) {
           writeFileSync(log, "");
-          // Each fresh helper owns an independent expected-contract cache.
-          const scope = createSqliteReadOnlyWorkerScope();
+          // Each fresh history worker starts without an inherited expected-contract cache.
+          await maintenanceLane.pool.rotate();
+          const factKey = "openclaw.agentCanonicalValidationSchemaDefinitions";
+          const inherited = getEnvironmentData(factKey);
+          setEnvironmentData(factKey, undefined);
+          const reader = retainSessionHistoryWorkerDatabase(
+            { agentId: "main", path: pathname, env: state.env },
+            maintenanceLane,
+          );
           const read = () =>
-            scope.run(() =>
-              runSqliteReadOnlyOperation(
-                pathname,
-                {
-                  type: "trajectoryRetention.read",
-                  input: {
-                    agentId: "main",
-                    sessionId: "retained",
-                    now: 1,
-                    schemaContract: carry ? contract : undefined,
-                  },
-                },
-                {
-                  source: "canonical",
-                  expectedIdentity,
-                  env: { ...state.env, ...preloadEnv },
-                  signal,
-                },
-              ),
+            reader.owner.readTrajectoryRetention(
+              {
+                input: { sessionId: "retained" },
+                now: 1,
+                schemaContract: carry ? contract : undefined,
+                expectedIdentity,
+                env: { ...state.env, ...preloadEnv },
+              },
+              { signal, timeoutMs: 60_000 },
             );
           try {
             await expect(read()).resolves.toMatchObject({ sessionId: "retained", runs: [] });
@@ -326,7 +321,9 @@ DatabaseSync.prototype.prepare = function(sql) {
               );
             }
           } finally {
-            await scope.close();
+            setEnvironmentData(factKey, inherited);
+            reader.release();
+            await maintenanceLane.pool.rotate();
           }
         }
       });

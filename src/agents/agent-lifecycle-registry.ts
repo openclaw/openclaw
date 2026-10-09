@@ -22,7 +22,10 @@ import {
   readAgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { createAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
-import { assertAgentDeletionFinalInDatabase } from "../state/agent-deletion-final-guard.js";
+import {
+  assertAgentDeletionFinalInDatabase,
+  assertAgentDeletionLeaseFinal,
+} from "../state/agent-deletion-final-guard.js";
 import type {
   AgentDeletionInput,
   AgentDeletionJournalTransport,
@@ -331,11 +334,22 @@ export function withAgentDeletion<T>(
                   withOpenClawStateLeaseWorkerAdmission(
                     additionalLease,
                     statePath,
-                    (admission) =>
-                      apply(additionalLease, () => {
+                    (admission) => {
+                      const assertLeaseCurrentHost = () => {
                         assertCurrentHost();
                         admission.assertCurrent();
-                      }),
+                      };
+                      return apply(additionalLease, assertLeaseCurrentHost, () =>
+                        assertAgentDeletionLeaseFinal(
+                          {
+                            ...admission.identity,
+                            leaseLabel: leaseOptions.leaseLabel ?? "state lease",
+                          },
+                          { path: statePath, env: context.environment },
+                          assertLeaseCurrentHost,
+                        ),
+                      );
+                    },
                     { assertCurrent: assertCurrentHost },
                   ),
                 ),

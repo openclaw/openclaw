@@ -1,3 +1,4 @@
+import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   assertExistingDatabaseIdentity,
@@ -18,6 +19,7 @@ import type {
   AgentDatabaseNativeGeneration,
   AgentDatabaseExecutionFileIdentity,
 } from "./openclaw-agent-execution-contract.js";
+import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
@@ -63,16 +65,22 @@ export function assertAgentDatabaseCreationTarget(params: {
 
 /** A read can borrow an already-selected file owner only within its current storage scope. */
 export function borrowExistingAgentDatabaseExecution(
-  owner: AgentDatabaseFileExecutionOwner,
+  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>,
   options: { path: string; env?: NodeJS.ProcessEnv },
 ): OpenClawAgentDatabaseExecution | undefined {
-  const target = { ...options, agentId: owner.agentId };
+  const pathname = path.resolve(options.path);
+  const owner =
+    owners.get(pathname) ?? owners.get(readDatabasePathIdentitySync(pathname).canonicalPath);
+  if (!owner || owner.kind !== "file") {
+    return undefined;
+  }
+  const target = { ...options, agentId: owner.agentId, path: pathname };
   if (!supportsAgentDatabaseExecutionScope(target)) {
     return undefined;
   }
   try {
     assertAgentDatabaseExecutionSharedState(target, owner.sharedDatabaseKey);
-    return owner.borrow(options.path);
+    return owner.borrow(pathname);
   } catch {
     // Initial read selection does not inherit failures of an unrelated writable lifecycle.
     return undefined;

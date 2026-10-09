@@ -4,7 +4,6 @@ import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "../state/worker-operation-registry.js";
-import type { TrajectoryRuntimeRetentionReadOperations } from "../trajectory/runtime-retention.contract.js";
 import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
 import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
@@ -14,8 +13,7 @@ export type SqliteReadOnlyOperations = WorkerOperations<
     typeof immutableInstallReadOperations &
     typeof pageCacheReadOperations
 > &
-  AgentDeletionSessionStoreAbsentReadOperations &
-  TrajectoryRuntimeRetentionReadOperations;
+  AgentDeletionSessionStoreAbsentReadOperations;
 
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
@@ -27,10 +25,6 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
     ),
   pageCache: () =>
     import("./sqlite-page-cache.worker.js").then((module) => module.pageCacheReadOperations),
-  trajectoryRetention: () =>
-    import("../trajectory/runtime-retention.worker.js").then(
-      (module) => module.trajectoryRuntimeRetentionReadOperations,
-    ),
   pluginCatalog: () =>
     import("../agents/plugin-model-catalog.kernel.js").then(
       (module) => module.pluginModelCatalogReadOperations,

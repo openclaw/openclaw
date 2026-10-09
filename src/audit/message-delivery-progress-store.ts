@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -64,6 +65,11 @@ function progressDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ProgressDatabase>(db);
 }
 
+const ensureProgressSchemaInDatabase = createSqliteSchemaEnsurer(progressSchemaSql, {
+  tables: ["outbound_message_progress"],
+  indexes: ["outbound_message_progress_occurred_idx", "outbound_message_progress_run_occurred_idx"],
+});
+
 function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   const database = openOpenClawStateDatabase(options);
   if (ensuredDatabases.has(database.db)) {
@@ -71,8 +77,7 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; progress rows use Kysely.
-      db.exec(progressSchemaSql());
+      ensureProgressSchemaInDatabase(db);
       ensureColumn(db, "outbound_message_progress", "context_id TEXT");
       ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
     },

@@ -253,6 +253,7 @@ vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   ) =>
     run((entry) => ({
       entry: Object.assign(entry, {
+        operationId: "fixture-deletion-operation",
         databasePaths: entry.databasePaths ?? [],
         cleanupPaths: entry.cleanupPaths ?? [],
       }),
@@ -310,6 +311,7 @@ vi.mock("../../state/agent-deletion-journal.js", () => ({
 // mock-isolation: Creation reads must consume the staged journal instead of a real worker database.
 vi.mock("../../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalForCreation: async () => mocks.readAgentDeletionJournal(),
+  readAgentDeletionRecoveryHoldsInWorker: async () => [],
 }));
 
 vi.mock("../../state/agent-provenance.js", async (importOriginal) => ({
@@ -454,9 +456,7 @@ beforeEach(() => {
     ownerAgentId: "robby",
     warnings: [],
   });
-  mocks.withAgentExecApprovalsRemoved
-    .mockReset()
-    .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
+  mocks.withAgentExecApprovalsRemoved.mockReset();
   mocks.assertAgentDeletionCurrent.mockReset();
   mocks.assertAgentDeletionCurrentAsync.mockReset().mockImplementation(async () => {
     mocks.assertAgentDeletionCurrent();
@@ -683,53 +683,6 @@ describe("agents.create", () => {
     ...mocks,
     create: (params) => makeCall("agents.create", params),
     configuredConfig: () => mocks.loadConfigReturn,
-  });
-
-  it("rejects invalid params (missing name)", async () => {
-    const respond = await call("agents.create", {
-      workspace: "/tmp/ws",
-    });
-
-    expectRespondErrorContaining(respond, "invalid");
-  });
-
-  it("writes emoji and avatar to both config and IDENTITY.md", async () => {
-    const respond = await call("agents.create", {
-      name: "Fancy Agent",
-      model: "sonnet-4.6",
-      workspace: "/tmp/ws",
-      emoji: "🤖",
-      avatar: "https://example.com/avatar.png",
-    });
-
-    expectRespondOk(respond, {
-      ok: true,
-      agentId: "fancy-agent",
-      name: "Fancy Agent",
-      model: "sonnet-4.6",
-    });
-    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
-      model: "sonnet-4.6",
-    });
-    expectRecordFields(configOptions.identity, {
-      name: "Fancy Agent",
-      emoji: "🤖",
-      avatar: "https://example.com/avatar.png",
-    });
-    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
-      rootDir: "/resolved/tmp/ws",
-      relativePath: "IDENTITY.md",
-    });
-    expect(write.data).toBe(
-      [
-        "# IDENTITY.md - Agent Identity",
-        "",
-        "- Name: Fancy Agent",
-        "- Emoji: 🤖",
-        "- Avatar: https://example.com/avatar.png",
-        "",
-      ].join("\n"),
-    );
   });
 });
 

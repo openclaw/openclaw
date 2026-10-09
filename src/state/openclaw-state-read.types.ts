@@ -113,6 +113,10 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
+import type {
+  TranscriptExportCommand,
+  TranscriptExportResult,
+} from "../transcripts/store-export-contract.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionWorkerSnapshot,
@@ -174,6 +178,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | TranscriptExportCommand
   | RegisteredStateReadCommand
   | { type: "admit" }
   | { type: "backup.runs" }
@@ -239,6 +244,11 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | { type: "userModelAccounts.links"; profileId: string }
+  | { type: "userModelAccounts.summary"; profileId: string; authProfileId: string }
+  | {
+      type: "userModelAccounts.catalog";
+      selection: import("./user-model-accounts.js").PersonalCatalogSelection;
+    }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
@@ -306,6 +316,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
   | { type: "backup.runs"; runs: BackupRunRecord[] }
   | {
@@ -473,6 +484,14 @@ export type OpenClawStateReadResult =
       links: import("./user-model-accounts.js").UserProfileAuthLink[];
     }
   | {
+      type: "userModelAccounts.summary";
+      account: import("./user-model-accounts.js").UserModelAccount | undefined;
+    }
+  | {
+      type: "userModelAccounts.catalog";
+      catalog: import("./user-model-accounts.js").PersonalCatalogProfiles;
+    }
+  | {
       type: "userProfiles.reconcile";
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
@@ -608,8 +627,6 @@ export type OpenClawStateReadOutcome =
 type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
 export type OpenClawStateReadReceipt = { phase: OpenClawStateReadPhase };
 export type OpenClawStateReadOptions = {
-  /** Consume private streamed facts synchronously; final settlement owns publication. */
-  onChunk?: (value: unknown) => void;
   /** Cancellation abandons delivery only after the accepted read and cleanup settle. */
   signal?: AbortSignal;
   /** Reuse the caller's captured authority instead of admitting a newer lifecycle. */
@@ -621,7 +638,18 @@ export type OpenClawStateReadOptions = {
   /** Named committed-status readers may reopen the matching retained warm source. */
   preferIndependentWarmRead?: true;
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;
-};
+} & (
+  | {
+      /** Consume private streamed facts synchronously; final settlement owns publication. */
+      onChunk?: (value: unknown) => void;
+      onChunkAsync?: never;
+    }
+  | {
+      onChunk?: never;
+      /** Hold backpressure and read custody until consumption settles, including cancellation. */
+      onChunkAsync: (value: unknown, signal: AbortSignal) => Promise<void>;
+    }
+);
 
 export type ReadResource = { close(): Promise<void> };
 export type RetainedReadScope = {
