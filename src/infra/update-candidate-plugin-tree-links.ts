@@ -18,6 +18,13 @@ import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime
 
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
 
+export function ignoreUnresolvedPluginLink(error: unknown): undefined {
+  if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+    return undefined;
+  }
+  throw error;
+}
+
 export const isUpdateCandidateHostLauncher = (file: string) =>
   path.basename(path.dirname(file)) === ".bin" &&
   ["openclaw", "openclaw.cmd", "openclaw.ps1"].includes(path.basename(file));
@@ -109,12 +116,9 @@ export function resolveUpdateCandidatePluginTreeTargets(
         }),
         ...plan.edges.map((edge) => async () => {
           const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
-          const real = await fs.realpath(edge.source).catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return target;
-            }
-            throw error;
-          });
+          const real = await fs
+            .realpath(edge.source)
+            .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
           if (target !== edge.target || real !== edge.real) {
             throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
           }

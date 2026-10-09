@@ -325,22 +325,13 @@ export function buildSlackProgressStreamChunks(params: {
   const finalTaskIndex = tasks.length - 1;
   const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {
     const recovered = params.finalInProgressStatus === "complete" && task.status === "error";
-    const chunk: TaskUpdateChunk = {
-      type: "task_update",
-      id: task.id,
-      title: recovered ? compactTitle(`Recovered: ${task.title}`) : task.title,
-      status: recovered
-        ? "complete"
-        : task.status === "in_progress"
-          ? (params.finalInProgressStatus ?? task.status)
-          : task.status,
-    };
-    if (task.details) {
-      chunk.details = task.details;
-    }
-    if (task.output) {
-      chunk.output = task.output;
-    }
+    const chunk: TaskUpdateChunk = Object.assign({ type: "task_update" as const }, task);
+    chunk.title = recovered ? compactTitle(`Recovered: ${task.title}`) : task.title;
+    chunk.status = recovered
+      ? "complete"
+      : task.status === "in_progress"
+        ? (params.finalInProgressStatus ?? task.status)
+        : task.status;
     if (index === finalTaskIndex && diffOutput) {
       chunk.output = [task.output, diffOutput].filter(Boolean).join(" · ");
     }

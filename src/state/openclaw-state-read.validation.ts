@@ -304,6 +304,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "userModelAccounts.summary" &&
         typeof input.command.profileId === "string" &&
         typeof input.command.authProfileId === "string") ||
+      (input.command.type === "userModelAccounts.selection" &&
+        (input.command.profileId === undefined || typeof input.command.profileId === "string") &&
+        typeof input.command.authProfileId === "string") ||
       (input.command.type === "userModelAccounts.catalog" &&
         isRecord(input.command.selection) &&
         (typeof input.command.selection.profileId === "string" ||
@@ -344,6 +347,12 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.login === "string")) ||
       (input.command.type === "userProfiles.githubAttribution.resolve" &&
         isStringArray(input.command.profileIds)) ||
+      (input.command.type === "userProfiles.catalogIdentity" &&
+        isRecord(input.command.input) &&
+        ((input.command.input.kind === "source" && isStringArray(input.command.input.profileIds)) ||
+          (input.command.input.kind === "link" &&
+            isStringArray(input.command.input.accountIds) &&
+            isStringArray(input.command.input.owners)))) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
         (Check(UserChannelIdentitySchema, input.command.identity) ||
           (isRecord(input.command.identity) &&

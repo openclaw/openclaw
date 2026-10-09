@@ -19,6 +19,7 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
@@ -170,8 +171,28 @@ export function prepareSessionTranscriptHydration(
     assertAgentDatabaseTerminalOpenAllowed(databasePath);
     try {
       const result = await withSessionHistoryWorkerDatabase(options, async (owner) => {
+        const assertReadCurrent = () => {
+          signal?.throwIfAborted();
+          owner.assertCurrent();
+        };
         try {
-          return await readInWorker(owner, resolvedScope);
+          return await readRestoredSessionTranscript(
+            target,
+            () => readInWorker(owner, resolvedScope),
+            {
+              assertCurrent: assertReadCurrent,
+              coldRead: {
+                target: resolvedScope,
+                readMetadata: async () => {
+                  const metadata = await owner.readColdMetadata({
+                    sessionId: resolvedScope.sessionId,
+                    env: target.env,
+                  });
+                  return metadata.archive;
+                },
+              },
+            },
+          );
         } finally {
           // An absent-store reply must not hide a revoked read owner.
           owner.assertCurrent();
@@ -216,37 +237,55 @@ export function prepareSessionTranscriptHydration(
                 path: scope.storePath,
                 env: scope.env,
               };
-              await runOpenClawAgentWriteAdmission(
-                database,
-                async (_identity, assertOwner) => {
-                  assertSource();
-                  const assertNative = captureSessionEntryNativeMutationWitness([database]);
-                  const prepared = await owner.readTranscript(
-                    {
-                      target: scope,
-                      resolvedScope: resolved,
-                      expectedIdentity,
-                      limits: contextLimits,
-                      admission,
-                      transcript: capturedSelection,
+              // Restoration needs the writer too; leave FIFO before handling a cold miss.
+              await readRestoredSessionTranscript(
+                scope,
+                () =>
+                  runOpenClawAgentWriteAdmission(
+                    database,
+                    async (_identity, assertOwner) => {
+                      assertSource();
+                      const assertNative = captureSessionEntryNativeMutationWitness([database]);
+                      const prepared = await owner.readTranscript(
+                        {
+                          target: scope,
+                          resolvedScope: resolved,
+                          expectedIdentity,
+                          limits: contextLimits,
+                          admission,
+                          transcript: capturedSelection,
+                        },
+                        signal,
+                      );
+                      signal?.throwIfAborted();
+                      assertOwner();
+                      assertSource();
+                      assertNative();
+                      const consumed = consume(prepared);
+                      if (isPromiseLike(consumed)) {
+                        void Promise.resolve(consumed).catch(() => {});
+                        throw new Error("Transcript cohort consumers must remain synchronous");
+                      }
+                      assertSource();
+                      assertNative();
                     },
+                    true,
+                    undefined,
                     signal,
-                  );
-                  signal?.throwIfAborted();
-                  assertOwner();
-                  assertSource();
-                  assertNative();
-                  const consumed = consume(prepared);
-                  if (isPromiseLike(consumed)) {
-                    void Promise.resolve(consumed).catch(() => {});
-                    throw new Error("Transcript cohort consumers must remain synchronous");
-                  }
-                  assertSource();
-                  assertNative();
+                  ),
+                {
+                  assertCurrent: assertSource,
+                  coldRead: {
+                    target: resolved,
+                    readMetadata: async () => {
+                      const metadata = await owner.readColdMetadata({
+                        sessionId: resolved.sessionId,
+                        env: scope.env,
+                      });
+                      return metadata.archive;
+                    },
+                  },
                 },
-                true,
-                undefined,
-                signal,
               );
             },
             signal,

@@ -480,6 +480,11 @@ async function retireProposals(params: {
   // Any unread or unexported proposal keeps the tables and files for the next Doctor run.
   let blocked = warnings.length > 0;
   const changes: string[] = [];
+  const migrationResult = (): MigrationMessages => ({
+    changes,
+    warnings,
+    ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+  });
   // Dropping the rollbacks forgets what an interrupted apply half-wrote, so undo that first.
   for (const apply of [...database.unfinishedApplies, ...legacy.unfinishedApplies]) {
     assertCurrent();
@@ -560,11 +565,7 @@ async function retireProposals(params: {
     );
   }
   if (blocked) {
-    return {
-      changes,
-      warnings,
-      ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
-    };
+    return migrationResult();
   }
   assertCurrent();
   const dropped = runOpenClawStateWriteTransaction(
@@ -596,7 +597,7 @@ async function retireProposals(params: {
     warnings.push(
       "Skill Workshop proposals changed during export; rerun openclaw doctor --fix to finish retiring the proposal tables.",
     );
-    return { changes, warnings, warningDisposition: "recoverable" };
+    return migrationResult();
   }
   if (dropped) {
     changes.push("Retired the Skill Workshop proposal tables.");
@@ -606,11 +607,7 @@ async function retireProposals(params: {
       `Removed retired Skill Workshop proposal files from ${path.join(stateDir, LEGACY_PROPOSALS_DIR)}.`,
     );
   }
-  return {
-    changes,
-    warnings,
-    ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
-  };
+  return migrationResult();
 }
 
 /**

@@ -245,8 +245,13 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | {
+      type: "userProfiles.catalogIdentity";
+      input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
+    }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userModelAccounts.summary"; profileId: string; authProfileId: string }
+  | { type: "userModelAccounts.selection"; profileId?: string; authProfileId: string }
   | {
       type: "userModelAccounts.catalog";
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
@@ -482,6 +487,10 @@ export type OpenClawStateReadResult =
       emailBindings: UserProfileEmailBinding[];
     }
   | {
+      type: "userProfiles.catalogIdentity";
+      result: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityRead;
+    }
+  | {
       type: "userPreferences.values";
       values: Map<string, unknown>;
     }
@@ -492,6 +501,12 @@ export type OpenClawStateReadResult =
   | {
       type: "userModelAccounts.summary";
       account: import("./user-model-accounts.js").UserModelAccount | undefined;
+    }
+  | {
+      type: "userModelAccounts.selection";
+      selection: ReturnType<
+        typeof import("./user-model-accounts.js").readUserModelAccountSelectionInDatabase
+      >;
     }
   | {
       type: "userModelAccounts.catalog";

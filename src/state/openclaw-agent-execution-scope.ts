@@ -7,6 +7,7 @@ import {
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { hasAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
+import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -54,6 +55,28 @@ export function supportsOpenClawAgentDatabaseExecution(
     !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
     supportsAgentDatabaseExecutionScope(options)
   );
+}
+
+export function assertAgentDatabaseExecutionCreationIdentity(
+  pathname: string,
+  expected: DatabasePathIdentity,
+  observed: DatabasePathIdentity | undefined,
+  expectedFile: AgentDatabaseExecutionFileIdentity | undefined,
+): void {
+  const capturesAbsence = expected.key.startsWith("path:");
+  if (
+    expectedFile ||
+    (capturesAbsence &&
+      (agentDatabaseLifecycle.databases.has(pathname) ||
+        agentDatabaseLifecycle.pending.has(pathname))) ||
+    (!capturesAbsence &&
+      (!expected.key.startsWith("file:") || typeof expected.birthtime !== "string")) ||
+    observed?.key !== expected.key ||
+    observed.canonicalPath !== expected.canonicalPath ||
+    observed.birthtime !== expected.birthtime
+  ) {
+    throw new Error("Agent creation no longer owns its originally observed target");
+  }
 }
 
 /** Each alias and retained file receipt must still name the borrower's original store. */

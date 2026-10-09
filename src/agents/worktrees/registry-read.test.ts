@@ -11,7 +11,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { WORKTREE_CREATE_LEASE_SCOPE } from "./capacity-contract.js";
 import { lockState } from "./git-lock.js";
@@ -35,6 +34,7 @@ import { resolveWorktreeForPath } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
+import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const initializeRepository = useManagedWorktreeTestRepository();
@@ -62,34 +62,24 @@ async function serviceFixture() {
 function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCommit = false) {
   const entered = createDeferred();
   const release = createDeferred();
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const transport = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (command.type !== type) {
-                return scope.execute(command, executeOptions);
-              }
-              writes += 1;
-              if (afterCommit) {
-                await scope.execute(command, executeOptions);
-              }
-              entered.resolve();
-              await release.promise;
-              if (afterCommit) {
-                throw new Error("Synthetic lost registry reply after native commit");
-              }
-              return scope.execute(command, executeOptions);
-            },
-          }),
-        options,
-      ),
-    );
+  const transport = interceptWorktreeWorkerOperation(
+    (execute) => async (command, executeOptions) => {
+      if (command.type !== type) {
+        return execute(command, executeOptions);
+      }
+      writes += 1;
+      if (afterCommit) {
+        await execute(command, executeOptions);
+      }
+      entered.resolve();
+      await release.promise;
+      if (afterCommit) {
+        throw new Error("Synthetic lost registry reply after native commit");
+      }
+      return execute(command, executeOptions);
+    },
+  );
   return {
     entered: entered.promise,
     release: () => release.resolve(),

@@ -19,7 +19,6 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
-import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getOwnedSessionTranscriptReader } from "../../config/sessions/transcript-write-context.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
@@ -35,7 +34,6 @@ import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
-import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { formatForLog } from "../ws-log.js";
 import {
   combineNonStreamingReplyParts,
@@ -192,155 +190,90 @@ export function createChatSendReplyDispatch(params: {
     if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
-    const initial = await readSessionTranscriptAnchorsAsync(scope, {
-      entryIds: [admission.entryId],
-      afterSeq: transcriptStart.afterSeq,
-      includeSession: true,
-      includeWatermark: true,
-    });
-    if (
-      !(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent()) ||
-      initial.session?.sessionId !== admission.sessionId ||
-      initial.session.lifecycleRevision !== lifecycleRevision ||
-      !initial.watermark
-    ) {
-      return "missing";
-    }
-    const watermark = initial.watermark;
-    const input = initial.anchors[0];
-    if (!input || input.rawSeq !== admission.rawSeq) {
-      return "missing";
-    }
-    let latestInputPosition = input.activeMessagePosition;
-    let latestInputId = input.entryId;
-    const candidateIds: string[] = [];
-    // Stream indices also advance between content blocks. Fence with committed input
-    // identities instead of treating the number of persisted assistant rows as an index.
-    for (const row of initial.tail?.entries ?? []) {
-      if (row.role === "user") {
-        const anchor = row.anchor;
-        if (anchor && anchor.activeMessagePosition > latestInputPosition) {
-          latestInputPosition = anchor.activeMessagePosition;
-          latestInputId = anchor.entryId;
-        }
-      } else if (row.role === "assistant" && row.runId === runId) {
-        candidateIds.push(row.entryId);
-      }
-    }
-    if (minimumAssistantMessageIndex > 0 && latestInputId === input.entryId) {
-      return "missing";
-    }
-    for (const messageId of candidateIds) {
-      const stored = await readSessionMessageByIdAsync(scope, messageId, {
-        currentOnly: true,
-        maxBytes: Number.MAX_SAFE_INTEGER,
-      });
-      if (!isInspectionCurrent()) {
-        return "missing";
-      }
-      if (!stored.found) {
-        continue;
-      }
-      const message = asOptionalRecord(stored.message);
-      if (message?.role !== "assistant" || readSessionTranscriptRunId(message) !== runId) {
-        continue;
-      }
-      const hasTools =
-        message.stopReason === "toolUse" ||
-        (Array.isArray(message.content) &&
-          message.content.some((block) => isToolHistoryBlockType(asOptionalRecord(block)?.type)));
-      const answer = hasTools
-        ? extractAssistantTextForPhase(message, { phase: "final_answer" })
-        : extractAssistantPhaseText(message);
-      if (
-        answer &&
-        !isSuppressedControlReplyText(answer) &&
-        extractAssistantPhaseText(projectChatDisplayMessage(message))
-      ) {
-        const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
-        if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
-          return "missing";
-        }
-        // Consume final facts inside the existing writer FIFO; projection repair and
-        // message restoration above must stay outside because they can need that writer.
-        let decision: ReplyDeliveryState | undefined = "pending";
-        let refreshTail = !reader;
-        const selection = {
-          entryIds: [admission.entryId, latestInputId, messageId],
-          includeSession: true,
-          includeWatermark: true,
-        };
-        const consume = (facts: SessionTranscriptAnchorFacts) => {
-          assertRoutingCurrent(getRuntimeConfig());
-          if (
-            !isInspectionCurrent() ||
-            facts.session?.sessionId !== admission.sessionId ||
-            facts.session.lifecycleRevision !== lifecycleRevision
-          ) {
-            decision = "missing";
-            return;
-          }
-          const currentWatermark = facts.watermark;
-          if (!currentWatermark) {
-            decision = "missing";
-            return;
-          }
-          if (
-            !facts.tail &&
-            (currentWatermark.generation !== watermark.generation ||
-              currentWatermark.maxSeq !== watermark.maxSeq)
-          ) {
-            // Changed history needs its own lane; never decode an unbounded tail in the actor.
-            refreshTail = true;
-            return;
-          }
-          decision = resolveChatReplyDeliveryFromAnchors({
-            facts: { ...facts, tail: facts.tail ?? initial.tail },
-            admissionId: admission.entryId,
-            inputId: latestInputId,
-            messageId,
-            afterSeq: transcriptStart.afterSeq,
-            watermark,
-            currentWatermark,
-          });
-        };
-        if (reader) {
-          await reader.withRead(
-            {
-              sessionKeys: [reader.sessionKey],
-              snapshotFields: [],
-              transcript: { ...selection, sessionKey: reader.sessionKey },
-            },
-            () => {
-              if (!isInspectionCurrent()) {
-                throw new Error("Chat delivery inspection is no longer current");
-              }
-            },
-            (read, assertCurrent) => {
-              assertCurrent();
-              consume(read.transcript ?? { anchors: [] });
-            },
-          );
-        }
-        if (refreshTail) {
-          await readSessionTranscriptAnchorsAsync(
-            scope,
-            { ...selection, afterSeq: transcriptStart.afterSeq },
-            undefined,
-            consume,
-          );
-        }
-        // Another worker lookup here could invalidate the completed anchor decision.
+    const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
+    let decision: ReplyDeliveryState = "pending";
+    await readSessionTranscriptAnchorsAsync(
+      scope,
+      {
+        entryIds: [admission.entryId],
+        afterSeq: transcriptStart.afterSeq,
+        includeSession: true,
+        includeWatermark: true,
+        includeMessagesForRunId: runId,
+      },
+      params.abortSignal,
+      (facts) => {
         assertRoutingCurrent(getRuntimeConfig());
-        if (!isInspectionCurrent()) {
-          return "missing";
+        if (
+          !isInspectionCurrent() ||
+          facts.session?.sessionId !== admission.sessionId ||
+          facts.session.lifecycleRevision !== lifecycleRevision ||
+          !facts.watermark
+        ) {
+          decision = "missing";
+          return;
         }
-        if (decision !== undefined) {
-          return decision;
+        const input = facts.anchors.find((anchor) => anchor.entryId === admission.entryId);
+        if (!input || input.rawSeq !== admission.rawSeq) {
+          decision = "missing";
+          return;
         }
-      }
-    }
-    return "missing";
+        let latestInput = input;
+        for (const row of facts.tail?.entries ?? []) {
+          if (
+            row.role === "user" &&
+            row.anchor &&
+            row.anchor.activeMessagePosition > latestInput.activeMessagePosition
+          ) {
+            latestInput = row.anchor;
+          }
+        }
+        if (minimumAssistantMessageIndex > 0 && latestInput.entryId === input.entryId) {
+          decision = "missing";
+          return;
+        }
+        decision = "missing";
+        // Payload visibility and anchors were selected in this same history snapshot.
+        // The callback consumes them before releasing the FIFO and native mutation witness.
+        for (const row of facts.tail?.entries ?? []) {
+          const message = asOptionalRecord(row.message);
+          if (message?.role !== "assistant" || readSessionTranscriptRunId(message) !== runId) {
+            continue;
+          }
+          const hasTools =
+            message.stopReason === "toolUse" ||
+            (Array.isArray(message.content) &&
+              message.content.some((block) =>
+                isToolHistoryBlockType(asOptionalRecord(block)?.type),
+              ));
+          const answer = hasTools
+            ? extractAssistantTextForPhase(message, { phase: "final_answer" })
+            : extractAssistantPhaseText(message);
+          if (
+            !answer ||
+            isSuppressedControlReplyText(answer) ||
+            !extractAssistantPhaseText(projectChatDisplayMessage(message))
+          ) {
+            continue;
+          }
+          const selected = resolveChatReplyDeliveryFromAnchors({
+            facts,
+            admissionId: admission.entryId,
+            inputId: latestInput.entryId,
+            messageId: row.entryId,
+            afterSeq: transcriptStart.afterSeq,
+            watermark: facts.watermark,
+            currentWatermark: facts.watermark,
+          });
+          if (selected !== undefined) {
+            decision = selected;
+            return;
+          }
+        }
+      },
+    );
+    assertRoutingCurrent(getRuntimeConfig());
+    return isInspectionCurrent() ? decision : "missing";
   };
   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
     isMediaBearingPayload(payload) ||

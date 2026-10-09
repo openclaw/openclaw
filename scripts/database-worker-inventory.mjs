@@ -1195,7 +1195,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["admitWorktreeRunLeaseInDatabase"],
         evidence:
-          "Only worktrees/dispatch.worker.ts:50 registers admission through run-lease-store.worker.ts:6; src/state/openclaw-state-worker-registry.ts:149 loads the handler. Shared release/lease cleanup remain T1.",
+          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Shared release/lease cleanup remain T1.",
       },
     ],
   ],

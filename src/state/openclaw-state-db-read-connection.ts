@@ -15,16 +15,11 @@ import { getSqlitePinnedReadSnapshot } from "../infra/sqlite-pinned-read-snapsho
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import {
-  admitSqliteSchema,
   isSqliteSchemaAdmissionCold,
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
 import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
@@ -34,10 +29,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
-import {
-  getSqliteWorkerStateIntegrityAdmission,
-  runWithSqliteWorkerStateContext,
-} from "../infra/sqlite-worker-state-context.js";
+import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -51,22 +43,20 @@ import {
 } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
   type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
-import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
 import {
   invalidateOpenClawStateRuntimeIntegrity,
   type OpenClawStateIntegrityPolicy,
 } from "./openclaw-state-db-integrity-admission.js";
-import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
-import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
-  assertSupportedStateSchemaVersion,
-  type StateSchemaContentVersionRowReader,
-} from "./openclaw-state-db-schema-version.js";
+  admitStateReadSchemaFacts,
+  assertStateReadSchemaForPolicy,
+} from "./openclaw-state-db-read-schema.js";
+import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
+import type { StateSchemaContentVersionRowReader } from "./openclaw-state-db-schema-version.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -95,7 +85,14 @@ type RetainedReader = {
   unregisterDirectClose?: () => void;
 };
 const retainedReaders = new Map<string, RetainedReader>();
+const corruptedReaders = new WeakSet<DatabaseSync>();
 let unregisterExitClose: (() => void) | undefined;
+
+/** Ordered partial results may carry corruption as data; the same reader owner still retires it. */
+export function retireOpenClawStateReadConnectionAfterCorruption(database: DatabaseSync): void {
+  invalidateOpenClawStateRuntimeIntegrity(database);
+  corruptedReaders.add(database);
+}
 
 function retireReader(reader: RetainedReader): void {
   if (retainedReaders.get(reader.identity.key) !== reader) {
@@ -392,53 +389,6 @@ export function assertStateReadSchema(
   );
 }
 
-function assertStateReadSchemaForPolicy(
-  database: DatabaseSync,
-  pathname: string,
-  existingSchema: boolean,
-  integrityPolicy?: OpenClawStateIntegrityPolicy,
-  readContentVersionRow?: StateSchemaContentVersionRowReader,
-): void {
-  if (existingSchema) {
-    assertExistingOpenClawStateRuntimeSchema(
-      database,
-      pathname,
-      getSqliteWorkerStateIntegrityAdmission(),
-      integrityPolicy,
-    );
-  } else {
-    assertSupportedStateSchemaVersion(database, pathname, undefined, readContentVersionRow);
-  }
-}
-
-function admitStateReadSchemaFacts(database: DatabaseSync, pathname: string): void {
-  try {
-    admitSqliteSchema(database, (userVersion) =>
-      assertSupportedStateSchemaVersion(database, pathname, {
-        userVersion,
-        contentVersion: userVersion,
-      }),
-    );
-  } catch (error) {
-    // An unreadable newer catalog must not be mistaken for a repair this build can perform.
-    let version: number;
-    try {
-      version = readSqliteUserVersion(database);
-    } catch {
-      throw normalizeOpenClawStateSchemaReadError(error, pathname);
-    }
-    if (version > OPENCLAW_STATE_SCHEMA_VERSION) {
-      throw createNewerSqliteSchemaVersionError(
-        "OpenClaw state database",
-        pathname,
-        version,
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-    }
-    throw normalizeOpenClawStateSchemaReadError(error, pathname);
-  }
-}
-
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
@@ -526,7 +476,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       };
     } catch (error) {
       if (isSqliteCorruptionError(error)) {
-        invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
+        retireOpenClawStateReadConnectionAfterCorruption(opened.database.db);
       }
       result = { status: "unavailable", error };
     }
@@ -545,7 +495,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
     errors.push(error);
   }
   try {
-    if (!opened.close(errors.length === 0 && result?.status === "available")) {
+    if (
+      !opened.close(
+        errors.length === 0 &&
+          result?.status === "available" &&
+          !corruptedReaders.has(opened.database.db),
+      )
+    ) {
       throw new SnapshotCleanupIncompleteError("Shared-state snapshot cleanup is incomplete.");
     }
   } catch (error) {

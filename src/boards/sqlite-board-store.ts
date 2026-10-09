@@ -506,19 +506,23 @@ export class SqliteBoardStore implements BoardStore {
       const result = await runOpenClawAgentWorkerWrite(captured, async () => accept(undefined));
       return await result.value;
     }
-    // Retain the reader before waiting; consumption shares the writer FIFO, not its grants.
+    // A read holds FIFO order without a native writer permit; cold admission may reenter.
     const result = await withSessionHistoryWorkerDatabase(
       { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
       (reader) =>
-        runOpenClawAgentWorkerWrite(captured, async () => {
-          this.assertTargetCurrent(capturedTarget, resolved);
-          const assertNativeCurrent = captureSessionEntryNativeMutationWitness([captured]);
-          const value = await worker(reader, captured.sessionKey, env, identity);
-          assertExistingDatabaseIdentity(captured.path, identity.key, identity.birthtime);
-          reader.assertCurrent();
-          assertNativeCurrent();
-          return accept(value);
-        }),
+        runOpenClawAgentWriteAdmission(
+          captured,
+          async () => {
+            this.assertTargetCurrent(capturedTarget, resolved);
+            const assertNativeCurrent = captureSessionEntryNativeMutationWitness([captured]);
+            const value = await worker(reader, captured.sessionKey, env, identity);
+            assertExistingDatabaseIdentity(captured.path, identity.key, identity.birthtime);
+            reader.assertCurrent();
+            assertNativeCurrent();
+            return accept(value);
+          },
+          true,
+        ),
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
     });
