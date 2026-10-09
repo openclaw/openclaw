@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireGitCommand as requireGit } from "../infra/git-exec.js";
 import {
   openOpenClawAgentDatabase,
@@ -17,23 +17,142 @@ import {
   createGitBackup,
   initializeGitBackupRepository,
   restoreGitBackupRef,
+  verifyGitBackupRef,
 } from "./git-backup.js";
-import { writeBackupManifest } from "./git-backup.test-support.js";
+import { createFinderMetadataFixture, writeBackupManifest } from "./git-backup.test-support.js";
 
-const roots: string[] = [];
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  await Promise.all(
-    roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
-  );
 });
 
 describe("Finder metadata ownership in Git backups", () => {
+  it.each(["agents/.DS_Store", "agents/main/.DS_Store", "agents/main/tables/.DS_Store"])(
+    "preserves an ordinary document in history and on disk at %s",
+    async (file) => {
+      const root = roots.make("git-backup-finder-document-");
+      const databasePath = path.join(root, "agent.sqlite");
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: databasePath,
+        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+      });
+      closeOpenClawAgentDatabaseByPath(database.path);
+      const repositoryPath = path.join(root, "repository");
+      const params = {
+        repositoryPath,
+        stateDir: path.join(root, "state"),
+        databases: [{ path: databasePath, identity: { role: "agent", agentId: "main" } as const }],
+        all: true,
+      };
+      await createGitBackup(params);
+      const document = "operator document with Finder's basename\n";
+      const finderPath = path.join(repositoryPath, file);
+      await fs.mkdir(path.dirname(finderPath), { recursive: true });
+      await fs.writeFile(finderPath, document);
+      await requireGit(repositoryPath, ["add", "--", file]);
+      await requireGit(repositoryPath, [
+        "-c",
+        "user.name=Backup test",
+        "-c",
+        "user.email=backup@example.invalid",
+        "commit",
+        "-m",
+        "Operator document",
+      ]);
+      const head = await requireGit(repositoryPath, ["rev-parse", "HEAD"]);
+      await expect(createGitBackup(params)).rejects.toThrow(/non-Finder file in backup history/u);
+      expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(head);
+      expect(await requireGit(repositoryPath, ["show", `HEAD:${file}`])).toBe(document.trim());
+      await expect(fs.readFile(finderPath, "utf8")).resolves.toBe(document);
+      if (file !== "agents/.DS_Store") {
+        await expect(
+          restoreGitBackupRef({
+            repositoryPath,
+            identity: { role: "agent", agentId: "main" },
+            ref: head,
+            targetPath: path.join(root, "refused.sqlite"),
+          }),
+        ).rejects.toThrow(/unexpected file/u);
+        await expect(fs.stat(path.join(root, "refused.sqlite"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    },
+  );
+
+  it("refuses uncommitted namesake documents before replacing a selected scope", async () => {
+    const root = roots.make("git-backup-finder-document-");
+    const databasePath = path.join(root, "agent.sqlite");
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: databasePath,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+    closeOpenClawAgentDatabaseByPath(database.path);
+    const repositoryPath = path.join(root, "repository");
+    const params = {
+      repositoryPath,
+      stateDir: path.join(root, "state"),
+      databases: [{ path: databasePath, identity: { role: "agent", agentId: "main" } as const }],
+    };
+    const first = await createGitBackup(params);
+    const finderPath = path.join(repositoryPath, "agents/main/.DS_Store");
+    await fs.writeFile(finderPath, "user document");
+    await expect(createGitBackup(params)).rejects.toThrow(/non-backup-owned path/u);
+    await expect(fs.readFile(finderPath, "utf8")).resolves.toBe("user document");
+    expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(first.commit);
+    await fs.rm(finderPath);
+    const nestedPath = path.join(repositoryPath, "agents/main/notes/.DS_Store");
+    await fs.mkdir(path.dirname(nestedPath), { recursive: true });
+    await fs.writeFile(nestedPath, "nested operator document");
+    await expect(createGitBackup(params)).rejects.toThrow(/non-backup-owned path/u);
+    await expect(fs.readFile(nestedPath, "utf8")).resolves.toBe("nested operator document");
+    const other = openOpenClawAgentDatabase({
+      agentId: "other",
+      path: path.join(root, "other.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+    });
+    closeOpenClawAgentDatabaseByPath(other.path);
+    await expect(
+      createGitBackup({
+        ...params,
+        all: true,
+        databases: [{ path: other.path, identity: { role: "agent", agentId: "other" } }],
+      }),
+    ).rejects.toThrow(/non-backup-owned path/u);
+    await expect(fs.readFile(nestedPath, "utf8")).resolves.toBe("nested operator document");
+    await fs.rm(path.join(repositoryPath, "agents/main/notes"), { recursive: true });
+    const truncated = createFinderMetadataFixture().subarray(0, 32);
+    const invalidBounds = createFinderMetadataFixture();
+    invalidBounds.writeUInt32BE(0xffffffff, 12);
+    const oversized = Buffer.concat([createFinderMetadataFixture(), Buffer.alloc(1024 * 1024)]);
+    for (const invalid of [truncated, invalidBounds, oversized]) {
+      await fs.writeFile(finderPath, invalid);
+      await expect(createGitBackup(params)).rejects.toThrow(/non-backup-owned path/u);
+      await expect(fs.readFile(finderPath)).resolves.toEqual(invalid);
+      expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(first.commit);
+      await requireGit(repositoryPath, ["add", "--", "agents/main/.DS_Store"]);
+      await requireGit(repositoryPath, [
+        "-c",
+        "user.name=Backup test",
+        "-c",
+        "user.email=backup@example.invalid",
+        "commit",
+        "-m",
+        "Invalid namesake metadata",
+      ]);
+      await expect(
+        verifyGitBackupRef({ repositoryPath, identity: { role: "agent", agentId: "main" } }),
+      ).rejects.toThrow(/unexpected file/u);
+      await requireGit(repositoryPath, ["reset", "--mixed", first.commit!]);
+    }
+  });
+
   it("removes committed Finder metadata when refreshing otherwise unchanged database scopes", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-finder-"));
-    roots.push(root);
+    const root = roots.make("git-backup-finder-");
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     openOpenClawStateDatabase({ env });
@@ -48,9 +167,15 @@ describe("Finder metadata ownership in Git backups", () => {
     const repositoryPath = path.join(root, "repository");
     const params = { repositoryPath, stateDir, databases, all: true };
     const first = await createGitBackup(params);
-    const metadataPaths = ["global/.DS_Store", "agents/main/.DS_Store", "agents/.DS_Store"];
+    const metadataPaths = [
+      "global/.DS_Store",
+      "global/tables/.DS_Store",
+      "agents/main/.DS_Store",
+      "agents/main/tables/.DS_Store",
+      "agents/.DS_Store",
+    ];
     for (const file of metadataPaths) {
-      await fs.writeFile(path.join(repositoryPath, file), "committed Finder metadata\n");
+      await fs.writeFile(path.join(repositoryPath, file), createFinderMetadataFixture());
     }
     await requireGit(repositoryPath, ["add", "--", ...metadataPaths]);
     await requireGit(repositoryPath, [
@@ -63,10 +188,25 @@ describe("Finder metadata ownership in Git backups", () => {
       "Seed existing repository metadata",
     ]);
 
+    const legacyRef = await requireGit(repositoryPath, ["rev-parse", "HEAD"]);
+    for (const [index, database] of databases.entries()) {
+      expect(
+        (
+          await verifyGitBackupRef({ repositoryPath, identity: database.identity, ref: legacyRef })
+        ).tables.every((table) => table.ok),
+      ).toBe(true);
+      const legacy = await restoreGitBackupRef({
+        repositoryPath,
+        identity: database.identity,
+        ref: legacyRef,
+        targetPath: path.join(root, `legacy-${index}.sqlite`),
+      });
+      expect(legacy.manifest.tables).toEqual(first.manifests[index]?.tables);
+    }
     const refreshed = await createGitBackup(params);
     expect(refreshed.commit).toMatch(/^[a-f0-9]{40}$/u);
-    await expect(fs.readFile(path.join(repositoryPath, "agents/.DS_Store"), "utf8")).resolves.toBe(
-      "committed Finder metadata\n",
+    await expect(fs.readFile(path.join(repositoryPath, "agents/.DS_Store"))).resolves.toEqual(
+      createFinderMetadataFixture(),
     );
     expect(
       await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
@@ -86,8 +226,7 @@ describe("Finder metadata ownership in Git backups", () => {
   it.skipIf(process.platform === "win32").each(["empty-directory", "directory", "symlink"])(
     "refuses a Finder-named %s before cleaning any agent scopes",
     async (kind) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-finder-"));
-      roots.push(root);
+      const root = roots.make("git-backup-finder-");
       const stateDir = path.join(root, "state");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       openOpenClawStateDatabase({ env });

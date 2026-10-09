@@ -348,6 +348,21 @@ scope. With `--all`, it validates every existing entry under `agents/` before
 removing stale backup-owned agent scopes, so an unowned entry aborts the cleanup
 before anything is deleted.
 
+Finder `.DS_Store` files are recognized by their versioned binary allocator
+header and valid root bounds, with a 1 MiB classification limit. Recognized
+regular files do not block agent enumeration and are excluded from backup
+commits. Refresh removes recognized metadata from older commits; the file at
+the `agents/` root stays on disk. A namesake user document, directory, symlink,
+truncated header, or oversized file is not Finder metadata. Refresh refuses to
+replace namesake documents in a selected scope or its committed history, leaving
+the file and previous commit intact. Move those documents explicitly before
+refreshing the scope.
+
+Verification and restore of older refs skip recognized regular `.DS_Store`
+blobs only at the selected scope root and its `tables/` root. Other namesake
+files remain errors; metadata is never restored as database content. No refresh
+of the old ref is required.
+
 With `--all`, only agents removed from the configuration have their scopes
 pruned. If a configured agent's database is missing or cannot pass snapshot
 validation, its previous backup scope stays unchanged while other agents are

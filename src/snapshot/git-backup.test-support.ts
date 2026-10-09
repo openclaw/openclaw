@@ -1,9 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { inflateSync } from "node:zlib";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+
+/** Generated and read back with ds_store 1.3.3; synthetic.txt has Iloc (100, 100). */
+export function createFinderMetadataFixture(iconX = 100): Buffer {
+  const bytes = inflateSync(
+    Buffer.from(
+      "eJzt2L2KwkAAReE7MUVgFfIIaWwF3yCIjbVv4A8oiBa6sNul87F14lzRRtugnA8mJ4SBTKoJIylMfldjqdBjlP14OUvVj5LMDWmUAgAAH6+XUrT7/TDu+4NOVwOgCyGfzqcTpR/9l5PiqN0mNfh55uZPc8un+9ptUoOfZ27uFm7pVm7tNqleZMjui3cL128OlVu/+SgAAAAAAADgu7WnaQMd9a+9TtpoHa9bLTWK/dNptjssF7vDQulEb9WOy023ywYAAAAAAAAAAAAAAK0rYYkWbg==",
+      "base64",
+    ),
+  );
+  // The fixture contains one blob-encoded icon location; vary its x coordinate.
+  bytes.writeUInt32BE(iconX, bytes.indexOf("Ilocblob") + 12);
+  return bytes;
+}
 
 export async function createFormatFixture(databasePath: string): Promise<void> {
   const database = new DatabaseSync(databasePath, { allowExtension: true });

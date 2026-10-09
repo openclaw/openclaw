@@ -35,6 +35,7 @@ import {
 } from "./git-backup.js";
 import {
   createAgentFixture,
+  createFinderMetadataFixture,
   createFormatFixture,
   writeBackupManifest,
 } from "./git-backup.test-support.js";
@@ -193,7 +194,7 @@ describe("Git-backed SQLite snapshots", () => {
           await initializeGitBackupRepository({ repositoryPath, stateDir });
           const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
           await fs.mkdir(path.dirname(finderPath), { recursive: true });
-          await fs.writeFile(finderPath, "Finder metadata\n");
+          await fs.writeFile(finderPath, createFinderMetadataFixture());
           const result = await backupGitCreateCommand(createTestRuntime(), {
             repository: repositoryPath,
             ...selection,
@@ -204,7 +205,7 @@ describe("Git-backed SQLite snapshots", () => {
 
           expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
           expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
-          await expect(fs.readFile(finderPath, "utf8")).resolves.toBe("Finder metadata\n");
+          await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture());
           expect(
             await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
           ).not.toContain(".DS_Store");
@@ -342,7 +343,7 @@ describe("Git-backed SQLite snapshots", () => {
     await requireGit(repositoryPath, ["add", "unrelated.txt"]);
     const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
     await fs.mkdir(path.dirname(finderPath), { recursive: true });
-    await fs.writeFile(finderPath, "Finder metadata\n");
+    await fs.writeFile(finderPath, createFinderMetadataFixture());
     await requireGit(repositoryPath, ["add", "agents/.DS_Store"]);
 
     const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
@@ -424,22 +425,22 @@ describe("Git-backed SQLite snapshots", () => {
     await initializeGitBackupRepository({ repositoryPath, stateDir });
     const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
     await fs.mkdir(path.dirname(finderPath), { recursive: true });
-    await fs.writeFile(finderPath, "Finder metadata\n");
+    await fs.writeFile(finderPath, createFinderMetadataFixture());
     const params = { repositoryPath, stateDir, databases: [database], all: true };
 
     const first = await createGitBackup(params);
     expect(first.commit).toMatch(/^[a-f0-9]{40}$/u);
-    await expect(fs.readFile(finderPath, "utf8")).resolves.toBe("Finder metadata\n");
+    await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture());
     expect(
       await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
     ).not.toContain(".DS_Store");
 
-    await fs.writeFile(finderPath, "changed Finder metadata\n");
+    await fs.writeFile(finderPath, createFinderMetadataFixture(101));
     const second = await createGitBackup(params);
     expect(second).toMatchObject({ noChanges: true });
     expect(second.commit).toBeUndefined();
     expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(first.commit);
-    await expect(fs.readFile(finderPath, "utf8")).resolves.toBe("changed Finder metadata\n");
+    await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture(101));
 
     const restored = await restoreGitBackupRef({
       repositoryPath,
