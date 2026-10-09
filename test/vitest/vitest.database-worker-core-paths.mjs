@@ -456,8 +456,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/skills/workshop/unused-archive.test.ts",
   "src/auto-reply/reply/commands-plugins.test.ts",
   "src/boards/board-generated-identity.test.ts",
-  "src/boards/board-store.native.test.ts",
-  "src/boards/board-store.parity.test.ts",
   "src/boards/board-store.test.ts",
   "src/boards/sqlite-board-store.batching.test.ts",
   "src/boards/sqlite-board-store.incognito.test.ts",
