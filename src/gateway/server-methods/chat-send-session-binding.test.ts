@@ -82,7 +82,7 @@ it.for(admissionScenarios)(
         setRuntimeConfigSnapshot({
           ...cfg,
           session: { ...cfg.session, scope: "global" },
-          agents: { ...cfg.agents, entries: { main: { default: true }, work: {} } },
+          agents: { ...cfg.agents, entries: { main: {}, work: {} } },
         });
       }
       const sessionKey = foreignGlobalTimeout
