@@ -8,6 +8,70 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("switches shared credentials with no personal accounts through the mounted chat picker", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        methodResponses: {
+          "models.list": {
+            models,
+            accountSelection: {
+              kind: "shared",
+              authProfileId: "openai:primary",
+              label: "Primary account",
+            },
+          },
+          "models.authStatus": {
+            ts: 1,
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles: [
+                  {
+                    profileId: "openai:primary",
+                    type: "oauth",
+                    status: "ok",
+                    email: "primary@example.test",
+                  },
+                  {
+                    profileId: "openai:alternate",
+                    type: "oauth",
+                    status: "ok",
+                    email: "alternate@example.test",
+                  },
+                ],
+              },
+            ],
+          },
+          "users.listModelAccounts": { profileId: "test-person", accounts: [], links: [] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
+      await expect.poll(() => picker.locator("[data-chat-model-provider-toggle]").count()).toBe(1);
+      await picker.locator("[data-chat-model-select]").click();
+      await picker.locator("[data-chat-account-group-toggle]").click();
+      await gateway.waitForRequest("users.listModelAccounts");
+      const alternate = picker.locator('[data-chat-account-option="account:openai:alternate"]');
+      await expect.poll(() => alternate.isVisible()).toBe(true);
+      expect(await alternate.textContent()).toContain("alternate@example.test");
+      expect(await picker.locator('[data-chat-account-option="current"]').count()).toBe(1);
+      await captureUiProof(suite, page, "shared-account-switch", "choices.png");
+      await alternate.click();
+      const patch = await gateway.waitForRequest("sessions.patch");
+      expect(patch.params).toMatchObject({
+        model: "openai/shared-alpha@openai:alternate",
+        expectedSessionId: expect.any(String),
+      });
+      expect(await gateway.getRequests("users.linkAuthProfile")).toEqual([]);
+      expect(await gateway.getRequests("users.selectModelAccount")).toEqual([]);
+    });
+  });
+
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];
