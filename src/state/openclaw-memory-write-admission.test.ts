@@ -25,14 +25,18 @@ import {
 } from "./openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 
-const { configureMemoryCoreDreamingState, getMemorySearchManager, memoryRuntime } =
-  await vi.importActual<{
-    configureMemoryCoreDreamingState: (
-      open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-    ) => void;
-    getMemorySearchManager: MemoryPluginRuntime["getMemorySearchManager"];
-    memoryRuntime: MemoryPluginRuntime;
-  }>("../../extensions/memory-core/runtime-api.js");
+const { configureMemoryCoreDreamingState, createMemoryRuntime } = await vi.importActual<{
+  configureMemoryCoreDreamingState: (
+    open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>("../../extensions/memory-core/runtime-api.js");
+
+const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
+const getMemorySearchManager: MemoryPluginRuntime["getMemorySearchManager"] = (params) =>
+  memoryRuntime.getMemorySearchManager(params);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
