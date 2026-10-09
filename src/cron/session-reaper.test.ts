@@ -370,6 +370,53 @@ describe("sweepCronRunSessions", () => {
     expect(readSessionEntries(storePath)).toEqual({});
   });
 
+  it("retains a continuation when a child is admitted after retention selection", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:late-child-parent";
+    const writerKey = "agent:main:main";
+    const parent: SessionEntry = {
+      sessionId: "late-child-parent",
+      delivery: { kind: "none" },
+      updatedAt: now - 25 * 3_600_000,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-parent",
+        phase: "ready",
+        basePersisted: true,
+      },
+    };
+    await seedSessionEntries(storePath, {
+      [sessionKey]: parent,
+      [writerKey]: { sessionId: "unrelated-writer", updatedAt: now },
+    });
+    const writerStarted = createDeferred();
+    const releaseWriter = createDeferred();
+    const writer = patchSessionEntryCore({ storePath, sessionKey: writerKey }, async () => {
+      writerStarted.resolve();
+      await releaseWriter.promise;
+      return {};
+    });
+    await writerStarted.promise;
+
+    const sweep = sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
+    const child = createSubagentRunRecord({
+      runId: "child-admitted-during-retention",
+      requesterSessionKey: sessionKey,
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    subagentRuns.set(child.runId, child);
+    try {
+      releaseWriter.resolve();
+      const result = await sweep;
+      expect(result).toEqual({ swept: true, pruned: 0 });
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(readSessionEntries(storePath)[sessionKey]).toEqual(parent);
+    } finally {
+      releaseWriter.resolve();
+      await Promise.allSettled([writer, sweep]);
+    }
+  });
+
   it("preserves an expired run when work is admitted before writer-owned removal", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:active-run";

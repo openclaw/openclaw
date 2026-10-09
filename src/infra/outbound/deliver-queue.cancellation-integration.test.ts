@@ -29,6 +29,7 @@ import {
 import {
   enqueueDelivery,
   enqueueDeliveryOnce,
+  markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
 } from "./delivery-queue-storage.js";
 import {
@@ -513,22 +514,29 @@ describe("queued cancellation during adapter preparation", () => {
     }
   });
 
-  it("does not retire the same claim after durable dispatch starts", async () => {
-    const { retireUnsentDelivery } = await import("./delivery-queue-ack.js");
-    const stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const initialProducerClaim = createInitialDeliveryProducerClaim();
-    const id = await enqueueDelivery({
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "possibly delivered question" }],
-      initialProducerClaim,
-    });
-    const producerClaimId = initialProducerClaim.producerClaimId;
-    await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, producerClaimId);
-    expect(await retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
-    expect(readQueuedEntry(stateDir, id).recoveryState).toBe("send_attempt_started");
-  });
+  it.each(["send_attempt_started", "unknown_after_send"] as const)(
+    "does not retire the same claim after durable state advances to %s",
+    async (state) => {
+      const { retireUnsentDelivery } = await import("./delivery-queue-ack.js");
+      const stateDir = fixtures.tmpDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const initialProducerClaim = createInitialDeliveryProducerClaim();
+      const id = await enqueueDelivery({
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "possibly delivered question" }],
+        initialProducerClaim,
+      });
+      const producerClaimId = initialProducerClaim.producerClaimId;
+      await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, producerClaimId);
+      if (state === "unknown_after_send") {
+        await markDeliveryPlatformOutcomeUnknown(id, stateDir, producerClaimId);
+      }
+
+      expect(await retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
+      expect(readQueuedEntry(stateDir, id).recoveryState).toBe(state);
+    },
+  );
 
   it("keeps failed retirement visible and settles custody once preparation finishes", async () => {
     const queueAck = await import("./delivery-queue-ack.js");
