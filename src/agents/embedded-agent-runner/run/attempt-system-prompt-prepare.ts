@@ -1,4 +1,5 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   resolveProviderSystemPromptContribution,
@@ -96,6 +97,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     };
   }
   const policyPreparation = {
+    reader: getReplyOperationSessionReader(attempt.replyOperation),
     signal: attempt.abortSignal,
     assertCurrent: resolveAdmittedRunActiveAssertion(
       attempt.admittedRunContext,

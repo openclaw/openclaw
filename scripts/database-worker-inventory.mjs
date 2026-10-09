@@ -1195,7 +1195,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["admitWorktreeRunLeaseInDatabase"],
         evidence:
-          "Only worktrees/dispatch.worker.ts:50 registers admission through run-lease-store.worker.ts:6; src/state/openclaw-state-worker-registry.ts:149 loads the handler. Shared release/lease cleanup remain T1.",
+          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Shared release/lease cleanup remain T1.",
       },
     ],
   ],
@@ -1959,9 +1959,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readLatestTranscriptEntry"],
+        operations: [
+          "readLatestTranscriptEntry",
+          "readTranscriptEntry",
+          "readStoredTranscriptNotes",
+        ],
         evidence:
-          "src/transcripts/store.ts:250 submits transcripts.latest → src/state/openclaw-state-worker-runtime.ts:188 → src/transcripts/store-worker-read.ts:94; other reference is ReturnType only.",
+          "Ordinary reads dispatch through store-worker-read.ts; streamed library exports dispatch through store-export.worker.ts. TranscriptsStore no longer invokes a native generator; remaining host references are types and pure helpers.",
       },
     ],
   ],

@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -134,7 +135,10 @@ export function deferAbortedPartialPersistence(
   try {
     snapshot.settlement.deferred = snapshot.settlement.producer.handoff((producerCompleted) =>
       context.trackExecution(async () => {
-        await producerCompleted;
+        const producerError = await producerCompleted;
+        if (isCliPartialOutputRejected(producerError)) {
+          return;
+        }
         let warning: string | undefined;
         try {
           const { persistAbortedPartial } = await import("./chat-transcript-persistence.js");

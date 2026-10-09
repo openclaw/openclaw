@@ -303,8 +303,6 @@ async function prepareUpdateFinalization(
     installKind,
     preFinalizeConfig,
     requestedChannel,
-    storedChannel,
-    effectiveChannel,
     channel,
   };
 }
@@ -317,15 +315,7 @@ async function updateFinalizeCommandInternal(
   invokingRunId: string,
   ownsMaintenance: boolean,
 ): Promise<() => Promise<void>> {
-  const {
-    root,
-    nodeRunner,
-    preFinalizeConfig,
-    requestedChannel,
-    storedChannel,
-    effectiveChannel,
-    channel,
-  } = prepared;
+  const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
   let doctorWarnings: string[] = [];
   const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
@@ -340,7 +330,7 @@ async function updateFinalizeCommandInternal(
     lifecycle.recordWarnings(doctorWarnings);
   };
 
-  const doctorParams = () => ({
+  const doctorParams = {
     root,
     nodeRunner,
     runId: invokingRunId,
@@ -349,7 +339,7 @@ async function updateFinalizeCommandInternal(
     onWarnings: onDoctorWarnings,
     onDoctorStep: (step: Parameters<typeof lifecycle.recordDoctorStep>[0]) =>
       lifecycle.recordDoctorStep(step),
-  });
+  };
 
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
@@ -374,7 +364,7 @@ async function updateFinalizeCommandInternal(
         () =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
-            ...doctorParams(),
+            ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
           }),
@@ -411,12 +401,7 @@ async function updateFinalizeCommandInternal(
               const postDoctorStoredChannel = configSnapshot.valid
                 ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
                 : null;
-              const postDoctorChannel =
-                requestedChannel ??
-                postDoctorStoredChannel ??
-                storedChannel ??
-                effectiveChannel ??
-                DEFAULT_PACKAGE_CHANNEL;
+              const postDoctorChannel = requestedChannel ?? postDoctorStoredChannel ?? channel;
               const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
               return await updatePluginsAfterCoreUpdate({
                 root,
@@ -440,7 +425,7 @@ async function updateFinalizeCommandInternal(
       "targetConfigConvergence",
       async (phase) => {
         const result = await completePostCorePluginUpdate({
-          ...doctorParams(),
+          ...doctorParams,
           pluginUpdate: initialPluginUpdate,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
         });

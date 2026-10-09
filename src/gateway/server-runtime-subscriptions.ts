@@ -42,6 +42,7 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createLazyPromiseLoader,
   createLazyRuntimeModule,
@@ -654,15 +655,17 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    // Share the agent queue so a later cumulative update cannot outrun retirement.
+    // Retire synchronously before later cumulative updates, but retain the wire
+    // projection until this committed row has crossed its async publication path.
     const agentHandler = agentEventHandlerLoader.peek();
+    const publication = createDeferredCore();
     const dispatch = runOutsideAsyncWorkScope(() =>
       dispatchEventHandler<InternalSessionTranscriptUpdate>({
         loadHandler: agentHandler
           ? () =>
               agentHandler
                 .then(
-                  (handler) => handler.retireTranscript(evt),
+                  (handler) => handler.retireTranscript(evt, publication.promise),
                   () => undefined,
                 )
                 .then(getTranscriptUpdateHandler)
@@ -674,7 +677,10 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       }),
     );
     agentEventDispatches.add(dispatch);
-    void dispatch.then(() => agentEventDispatches.delete(dispatch));
+    void dispatch.then(() => {
+      publication.resolve();
+      agentEventDispatches.delete(dispatch);
+    });
   });
 
   // Committed resets/rotations can change access after the originating run is gone.

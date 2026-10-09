@@ -227,12 +227,15 @@ export type AgentCommandOpts = {
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
   /** Gateway owns final media projection and joins transcript writes before delivery or cleanup. */
-  beforeTerminalDelivery?: (reply?: {
-    payloads: ReplyPayload[];
-    sessionId: string;
-    lifecycleRevision?: string;
-    storePath?: string;
-  }) => Promise<void>;
+  beforeTerminalDelivery?: (
+    reply?: {
+      payloads: ReplyPayload[];
+      sessionId: string;
+      lifecycleRevision?: string;
+      storePath?: string;
+    },
+    producerError?: unknown,
+  ) => Promise<void>;
   /** Exact Gateway execution outcome; terminal cleanup retains its session admission. */
   isTerminalOutcomeObserved?: () => boolean;
   /** Gateway-owned preparation of runtime-appended assistant transcript messages. */

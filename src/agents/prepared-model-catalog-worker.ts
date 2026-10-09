@@ -5,7 +5,6 @@ import {
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
@@ -14,7 +13,6 @@ import {
   captureRemoteModelCatalogSnapshot,
   type ActiveRemoteModelCatalog,
 } from "../model-catalog/remote-overlay.js";
-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
@@ -28,11 +26,15 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  fingerprintPreparedModelCatalogGeneration,
+  fingerprintPreparedModelWorkerRequest,
+} from "./prepared-model-catalog-fingerprints.js";
 import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
@@ -69,6 +71,7 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
+  sharedAuthStoreOwnership?: SharedAuthStoreOwnership;
   providerIds: readonly string[];
   catalogFacts: Pick<
     PreparedModelRuntimeAgentFacts,
@@ -279,78 +282,6 @@ async function getGatewayCatalogPool(
   return getGatewayCatalogPool(input, metadata, environmentFingerprint);
 }
 
-export function fingerprintPreparedModelWorkerRequest(
-  input: PreparedModelCatalogWorkerInput,
-  request: PreparedModelWorkerRequest,
-): string {
-  return fingerprintPreparedRuntimeFacts([input.generationFingerprint, request]);
-}
-
-function fingerprintPreparedModelCatalogPlugins(
-  snapshot: PreparedModelCatalogWorkerInput["pluginMetadataSnapshot"],
-): string {
-  return fingerprintPreparedRuntimeFacts({
-    config: snapshot.configFingerprint ?? null,
-    index: resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
-    pluginIds: snapshot.pluginIds ?? null,
-    policy: snapshot.policyHash,
-    workspaceDir: snapshot.workspaceDir ?? null,
-  });
-}
-
-const immutableGenerationConfigFingerprints = new WeakMap<OpenClawConfig, string>();
-
-function fingerprintPreparedModelCatalogConfig(config: OpenClawConfig): string {
-  const immutable = isDeeplyFrozenPlainData(config);
-  const cached = immutable ? immutableGenerationConfigFingerprints.get(config) : undefined;
-  if (cached !== undefined) {
-    return cached;
-  }
-  // Worker generation facts must retain the distinction between undefined and null.
-  const fingerprint = fingerprintPreparedRuntimeFacts(config);
-  if (immutable) {
-    immutableGenerationConfigFingerprints.set(config, fingerprint);
-  }
-  return fingerprint;
-}
-
-export function fingerprintPreparedModelCatalogGeneration(
-  params: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint">,
-): string {
-  return fingerprintPreparedRuntimeFacts({
-    remoteCatalogSource: params.remoteCatalog?.sourceUrl,
-    remoteCatalogRevision: params.remoteCatalog?.revision,
-    input: { ...params.input, config: fingerprintPreparedModelCatalogConfig(params.input.config) },
-    sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(params.sourceConfigForSecrets),
-    configResolutionFacts: params.configResolutionFacts,
-    sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
-    authStore: params.authStore,
-    providerIds: params.providerIds,
-    catalogFacts: params.catalogFacts,
-    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
-    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
-  });
-}
-
-/** Registrations follow their loader context; agent credentials remain request-local. */
-export function fingerprintPreparedModelCatalogPluginContext(
-  value: PreparedModelCatalogWorkerInput,
-): string {
-  return fingerprintPreparedRuntimeFacts({
-    remoteCatalogSource: value.remoteCatalog?.sourceUrl,
-    remoteCatalogRevision: value.remoteCatalog?.revision,
-    config: fingerprintPreparedModelCatalogConfig(value.input.config),
-    sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(value.sourceConfigForSecrets),
-    configResolutionFacts: value.configResolutionFacts,
-    sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
-    env: value.input.env,
-    workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
-    allowGatewaySubagentBinding: value.input.allowGatewaySubagentBinding === true,
-    preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
-    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(value.pluginMetadataSnapshot),
-  });
-}
-
 export function createPreparedModelCatalogWorkerInput(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
@@ -380,6 +311,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
     params.pluginMetadataSnapshot;
   const cache = getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot);
   const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
+  const sharedAuthStoreOwnership = getPreparedSharedAuthStoreOwnership(params.agentFacts.env);
   const value: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint"> = {
     remoteCatalog: captureRemoteModelCatalogSnapshot(),
     input,
@@ -387,6 +319,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
     configResolutionFacts,
     sourceConfigResolutionFacts,
     authStore: cloneAuthProfileStore(params.agentFacts.authStore),
+    ...(sharedAuthStoreOwnership
+      ? { sharedAuthStoreOwnership: { ...sharedAuthStoreOwnership } }
+      : {}),
     providerIds: [...params.agentFacts.providerIds],
     catalogFacts: {
       configuredModelRefs: params.agentFacts.configuredModelRefs,

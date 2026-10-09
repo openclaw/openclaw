@@ -1,6 +1,7 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
@@ -282,6 +283,7 @@ async function resolveSessionAuthProfileOverride(params: {
   modelId: string;
   agentId: string;
   agentDir: string;
+  reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -313,7 +315,7 @@ async function resolveSessionAuthProfileOverride(params: {
     !sessionEntry.authProfileOverride?.trim() &&
     !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
-    !(await hasAnyAuthProfileStoreSourceAsync(agentDir))
+    !(await hasAnyAuthProfileStoreSourceAsync(agentDir, params.reader))
   ) {
     return { profileId: undefined, store: undefined };
   }
@@ -582,6 +584,7 @@ export async function resolveSessionAuthSelection(params: {
   configuredProfileId?: string;
   harnessRuntime?: string;
   agentDir: string;
+  reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;

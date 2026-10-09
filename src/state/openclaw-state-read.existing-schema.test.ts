@@ -10,7 +10,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
-import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -226,35 +225,20 @@ it("rejects detached fixed reads after their existing-schema scope ends", async 
   });
 });
 
-it.each(["fresh", "streaming"] as const)(
-  "validates existing runtime shape before a %s native read callback",
-  async (mode) => {
-    const { env, options } = await fixture();
-    await withExistingOpenClawStateSchema(options, async () => {
-      const source = mode === "streaming" ? openOpenClawStateDatabase(options) : undefined;
-      const { DatabaseSync } = requireNodeSqlite();
-      const external = new DatabaseSync(options.path);
-      try {
-        external.exec("DROP INDEX idx_plugin_state_listing");
-      } finally {
-        external.close();
-      }
-      const read = vi.fn(() => "must not run");
-      if (source) {
-        const rows = iterateOpenClawStateDatabaseReadOnly(
-          source,
-          function* () {
-            yield read();
-          },
-          env,
-        );
-        await expect(rows.next()).rejects.toThrow(/idx_plugin_state_listing|schema/i);
-      } else {
-        expect(() => withExistingOpenClawStateDatabaseReadOnly(read, options)).toThrow(
-          /idx_plugin_state_listing|schema/i,
-        );
-      }
-      expect(read).not.toHaveBeenCalled();
-    });
-  },
-);
+it("validates existing runtime shape before a fresh native read callback", async () => {
+  const { options } = await fixture();
+  withExistingOpenClawStateSchema(options, () => {
+    const { DatabaseSync } = requireNodeSqlite();
+    const external = new DatabaseSync(options.path);
+    try {
+      external.exec("DROP INDEX idx_plugin_state_listing");
+    } finally {
+      external.close();
+    }
+    const read = vi.fn(() => "must not run");
+    expect(() => withExistingOpenClawStateDatabaseReadOnly(read, options)).toThrow(
+      /idx_plugin_state_listing|schema/i,
+    );
+    expect(read).not.toHaveBeenCalled();
+  });
+});

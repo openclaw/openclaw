@@ -34,7 +34,16 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../s
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  requestHeartbeat: vi.fn(),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "captured-session",
+    generation: "captured-generation",
+  })),
+  enqueueSessionEvent: vi.fn((_text: string, _options: Record<string, unknown>) => ({
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed" }),
+  })),
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
@@ -44,8 +53,10 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Keep ordinary reply execution outside the hook admission fixture.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
@@ -314,8 +325,8 @@ describe("gateway hook early-failure recovery", () => {
         expect(line).toContain(message);
       }
       const events = outcome === "delivery" ? 0 : 1;
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(events);
-      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     },
   );
 
@@ -334,19 +345,16 @@ describe("gateway hook early-failure recovery", () => {
     });
     expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       "Hook Recovery (error): Error: required system config unavailable",
-      { sessionKey: global ? "agent:hooks:global" : testCase.eventSessionKey },
+      expect.objectContaining({
+        agentId: "hooks",
+        sessionKey: testCase.eventSessionKey,
+        source: "hook",
+      }),
     );
 
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
-      agentId: "hooks",
-      ...(global ? {} : { sessionKey: testCase.eventSessionKey }),
-    });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
@@ -483,7 +491,7 @@ describe("gateway hook early-failure recovery", () => {
     },
   );
 
-  it("announces successful plugin hook turns through the existing heartbeat path", async () => {
+  it("announces successful plugin hook turns through the ordinary event owner", async () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
     mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
       async (params: { onExecutionStarted?: () => void }) => {
@@ -498,18 +506,15 @@ describe("gateway hook early-failure recovery", () => {
     ).resolves.toEqual({ ok: true, runId: expect.any(String) });
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
         "Hook IMAP fastmail: New email summarized",
-        { sessionKey: "agent:hooks:main" },
+        expect.objectContaining({
+          agentId: "hooks",
+          sessionKey: "agent:hooks:main",
+          source: "hook",
+        }),
       ),
     );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
-      agentId: "hooks",
-      sessionKey: "agent:hooks:main",
-    });
   });
 
   it.each([
@@ -761,7 +766,7 @@ describe("hook background admission", () => {
     });
 
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
-    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+    expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
       "Hook Gmail (skipped): model provider unavailable",
       "Hook Gmail (skipped): model provider unavailable",
     ]);
@@ -770,7 +775,7 @@ describe("hook background admission", () => {
     try {
       expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
       expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
@@ -799,7 +804,7 @@ describe("hook background admission", () => {
     expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (error): execution failed",
       ]),

@@ -95,17 +95,14 @@ export function writeRequestLogEntryOrFail(
   res,
   { requestLog, entry, label = "mock-openai", required = false },
 ) {
-  if (!requestLog) {
-    if (!required) {
-      return false;
-    }
-    const message = "MOCK_REQUEST_LOG is not configured";
-    console.error(`${label} request log write failed: ${message}`);
-    writeJson(res, 500, { error: { message: `mock OpenAI request log write failed: ${message}` } });
-    return true;
+  if (!requestLog && !required) {
+    return false;
   }
 
   try {
+    if (!requestLog) {
+      throw new Error("MOCK_REQUEST_LOG is not configured");
+    }
     fs.appendFileSync(requestLog, `${JSON.stringify(entry)}\n`);
     return false;
   } catch (error) {

@@ -22,6 +22,7 @@ import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import {
   applyUpdateCandidateAdmission,
   assertUpdateAdmissionConfigUnchanged,
+  createUpdateCandidateAdmissionReport,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -316,19 +317,9 @@ export async function initializeAndRunUpdate(
                           if (!(error instanceof UpdatePreMutationError)) {
                             throw error;
                           }
-                          throw new UnreportedUpdateAdmissionOutcome({
-                            root: target.root,
-                            mode: target.mode,
-                            installKind: target.updateInstallKind,
-                            opts,
-                            controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-                            reason: error.reason,
-                            message: error.message,
-                            nextAction: error.nextAction,
-                            failureFacts: error.failureFacts,
-                            stepResult: error.stepResult,
-                            recoverySteps: error.recoverySteps,
-                          });
+                          throw new UnreportedUpdateAdmissionOutcome(
+                            createUpdateCandidateAdmissionReport({ target, opts, prepared }, error),
+                          );
                         }
                       },
                     }

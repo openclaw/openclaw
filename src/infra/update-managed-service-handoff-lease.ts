@@ -46,6 +46,7 @@ import {
 import { assertNoRetainedSourceBorrower } from "./update-managed-service-handoff-retained-custody.js";
 import {
   createManagedHandoffLeaseRows,
+  managedHandoffLeaseRow,
   managedHandoffLeaseText as text,
   triageFailureSchema,
 } from "./update-managed-service-handoff-rows.js";
@@ -195,13 +196,7 @@ function createLeaseStore(
         if (destination && !originalAllowsMutation(destination, db)) {
           return { kind: "busy", owner: destination.owner };
         }
-        if (
-          source &&
-          !sameRow(
-            { owner: source.owner, payload_json: source.payload, updated_at: source.updatedAt },
-            row(db, source.key),
-          )
-        ) {
+        if (source && !sameRow(managedHandoffLeaseRow(source), row(db, source.key))) {
           throw new Error("managed triage source changed during admission");
         }
         if (source && (!mutationCurrent(source, db) || hasUnsettledChildren(source, db))) {
@@ -611,13 +606,7 @@ function createLeaseStore(
           return false;
         }
         for (const lease of leases) {
-          if (
-            !deleteRow(db, lease.key, {
-              owner: lease.owner,
-              payload_json: lease.payload,
-              updated_at: lease.updatedAt,
-            })
-          ) {
+          if (!deleteRow(db, lease.key, managedHandoffLeaseRow(lease))) {
             if (leases.length === 1) {
               return false;
             }

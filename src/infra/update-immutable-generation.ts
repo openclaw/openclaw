@@ -147,10 +147,10 @@ export async function verifyImmutableGeneration(
   }
   const sealed = options.sealed !== false;
   await inspectGenerationTree(root, sealed);
-  if (sealed && !(await fs.lstat(path.join(root, ".git"))).isDirectory()) {
-    throw new Error("A sealed generation requires its own Git metadata directory.");
-  }
   if (sealed) {
+    if (!(await fs.lstat(path.join(root, ".git"))).isDirectory()) {
+      throw new Error("A sealed generation requires its own Git metadata directory.");
+    }
     const alternates = await fs
       .readFile(path.join(root, ".git", "objects", "info", "alternates"), "utf8")
       .catch((error: unknown) => {

@@ -10,34 +10,21 @@ import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
-const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
-  "api_key",
-  "aws-sdk",
-  "oauth",
-  "token",
-]);
-
 function normalizeMode(value: unknown): AuthProfileConfig["mode"] | null {
-  return typeof value === "string" && AUTH_PROFILE_MODES.has(value as AuthProfileConfig["mode"])
-    ? (value as AuthProfileConfig["mode"])
-    : null;
+  switch (value) {
+    case "api_key":
+    case "aws-sdk":
+    case "oauth":
+    case "token":
+      return value;
+    default:
+      return null;
+  }
 }
 
-function extractProviderFromModelRef(value: string): string | null {
-  const { model } = splitTrailingAuthProfile(value);
-  const slash = model.indexOf("/");
-  if (slash <= 0) {
-    return null;
-  }
-  return normalizeProviderId(model.slice(0, slash)) || null;
-}
-
-function extractProviderFromProfileId(profileId: string): string | null {
-  const colon = profileId.indexOf(":");
-  if (colon <= 0) {
-    return null;
-  }
-  return normalizeProviderId(profileId.slice(0, colon)) || null;
+function extractProviderPrefix(value: string, separator: ":" | "/"): string | null {
+  const index = value.indexOf(separator);
+  return index > 0 ? normalizeProviderId(value.slice(0, index)) || null : null;
 }
 
 function collectActiveAuthHints(config: OpenClawConfig) {
@@ -55,8 +42,8 @@ function collectActiveAuthHints(config: OpenClawConfig) {
   }
 
   for (const { value } of collectConfiguredModelRefs(config)) {
-    const { profile } = splitTrailingAuthProfile(value);
-    const provider = extractProviderFromModelRef(value);
+    const { model, profile } = splitTrailingAuthProfile(value);
+    const provider = extractProviderPrefix(model, "/");
     if (profile) {
       explicitProfileIds.add(profile);
       if (provider) {
@@ -106,7 +93,7 @@ function buildProfileMetadata(params: {
   const provider =
     normalizeProviderId(after.provider) ||
     normalizeProviderId(before.provider) ||
-    extractProviderFromProfileId(params.profileId) ||
+    extractProviderPrefix(params.profileId, ":") ||
     normalizeProviderId(params.providerHint);
   if (!provider) {
     return null;
@@ -174,7 +161,7 @@ export function protectActiveAuthProfileConfig(params: {
     const provider =
       normalizeProviderId(afterProfileRecord?.provider) ||
       normalizeProviderId(beforeProfileRecord?.provider) ||
-      extractProviderFromProfileId(profileId);
+      extractProviderPrefix(profileId, ":");
     const protectsActiveProvider = provider !== null && activeProviders.has(provider);
     const protectsExplicitProfile = explicitProfileIds.has(profileId);
     if (!protectsActiveProvider && !protectsExplicitProfile) {

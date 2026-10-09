@@ -43,6 +43,10 @@ export type SessionSourceAssertion = (() => void) & {
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
 };
 
+export function sessionEntryCommitGuardOptions(source: SessionSourceAssertion | undefined) {
+  return source?.nativeSource ? { assertCommitAllowed: source } : { workerGuard: { source } };
+}
+
 const sessionSourceScopes = new AsyncLocalStorage<
   ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceAuthority>
 >();

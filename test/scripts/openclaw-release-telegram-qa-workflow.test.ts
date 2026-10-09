@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -1099,6 +1100,65 @@ describe("release Telegram QA workflow", () => {
     expect(createSut).toContain('/usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID"');
     expect(createSut).toContain('export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"');
   });
+
+  it.runIf(process.platform === "linux").each(["directory", "symlink"])(
+    "projects a %s run fixture through the actual SUT config seeder",
+    (kind) => {
+      const launcher = extractHereDocument(
+        requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher"),
+        "LAUNCHER",
+      );
+      const source = launcher.match(
+        /\/bin\/bash --noprofile --norc -ceu '\n\s*(umask 077\n[\s\S]*?)\n\s*' openclaw-config-projection/u,
+      )?.[1];
+      if (!source) {
+        throw new Error("Expected the unprivileged SUT config seeder");
+      }
+      const program = source.replaceAll("'\\''", "'");
+      const root = tempDirs.make("openclaw-telegram-plugin-projection-");
+      const plugin = join(root, "hook");
+      mkdirSync(plugin);
+      writeFileSync(join(plugin, "index.js"), "export default { register() {} };\n");
+      if (kind === "symlink") {
+        symlinkSync(join(plugin, "index.js"), join(plugin, "escape.js"));
+      }
+      const configPath = join(root, "openclaw.json");
+      const external = "/outside/run/fixture";
+      const config = JSON.stringify({ plugins: { load: { paths: [plugin, external] } } });
+      writeFileSync(configPath, config);
+      const projection = join(root, "state", "projection");
+      const result = spawnSync(
+        "bash",
+        [
+          "-ceu",
+          program,
+          "openclaw-config-projection",
+          configPath,
+          projection,
+          createHash("sha256").update(config).digest("hex"),
+          root,
+        ],
+        { encoding: "utf8" },
+      );
+      if (kind === "symlink") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "Telegram QA plugin fixture contains unsupported file types",
+        );
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      const projected = JSON.parse(readFileSync(join(projection, "openclaw.json"), "utf8"));
+      const copied = projected.plugins.load.paths[0] as string;
+      expect(copied).not.toBe(plugin);
+      expect(readFileSync(join(copied, "index.js"), "utf8")).toBe(
+        "export default { register() {} };\n",
+      );
+      expect(statSync(copied).uid).toBe(process.getuid!());
+      expect(projected.plugins.load.paths[1]).toBe(external);
+      expect(readFileSync(configPath, "utf8")).toBe(config);
+    },
+  );
 
   it("admits only one source-generation directory beneath the writable config root", () => {
     const launcher = extractHereDocument(

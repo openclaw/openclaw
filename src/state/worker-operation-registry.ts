@@ -19,6 +19,7 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
     >,
   ) => T;
+  writeAdmitted: WorkerWriteOperationContext["write"];
 };
 
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<

@@ -142,6 +142,14 @@ describe("canonical SQLite metadata reads", () => {
       expect(() => loadSessionEntryReadOnly({ ...scope, projection })).toThrow(
         "non-canonical persisted row",
       );
+      expect(() =>
+        listSessionEntriesReadOnly({
+          ...scope,
+          projection,
+          sessionKeys: [sessionKey],
+          includeParticipants: false,
+        }),
+      ).toThrow("non-canonical persisted row");
     }
     const shouldAppend = vi.fn(() => true);
     await expect(

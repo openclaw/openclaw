@@ -559,33 +559,13 @@ export function isRetryableError(error: Error): boolean {
     current.reason,
     ...(Array.isArray(current.errors) ? current.errors : []),
   ]);
-  const messages = candidates.map((candidate) =>
-    normalizeLowercaseStringOrEmpty(readStringField(asOptionalObjectRecord(candidate), "message")),
-  );
-
   // Provider status takes precedence over statuses mentioned in its details and network errors.
-  // Require the API prefix so port numbers and IP octets cannot become HTTP statuses.
-  if (messages.some((message) => /mattermost api 5\d{2}\b/.test(message))) {
-    return true;
-  }
-
-  if (
-    messages.some(
-      (message) => /mattermost api 429\b/.test(message) || message.includes("too many requests"),
-    )
-  ) {
-    return true;
-  }
-
-  if (messages.some((message) => /mattermost api 4\d{2}\b/.test(message))) {
-    return false;
-  }
-
-  const hasMattermostApiStatusCode = messages.some((message) =>
-    /mattermost api \d{3}\b/.test(message),
-  );
-  if (hasMattermostApiStatusCode) {
-    return false;
+  // The first status in the outermost provider error is authoritative, including wrapped errors.
+  for (const candidate of candidates) {
+    const status = parseMattermostApiStatus(candidate);
+    if (status !== undefined) {
+      return status === 429 || (status >= 500 && status < 600);
+    }
   }
 
   if (
@@ -600,9 +580,15 @@ export function isRetryableError(error: Error): boolean {
     return true;
   }
 
-  return messages.some((message) =>
-    RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
-  );
+  return candidates.some((candidate) => {
+    const message = normalizeLowercaseStringOrEmpty(
+      readStringField(asOptionalObjectRecord(candidate), "message"),
+    );
+    return (
+      message.includes("too many requests") ||
+      RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern))
+    );
+  });
 }
 
 function readErrorCode(error: unknown): string | undefined {

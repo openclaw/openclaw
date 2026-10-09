@@ -283,46 +283,28 @@ describe("repository source profile creation", () => {
     }
   });
 
-  it.each([false, true])("reloads profiles at fallback HEAD; missing=%s", async (missing) => {
-    if (missing) {
-      await git(repo, "rm", ".openclaw/worktree-profiles/alpha");
-    } else {
-      await write(".openclaw/worktree-profiles/alpha", "beta\n");
-    }
-    const fallback = await save();
+  it("reports a failed remote checkout without retrying from local HEAD", async () => {
+    await write(".openclaw/worktree-profiles/alpha", "beta\n");
+    await save();
     vi.spyOn(baseRefs, "resolveWorktreeBase").mockResolvedValue({
       commit,
       gitOperand: commit,
       recordRef: "origin/main",
-      remote: true,
+      fetchSucceeded: true,
     });
     let attempts = 0;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (argv[0] === "git" && argv.includes("worktree") && argv.includes("add")) {
         attempts++;
-        if (attempts === 1) {
-          return failed("remote checkout failed");
-        }
+        return failed("remote checkout failed");
       }
       return await realRunCommand(argv, options);
     });
-    const result = service.create({ repoRoot: repo, name: "retry", profiles: ["alpha"] });
-    if (missing) {
-      await expect(result).rejects.toThrow(/tracked regular file/);
-      expect(attempts).toBe(1);
-      expect(await service.listRegistryRecords()).toEqual([]);
-      expect(await git(repo, "branch", "--list", "openclaw/retry")).toBe("");
-    } else {
-      const target = await result;
-      expect(attempts).toBe(2);
-      expect(await git(target.path, "rev-parse", "HEAD")).toBe(fallback);
-      expect(await git(target.path, "sparse-checkout", "list")).toBe(
-        ".openclaw/worktree-profiles\nbeta",
-      );
-      await expect(fs.access(path.join(target.path, "alpha/source.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(target.baseRef).toBe("HEAD");
-    }
+    await expect(
+      service.create({ repoRoot: repo, name: "retry", profiles: ["alpha"] }),
+    ).rejects.toThrow("remote checkout failed");
+    expect(attempts).toBe(1);
+    expect(await service.listRegistryRecords()).toEqual([]);
+    expect(await git(repo, "branch", "--list", "openclaw/retry")).toBe("");
   });
 });

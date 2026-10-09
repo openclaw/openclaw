@@ -9,6 +9,7 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
@@ -28,6 +29,46 @@ import {
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+
+it("reenters the projection writer from a cold search's retained read admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("cold-search.sqlite");
+    const database = { agentId: "main", path: storePath, env: state.env };
+    const scope = { agentId: "main", storePath, env: state.env };
+    const sessionKey = "agent:main:cold-search";
+    await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "cold-search" }, [
+      { type: "session", id: "cold-search", version: 3 },
+      {
+        type: "message",
+        id: "cold-needle",
+        parentId: null,
+        timestamp: 1,
+        message: { role: "assistant", content: "Cold search needle" },
+      },
+    ]);
+    await waitForSessionTranscriptIndexReconcile(database);
+    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    const reader = retainSessionHistoryWorkerDatabase(database);
+    const readStatus = vi.fn((signal: AbortSignal) =>
+      projectionWriter.readSessionTranscriptIndexStatus(
+        database,
+        reader.owner.assertCurrent,
+        signal,
+      ),
+    );
+    try {
+      const result = await reader.owner.searchTranscripts(
+        { ...scope, query: "needle", sessionKeys: [sessionKey] },
+        readStatus,
+      );
+      expect(result.hits).toMatchObject([{ messageId: "cold-needle" }]);
+      expect(readStatus).toHaveBeenCalledOnce();
+    } finally {
+      reader.release();
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    }
+  });
+});
 
 it("keeps a warmed search reader through discovery and retires it through its captured alias", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -209,9 +250,8 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
         throw new Error("projection writer unavailable after admission wait");
       });
     try {
-      expect(await searchSessionTranscripts(request, database)).toEqual({
-        ...golden,
-        indexing: true,
+      await expect(searchSessionTranscripts(request, database)).rejects.toMatchObject({
+        code: "timeout",
       });
       expect(slowUnavailable).toHaveBeenCalledTimes(1);
     } finally {
@@ -255,6 +295,61 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       ...golden,
       indexing: false,
     });
+  });
+});
+
+it("cancels a search status callback queued behind a stuck writer at its deadline", async (test) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = path.join(state.stateDir, "search-cancellation.sqlite");
+    const database = { agentId: "main", path: storePath, env: state.env };
+    const scope = { agentId: "main", storePath, env: state.env };
+    const sessionKey = "agent:main:search-cancellation";
+    await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "search-cancellation" }, [
+      { type: "session", id: "search-cancellation", version: 3 },
+      {
+        type: "message",
+        id: "needle",
+        parentId: null,
+        timestamp: 1,
+        message: { role: "assistant", content: "Committed needle" },
+      },
+    ]);
+    await waitForSessionTranscriptIndexReconcile(database);
+    const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+    const committed = await searchSessionTranscripts(request, database);
+    const releaseWriter = createDeferred();
+    const writerEntered = createDeferred();
+    const writer = runOpenClawAgentWorkerWrite(database, async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    });
+    await withinTest(writerEntered.promise, test.signal);
+    const entered = createDeferred<AbortSignal | undefined>();
+    const readStatus = projectionWriter.readSessionTranscriptIndexStatus;
+    const status = vi
+      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
+      .mockImplementation((...args) => {
+        entered.resolve(args[2]);
+        return readStatus(...args);
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const search = searchSessionTranscripts(request, database);
+    const outcome = Promise.allSettled([search]);
+    try {
+      const signal = await withinTest(entered.promise, test.signal);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(signal?.aborted).toBe(true);
+      expect(await withinTest(outcome, test.signal)).toEqual([
+        { status: "rejected", reason: expect.objectContaining({ code: "timeout" }) },
+      ]);
+    } finally {
+      vi.useRealTimers();
+      releaseWriter.resolve();
+      await writer;
+      await outcome;
+      status.mockRestore();
+    }
+    expect(await searchSessionTranscripts(request, database)).toEqual(committed);
   });
 });
 

@@ -584,6 +584,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     }
   }
   let custody: "held" | "restoring" | "released" = "held";
+  const assertHeld = (receiver: unknown, operation: string) => {
+    if (receiver !== maintenance || custody !== "held") {
+      throw new Error(`${operation} requires its original live maintenance owner.`);
+    }
+  };
   const maintenance = {
     signal: exit.signal,
     serviceUpdateVerdict,
@@ -595,9 +600,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     run: <T>(operation: () => T) => state.run(operation),
     releaseState: () => settle(releaseState),
     async repairSqliteNoCow(paths: readonly string[]) {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("SQLite NOCOW repair requires its original live maintenance owner.");
-      }
+      assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));
       for (const message of result.changes) {
         params.runtime.log(message);
@@ -607,18 +610,14 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       }
     },
     async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("SQLite reclamation requires its original live maintenance owner.");
-      }
+      assertHeld(this, "SQLite reclamation");
       const result = await settle(() => state.enableSqliteReclamation(agents));
       for (const message of result.warnings) {
         warn(message);
       }
     },
     async cleanupRetainedRuntimes() {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("Updater runtime cleanup requires its original live maintenance owner.");
-      }
+      assertHeld(this, "Updater runtime cleanup");
       await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
     },
     async release() {

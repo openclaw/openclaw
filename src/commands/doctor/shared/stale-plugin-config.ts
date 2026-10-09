@@ -463,17 +463,16 @@ export function maybeRepairStalePluginConfig(
   }
   if (channelIds.length > 0) {
     recordRemoval(channelIds, "channels", "channel config");
-    const heartbeatIds = idsForSurface("heartbeat");
-    if (heartbeatIds.length > 0) {
-      changes.push(
-        `- agents heartbeat: removed ${heartbeatIds.length} stale heartbeat target${heartbeatIds.length === 1 ? "" : "s"} (${[...new Set(heartbeatIds)].join(", ")})`,
-      );
-    }
-    const modelByChannelIds = idsForSurface("modelByChannel");
-    if (modelByChannelIds.length > 0) {
-      changes.push(
-        `- channels.modelByChannel: removed ${modelByChannelIds.length} stale channel model override${modelByChannelIds.length === 1 ? "" : "s"} (${[...new Set(modelByChannelIds)].join(", ")})`,
-      );
+    for (const [surface, label, noun] of [
+      ["heartbeat", "agents heartbeat", "heartbeat target"],
+      ["modelByChannel", "channels.modelByChannel", "channel model override"],
+    ] as const) {
+      const ids = idsForSurface(surface);
+      if (ids.length > 0) {
+        changes.push(
+          `- ${label}: removed ${ids.length} stale ${noun}${ids.length === 1 ? "" : "s"} (${[...new Set(ids)].join(", ")})`,
+        );
+      }
     }
   }
 

@@ -311,6 +311,10 @@ export function mintReplyMessageActionTurnCapability(
   >,
   runId: string,
 ): string | undefined {
+  // An event's captured delivery route is not a new trusted channel turn.
+  if (turn.followupRun.run.internalEventExecution) {
+    return undefined;
+  }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
   if (
