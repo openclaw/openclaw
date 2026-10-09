@@ -144,10 +144,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const configRepairWarnings: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
-    options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
+    fixHint: string,
+    options: { sanitize?: boolean; emitWarnings?: boolean } = {},
   ): void => {
     changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
-    if (options.emitWarnings && mutation.warnings?.length) {
+    if (options.emitWarnings !== false && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
       configRepairWarnings.push(...mutation.warnings);
     }
@@ -155,7 +156,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       state,
       mutation,
       shouldRepair,
-      fixHint: options.fixHint,
+      fixHint,
     });
   };
   const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
@@ -191,9 +192,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         config: state.candidate,
         changes: ["Prepared the canonical agent roster for persistence."],
       },
-      {
-        fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
-      },
+      `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
+      { emitWarnings: false },
     );
     if (state.candidate.agents?.ownership === "explicit") {
       explicitSetPaths.push(["agents", "ownership"]);
@@ -205,11 +205,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     snapshot,
     prompter: params.prompter,
   });
-  applyConfigMutation(sessionStoreOwnerRecovery, {
-    fixHint: `Run "${doctorFixCommand}" to review session-store ownership recovery.`,
-    sanitize: true,
-    emitWarnings: true,
-  });
+  applyConfigMutation(
+    sessionStoreOwnerRecovery,
+    `Run "${doctorFixCommand}" to review session-store ownership recovery.`,
+    { sanitize: true },
+  );
 
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
@@ -223,10 +223,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       targets: preflight.cronCodexRuntimePolicyTargets,
       blockedModelIdentities: blockedCodexModelIdentities,
     });
-    applyConfigMutation(cronRuntimeRepair, {
-      fixHint: `Run "${doctorFixCommand}" to preserve migrated cron runtime policy.`,
-      emitWarnings: true,
-    });
+    applyConfigMutation(
+      cronRuntimeRepair,
+      `Run "${doctorFixCommand}" to preserve migrated cron runtime policy.`,
+    );
     const blockedTargets = new Set(
       cronRuntimeRepair.blockedTargets.map(cronCodexRuntimePolicyTargetKey),
     );
@@ -285,10 +285,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }),
     }),
   );
-  applyConfigMutation(modelMetadataRepair, {
-    fixHint: `Run "${doctorFixCommand}" to remove audit-proven generated model metadata.`,
-    emitWarnings: true,
-  });
+  applyConfigMutation(
+    modelMetadataRepair,
+    `Run "${doctorFixCommand}" to remove audit-proven generated model metadata.`,
+  );
 
   noteDoctorHookConfigWarnings(state.cfg, snapshot.path);
 
@@ -300,21 +300,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       sourceRaw: snapshot.parsed,
     }),
   );
-  applyConfigMutation(normalized, {
-    fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
-    emitWarnings: true,
-  });
+  applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
 
   const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(
     runWithCurrentPluginMetadata(state.candidate, () =>
       recoverCommandOwnerTargetKinds({ config: state.candidate, snapshot }),
     ),
-    {
-      fixHint: `Run "${doctorFixCommand}" to restore recorded command-owner target kinds.`,
-      sanitize: true,
-      emitWarnings: true,
-    },
+    `Run "${doctorFixCommand}" to restore recorded command-owner target kinds.`,
+    { sanitize: true },
   );
 
   const { repairUnownedChannelAccountBindings } =
@@ -326,10 +320,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       }),
     ),
-    {
-      fixHint: `Run "${doctorFixCommand}" to preserve channel account ownership.`,
-      emitWarnings: true,
-    },
+    `Run "${doctorFixCommand}" to preserve channel account ownership.`,
   );
 
   const { prepareTailscaleConfigMigration } = await import("./doctor-tailscale.js");
@@ -338,10 +329,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg: state.candidate,
       env: process.env,
     }),
-    {
-      fixHint: `Run "${doctorFixCommand}" to apply safe Tailscale configuration migrations.`,
-      emitWarnings: true,
-    },
+    `Run "${doctorFixCommand}" to apply safe Tailscale configuration migrations.`,
   );
 
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
@@ -355,10 +343,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       changes: retiredPhoneControlCleanup.configChanges,
       warnings: retiredPhoneControlCleanup.warnings,
     },
-    {
-      fixHint: `Run "${doctorFixCommand}" to retire Phone Control lease configuration.`,
-      emitWarnings: true,
-    },
+    `Run "${doctorFixCommand}" to retire Phone Control lease configuration.`,
   );
   if (retiredPhoneControlCleanup.cleanupPending && !shouldRepair) {
     note(
@@ -375,7 +360,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   );
   applyConfigMutation(
     { ...installedPluginRecovery, warnings: installedPluginRecovery.notices },
-    { fixHint: `Run "${doctorFixCommand}" to apply these changes.`, emitWarnings: true },
+    `Run "${doctorFixCommand}" to apply these changes.`,
   );
   if (referenceSource) {
     referenceSource.installedPluginIdRecovery = installedPluginRecovery.recovery;
@@ -397,9 +382,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         env: process.env,
       }),
     ),
-    {
-      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
-    },
+    `Run "${doctorFixCommand}" to apply these changes.`,
+    { emitWarnings: false },
   );
 
   if (!shouldRepair) {
@@ -409,11 +393,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       repairStaleAgentModelRefs(state.candidate, { env: process.env }),
     );
     retiredModelRefConfig = staleAgentModelRepair.retiredModelRefConfig;
-    applyConfigMutation(staleAgentModelRepair, {
-      fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
-      sanitize: true,
-      emitWarnings: true,
-    });
+    applyConfigMutation(
+      staleAgentModelRepair,
+      `Run "${doctorFixCommand}" to remove stale agent model references.`,
+      { sanitize: true },
+    );
   }
 
   const [
@@ -467,19 +451,21 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }),
     );
     for (const staleCleanup of staleChannelCleanups) {
-      applyConfigMutation(staleCleanup, {
-        fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
-        sanitize: true,
-        emitWarnings: true,
-      });
+      applyConfigMutation(
+        staleCleanup,
+        `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
+        { sanitize: true },
+      );
     }
   }
 
   const { repairHooksTokenReuseGatewayAuth } =
     await import("./doctor/shared/hooks-token-reuse-repair.js");
-  applyConfigMutation(await repairHooksTokenReuseGatewayAuth(state.candidate, process.env), {
-    fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
-  });
+  applyConfigMutation(
+    await repairHooksTokenReuseGatewayAuth(state.candidate, process.env),
+    `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
+    { emitWarnings: false },
+  );
 
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");

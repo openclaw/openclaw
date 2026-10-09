@@ -168,6 +168,8 @@ export function createFreeBsdPkgOwnershipInspection(
         );
       }),
     );
+  const canonicalEntry = async (file: string) =>
+    path.join(await canonicalDirectory(path.dirname(file)), path.basename(file));
   const assertUnowned = async (lexicalRoot: string, entryOnly: boolean) => {
     // Start cached work inside the admitted callback so synchronous budget
     // consumption cannot leave a started promise outside the deadline race.
@@ -179,16 +181,10 @@ export function createFreeBsdPkgOwnershipInspection(
     if (inventory.some((file) => matches(lexicalRoot, file))) {
       throw new FreeBsdPkgOwnershipError("pkg-owned-install");
     }
-    const rootEntry = path.join(
-      await canonicalDirectory(path.dirname(lexicalRoot)),
-      path.basename(lexicalRoot),
-    );
+    const rootEntry = await canonicalEntry(lexicalRoot);
     const canonicalRoot = entryOnly ? rootEntry : await canonicalDirectory(lexicalRoot);
     for (const file of inventory) {
-      const canonicalFile = path.join(
-        await canonicalDirectory(path.dirname(file)),
-        path.basename(file),
-      );
+      const canonicalFile = await canonicalEntry(file);
       // An aliased root symlink is itself an owned entry even when its
       // referent is outside the package prefix.
       if (canonicalFile === rootEntry || matches(canonicalRoot, canonicalFile)) {

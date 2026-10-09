@@ -8,6 +8,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
@@ -42,6 +43,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
+import { intersectSessionPermissionModes } from "../session-permission-exec-mode.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
@@ -55,6 +57,12 @@ type GatewayToolCallerIdentity = {
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  /** Restrict-only executable surface captured for internal follow-ups. */
+  sessionEventToolsAllow?: readonly string[];
+  /** An object with no mode retains the producer's default permission posture. */
+  sessionEventSettings?: { permissionMode?: SessionEntry["permissionMode"] };
+  /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
+  sessionEventDelivery?: false;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
@@ -607,6 +615,25 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      sessionEventDelivery:
+        inheritedOwner?.sessionEventDelivery === false || identity.sessionEventDelivery === false
+          ? false
+          : undefined,
+      sessionEventSettings:
+        identity.sessionEventSettings && inheritedOwner?.sessionEventSettings
+          ? {
+              permissionMode: intersectSessionPermissionModes(
+                inheritedOwner.sessionEventSettings.permissionMode,
+                identity.sessionEventSettings.permissionMode,
+              ),
+            }
+          : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
+      sessionEventToolsAllow:
+        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
+          ? identity.sessionEventToolsAllow.filter((name) =>
+              inheritedOwner.sessionEventToolsAllow!.includes(name),
+            )
+          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),
       personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),

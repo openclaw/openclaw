@@ -262,7 +262,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           (entry: { phase: string }) => entry.phase === "doctor",
         );
         expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
-        expect(timing.durationMs, failure).toBeLessThan(3_000);
+        // Exact deadline/nonrenewal timing lives in update-finalization-lifecycle.test.ts;
+        // this duration also includes service custody, diagnostics, and joined cleanup.
+        expect(timing.outcome, failure).toBe("failed");
+        expect(readRun(), failure).toMatchObject({ reason: "finalization-timeout" });
         if (scenario === "doctor-progress") {
           expect(output.doctorOutput.stderr.excerpt, failure).toContain(
             "PROGRESS fixture-validation",

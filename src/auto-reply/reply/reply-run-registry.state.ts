@@ -234,7 +234,7 @@ export function hasReplyOperationExecutionStarted(operation: ReplyOperation): bo
 }
 export const abortFrozenOperations = new WeakSet<ReplyOperation>();
 export const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
-export const producerCompletionByOperation = new WeakMap<ReplyOperation, Promise<void>>();
+export const producerCompletionByOperation = new WeakMap<ReplyOperation, Promise<unknown>>();
 export const backendReadyByOperation = new WeakMap<ReplyOperation, Promise<void>>();
 export const retainStateUntilCompleteOperations = new WeakSet<ReplyOperation>();
 type ReplyOperationAfterClear = {
@@ -350,7 +350,7 @@ export function resolveActiveReplyRunOwnerForSignal(signal: AbortSignal):
       sessionId: string;
       sessionKey: string;
       abort: () => boolean;
-      handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+      handoff: (settle: (producerCompleted: Promise<unknown>) => Promise<void>) => boolean;
     }
   | undefined {
   const operation = operationsByUpstreamAbortSignal.get(signal);

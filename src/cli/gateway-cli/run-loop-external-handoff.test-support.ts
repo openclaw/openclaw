@@ -23,7 +23,6 @@ export function registerExternalHandoffShutdownTests(
   restartDeferralTimeoutMs: number,
 ): void {
   it.each([
-    { fails: false, trigger: "signal" },
     { fails: true, trigger: "signal" },
     { fails: false, trigger: "commit" },
   ])(

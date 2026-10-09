@@ -508,10 +508,7 @@ export async function maybeRepairGatewayDaemon(params: {
     );
   }
 
-  if (serviceRuntime?.status !== "running") {
-    return;
-  }
-  if (params.healthSkipped) {
+  if (serviceRuntime?.status !== "running" || params.healthSkipped) {
     return;
   }
   if (serviceRepairDeferred) {

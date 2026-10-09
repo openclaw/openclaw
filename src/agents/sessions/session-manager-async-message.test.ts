@@ -21,6 +21,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -571,6 +572,8 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     });
     expect(pending.state).toBe("consumed");
     expect(manager.getLeafEntry()).toMatchObject({ id: newerId, parentId: pending.inputId });
+    expect(manager[sessionManagerReadMessageAnchor](newerId)).toMatchObject({ entryId: newerId });
+    expect(manager[sessionManagerReadMessageAnchor](committed.entryId)).toBeUndefined();
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
     pending.finish("interrupted");

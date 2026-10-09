@@ -1,5 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -233,6 +234,8 @@ export function captureCliRunStartTime() {
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
+  /** Original host policy, retained before native tool translation consumes runtime caps. */
+  sessionEventSourcePolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
   /** Core-only original caller policy, bound to each native request's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;

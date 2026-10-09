@@ -13,6 +13,15 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
+
+export type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
 
 export type SessionCatalogListProviderParams = {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
@@ -120,16 +129,6 @@ export type SessionCatalogEntrySnapshot = {
 };
 
 type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
-
-export type SessionUpstreamJsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | SessionUpstreamJsonValue[]
-  | { [key: string]: SessionUpstreamJsonValue };
-
-export type SessionUpstreamKind = "claude-cli" | "codex-app-server" | "opencode-cli" | "pi-cli";
 
 export type SessionUpstreamProbe = {
   sessionKey: string;

@@ -100,11 +100,20 @@ export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentRea
   };
 }
 
-/** Recheck committed admission facts before using an existing read-only connection. */
-export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
+/** Recheck admission and consume retained rows in the same fresh synchronous scope. */
+export function hasOpenClawAgentReadOnlySchema(
+  database: OpenClawAgentReadOnlyDatabase,
+  onAdmitted?: () => void,
+): boolean {
   return runSqliteReadOperationSync(
     database.db,
-    () => hasAdmittedAgentReadOnlySchema(database),
+    () => {
+      if (!hasAdmittedAgentReadOnlySchema(database)) {
+        return false;
+      }
+      onAdmitted?.();
+      return true;
+    },
     "fresh",
   );
 }

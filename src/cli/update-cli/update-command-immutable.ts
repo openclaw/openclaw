@@ -55,6 +55,15 @@ function reportImmutableFailure(
   return exitCliAfterOutput(defaultRuntime, 1);
 }
 
+function collectReceipt(receipts: string[], opts: { json?: boolean }) {
+  return (line: string) => {
+    receipts.push(line);
+    if (!opts.json) {
+      defaultRuntime.log(line);
+    }
+  };
+}
+
 export async function refuseImmutableUpdateActivation(
   root: string,
   opts: { json?: boolean },
@@ -132,12 +141,7 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         expectedPrepared,
         timeoutMs: parseUpdateTimeoutMs(opts.timeout),
         drainTimeoutMs,
-        onReceipt: (line) => {
-          receipts.push(line);
-          if (!opts.json) {
-            defaultRuntime.log(line);
-          }
-        },
+        onReceipt: collectReceipt(receipts, opts),
       });
     } catch (error) {
       return reportImmutableFailure(error, opts.json, "immutable-activation-failed");
@@ -233,12 +237,7 @@ export async function updateRecoverImmutableCommand(opts: {
       root: opts.root,
       timeoutMs: parseUpdateTimeoutMs(opts.timeout),
       drainTimeoutMs: parseUpdateTimeoutMs(opts.drainTimeout, "--drain-timeout"),
-      onReceipt: (line) => {
-        receipts.push(line);
-        if (!opts.json) {
-          defaultRuntime.log(line);
-        }
-      },
+      onReceipt: collectReceipt(receipts, opts),
     });
   } catch (error) {
     return reportImmutableFailure(error, opts.json, "immutable-recovery-failed");

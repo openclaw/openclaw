@@ -2,7 +2,6 @@ import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type {
@@ -11,10 +10,9 @@ import type {
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
-import { resolveStateDir } from "../state-dir.js";
-import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
@@ -36,23 +34,6 @@ type ReadSessionStore = <T>(
     assertCurrent: () => void;
   }) => Promise<T>,
 ) => Promise<T>;
-
-export function assertSessionEntryCohortScope(
-  reader: SessionEntryCohortReader,
-  input: SessionAccessScope,
-) {
-  reader.assertCurrent();
-  const key = resolveSqliteSessionKey(input.sessionKey, reader.logicalAgentId);
-  if (
-    key !== reader.sessionKey ||
-    (input.agentId && normalizeAgentId(input.agentId) !== reader.logicalAgentId) ||
-    (input.storePath && !reader.storePaths.includes(path.resolve(input.storePath))) ||
-    (input.env && resolveStateDir(input.env) !== resolveStateDir(reader.database.env))
-  ) {
-    throw new Error("Session read differs from its original admitted target");
-  }
-  return key;
-}
 
 /** Data-only return; decisions/effects consume withRead's synchronous callback directly. */
 export function readAdmittedSessionEntry(
@@ -106,7 +87,14 @@ export function createAdmittedSessionEntryCohortReader(params: {
     async withRead(request, assertCallerCurrent, consume) {
       assertOwnerCurrent();
       assertCallerCurrent();
-      const captured = structuredClone({ ...request, expected });
+      const captured = structuredClone({
+        ...request,
+        expected,
+        transcript: request.transcript && {
+          ...request.transcript,
+          agentId: params.logicalAgentId,
+        },
+      });
       let assertNativeCurrent: (() => void) | undefined;
       const assertCurrent = () => {
         if (!assertNativeCurrent) {

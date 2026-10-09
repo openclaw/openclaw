@@ -149,7 +149,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   const closeTabsCall = browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock
     .calls[0] as unknown as [{ sessionKeys?: string[]; onWarn?: unknown }] | undefined;
   const closeTabsParams = closeTabsCall?.[0];
-  expect(closeTabsParams?.sessionKeys).toEqual(["main", "agent:main:main", "sess-main"]);
+  expect(closeTabsParams?.sessionKeys).toEqual(["agent:main:main", "agent:main:sess-main"]);
   expect(typeof closeTabsParams?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(

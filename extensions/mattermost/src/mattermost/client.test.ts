@@ -526,7 +526,13 @@ describe("Mattermost DM retries", () => {
     { name: "429", failure: new Error("Mattermost API 429 Too many requests") },
     {
       name: "503 mentioning upstream 404",
-      failure: new Error("Mattermost API 503: upstream returned 404 Not Found"),
+      failure: new Error("Mattermost API 503: upstream returned Mattermost API 404 Not Found"),
+    },
+    {
+      name: "wrapped provider status",
+      failure: new Error("request failed", {
+        cause: new Error("Mattermost API 429: upstream returned Mattermost API 403 Forbidden"),
+      }),
     },
     {
       name: "nested transport code",
@@ -563,13 +569,35 @@ describe("Mattermost DM retries", () => {
     expect(onRetry.mock.calls[1]?.[1]).toBeLessThanOrEqual(250);
   });
 
-  it("does not retry 400 responses containing retryable keywords or numbers", async () => {
-    const { client, fetchImpl } = customClient(
-      Response.json({ message: "Request timeout for user 4294967295" }, { status: 400 }),
-    );
-    await expect(createMattermostDirectChannelWithRetry(client, ["u1", "u2"])).rejects.toThrow(
-      "Mattermost API 400",
-    );
+  it.each([
+    { status: 400, message: "Request timeout for user 4294967295" },
+    { status: 400, message: "Invalid request: too many requests is diagnostic text" },
+    { status: 403, message: "Permission denied despite upstream too many requests" },
+    { status: 400, message: "Invalid request; upstream Mattermost API 503 Service Unavailable" },
+    { status: 403, message: "Permission denied; upstream Mattermost API 503 Service Unavailable" },
+  ])("does not retry $status with misleading details: $message", async ({ status, message }) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ message }, { status }));
+    const client = createMattermostClient({ ...clientParams, fetchImpl });
+    const outcome = expect(
+      createMattermostDirectChannelWithRetry(client, ["u1", "u2"]),
+    ).rejects.toThrow(`Mattermost API ${status}`);
+    await vi.runAllTimersAsync();
+    await outcome;
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry a permanent dispatch rejection with a transient provider cause", async () => {
+    const failure = new PlatformMessageNotDispatchedError("sender retired", {
+      cause: new Error("Mattermost API 503 Service Unavailable"),
+      retryable: false,
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(failure);
+    const client = createMattermostClient({ ...clientParams, fetchImpl });
+    const outcome = expect(
+      createMattermostDirectChannelWithRetry(client, ["u1", "u2"]),
+    ).rejects.toBe(failure);
+    await vi.runAllTimersAsync();
+    await outcome;
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 

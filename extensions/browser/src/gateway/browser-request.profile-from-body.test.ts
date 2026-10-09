@@ -877,6 +877,7 @@ describe("session tab scope", () => {
   });
 
   it.each([
+    { tabScope: { sessionKey: "global" } },
     {
       tabScope: {
         sessionKey,

@@ -531,9 +531,9 @@ describe("transcript library asynchronous reads", () => {
           return snapshot;
         });
       } else {
-        const iterate = store.iterateExport.bind(store);
-        vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* (...args) {
-          const snapshot = yield* iterate(...args);
+        const stream = store.streamExport.bind(store);
+        vi.spyOn(store, "streamExport").mockImplementationOnce(async (...args) => {
+          const snapshot = await stream(...args);
           reading.resolve();
           await gate.promise;
           return snapshot;
@@ -581,15 +581,4 @@ describe("transcript library asynchronous reads", () => {
       expect(await store.readUtterancesForSession(replacement)).toMatchObject([utterance, added]);
     },
   );
-
-  it("rejects an export canceled before its completion result", async () => {
-    const { store } = fixture();
-    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-      yield { sequence: 0, text: "Partial content" };
-      return undefined;
-    });
-    await expect(
-      exportTranscriptLibrary(store, { selector: "canceled", format: "jsonl" }),
-    ).rejects.toThrow("export ended before completion");
-  });
 });

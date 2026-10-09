@@ -146,6 +146,13 @@ export async function prepareGitCandidateTransfer(params: {
     if (local === undefined) {
       return undefined;
     }
+    const invalidInventory = () =>
+      recordStagingFailure(
+        { ...step, cwd: installedRoot },
+        "git-retained-object-inventory",
+        "verify retained Git object availability",
+        "Incomplete retained Git object availability inventory",
+      );
     const pending = new Set(beforeTree.split("\n"));
     for (const line of local.split("\n")) {
       const [oid, type, ...extra] = line.split(" ");
@@ -156,24 +163,14 @@ export async function prepareGitCandidateTransfer(params: {
         !pending.delete(oid) ||
         !["blob", "tree", "missing"].includes(type)
       ) {
-        return await recordStagingFailure(
-          { ...step, cwd: installedRoot },
-          "git-retained-object-inventory",
-          "verify retained Git object availability",
-          "Incomplete retained Git object availability inventory",
-        );
+        return await invalidInventory();
       }
       if (type !== "missing") {
         retained.add(oid);
       }
     }
     if (pending.size) {
-      return await recordStagingFailure(
-        { ...step, cwd: installedRoot },
-        "git-retained-object-inventory",
-        "verify retained Git object availability",
-        "Incomplete retained Git object availability inventory",
-      );
+      return await invalidInventory();
     }
   }
   // Only physically available retained-HEAD objects are safe to borrow. Objects
