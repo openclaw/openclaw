@@ -147,8 +147,9 @@ const UpdateRollbackOutcomeSchema = z.object({
 export type UpdateRollbackOutcome = z.infer<typeof UpdateRollbackOutcomeSchema>;
 
 const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
-const admissionCheck = UpdateAdmissionCheckSchema.extend({
+const admissionCheck = z.object({
   name: text,
+  status: UpdateAdmissionCheckSchema.shape.status,
   detail: text.optional(),
 });
 const admissionChecks = z.array(admissionCheck).max(UPDATE_RUN_DIAGNOSTIC_LIMIT);

@@ -222,30 +222,32 @@ export function createUpdateDoctorDatabaseWriteCapture(
     options.assertCurrent?.();
     return generations;
   };
-  const observe = async (phase: "admit" | "settle") => {
-    if (phase === "admit") {
-      receipt = undefined;
-    }
-    const generations = await read();
-    if (generations && expectedGenerations) {
-      if (phase === "admit") {
-        fromGenerations ??= generations;
-      }
-      // Earlier receipts or foreign writes cannot become our baseline, including during maintenance.
-      unchanged &&= Object.entries(expectedGenerations).every(
-        ([pathname, generation]) => generations[pathname] === generation,
-      );
-      if (phase === "settle") {
-        receipt = { unchanged, fromGenerations, generations };
-      }
-    }
-  };
   return {
     get receipt() {
       return receipt;
     },
-    admit: () => observe("admit"),
-    settle: () => observe("settle"),
+    async admit() {
+      receipt = undefined;
+      const generations = await read();
+      if (generations && expectedGenerations) {
+        fromGenerations ??= generations;
+        // Earlier receipts or another process's writes must never become our baseline.
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
+      }
+    },
+    async settle() {
+      const generations = await read();
+      if (generations && expectedGenerations) {
+        // Maintenance excludes Gateway writers, not independent SQLite writers.
+        // Without transaction attribution, even Doctor-time changes are unknown.
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
+        receipt = { unchanged, fromGenerations, generations };
+      }
+    },
   };
 }
 
