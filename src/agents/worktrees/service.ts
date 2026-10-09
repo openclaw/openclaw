@@ -12,7 +12,7 @@ import {
   withWorktreeMutationLease,
   type WorktreeAllocationGuard,
 } from "./allocation.js";
-import { resolveWorktreeBase } from "./base-ref.js";
+import { logWorktreeBase, resolveWorktreeBase } from "./base-ref.js";
 import { createWorktreeCapacityOwner } from "./capacity-owner.js";
 import {
   directorySizeBytes,
@@ -71,13 +71,11 @@ import {
 } from "./run-lease.js";
 import { reconcileListedWorktrees } from "./service-list.js";
 import {
-  canResetFailedWorktreeAdd,
   removeFailedWorktree,
   createWithWorktreeAllocation,
   createOwnedWorktree,
   prepareWorktreeDestination,
   findWorktreeByName,
-  resetFailedWorktreeAdd,
   resolveRepository,
   rebindLiveWorktreeRepository,
   resolveRepositoryIdentity,
@@ -591,13 +589,15 @@ export class ManagedWorktreeService {
           commit: params.checkoutCommit,
           gitOperand: params.checkoutCommit,
           recordRef: params.baseRef ?? params.checkoutCommit,
-          remote: false,
+          fetchSucceeded: undefined,
+          warning: undefined,
         }
       : await resolveWorktreeBase(
           repository.repoRoot,
           params.baseRef,
           params.signal,
           params.commitGuard,
+          "fast-forward",
         );
     let gitBytes = 0;
     const provisionedBytes =
@@ -630,11 +630,8 @@ export class ManagedWorktreeService {
       : 0;
     params.signal?.throwIfAborted();
     params.commitGuard?.();
-    let gitBase = params.profiles?.length ? base.commit : base.gitOperand;
-    let recordBase = base.recordRef;
+    const gitBase = params.profiles?.length ? base.commit : base.gitOperand;
     const addCheckout = async () => {
-      // Resolve on every attempt, including the remote-base fallback to local HEAD.
-      // Never pair one commit's source selection with another commit's checkout.
       const sourceProfile = params.profiles?.length
         ? await resolveWorktreeSourceProfile(repository.repoRoot, gitBase, params.profiles, {
             signal: params.signal,
@@ -658,6 +655,13 @@ export class ManagedWorktreeService {
         base: sourceProfile?.commit ?? gitBase,
         sourceProfile,
         prepareCommit: async (commit) => {
+          await logWorktreeBase(repository.repoRoot, base, commit, {
+            worktreePath,
+            ownerId: params.ownerId,
+            now: this.now(),
+            signal: params.signal,
+            assertCurrent: params.commitGuard,
+          });
           return (gitBytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
             signal: params.signal,
             assertCurrent: params.commitGuard,
@@ -687,24 +691,15 @@ export class ManagedWorktreeService {
         },
       });
     };
-    let added = await timeWorktreePreparationPhase("checkout", addCheckout);
-    if (added.code !== 0 && base.remote) {
-      if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
-        throw commandError("git worktree add", added);
-      }
-      await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, params.rollbackGuard);
-      params.signal?.throwIfAborted();
-      params.commitGuard?.();
-      gitBase = "HEAD";
-      recordBase = "HEAD";
-      added = await timeWorktreePreparationPhase("checkout", addCheckout);
-    }
+    const added = await timeWorktreePreparationPhase("checkout", addCheckout);
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
     return {
       worktreePath,
-      recordBase,
+      recordBase: base.recordRef,
       provisionedBytes,
       setupBytes,
       runRepositorySetup,

@@ -314,10 +314,11 @@ export async function admitFollowupTurn(params: {
       | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
-      turn.sendPolicy === "allow" &&
-      queued.currentInboundEventKind !== "room_event" &&
-      shouldNotifyUserAboutCompaction(config)
+      turn.sendPolicy === "allow" && queued.currentInboundEventKind !== "room_event"
         ? async (phase: CompactionNoticePhase, text?: string) => {
+            if (phase !== "context_bounded" && !shouldNotifyUserAboutCompaction(config)) {
+              return;
+            }
             if (phase !== "start") {
               pendingTerminalCompactionNotice = { phase, text };
               return;
@@ -347,6 +348,7 @@ export async function admitFollowupTurn(params: {
     const preflightEntry = session.current();
     try {
       activeEntry = await runSessionCompactionIfNeeded({
+        replyOperation: operation,
         cfg: config,
         followupRun: turn.queued,
         pendingUserEntryId: readPendingUserTurnTranscriptAdmission(

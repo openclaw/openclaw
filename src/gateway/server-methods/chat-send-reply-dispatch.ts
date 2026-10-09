@@ -14,16 +14,14 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import {
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
-import {
-  readActiveTranscriptEntryAnchorAsync,
-  readSessionTranscriptAnchorsAsync,
-} from "../../config/sessions/session-transcript-anchor-read.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { getOwnedSessionTranscriptReader } from "../../config/sessions/transcript-write-context.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -37,10 +35,7 @@ import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
-import {
-  readSessionMessageByIdAsync,
-  readSessionTranscriptWatermarkAsync,
-} from "../session-transcript-readers.js";
+import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { formatForLog } from "../ws-log.js";
 import {
   combineNonStreamingReplyParts,
@@ -81,24 +76,31 @@ import type { GatewayRequestContext } from "./types.js";
 
 /** Build delivery options and capture state for the core-owned webchat dispatcher. */
 export function createChatSendReplyDispatch(params: {
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   accountId: string | undefined;
   requesterContext?: WebchatReplyMediaRequesterContext;
   isAgentRunStarted: () => boolean;
   onCommandBlock?: (text: string) => void;
   isRunCurrent?: () => boolean;
   abortSignal?: AbortSignal;
+  assertWorkCurrent?: () => void;
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
   session: ChatReplySession;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "markBlocked" | "getAdmissionReceipt">;
 }) {
-  const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
+  const { accountId, getRuntimeConfig, isAgentRunStarted, logGateway, session, userTurnRecorder } =
+    params;
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  const { notePreparedSession, readCurrentSession, captureTranscriptStart } =
-    createChatReplySessionReader(session);
+  const {
+    notePreparedSession,
+    readCurrentSession,
+    captureTranscriptStart,
+    assertRetainedSourceCurrent,
+  } = createChatReplySessionReader(session, getRuntimeConfig, params.assertWorkCurrent);
   let assistantTranscriptRewriteState: ReturnType<typeof captureTranscriptStart>;
   let agentRunId = clientRunId;
   const captureAgentTranscriptStart = (
@@ -134,6 +136,7 @@ export function createChatSendReplyDispatch(params: {
     const transcriptStart = assistantTranscriptRewriteState;
     const runId = agentRunId;
     const lifecycleRevision = transcriptStart?.lifecycleRevision;
+    const reader = admission && getOwnedSessionTranscriptReader(admission);
     const isRunCurrent = () => {
       const currentAdmission = userTurnRecorder.getAdmissionReceipt();
       return Boolean(
@@ -148,6 +151,14 @@ export function createChatSendReplyDispatch(params: {
         currentAdmission?.logicalTurnId === admission.logicalTurnId &&
         currentAdmission?.entryId === admission.entryId,
       );
+    };
+    const isInspectionCurrent = () => {
+      if (!isRunCurrent()) {
+        return false;
+      }
+      assertRetainedSourceCurrent?.();
+      reader?.assertCurrent();
+      return true;
     };
     const isCurrent = async () => {
       if (!admission || !isRunCurrent()) {
@@ -170,26 +181,32 @@ export function createChatSendReplyDispatch(params: {
       !admission ||
       !transcriptStart ||
       transcriptStart.sessionId !== admission.sessionId ||
-      !(await isCurrent())
+      !(reader ? isInspectionCurrent() : await isCurrent())
     ) {
       return "missing";
     }
     const scope = admission;
+    // Inspection exposes no result until the final anchor snapshot rechecks the stored session.
+    // Between reads, retain physical/run custody; each history operation keeps its own freshness.
     await waitForSessionTranscriptProjection(scope, params.abortSignal);
-    if (!(await isCurrent())) {
-      return "missing";
-    }
-    const watermark = await readSessionTranscriptWatermarkAsync(scope);
-    if (!(await isCurrent())) {
+    if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
     const initial = await readSessionTranscriptAnchorsAsync(scope, {
       entryIds: [admission.entryId],
       afterSeq: transcriptStart.afterSeq,
+      includeSession: true,
+      includeWatermark: true,
     });
-    if (!(await isCurrent())) {
+    if (
+      !(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent()) ||
+      initial.session?.sessionId !== admission.sessionId ||
+      initial.session.lifecycleRevision !== lifecycleRevision ||
+      !initial.watermark
+    ) {
       return "missing";
     }
+    const watermark = initial.watermark;
     const input = initial.anchors[0];
     if (!input || input.rawSeq !== admission.rawSeq) {
       return "missing";
@@ -218,8 +235,7 @@ export function createChatSendReplyDispatch(params: {
         currentOnly: true,
         maxBytes: Number.MAX_SAFE_INTEGER,
       });
-      const admitted = await readActiveTranscriptEntryAnchorAsync(admission);
-      if (!(await isCurrent()) || !admitted) {
+      if (!isInspectionCurrent()) {
         return "missing";
       }
       if (!stored.found) {
@@ -241,46 +257,82 @@ export function createChatSendReplyDispatch(params: {
         !isSuppressedControlReplyText(answer) &&
         extractAssistantPhaseText(projectChatDisplayMessage(message))
       ) {
-        const currentWatermark = await readSessionTranscriptWatermarkAsync(scope);
         const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
-        if (!(await isCurrent())) {
+        if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
           return "missing";
         }
         // Consume final facts inside the existing writer FIFO; projection repair and
         // message restoration above must stay outside because they can need that writer.
         let decision: ReplyDeliveryState | undefined = "pending";
-        await readSessionTranscriptAnchorsAsync(
-          scope,
-          {
-            entryIds: [admission.entryId, latestInputId, messageId],
+        let refreshTail = !reader;
+        const selection = {
+          entryIds: [admission.entryId, latestInputId, messageId],
+          includeSession: true,
+          includeWatermark: true,
+        };
+        const consume = (facts: SessionTranscriptAnchorFacts) => {
+          assertRoutingCurrent(getRuntimeConfig());
+          if (
+            !isInspectionCurrent() ||
+            facts.session?.sessionId !== admission.sessionId ||
+            facts.session.lifecycleRevision !== lifecycleRevision
+          ) {
+            decision = "missing";
+            return;
+          }
+          const currentWatermark = facts.watermark;
+          if (!currentWatermark) {
+            decision = "missing";
+            return;
+          }
+          if (
+            !facts.tail &&
+            (currentWatermark.generation !== watermark.generation ||
+              currentWatermark.maxSeq !== watermark.maxSeq)
+          ) {
+            // Changed history needs its own lane; never decode an unbounded tail in the actor.
+            refreshTail = true;
+            return;
+          }
+          decision = resolveChatReplyDeliveryFromAnchors({
+            facts: { ...facts, tail: facts.tail ?? initial.tail },
+            admissionId: admission.entryId,
+            inputId: latestInputId,
+            messageId,
             afterSeq: transcriptStart.afterSeq,
-            includeSession: true,
-          },
-          undefined,
-          (facts) => {
-            assertRoutingCurrent(getRuntimeConfig());
-            if (
-              !isRunCurrent() ||
-              facts.session?.sessionId !== admission.sessionId ||
-              facts.session.lifecycleRevision !== lifecycleRevision
-            ) {
-              decision = "missing";
-              return;
-            }
-            decision = resolveChatReplyDeliveryFromAnchors({
-              facts,
-              admissionId: admission.entryId,
-              inputId: latestInputId,
-              messageId,
-              afterSeq: transcriptStart.afterSeq,
-              watermark,
-              currentWatermark,
-            });
-          },
-        );
+            watermark,
+            currentWatermark,
+          });
+        };
+        if (reader) {
+          await reader.withRead(
+            {
+              sessionKeys: [reader.sessionKey],
+              snapshotFields: [],
+              transcript: { ...selection, sessionKey: reader.sessionKey },
+            },
+            () => {
+              if (!isInspectionCurrent()) {
+                throw new Error("Chat delivery inspection is no longer current");
+              }
+            },
+            (read, assertCurrent) => {
+              assertCurrent();
+              consume(read.transcript ?? { anchors: [] });
+            },
+          );
+        }
+        if (refreshTail) {
+          await readSessionTranscriptAnchorsAsync(
+            scope,
+            { ...selection, afterSeq: transcriptStart.afterSeq },
+            undefined,
+            consume,
+          );
+        }
         // Another worker lookup here could invalidate the completed anchor decision.
         assertRoutingCurrent(getRuntimeConfig());
-        if (!isRunCurrent()) {
+        if (!isInspectionCurrent()) {
           return "missing";
         }
         if (decision !== undefined) {

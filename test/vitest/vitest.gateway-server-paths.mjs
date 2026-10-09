@@ -11,6 +11,7 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/agent-runtime-identity-token.test.ts",
   "src/gateway/agent-turn/agent-run-media.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",
@@ -107,6 +108,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mcp-http.question-authority.test.ts",
   "src/gateway/mcp-http.session-controls.test.ts",
   "src/gateway/mcp-http.test.ts",
+  "src/gateway/mcp-http/mediated-exec-policy.test.ts",
   "src/gateway/mention-directory.test.ts",
   "src/gateway/mention-inbox.compat.test.ts",
   "src/gateway/mention-inbox.sharing-target.test.ts",
@@ -148,6 +150,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/cron.scratch-read.test.ts",
   "src/gateway/server-methods/cron.self-removal.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
+  "src/gateway/server-methods/exec-approvals.test.ts",
   "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
   "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
   "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
@@ -184,6 +187,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/sessions-read-diagnostics.test.ts",
   "src/gateway/server-methods/sessions-read-visibility.test.ts",
   "src/gateway/server-methods/sessions-read.test.ts",
+  "src/gateway/server-methods/sessions-sharing.patch-worker.test.ts",
   "src/gateway/server-methods/sessions-sharing.test.ts",
   "src/gateway/server-methods/skills-library.test.ts",
   "src/gateway/server-methods/skills.remote.test.ts",
@@ -241,8 +245,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.membership.test.ts",
   "src/gateway/session-row-projection.prepared-read.test.ts",
   "src/gateway/session-row-projection.publication.test.ts",
-  "src/gateway/session-row-projection.registry-refresh.test.ts",
-  "src/gateway/session-row-projection.search-facts.test.ts",
   "src/gateway/session-row-projection.subagent-index.test.ts",
   "src/gateway/session-row-projection.test.ts",
   "src/gateway/session-row-projection.topology.test.ts",
@@ -251,6 +253,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-sharing-groups.test.ts",
   "src/gateway/session-sharing-preparation.creation-settlement.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",
+  "src/gateway/session-sharing.incognito.test.ts",
   "src/gateway/session-sharing.worker.test.ts",
   "src/gateway/session-startup-migration.test.ts",
   "src/gateway/session-subagent-resume.test.ts",

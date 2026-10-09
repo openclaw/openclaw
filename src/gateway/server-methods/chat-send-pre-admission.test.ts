@@ -443,6 +443,11 @@ describe("chat send retry identity", () => {
 
   it("rechecks a competing request admitted while durable recovery yields", async () => {
     const { fixture, params } = preAdmissionFixture("recovery-race");
+    let authorityReads = 0;
+    params.withCurrent = async (consume) => {
+      authorityReads += 1;
+      return consume();
+    };
     const { session } = fixture;
     const deferred = createDeferred<Awaited<ReturnType<typeof resolveDurableChatClaim>>>();
     const entered = createDeferred();
@@ -453,6 +458,7 @@ describe("chat send retry identity", () => {
     const pending = runChatSendPreAdmission(params);
     await entered.promise;
     expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
+    expect(authorityReads).toBe(1);
     fixture.context.dedupe.set(`chat:${session.clientRunId}`, {
       ts: 200,
       ok: true,
@@ -462,6 +468,7 @@ describe("chat send retry identity", () => {
     deferred.resolve({ kind: "continue", entry: session.entry });
     expect(await pending).toBe(false);
     expectConflict(fixture.respond);
+    expect(authorityReads).toBe(2);
   });
 
   it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(

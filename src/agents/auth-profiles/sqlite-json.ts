@@ -56,6 +56,9 @@ function inspectAuthProfileTable(
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
   const tableName = authProfileTableName(target, databaseKind);
+  if (getSqliteReadScopeRevision(db)?.schema.tables.has(tableName)) {
+    return null;
+  }
   const schemaObject = executeWithCachedStatement(
     db,
     "SELECT type FROM sqlite_master WHERE name = ?",
@@ -216,6 +219,33 @@ export function readAuthProfileRows(
     state,
     cacheable: store.status !== "unreadable" && state.status !== "unreadable" && canCache(),
   };
+}
+
+function inspectAuthProfileRow(
+  database: DatabaseSync,
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): PersistedAuthProfileStoreInspection {
+  try {
+    return inspectAuthProfileJsonCell(database, target, databaseKind);
+  } catch (error) {
+    // Shared-state read ownership handles native failures and poisoned-handle eviction.
+    if (databaseKind === "shared-state") {
+      throw error;
+    }
+    // A broken state table must not turn an absent credential row into a present source.
+    return { status: "unreadable" };
+  }
+}
+
+/** The selected worker returns source presence without transferring credential rows. */
+export function hasAgentAuthProfileSourceInDatabase(database: DatabaseSync): boolean {
+  const store = inspectAuthProfileRow(database, "store", "agent");
+  if (store.status !== "missing") {
+    return true;
+  }
+  const state = inspectAuthProfileRow(database, "state", "agent");
+  return state.status === "readable" && Boolean(state.raw);
 }
 
 /** Write one canonical auth cell on the caller's admitted transaction connection. */

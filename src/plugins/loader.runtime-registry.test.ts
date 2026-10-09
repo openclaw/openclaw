@@ -2,6 +2,7 @@ import fs, { writeFileSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -294,7 +295,22 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           expect(Reflect.set(runtime, key, {})).toBe(false);
           expect(runtime[key]).toBe(facade);
         }
-        expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+        const replyRequest = {
+          ctx: { Body: "runtime registry reply", CommandAuthorized: false },
+          cfg: config,
+          dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+          replyOptions: { runId: "runtime-registry-reply" },
+        };
+        onTestFinished(async () => {
+          replyRequest.dispatcher.markComplete();
+          await replyRequest.dispatcher.waitForIdle();
+        });
+        const replyResult = { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+        dispatchReplyFromConfig.mockResolvedValueOnce(replyResult);
+        await expect(runtime.channel.reply.dispatchReplyFromConfig(replyRequest)).resolves.toBe(
+          replyResult,
+        );
+        expect(dispatchReplyFromConfig).toHaveBeenCalledExactlyOnceWith(replyRequest);
         for (const key of [
           "gateway",
           "subagent",

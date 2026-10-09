@@ -13,12 +13,14 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
+import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
 } from "./session-transcript-anchor-read.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const events = [
   { type: "session", id: "anchors", version: 3 },
@@ -52,6 +54,48 @@ function transcriptScope(state: OpenClawTestState) {
     storePath: state.statePath("transcript.sqlite"),
   };
 }
+
+it("rejects an async anchor consumer on the selected execution owner", async () => {
+  await withOpenClawTestState({ label: "transcript-anchors-async-consumer" }, async (state) => {
+    const scope = transcriptScope(state);
+    await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+    }));
+    await replaceTranscriptEvents(scope, events);
+    const { databaseClaim } = await loadSessionEntryForAdmission(scope);
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: scope,
+          sessionReader: databaseClaim.reader,
+          withTranscriptWrite: async (write) => write(),
+        },
+        async () => {
+          let consumed = false;
+          await expect(
+            readSessionTranscriptAnchorsAsync(
+              scope,
+              { entryIds: ["question"] },
+              undefined,
+              // oxlint-disable-next-line typescript/no-misused-promises -- Exercise runtime rejection of an async consumer.
+              async (facts) => {
+                expect(facts.anchors).toMatchObject([{ entryId: "question" }]);
+                consumed = true;
+              },
+            ),
+          ).rejects.toThrow("must remain synchronous");
+          expect(consumed).toBe(true);
+        },
+      );
+    } finally {
+      await databaseClaim.release();
+    }
+  });
+});
 
 it("reads active anchors and raw tail facts without caller SQL, including cold discovery", async () => {
   await withOpenClawTestState({ label: "transcript-anchors-worker" }, async (state) => {
@@ -114,6 +158,16 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
           entryId: "question",
         }),
       ).resolves.toBeUndefined();
+      const consumeInitial = vi.fn();
+      await expect(
+        readSessionTranscriptAnchorsAsync(
+          { ...scope, storePath: absentPath },
+          { entryIds: [], replayValidation: { allowInitial: true } },
+          undefined,
+          consumeInitial,
+        ),
+      ).resolves.toEqual({ anchors: [], replayValidated: "initial" });
+      expect(consumeInitial).toHaveBeenCalledWith({ anchors: [], replayValidated: "initial" });
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();

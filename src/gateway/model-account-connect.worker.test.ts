@@ -15,6 +15,7 @@ import {
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
@@ -163,25 +164,15 @@ it("rejects a pin whose identity changed before an awaited account read was acce
     context.getClientConnIds = () => new Set(client.connId ? [client.connId] : []);
     const scanned = createDeferredCore();
     const consume = createDeferredCore();
-    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (workerContext, operation, options) =>
-        runWorker(
-          workerContext,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                const result = await scope.execute(command, executeOptions);
-                if (command.type === "userProfiles.modelAccount.summary") {
-                  scanned.resolve();
-                  await consume.promise;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-    );
+    const read = stateReads.executeExistingOpenClawStateRead;
+    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
+      const result = await read(...args);
+      if (args[1].type === "userModelAccounts.summary") {
+        scanned.resolve();
+        await consume.promise;
+      }
+      return result;
+    });
     const pending = preparePersonalModelAccountSelection({ client, context }, authProfileId);
     const refused = expect(pending).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
     try {

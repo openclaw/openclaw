@@ -10,7 +10,7 @@ type CronLegacyIssueCounts = Partial<Record<string, number>>;
 function formatJobNameList(names: string[]): string {
   const preview = names.slice(0, 5).map((name) => `\`${name}\``);
   const remaining = names.length - preview.length;
-  return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
+  return `: ${preview.join(", ")}${remaining > 0 ? ` (+${remaining} more)` : ""}`;
 }
 
 /**

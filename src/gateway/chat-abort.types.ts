@@ -5,7 +5,8 @@ import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 type ChatTerminalProducer = {
   sessionId: string;
   sessionKey: string;
-  handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+  /** Resolves with the producer's error, if any, after its persistence has settled. */
+  handoff: (settle: (producerCompleted: Promise<unknown>) => Promise<void>) => boolean;
 };
 
 export type ChatAbortControllerEntry = {

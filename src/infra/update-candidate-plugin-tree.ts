@@ -17,6 +17,7 @@ import {
 } from "./update-candidate-plugin-hash.js";
 import {
   assertUpdateCandidatePluginEntryStat,
+  ignoreUnresolvedPluginLink,
   isUpdateCandidateHostLauncher,
   publishUpdateCandidatePluginTreeLinks,
   resolveUpdateCandidatePluginTreeTargets,
@@ -203,12 +204,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     } else if (stat.isSymbolicLink()) {
       const target =
         process.platform === "win32"
-          ? await fs.stat(file).catch((error: unknown) => {
-              if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-                return undefined;
-              }
-              throw error;
-            })
+          ? await fs.stat(file).catch(ignoreUnresolvedPluginLink)
           : undefined;
       entry = {
         ...common,
@@ -331,12 +327,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
       if (entry.name === "node_modules" && (entry.isDirectory() || entry.isSymbolicLink())) {
         const owner = await fs
           .realpath(path.join(directory, entry.name))
-          .catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return undefined;
-            }
-            throw error;
-          });
+          .catch(ignoreUnresolvedPluginLink);
         if (owner) {
           const source = path.join(directory, entry.name);
           assertUpdateCandidatePluginCopySource(owner, privateRoot);
@@ -363,12 +354,9 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
             return { measured };
           }
           const target = path.resolve(directory, measured.link);
-          const real = await fs.realpath(file).catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return target;
-            }
-            throw error;
-          });
+          const real = await fs
+            .realpath(file)
+            .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
           return { measured, edge: { target, real } };
         }),
     });
@@ -549,11 +537,8 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
   for (const [sourceRoot, real] of moduleAliases) {
     relocations.push({ sourceRoot, destinationRoot: projected(real) });
   }
-  for (const root of hostRoots) {
+  for (const root of [...hostRoots, ...hosts]) {
     relocations.push({ sourceRoot: root, destinationRoot: candidateRoot });
-  }
-  for (const host of hosts) {
-    relocations.push({ sourceRoot: host, destinationRoot: candidateRoot });
   }
   for (const [file, { target, real }] of edges) {
     const host = isUpdateCandidateHostLauncher(file)
@@ -715,11 +700,8 @@ export async function copyUpdateCandidatePluginTrees(
     onCodeLink: params.onCodeLink,
     onProgress: params.onProgress,
   };
-  for (const alias of privateAliases) {
-    await verifyUpdateCandidatePluginTree(alias, verification);
-  }
-  for (const [, target] of copies) {
-    await verifyUpdateCandidatePluginTree(target, verification);
+  for (const treeRoot of [...privateAliases, ...copies.map(([, target]) => target)]) {
+    await verifyUpdateCandidatePluginTree(treeRoot, verification);
   }
   for (const entry of plan.entries) {
     if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {

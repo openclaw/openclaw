@@ -28,13 +28,6 @@ function buildGatewayTokenSecretRefUnavailableMessage(params: {
   return "Gateway token is managed via SecretRef and is currently unavailable.";
 }
 
-function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
-  if (ref.source === "exec") {
-    return "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.";
-  }
-  return "Resolve or rotate the external secret source, then rerun doctor.";
-}
-
 /** Shared auth diagnostics keep doctor's read-only and repair paths on the same policy. */
 export async function detectGatewayAuthHealth(
   ctx: Pick<HealthCheckContext, "cfg" | "env" | "allowExecSecretRefs">,
@@ -105,7 +98,9 @@ export async function detectGatewayAuthHealth(
         fixHint:
           redacted && gatewayTokenRef.source === "store"
             ? `Run \`openclaw doctor --fix\` to regenerate secret store entry "${gatewayTokenRef.id}", then restart the Gateway and reconnect or re-pair devices with the new token.`
-            : buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
+            : gatewayTokenRef.source === "exec"
+              ? "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs."
+              : "Resolve or rotate the external secret source, then rerun doctor.",
       },
     ];
   }

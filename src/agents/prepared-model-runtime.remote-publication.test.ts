@@ -309,6 +309,9 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   signal,
 }) => {
   await setup();
+  const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!;
+  // Settle startup's full discovery so the refresh below runs with this test's worker.
+  await owner.loadFullModelCatalog!();
   const discovering = createDeferred();
   const release = createDeferred();
   let held = false;
@@ -324,8 +327,7 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   });
   const rows = async () =>
     (await listModels(false)).models.map((row: { id: string }) => row.id) as string[];
-  await getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!
-    .loadFullModelCatalog!({ refresh: true });
+  await owner.loadFullModelCatalog!({ refresh: true });
   expect(await rows()).toContain("discovered-200");
   held = true;
   const adoption = applyRemoteModelCatalogUpdate(() => config);

@@ -4,10 +4,10 @@ import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
-  createPreparedModelCatalogWorkerInput,
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelWorkerRequest,
-} from "./prepared-model-catalog-worker.js";
+} from "./prepared-model-catalog-fingerprints.js";
+import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 

@@ -5,7 +5,7 @@ import {
   listSessionEntriesCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-runtime.js";
+import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-maintenance.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createSessionReaperTimerHarness } from "./service.session-reaper.test-support.js";
 import {

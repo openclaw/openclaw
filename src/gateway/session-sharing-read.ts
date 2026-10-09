@@ -23,6 +23,10 @@ import {
   SessionSharingProfileFactsChangedError,
 } from "./session-mutation-authorization-error.js";
 import {
+  hasNativeIncognitoSessionSharingSource,
+  type IncognitoSessionSharingTarget,
+} from "./session-sharing-incognito.js";
+import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
@@ -38,6 +42,7 @@ import {
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
+import type { GatewaySessionStoreSelection } from "./session-utils-store-retained.js";
 
 function sharingSnapshot(
   target: SessionSharingTarget | null,
@@ -196,6 +201,7 @@ export type PreparedSessionSharingProfiles = {
 };
 
 export type PreparedMutationSharing = {
+  selection?: GatewaySessionStoreSelection;
   target: SessionSharingTarget | null;
   storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
   members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
@@ -339,9 +345,10 @@ export function createSessionSharingInputAuthority(
   ownedParams: { client: GatewayClient | null; preparedProfiles?: PreparedSessionSharingProfiles },
   authorization: SessionMutationAuthorization,
   readSharing: () => Parameters<Parameters<typeof withSessionSharingTarget>[1]>[0],
+  targets: readonly IncognitoSessionSharingTarget[],
 ): SessionMutationAuthorization["admittedInputAuthority"] {
   const { withCurrent, withPreparedCurrent } = authorization;
-  if (!withCurrent || !withPreparedCurrent) {
+  if (!withCurrent || !withPreparedCurrent || hasNativeIncognitoSessionSharingSource(targets)) {
     return undefined;
   }
   return {
