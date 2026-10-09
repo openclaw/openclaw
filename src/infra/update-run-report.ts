@@ -310,7 +310,7 @@ export function renderUpdateRunReport(
     const candidateVersion = admission.candidateVersion
       ? ` (${bounded(admission.candidateVersion, 120)})`
       : "";
-    lines.push(`Admission: ${admission.owner}${candidateVersion}.`);
+    lines.push(`Update safety checks ran in the ${admission.owner} updater${candidateVersion}.`);
     if (admission.checks?.length) {
       lines.push(
         `Admission checks: ${admission.checks.map((check) => `${bounded(check.name, 120)}: ${check.status}`).join(", ")}.`,
