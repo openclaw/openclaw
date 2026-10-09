@@ -135,7 +135,7 @@ describe("resolveGatewayProgramArguments", () => {
 
   it.skipIf(
     resolveNodeRuntimeExecutable({ requiredFlag: "--max-old-space-size" }) !== originalExecPath,
-  )("sizes only the Gateway in an ordinary Node spawn tree", async () => {
+  )("keeps an ordinary Node spawn tree on the runtime default heap", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/index.js");
     mockEntrypoint(entryPath, originalExecPath);
     const { programArguments } = await resolveGatewayProgramArguments({
@@ -163,7 +163,9 @@ describe("resolveGatewayProgramArguments", () => {
     expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
     expect(parent.status, parent.stderr).toBe(0);
     const result = JSON.parse(parent.stdout);
-    expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
+    // A managed Node install adds no automatic process-wide heap flag, so the
+    // Gateway and a spawned child both stay on the runtime default heap.
+    expect(result.heap).toBe(Number(nativeDefault.stdout));
     expect(result.used).toBeLessThan(64 * 1024 ** 2);
     expect(result.child).toBe(Number(nativeDefault.stdout));
     expect(result.options).toBe("");
