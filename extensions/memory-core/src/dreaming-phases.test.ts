@@ -188,7 +188,6 @@ function createHarness(
       cfg,
       logger,
       subagent,
-      detachNarratives: false,
       pluginConfig: {
         ...pluginConfig,
         dreaming: {
@@ -1522,7 +1521,6 @@ describe("memory-core dreaming phases", () => {
           },
         },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        detachNarratives: false,
       });
     });
 

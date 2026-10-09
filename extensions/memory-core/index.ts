@@ -180,13 +180,7 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       return await createMemoryRuntime(host).authorizeSearchHits(params);
     },
     async classifyWorkspaceMemoryPaths(params) {
-      const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
-        import("./src/workspace-path-classifier.js"),
-        import("./src/dreaming-state.js"),
-      ]);
-      if (host.openKeyedStore) {
-        dreamingState.configureMemoryCoreDreamingState(host.openKeyedStore);
-      }
+      const { classifyWorkspaceMemoryPaths } = await import("./src/workspace-path-classifier.js");
       return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig,
