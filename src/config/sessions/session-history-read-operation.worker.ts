@@ -11,6 +11,7 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "trajectory-retention"
       | "board-snapshot"
       | "board-widget-document"
       | "transcript-match"
@@ -46,6 +47,7 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "trajectory-retention":
     case "board-snapshot":
     case "board-widget-document":
     case "transcript-match":
@@ -103,6 +105,37 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "trajectory-retention": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { assertOpenClawAgentDatabaseIdentity },
+        { prepareTrajectoryRuntimeRetention },
+        { adoptPreparedCanonicalSessionValidationSchema },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("../../state/openclaw-agent-db-identity.js"),
+        import("../../trajectory/runtime-retention.sqlite.js"),
+        import("../../state/openclaw-agent-canonical-validation-schema.js"),
+      ]);
+      if (request.schemaContract) {
+        adoptPreparedCanonicalSessionValidationSchema(request.schemaContract);
+      }
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => {
+            assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+            const plan = prepareTrajectoryRuntimeRetention(database.db, request.input, request.now);
+            assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+            return plan;
+          },
+          { ...request.database, env: request.env },
+        );
+        if (!read.found) {
+          throw new Error(`Trajectory retention cannot read its database: ${read.reason}`);
+        }
+        return { kind: request.kind, plan: read.value };
+      };
+    }
     case "session-memory-capture": {
       const { readSessionMemoryCapture } =
         await import("../../hooks/bundled/session-memory/capture.worker.js");
@@ -183,11 +216,12 @@ async function prepareHistoryRead(
     case "transcript-anchors": {
       const [
         { withOpenClawAgentDatabaseReadOnly },
-        { readSessionTranscriptAnchorFactsInDatabase },
+        { readSessionTranscriptAnchorFactsInDatabase, prepareSessionTranscriptAnchorMessageReader },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly.js"),
         import("./session-transcript-anchor-read.kernel.js"),
       ]);
+      const readMessage = await prepareSessionTranscriptAnchorMessageReader(request.selection);
       return () => {
         assertExistingDatabaseIdentity(
           request.database.path,
@@ -200,6 +234,7 @@ async function prepareHistoryRead(
               database,
               request.resolved,
               request.selection,
+              readMessage,
             ),
           { ...request.database, env: request.resolved.env },
         );

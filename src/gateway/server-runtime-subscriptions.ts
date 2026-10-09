@@ -43,14 +43,16 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
-  createLazyPromise,
   createLazyPromiseLoader,
+  createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
+  captureChatAbortRegistrationGuard,
   isCurrentChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
   markChatAbortTerminalOutcome,
@@ -79,12 +81,15 @@ function dispatchEventHandler<TEvent>(params: {
   log: SubsystemLogger;
   failureMessage: string;
   context: Record<string, unknown>;
+  isDeliveryCurrent?: () => boolean;
   onFailure?: (error: unknown) => void;
 }) {
   return runWithRetainedGatewayRootWork(() =>
     params
       .loadHandler()
-      .then((handler) => handler(params.event))
+      .then((handler) =>
+        params.isDeliveryCurrent?.() === false ? undefined : handler(params.event),
+      )
       .then(() => undefined)
       .catch((error: unknown) => {
         params.log.warn(params.failureMessage, { ...params.context, error });
@@ -294,9 +299,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     }
     return tracked;
   };
-  const getSessionKeyModule = createLazyPromise(() => import("./server-session-key.js"), {
-    cacheRejections: true,
-  });
+  const getSessionKeyModule = createLazyRuntimeModule(() => import("./server-session-key.js"));
   const agentEventHandlerLoader = createLazyPromiseLoader(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -391,11 +394,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     },
     { cacheRejections: true },
   );
-  const getAgentEventHandler = agentEventHandlerLoader.load;
-
-  const getSessionEventsModule = createLazyPromise(() => import("./server-session-events.js"), {
-    cacheRejections: true,
-  });
+  const getSessionEventsModule = createLazyRuntimeModule(
+    () => import("./server-session-events.js"),
+  );
 
   const getTranscriptUpdateHandler = createLazyRuntimeSurface(
     getSessionEventsModule,
@@ -406,7 +407,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     ({ createLifecycleEventBroadcastHandler }) => createLifecycleEventBroadcastHandler(params),
   );
 
-  const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+  const handleAgentEvent = (evt: AgentEventRuntimePayload, isDeliveryCurrent = () => true) => {
     if (evt.stream === "lifecycle") {
       const projection = params.getSessionRowProjection?.();
       if (projection) {
@@ -438,6 +439,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "start" || lifecyclePhase === "end" || lifecyclePhase === "error") {
+      const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
       const terminal = lifecyclePhase !== "start";
       const definitiveTerminal =
         terminal && isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data });
@@ -458,7 +460,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         : undefined;
       for (const candidateRunId of candidateRunIds) {
         const entry = params.chatAbortControllers.get(candidateRunId);
-        const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
         if (
           entry &&
           (!eventLifecycleGeneration ||
@@ -494,7 +495,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           evt.sessionKey ??
           trackedEntry?.sessionKey ??
           runContext?.sessionKey;
-        const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
         const terminalAuthority =
           evt.contextClaimId && eventLifecycleGeneration
             ? {
@@ -563,7 +563,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 agentId: sessionAgentId,
                 projection: params.getSessionRowProjection?.(),
               });
-              if (selected) {
+              if (selected && isDeliveryCurrent()) {
                 await prepareTerminalPersistence(selected.sessionKey, selected.agentId);
               }
             });
@@ -572,17 +572,16 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         }
       }
     }
-    const dispatchPreparation = terminalPreparation;
     const terminalDispatch: Pick<ChatAbortTerminalDispatch, "failure"> | undefined = terminalEntries
       ? {}
       : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
-      loadHandler: dispatchPreparation
-        ? async () => {
-            await dispatchPreparation;
-            return getAgentEventHandler();
-          }
-        : getAgentEventHandler,
+      // An extra async hop lets empty queued finalization overtake reply buffer capture.
+      loadHandler: () =>
+        terminalPreparation
+          ? terminalPreparation.then(agentEventHandlerLoader.load)
+          : agentEventHandlerLoader.load(),
+      isDeliveryCurrent,
       event: evt,
       log: params.log,
       failureMessage: "Agent event dispatch failed",
@@ -612,6 +611,22 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
+  };
+  const unsubscribeAgentEvents = onAgentRuntimeEvent(handleAgentEvent, (evt) => {
+    if (evt.stream !== "lifecycle") {
+      return () => true;
+    }
+    const runId = evt.runId;
+    const chatLink = params.chatRunState.registry.peek(runId);
+    const isRegistrationCurrent = captureChatAbortRegistrationGuard(
+      params.chatAbortControllers,
+      trackedRunIds(runId, chatLink?.clientRunId ?? runId),
+    );
+    return () =>
+      evt.runId === runId &&
+      (!params.chatRunState.registry.peek(runId) ||
+        params.chatRunState.registry.peek(runId) === chatLink) &&
+      isRegistrationCurrent();
   });
   const agentUnsub = async () => {
     auditPolicyClosed = true;
@@ -645,15 +660,17 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    // Share the agent queue so a later cumulative update cannot outrun retirement.
+    // Retire synchronously before later cumulative updates, but retain the wire
+    // projection until this committed row has crossed its async publication path.
     const agentHandler = agentEventHandlerLoader.peek();
+    const publication = createDeferredCore();
     const dispatch = runOutsideAsyncWorkScope(() =>
       dispatchEventHandler<InternalSessionTranscriptUpdate>({
         loadHandler: agentHandler
           ? () =>
               agentHandler
                 .then(
-                  (handler) => handler.retireTranscript(evt),
+                  (handler) => handler.retireTranscript(evt, publication.promise),
                   () => undefined,
                 )
                 .then(getTranscriptUpdateHandler)
@@ -665,7 +682,10 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       }),
     );
     agentEventDispatches.add(dispatch);
-    void dispatch.then(() => agentEventDispatches.delete(dispatch));
+    void dispatch.then(() => {
+      publication.resolve();
+      agentEventDispatches.delete(dispatch);
+    });
   });
 
   // Committed resets/rotations can change access after the originating run is gone.

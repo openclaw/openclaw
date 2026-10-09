@@ -1,7 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   patchSessionEntryCore,
@@ -15,7 +14,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -23,7 +25,6 @@ const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
 let durableSource: CapturedSessionEntryReadSource;
-let sql: ReturnType<typeof observeHostDataSql>;
 const target = (name: string) => ({
   agentId: "main",
   env,
@@ -41,25 +42,9 @@ beforeAll(async () => {
     databaseIdentity: physical.identity,
     databaseBirthtime: physical.birthtime,
   };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+  actor = await openIncognitoTestActor(env, authority);
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
@@ -224,7 +209,7 @@ it("rejects bindings and selections for another physical store or session", asyn
         { ...scope, env: { OPENCLAW_STATE_DIR: tempDirs.make("foreign-incognito-") } },
         () => ({ label: "foreign" }),
       ),
-    ).rejects.toThrow("another incognito actor");
+    ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
     await expect(
       patchSessionEntryTarget(
         {

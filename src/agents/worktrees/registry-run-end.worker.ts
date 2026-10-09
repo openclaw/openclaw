@@ -19,7 +19,7 @@ import {
   SessionWorktreeLifecycleError,
   SessionWorktreeSourceChangedError,
   WorktreeRemovalContentionError,
-  WorktreeRemovalLockError,
+  registryAuthorityChanged,
 } from "./errors.js";
 import {
   publishPendingWorktreeInDatabase,
@@ -224,10 +224,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current &&
         (current.ownerKind !== "session" || current.ownerId !== predicate.sessionKey)
       ) {
-        throw new SessionWorktreeLifecycleError(
-          "Session worktree ownership changed; retry cleanup.",
-          "owner-mismatch",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "binding":
@@ -248,22 +245,17 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
           ] as const
         ).some((key) => current[key] !== predicate.record[key])
       ) {
-        throw new WorktreeRemovalContentionError(
-          "busy",
-          "Worktree owner or binding changed; checkout preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "activity":
       if (current?.lastActiveAt !== predicate.lastActiveAt) {
-        throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "record":
       if (JSON.stringify(current) !== JSON.stringify(predicate.record)) {
-        throw new Error(
-          "Worktree registry changed during recovery; remaining source and original snapshot preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "exact-snapshot": {
@@ -281,9 +273,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.branch !== record.branch ||
         current.snapshotRef !== record.snapshotRef
       ) {
-        throw new Error(
-          "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     }
@@ -297,7 +287,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.createdAt !== record.createdAt ||
         current.lastActiveAt !== record.lastActiveAt
       ) {
-        throw new Error("Worktree exact-state owner or lifecycle changed; checkout preserved");
+        throw registryAuthorityChanged(predicate.kind);
       }
       if (
         current.path !== record.path ||
@@ -316,7 +306,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.path !== predicate.path ||
         current.repoRoot !== predicate.repoRoot
       ) {
-        throw new Error("Managed projection owner changed during settlement");
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "source-owner":
@@ -325,9 +315,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.repoRoot !== predicate.repoRoot ||
         current.path !== predicate.path
       ) {
-        throw new SessionWorktreeSourceChangedError(
-          "Spawn parent managed worktree changed; retry from its current session",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "source-record":
@@ -336,9 +324,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current?.repoRoot !== predicate.repoRoot ||
         current?.repoFingerprint !== predicate.repoFingerprint
       ) {
-        throw new SessionWorktreeSourceChangedError(
-          "Accepted managed source changed during preparation",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
   }
 }
@@ -384,7 +370,7 @@ function assertSnapshotRetirementInDatabase(
     !row ||
     JSON.stringify(rowToRecord(row)) !== JSON.stringify(observed)
   ) {
-    throw new Error("Worktree snapshot retirement identity changed");
+    throw registryAuthorityChanged("snapshot-retirement");
   }
   const provisioned = safeParseJson(row.provisioned_paths_json ?? "");
   if (!Array.isArray(provisioned) || provisioned.length !== 0 || row.has_chunks) {

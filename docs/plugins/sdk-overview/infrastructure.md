@@ -191,6 +191,13 @@ include `hostWaitMs` alongside the existing timing fields; host wait is included
 in `runMs`, not added to it. This field is diagnostic data, not a public config
 option.
 
+The task's `timeoutMs` includes host callbacks. Expiry aborts the callback's
+`signal` and retires the worker; a host response can shorten the remaining
+deadline but cannot renew it. An owner that already enforces a separate,
+approval-aware host deadline can set `hostTimeout: "owner"` to suspend the pool
+clock during host callbacks and supply its remaining budget in the response.
+Accepted host effects still need their owner's settlement and cleanup receipts.
+
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
 `{ options, temporaryDirectory? }`. Its `options` shallowly override

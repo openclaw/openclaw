@@ -143,6 +143,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     !activeRunAbort.controller.signal.aborted &&
     context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry;
   const replyDispatch = createChatSendReplyDispatch({
+    getRuntimeConfig: context.getRuntimeConfig,
+    assertWorkCurrent: admission.assertWorkAdmissionCurrent,
     requesterContext: ctx,
     accountId,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
@@ -581,6 +583,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             await persistGatewayUserTurnTranscriptBestEffort();
           }
           const replyFinalization = {
+            terminalEntry: sessionBinding,
             requesterContext: ctx,
             abortSignal: activeRunAbort.controller.signal,
             accountId,

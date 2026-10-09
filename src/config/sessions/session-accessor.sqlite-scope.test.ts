@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -20,10 +21,42 @@ import type {
   SqliteSessionReclamationDiagnostics,
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import {
+  runExclusiveSqliteSessionWrite,
+  resolveSqliteReadScope,
+  prepareSqliteTranscriptReadScope,
+} from "./session-accessor.sqlite-scope.js";
 import { observeSessionArchivePruning } from "./session-history-archive-pruning-diagnostics.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+test.each([undefined, "agent:main:dashboard:incognito-root"])(
+  "keeps an explicit incognito root outside the ambient root (key: %s)",
+  async (sessionKey) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const root = state.path("captured-root");
+      const storePath = path.join(
+        root,
+        "agents",
+        "main",
+        "agent",
+        "incognito-openclaw-agent.sqlite",
+      );
+      const scope = { agentId: "main", storePath, sessionKey, sessionId: "captured-session" };
+      const resolved = resolveSqliteReadScope(scope);
+      expect(resolved).toMatchObject({
+        agentId: "main",
+        path: storePath,
+        env: { OPENCLAW_STATE_DIR: root },
+      });
+      expect(await prepareSqliteTranscriptReadScope(scope)).toMatchObject(resolved);
+      expect(() => resolveSqliteReadScope({ ...scope, env: state.env })).toThrow(
+        "does not match its agent and state root",
+      );
+      await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  },
+);
 
 async function readFailedWriterLog(failure: unknown, diagnostics?: SqliteSessionWriteDiagnostics) {
   return await withOpenClawTestState(

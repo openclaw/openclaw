@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import { readDatabase } from "./observations.mjs";
 
 const MIGRATION = "state:cron-run-logs-to-task-runs:v1";
 const FIXTURE_NAME = "legacy-operator-cron-history.json";
@@ -34,8 +35,7 @@ function installedIdentity(root) {
 }
 
 function snapshot(fixture) {
-  const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
-  try {
+  return readDatabase(fixture.databasePath, (db) => {
     const legacySchema = db
       .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_logs'")
       .get()?.sql;
@@ -60,9 +60,7 @@ function snapshot(fixture) {
       tasks,
       migration: migration ?? null,
     };
-  } finally {
-    db.close();
-  }
+  });
 }
 
 export function seedCronHistory(stateDir, artifactRoot, baselineRoot, candidateTarball) {

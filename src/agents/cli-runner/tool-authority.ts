@@ -1,4 +1,8 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  intersectSessionEventToolsAllow,
+  narrowSessionEventSettings,
+} from "../../auto-reply/reply/session-event-target.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -9,7 +13,7 @@ import {
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
 } from "../harness/host-private-capabilities.js";
-import type { RunCliAgentParams } from "./types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 /** Bind CLI and loopback questions to the original creator, not their callback transport. */
 export function bindCliQuestionAnswerAuthority(params: {
@@ -63,7 +67,7 @@ export function bindCliQuestionAnswerAuthority(params: {
 }
 
 /** Capture the original CLI caller before native tool availability replaces its tool cap. */
-export function prepareCliReplyToolAuthority(
+function prepareCliReplyToolAuthority(
   params: RunCliAgentParams,
   workspace: { agentId: string; workspaceDir: string; cwd: string },
 ) {
@@ -93,5 +97,79 @@ export function prepareCliReplyToolAuthority(
       groupSpace: params.groupSpace ?? undefined,
       spawnedBy: params.spawnedBy ?? undefined,
     },
+  });
+}
+
+/** Keep creator facts together while backend preparation translates the run's tool policy. */
+export function captureCliRunToolAuthority(
+  params: RunCliAgentParams,
+  workspace: Parameters<typeof prepareCliReplyToolAuthority>[1],
+) {
+  const operation = params.toolAuthorityFingerprint ? params.replyOperation : undefined;
+  const snapshot = operation ? undefined : prepareCliReplyToolAuthority(params, workspace);
+  const sessionKey = params.sessionKey ?? params.sessionId;
+  const signal = params.abortSignal;
+  const assertSourceCurrent = params.assertCurrent;
+  return {
+    sessionEventSourcePolicy: captureCliSessionEventSourcePolicy(params),
+    hasReplyOperation: Boolean(operation),
+    async bindQuestions(
+      route: { provider: string; model: string },
+      readSource: () => AdmittedRunOperatorAuthority | undefined,
+    ) {
+      const fingerprint = operation
+        ? await operation.bindToolAuthorityRouteAsync(route)
+        : await snapshot?.fingerprintAsync(route);
+      const bind = bindCliQuestionAnswerAuthority({
+        operation,
+        snapshot,
+        route,
+        fingerprint,
+        readSource,
+        assertSourceCurrent,
+        signal,
+      });
+      return {
+        fingerprint,
+        bindQuestionAnswerAuthorityForSession: bind,
+        bindQuestionAnswerAuthority: (assertActive: () => void) => bind(sessionKey, assertActive),
+      };
+    },
+  };
+}
+
+/** Capture the original caller before CLI policy replaces its canonical tool allowlist. */
+function captureCliSessionEventSourcePolicy(
+  params: RunCliAgentParams,
+): NonNullable<PreparedCliRunContext["sessionEventSourcePolicy"]> {
+  return Object.freeze({
+    toolsAllow: intersectSessionEventToolsAllow(params.disableTools ? [] : params.toolsAllow),
+    settings: structuredClone({
+      permissionMode: params.sessionEntry?.permissionMode,
+      toolOverrides: narrowSessionEventSettings(
+        { toolOverrides: params.toolOverrides },
+        { toolOverrides: params.sessionEntry?.toolOverrides },
+      ).toolOverrides,
+    }),
+  });
+}
+
+/** Native availability and prompt hooks can narrow, never replace, the caller's original cap. */
+export function finalizeCliSessionEventSourcePolicy(
+  original: NonNullable<PreparedCliRunContext["sessionEventSourcePolicy"]>,
+  params: RunCliAgentParams,
+  promptToolsAllow?: readonly string[],
+): NonNullable<PreparedCliRunContext["sessionEventSourcePolicy"]> {
+  return Object.freeze({
+    ...original,
+    toolsAllow: intersectSessionEventToolsAllow(
+      original.toolsAllow,
+      promptToolsAllow,
+      params.disableTools
+        ? []
+        : params.cliToolAvailability?.native.length === 0
+          ? params.cliToolAvailability.openClaw
+          : undefined,
+    ),
   });
 }

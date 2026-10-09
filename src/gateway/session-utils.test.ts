@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
@@ -58,7 +57,6 @@ import {
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionEntry as loadSessionEntry,
   resolveCanonicalGatewaySessionStoreKey,
-  resolveDeletedAgentIdFromSessionKey,
 } from "./session-utils-store.js";
 import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
 import {
@@ -1406,80 +1404,6 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("resolveDeletedAgentIdFromSessionKey rejects non-alias main keys when main is absent", () => {
-    const cfg = {
-      session: { mainKey: "work" },
-      agents: { entries: { ops: {} } },
-    } as OpenClawConfig;
-    const legacyMainAlias = resolveSessionStoreKey({ cfg, sessionKey: "agent:main:main" });
-
-    expect(legacyMainAlias).toBe("agent:ops:work");
-    expect(resolveDeletedAgentIdFromSessionKey(cfg, legacyMainAlias)).toBeNull();
-    expect(resolveDeletedAgentIdFromSessionKey(cfg, "global")).toBeNull();
-    expect(resolveDeletedAgentIdFromSessionKey(cfg, "unknown")).toBeNull();
-    expect(resolveDeletedAgentIdFromSessionKey(cfg, "main")).toBeNull();
-    expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
-  });
-
-  test("deleted-agent checks require canonical ACP metadata instead of embedded entries", async () => {
-    await withStateDirEnv("session-utils-acp-canonical-facts-", async () => {
-      const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
-      for (const agent of ["claude", "cursor"]) {
-        const key = `agent:${agent}:acp:11111111-1111-4111-8111-111111111111`;
-        const acpMeta: NonNullable<SessionEntry["acp"]> = {
-          backend: "acpx",
-          agent,
-          runtimeSessionName: key,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 1,
-        };
-        const entry: SessionEntry = { sessionId: `synthetic-${agent}`, updatedAt: 1, acp: acpMeta };
-        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, entry)).toBe(agent);
-        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, entry, { acpMeta })).toBeNull();
-      }
-    });
-  });
-
-  test("resolveDeletedAgentIdFromSessionKey recognizes canonical free ACP metadata", async () => {
-    await withStateDirEnv("session-utils-acp-deleted-agent-repair-", async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
-      const acpKey = "agent:claude:acp:55555555-5555-4555-8555-555555555555";
-      const legacyAcpKey = "agent:CLAUDE:acp:55555555-5555-4555-8555-555555555555";
-      const entry = {
-        sessionId: "sess-acp-repair",
-        updatedAt: 1,
-      } satisfies SessionEntry;
-      seedSessionEntries(storePath, {
-        [acpKey]: entry,
-      });
-      seedCanonicalAcpSessionMeta({
-        sessionKey: legacyAcpKey,
-        lifecycleRevision: undefined,
-        meta: {
-          backend: "acpx",
-          agent: "claude",
-          runtimeSessionName: legacyAcpKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 1,
-        },
-      });
-      const cfg = {
-        session: {
-          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-        agents: { entries: { main: {} } },
-      } as OpenClawConfig;
-
-      expect(
-        resolveDeletedAgentIdFromSessionKey(cfg, acpKey, entry, {
-          acpMetadataSessionKey: acpKey,
-        }),
-      ).toBeNull();
-    });
-  });
-
   test("resolveSessionStoreKey uses configured fixed-store ownership for bare keys", () => {
     const cfg = {
       session: { mainKey: "main", store: "/tmp/shared.sqlite" },
@@ -2092,7 +2016,7 @@ describe("gateway session utils", () => {
     },
   ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.updateExecApprovalsSync({ update: () => approvals });
+      execApprovalsStore.updateExecApprovalsForMaintenance({ update: () => approvals });
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       if (expected === undefined) {

@@ -190,12 +190,10 @@ async function seed(fixture: OpenClawTestState, partition = "first", enabled = t
 /** Pauses the real worker after its commit grant, then after native settlement before its reply. */
 async function gateWriter(fixture: OpenClawTestState) {
   await closeOpenClawStateDatabaseAsync();
-  const gate = new Int32Array(new SharedArrayBuffer(20));
+  const gate = new Int32Array(new SharedArrayBuffer(16));
   Atomics.store(gate, 3, 1);
-  Atomics.store(gate, 4, 1);
   const granted = createDeferred();
   const committed = createDeferred();
-  const stale = createDeferred();
   const replied = createDeferred();
   const { port1, port2 } = new MessageChannel();
   port1.on("message", (phase) => {
@@ -204,9 +202,6 @@ async function gateWriter(fixture: OpenClawTestState) {
     }
     if (phase === "committed") {
       committed.resolve();
-    }
-    if (phase === "stale") {
-      stale.resolve();
     }
     if (phase === "reply") {
       replied.resolve();
@@ -222,7 +217,7 @@ async function gateWriter(fixture: OpenClawTestState) {
     const phase = workerData.authorityPhase;
     const post = MessagePort.prototype.postMessage;
     const load = Atomics.load;
-    let selected, decision, previousCommit;
+    let selected, decision;
     parentPort.on("message", (request) => {
       if (request.type === "execute" && load(gate, 0)) {
         const command = deserialize(request.input);
@@ -236,14 +231,8 @@ async function gateWriter(fixture: OpenClawTestState) {
           phase.postMessage("committed");
           Atomics.wait(gate, 3, 0);
         }
-        if (selected && previousCommit) {
-          post.call(this, previousCommit);
-          phase.postMessage("stale");
-          Atomics.wait(gate, 4, 0);
-        }
         post.call(this, message, ...args);
         if (selected) post.call(this, message);
-        previousCommit = message;
         return;
       }
       if (this === parentPort && message?.id === selected && message.ok) {
@@ -290,14 +279,11 @@ async function gateWriter(fixture: OpenClawTestState) {
   return {
     granted: granted.promise,
     committed: committed.promise,
-    stale: stale.promise,
     replied: replied.promise,
     arm: () => Atomics.store(gate, 0, 1),
     commit: () => release(1),
     holdNativeReceipt: () => Atomics.store(gate, 3, 0),
     publish: () => release(3),
-    holdStaleReceipt: () => Atomics.store(gate, 4, 0),
-    currentReceipt: () => release(4),
     reply: () => release(2),
     async terminate() {
       if (!worker) {
@@ -309,7 +295,6 @@ async function gateWriter(fixture: OpenClawTestState) {
       release(1);
       release(2);
       release(3);
-      release(4);
       factory.mockRestore();
       port1.close();
       port2.close();
@@ -317,7 +302,7 @@ async function gateWriter(fixture: OpenClawTestState) {
   };
 }
 
-it("suspends through commit and reply gaps, ignores stale/duplicate facts, and keeps partitions exact", async ({
+it("suspends through commit and reply gaps, ignores duplicate facts, and keeps partitions exact", async ({
   signal,
 }) => {
   await withOpenClawTestState({ label: "cron-authority-publication" }, async (fixture) => {
@@ -330,12 +315,11 @@ it("suspends through commit and reply gaps, ignores stale/duplicate facts, and k
       const sql = observeMainThreadSql();
       sql.calibrate();
       let checked = false;
-      let admission: workerAdmission.SqliteWorkerOperationAdmission | undefined;
       const create = workerAdmission.createSqliteWorkerOperationAdmission;
       const admissions = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) => {
-          admission = create((request, grant) => {
+        .mockImplementation((admit, attachment) =>
+          create((request, grant) => {
             if (request.stage === "commit") {
               sql.clear();
               expect(() => first.observation.readForPreparation()).toThrow("unavailable");
@@ -345,11 +329,10 @@ it("suspends through commit and reply gaps, ignores stale/duplicate facts, and k
             } else {
               admit(request, grant);
             }
-          }, attachment);
-          return admission;
-        });
+          }, attachment),
+        );
       gate.arm();
-      gate.holdStaleReceipt();
+      gate.holdNativeReceipt();
       pending = saveCronStore(first.storePath, {
         version: 1,
         jobs: [{ ...first.job, enabled: false }],
@@ -362,12 +345,11 @@ it("suspends through commit and reply gaps, ignores stale/duplicate facts, and k
       expect(() => first.observation.readForPreparation()).toThrow("unavailable");
       gate.commit();
       await withinTest(
-        awaitGateBeforeSettlement(gate.stale, pending, "Save missed the stale receipt gate"),
+        awaitGateBeforeSettlement(gate.committed, pending, "Save missed native COMMIT"),
         signal,
       );
-      admission!.service();
       expect(() => first.observation.readForPreparation()).toThrow("unavailable");
-      gate.currentReceipt();
+      gate.publish();
       await withinTest(
         awaitGateBeforeSettlement(gate.replied, pending, "Save missed the ordinary reply gate"),
         signal,

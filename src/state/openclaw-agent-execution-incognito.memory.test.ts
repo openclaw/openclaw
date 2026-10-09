@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import * as memoryRuntime from "../../packages/memory-host-sdk/src/host/openclaw-runtime-session.js";
 import * as sessionFiles from "../../packages/memory-host-sdk/src/host/session-files.js";
 import {
@@ -10,7 +10,6 @@ import {
 } from "../../packages/memory-host-sdk/src/host/session-files.js";
 import { readSessionResetRecallCutoff } from "../../packages/memory-host-sdk/src/host/session-reset-recall-read.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -31,35 +30,24 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  useIncognitoActorProbe,
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
-let sql: ReturnType<typeof observeHostDataSql>;
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-memory-wiring-") };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+  actor = await openIncognitoTestActor(env, authority);
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
@@ -123,7 +111,7 @@ it("fences an empty Memory corpus against earlier queued creation", async () => 
         listSessionTranscriptCorpusEntriesForAgent("main"),
       ),
     ).toEqual([]);
-    held = actor.run(authority, async () => {
+    held = probe.read(actor, authority, async () => {
       entered.resolve();
       await resume.promise;
     });

@@ -97,21 +97,14 @@ export function macFamilyLabel(identifier?: string): string | undefined {
   if (!model) {
     return undefined;
   }
-  switch (resolveMacFormFactor(model)) {
-    case "laptop":
-      if (model.startsWith("MacBookAir") || MACBOOK_AIR_IDENTIFIERS.has(model)) {
-        return "MacBook Air";
-      }
-      return /^MacBook\d/.test(model) ? "MacBook" : "MacBook Pro";
-    case "mini":
-      return "Mac mini";
-    case "studio":
-      return "Mac Studio";
-    case "pro":
-      return "Mac Pro";
-    case "imac":
-      return "iMac";
-    default:
-      return undefined;
+  const formFactor = resolveMacFormFactor(model);
+  if (formFactor === "laptop") {
+    if (model.startsWith("MacBookAir") || MACBOOK_AIR_IDENTIFIERS.has(model)) {
+      return "MacBook Air";
+    }
+    return /^MacBook\d/.test(model) ? "MacBook" : "MacBook Pro";
   }
+  return formFactor
+    ? { mini: "Mac mini", studio: "Mac Studio", pro: "Mac Pro", imac: "iMac" }[formFactor]
+    : undefined;
 }

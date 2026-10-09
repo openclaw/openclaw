@@ -170,7 +170,9 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   options: readonly OpenClawAgentDatabaseOptions[],
   run: () => Promise<T> | T,
   reentrant = false,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const selected = new Map(
     options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]),
   );
@@ -201,6 +203,7 @@ export async function runOpenClawAgentWriteAdmissions<T>(
             () => acquire(index + 1),
             true,
             timing,
+            signal,
           ),
         );
   };

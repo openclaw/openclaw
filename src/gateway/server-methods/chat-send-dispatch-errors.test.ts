@@ -18,6 +18,10 @@ import {
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import {
+  beginSessionWorkAdmission,
+  getTerminalSessionWorkAdmissionRelease,
+} from "../../sessions/session-lifecycle-admission.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
 import {
   AgentDatabaseAdmissionError,
@@ -27,6 +31,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
@@ -882,9 +887,24 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         persistenceEntered.resolve();
         await releasePersistence.promise;
       });
-    const cleanupAdmittedRun = vi.fn();
+    const sessionBinding: Pick<
+      ChatAbortControllerEntry,
+      "sessionId" | "sessionKey" | "agentId" | "lifecycleGeneration" | "terminalOutcomeObserved"
+    > = {
+      sessionId: "sess-ops",
+      sessionKey: "agent:ops:main",
+      agentId: "ops",
+      lifecycleGeneration: "test-generation",
+    };
+    const target = { scope: "/isolated/dispatch-terminal", identities: [sessionBinding.sessionId] };
+    const work = await beginSessionWorkAdmission({
+      ...target,
+      assertAllowed: () => {},
+      isSettling: () => sessionBinding.terminalOutcomeObserved === true,
+    });
+    const cleanupAdmittedRun = vi.fn(work.release);
     const activeRunCleanup = vi.fn();
-    const broadcast = vi.fn();
+    const broadcast = vi.fn(() => getTerminalSessionWorkAdmissionRelease(target));
     const dedupe = new Map();
     const clientRunId = "failed-ops-global-send";
     const chatAbortControllers = new Map([
@@ -901,12 +921,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     try {
       const lifecycle = createChatSendDispatchErrorLifecycle({
         admission: {
-          sessionBinding: {
-            sessionId: "sess-ops",
-            sessionKey: "agent:ops:main",
-            agentId: "ops",
-            lifecycleGeneration: "test-generation",
-          },
+          sessionBinding,
           activeRunAbort: {
             cleanup: activeRunCleanup,
             controller: new AbortController(),
@@ -946,6 +961,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
+      expect(getTerminalSessionWorkAdmissionRelease(target)).toBe(false);
       await lifecycle.handleError(new Error("dispatch rejected"));
       const finalization = lifecycle.finalize();
       await persistenceEntered.promise;
@@ -972,10 +988,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect.objectContaining({ runId: clientRunId, state: "error" }),
         expect.anything(),
       );
+      await expect(broadcast.mock.results[0]?.value).resolves.toBeUndefined();
       expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {
       releasePersistence.resolve();
+      work.release();
       persistLifecycleEvent.mockRestore();
     }
   });

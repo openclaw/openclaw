@@ -10,10 +10,7 @@ import {
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
@@ -70,7 +67,14 @@ import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
-import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  createSessionWorkerOperationContext,
+  transferSessionEntryWorkerCandidate,
+} from "./session-entry-patch.worker.js";
+import {
+  compactManualTranscript,
+  type ManualCompactInput,
+} from "./session-manual-compact.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
@@ -123,6 +127,10 @@ export type SessionMessageRewriteOperations = {
     input: LockedTranscriptMutation;
     output: ReturnType<typeof commitLockedTranscript>;
   };
+  "session.transcript.manualCompact": {
+    input: ManualCompactInput;
+    output: ReturnType<typeof compactManualTranscript>;
+  };
   "session.transcript.event.append": {
     input: { scope: ResolvedTranscriptScope; eventJson: string };
     output: ReturnType<typeof commitSessionTranscriptEvent>;
@@ -165,31 +173,12 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
     throw new Error("Transcript rewrite lost its canonical database owner");
   }
-  const context: AgentWorkerOperationContext = {
+  const context = createSessionWorkerOperationContext(
+    database,
     options,
-    open: () => database,
-    admit(stage, publication) {
-      bound.admit(stage, (request, dispatch) => {
-        if (!isRecord(request.facts)) {
-          throw new Error("Transcript rewrite admission omitted its database identity");
-        }
-        dispatch({ ...request, facts: { ...request.facts, publication } });
-      });
-    },
-    writeTransaction(operationLabel, owner, write) {
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== bound.database) {
-            throw new Error(`${owner} lost its canonical database owner`);
-          }
-          context.admit("transaction");
-          return write(current);
-        },
-        options,
-        { operationLabel },
-      );
-    },
-  };
+    bound,
+    "Transcript rewrite",
+  );
   return {
     execute(command) {
       switch (command.type) {
@@ -205,6 +194,8 @@ export function bindSqliteWorkerBackend(
           return readTranscriptMirrorFacts(database, command.input.scope, command.input);
         case "session.transcript.lock.commit":
           return commitLockedTranscript(command.input, context);
+        case "session.transcript.manualCompact":
+          return compactManualTranscript(command.input, context);
         case "session.transcript.event.append":
           return commitSessionTranscriptEvent(command.input, context);
         case "session.transcript.correct":
@@ -390,7 +381,7 @@ function commitLockedTranscript(
           },
           preparedMessage,
           projection,
-        );
+        )?.result;
         if (result && input.sequenced) {
           rememberCommittedTranscriptMessageSequencesInTransaction(
             database,

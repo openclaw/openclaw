@@ -390,6 +390,12 @@ let updaterStarted = false;
 let pendingServiceStop;
 let finishBeforeParkNotice;
 
+function isParkedSystemdGeneration(current, allowCleared = false) {
+  return (current?.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
+    current?.InvocationID === parkedServiceInvocation) ||
+    (allowCleared && current?.ExecMainStartTimestampMonotonic === "0" && !current?.InvocationID);
+}
+
 function recordServiceStop() {
   serviceStoppedAtMs ??= Date.now();
   // Both native stop observations retain the updater phase; they do not own activation.
@@ -531,9 +537,6 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       return false;
     }
     const parked = await inspectSystemdService(recovery.unit);
-    const retained = parked?.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
-      parked?.InvocationID === parkedServiceInvocation;
-    const cleared = parked?.ExecMainStartTimestampMonotonic === "0" && !parked?.InvocationID;
     // A Gateway that exits non-zero during the stop (KillMode=mixed) settles the unit
     // into ActiveState=failed with the parked identity retained; that is still the
     // exact parked generation and recovery stays safe. An owned candidate boot can
@@ -541,7 +544,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     // permits recovering that later stopped invocation.
     if (!parked || parked.Id !== recovery.unit || parked.LoadState !== "loaded" ||
       (parked.ActiveState !== "inactive" && parked.ActiveState !== "failed") ||
-      parked.MainPID !== "0" || !(previousGeneration || retained || cleared) ||
+      parked.MainPID !== "0" || !(previousGeneration || isParkedSystemdGeneration(parked, true)) ||
       !ownsRecovery()) {
       appendLog("recovery refused: parked systemd service identity changed or stop is incomplete");
       record(false);
@@ -684,19 +687,13 @@ async function finishGatewayServicePark() {
         // when the Gateway main process exits non-zero during the stop. The parked
         // generation/invocation stays retained in that state, so it is still the
         // exact parked unit and activation may proceed.
-        const retainedIdentity =
-          current.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
-          current.InvocationID === parkedServiceInvocation;
-        const clearedIdentity =
-          current.ExecMainStartTimestampMonotonic === "0" && !current.InvocationID;
-        if (!retainedIdentity && !clearedIdentity) {
+        if (!isParkedSystemdGeneration(current, true)) {
           throw new Error("systemd service remained active or changed execution generation");
         }
         break;
       }
       if (current.ActiveState !== "deactivating" || current.MainPID !== "0" ||
-        current.ExecMainStartTimestampMonotonic !== parkedServiceGeneration ||
-        current.InvocationID !== parkedServiceInvocation) {
+        !isParkedSystemdGeneration(current)) {
         throw new Error("systemd service remained active or changed execution generation");
       }
       // The exact stop job has completed; systemd may publish inactive a moment later.

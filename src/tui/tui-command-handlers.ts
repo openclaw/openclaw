@@ -258,11 +258,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       models = next;
       const { modelProvider, model } = state.sessionInfo;
-      selector.setItems(
-        modelSelectItems(models),
-        emptyMessage,
-        modelProvider && model ? modelKey(modelProvider, model) : undefined,
-      );
+      const currentRef = modelProvider && model ? modelKey(modelProvider, model) : undefined;
+      selector.setItems(modelSelectItems(models, currentRef), emptyMessage, currentRef);
       tui.requestRender();
     };
     request.refreshModels = (scope) => {
@@ -472,6 +469,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     }
   };
 
+  const selectionCommand =
+    (open: () => Promise<void>, set: (value: string) => Promise<void>) => async (args: string) => {
+      await (args ? set(args) : open());
+    };
+
   type CommandHandler = (args: string, raw: string) => void | Promise<void>;
   const commandHandlers = {
     help: () => {
@@ -557,13 +559,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         chatLog.addSystem(`status failed: ${formatTuiErrorMessage(err)}`);
       }
     },
-    agent: async (args) => {
-      if (!args) {
-        await openAgentSelector();
-      } else {
-        await setAgent(args);
-      }
-    },
+    agent: selectionCommand(openAgentSelector, setAgent),
     agents: openAgentSelector,
     context: async (args, raw) => {
       if (opts.local) {
@@ -626,13 +622,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         ...(args ? { systemAgentMessage: args } : {}),
       });
     },
-    session: async (args) => {
-      if (!args) {
-        await openSessionSelector();
-      } else {
-        await setSession(args);
-      }
-    },
+    session: selectionCommand(openSessionSelector, setSession),
     sessions: openSessionSelector,
     model: async (args, raw) => {
       if (shouldForwardModelCommandToServer(args)) {

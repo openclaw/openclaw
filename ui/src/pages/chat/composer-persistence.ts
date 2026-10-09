@@ -422,16 +422,6 @@ export function updateStoredChatComposerQueueItems(
   }
 }
 
-export function updateStoredChatComposerQueueItem(
-  state: ChatComposerScope,
-  sessionKey: string,
-  expected: ChatQueueItem,
-  next: ChatQueueItem,
-  agentId?: string,
-): boolean {
-  return updateStoredChatComposerQueueItems(state, sessionKey, [{ expected, next }], agentId);
-}
-
 export function removeStoredChatComposerQueueItem(
   state: ChatComposerScope,
   sessionKey: string,

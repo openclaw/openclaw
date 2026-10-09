@@ -83,6 +83,8 @@ suite.define(() => {
           expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
           if (!incognito) {
             await page.locator(".chat-pane__nav-toggle").click();
+            // The sliding drawer can hover a tooltip under the stationary pointer.
+            await page.mouse.move(0, 0);
             await expect
               .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
               .toBe("true");

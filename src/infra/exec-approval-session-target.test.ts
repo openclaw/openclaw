@@ -50,12 +50,6 @@ vi.mock("../channels/plugins/session-conversation.js", () => ({
   },
 }));
 
-vi.mock("./outbound/targets.js", async () => {
-  return await vi.importActual<typeof import("./outbound/targets-session.js")>(
-    "./outbound/targets-session.js",
-  );
-});
-
 const baseRequest: ExecApprovalRequest = {
   id: "req-1",
   request: {

@@ -25,6 +25,7 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
+  readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
@@ -271,6 +272,10 @@ function groupChatItems(
     if (
       !currentGroup ||
       startsProjectedTurn ||
+      // Each automation input owns a turn, including old rows without a projected marker.
+      Boolean(
+        readAutomationRun(item.message) || readAutomationRun(currentGroup.messages[0]?.message),
+      ) ||
       (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||

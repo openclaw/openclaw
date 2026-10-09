@@ -8,6 +8,7 @@ import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-q
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -224,16 +225,12 @@ describe("native subagent completion worker admission", () => {
       await withAdmissionState(async ({ input, database, context, admit }) => {
         let current = true;
         const before = readSubagentRun(database, input.expected.runId);
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (grantOwner, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === stage) {
-                current = false;
-              }
-              grantOwner(request, grant);
-            }, attachment),
-        );
+        probe.admission(workerAdmission, (request, grant, grantOwner) => {
+          if (request.stage === stage) {
+            current = false;
+          }
+          grantOwner(request, grant);
+        });
         await expect(
           admit(() => {
             if (!current) {
@@ -251,49 +248,38 @@ describe("native subagent completion worker admission", () => {
     "publishes native completion before its admitted successor without host SQLite or record parsing (%s)",
     async (change) => {
       await withAdmissionState(async ({ input, database, context }) => {
-        const original = stateWorker.runOpenClawStateWorkerOperation;
         let crossed = false;
         let successor: Promise<void> | undefined;
-        vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-          (owner, operation, options) =>
-            original(
-              owner,
-              (scope) =>
-                operation({
-                  execute: async (command, executeOptions) => {
-                    const result = await scope.execute(command, executeOptions);
-                    if (command.type === "sessionDelivery.admitSubagentCompletion") {
-                      crossed = true;
-                      if (change === "replacement" || change === "metadata successor") {
-                        successor = mutateSubagentRuns(
-                          [input.expected.runId],
-                          (rows) => {
-                            const current = expectDefined(
-                              rows.get(input.expected.runId),
-                              "admitted successor predecessor",
-                            );
-                            expect(current.delivery?.status).toBe("in_progress");
-                            const next = structuredClone(current);
-                            if (change === "replacement") {
-                              next.generation = 2;
-                              next.delivery = { status: "pending", generation: 2 };
-                            } else {
-                              next.task = "metadata updated after completion admission";
-                            }
-                            return { value: undefined, postimages: new Map([[next.runId, next]]) };
-                          },
-                          { context },
-                        );
-                      } else if (change === "reply lost") {
-                        throw new Error("synthetic completion reply lost after commit");
-                      }
-                    }
-                    return result;
-                  },
-                }),
-              options,
-            ),
-        );
+        probe.command(stateWorker, async (command, executeOptions, scope) => {
+          const result = await scope.execute(command, executeOptions);
+          if (command.type === "sessionDelivery.admitSubagentCompletion") {
+            crossed = true;
+            if (change === "replacement" || change === "metadata successor") {
+              successor = mutateSubagentRuns(
+                [input.expected.runId],
+                (rows) => {
+                  const current = expectDefined(
+                    rows.get(input.expected.runId),
+                    "admitted successor predecessor",
+                  );
+                  expect(current.delivery?.status).toBe("in_progress");
+                  const next = structuredClone(current);
+                  if (change === "replacement") {
+                    next.generation = 2;
+                    next.delivery = { status: "pending", generation: 2 };
+                  } else {
+                    next.task = "metadata updated after completion admission";
+                  }
+                  return { value: undefined, postimages: new Map([[next.runId, next]]) };
+                },
+                { context },
+              );
+            } else if (change === "reply lost") {
+              throw new Error("synthetic completion reply lost after commit");
+            }
+          }
+          return result;
+        });
         const sql = forbidMainThreadSql("Correlated completion touched main-thread SQLite");
         const parse = JSON.parse;
         const parsedRecords: string[] = [];
@@ -385,28 +371,16 @@ it("settles a requester cohort after concurrently admitted children complete", a
     }
     const acknowledged = createDeferredCore();
     const release = createDeferredCore();
-    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
     let held = false;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, run, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                const receipt = await scope.execute(command, executeOptions);
-                if (command.type === "subagents.persistChanges" && !held) {
-                  held = true;
-                  acknowledged.resolve();
-                  await release.promise;
-                }
-                return receipt;
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const receipt = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges" && !held) {
+        held = true;
+        acknowledged.resolve();
+        await release.promise;
+      }
+      return receipt;
+    });
     const completions = inputs.map(({ subagent }, index) =>
       mutateSubagentRuns([subagent.runId], (rows) => {
         const next = structuredClone(rows.get(subagent.runId)!);

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -25,22 +26,17 @@ const MID_TURN_PRECHECK_ERROR_MESSAGE = new MidTurnPrecheckSignal({
 }).message;
 
 function interceptTranscriptCommit(databasePath: string, onCommit: () => void) {
-  const original = workerAdmission.createSqliteWorkerOperationAdmission;
-  return vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      original((request, grant) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.identity) &&
-          request.facts.identity.nativeLocation === databasePath
-        ) {
-          onCommit();
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  return probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      isRecord(request.facts.identity) &&
+      request.facts.identity.nativeLocation === databasePath
+    ) {
+      onCommit();
+    }
+    admit(request, grant);
+  });
 }
 
 it.each(["yield", "precheck", "compaction"])(

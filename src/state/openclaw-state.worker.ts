@@ -44,7 +44,7 @@ import {
   type WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
-// Device auth and PR provisioning prepare without loading the application runtime.
+// Restart handoff must stay cheap when shutdown has already retired every actor.
 const commandRegistry = createWorkerOperationRegistry<
   WorktreeTemplateWorkerOperations &
     Pick<
@@ -52,10 +52,16 @@ const commandRegistry = createWorkerOperationRegistry<
       | "worktrees.reserveCapacity"
       | "worktrees.recoverPending"
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
-    >
+      | Extract<keyof OpenClawStateWorkerOperations, `restartLifecycle.${string}`>
+    >,
+  WorkerWriteOperationContext
 >({
   deviceAuth: async () =>
     (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
+  restartLifecycle: () =>
+    import("../infra/restart-lifecycle.worker.js").then(
+      (loaded) => loaded.restartLifecycleOperations,
+    ),
   worktrees: async () => {
     const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
@@ -168,10 +174,20 @@ function createSharedStateWorkerBackend(
       },
       transactionOptions,
     );
+  const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (operation, options) => {
+    open();
+    return write((database) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = operation(database);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return result;
+    }, options);
+  };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
         commandType.startsWith("deviceAuth.") ||
+        commandType.startsWith("restartLifecycle.") ||
         commandType.startsWith("worktrees.templates.") ||
         commandType === "worktrees.reserveCapacity" ||
         commandType === "worktrees.recoverPending"
@@ -230,6 +246,8 @@ function createSharedStateWorkerBackend(
       if (commandRegistry.has(command)) {
         return commandRegistry.execute(command, {
           open,
+          write,
+          writeAdmitted,
           stateOptions: () => ({
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
@@ -381,6 +399,7 @@ function createSharedStateWorkerBackend(
         context,
         open,
         write,
+        writeAdmitted,
         () =>
           (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
             path: context.databasePath,

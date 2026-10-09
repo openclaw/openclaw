@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -12,6 +13,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { readBtwTranscriptMessages } from "../../btw-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -125,140 +127,133 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(added.pendingTokens).toBeGreaterThan(userOnly.pendingTokens);
   });
 
-  it.each([false, true])(
-    "fits pre-prompt compaction around prepared model context (runtimeOnly=%s)",
-    async (runtimeOnly) => {
-      const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-      const settingsManager = SettingsManager.inMemory({
-        compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 20_000 },
-        retry: { enabled: false },
-      });
-      const systemPrompt = "Preserve the project requirements.";
-      const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({
-        role: "user",
-        content: "Earlier archive decision: blue buttons. ".repeat(270),
-        timestamp: 1,
-      });
-      sessionManager.appendMessage(
-        createAssistant(model, [{ type: "text", text: "Archived the decision." }]),
-      );
-      sessionManager.appendMessage({
-        role: "user",
-        content: "Current project detail. ".repeat(140),
-        timestamp: 3,
-      });
-      const priorInputTokens = Math.ceil(
+  it("fits pre-prompt compaction around prepared model context", async () => {
+    const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 20_000 },
+      retry: { enabled: false },
+    });
+    const systemPrompt = "Preserve the project requirements.";
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "Earlier archive decision: blue buttons. ".repeat(270),
+      timestamp: 1,
+    });
+    sessionManager.appendMessage(
+      createAssistant(model, [{ type: "text", text: "Archived the decision." }]),
+    );
+    sessionManager.appendMessage({
+      role: "user",
+      content: "Current project detail. ".repeat(140),
+      timestamp: 3,
+    });
+    const priorInputTokens = Math.ceil(
+      JSON.stringify({
+        system: systemPrompt,
+        messages: sessionManager.buildSessionContext().messages,
+      }).length / 4,
+    );
+    expect(priorInputTokens).toBeGreaterThan(3_072);
+    expect(priorInputTokens).toBeLessThan(model.contextWindow);
+    sessionManager.appendMessage(
+      createAssistant(
+        model,
+        [{ type: "text", text: "Details recorded." }],
+        "stop",
+        priorInputTokens,
+      ),
+    );
+    const { session } = await createTestSession({
+      model,
+      settingsManager,
+      sessionManager,
+      systemPrompt,
+      resourceLoader: createResourceLoader(),
+    });
+    const transcriptPrompt = "Answer the new request with ACK.";
+    const prependContext = "Prepared hook context. ".repeat(210);
+    const appendContext = "End of prepared hook context.";
+    const runtimeContextMessage = buildRuntimeContextCustomMessage("Prepared runtime context.");
+    const pendingPrompt = [prependContext, transcriptPrompt, appendContext].join("\n\n");
+    const compactionRequestBudget = createCompactionRequestBudget({
+      contextWindow: model.contextWindow,
+      reserveTokens: settingsManager.getCompactionReserveTokens(),
+      systemPrompt,
+      tools: session.state.tools,
+      pendingPrompt,
+      pendingAdditivePrompt: [prependContext, appendContext].join("\n\n"),
+      pendingQueuedContextMessages: runtimeContextMessage ? [runtimeContextMessage] : [],
+    });
+    const requests: Array<{ text: string; tokens: number; committedBefore: number }> = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      const text =
+        context.messages
+          .filter((message) => message.role === "user")
+          .map((message) =>
+            typeof message.content === "string"
+              ? message.content
+              : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+          )
+          .find((content) => content.includes(transcriptPrompt)) ?? "";
+      const tokens = Math.ceil(
         JSON.stringify({
-          system: systemPrompt,
-          messages: sessionManager.buildSessionContext().messages,
+          system: context.systemPrompt,
+          tools: context.tools,
+          messages: context.messages.map(({ role, content }) => ({ role, content })),
         }).length / 4,
       );
-      expect(priorInputTokens).toBeGreaterThan(3_072);
-      expect(priorInputTokens).toBeLessThan(model.contextWindow);
-      sessionManager.appendMessage(
+      const foreground = !session.isCompacting;
+      if (foreground) {
+        requests.push({
+          text,
+          tokens,
+          committedBefore: sessionManager
+            .getEntries()
+            .filter((entry) => entry.type === "compaction").length,
+        });
+      }
+      return createAssistantResultStream(
         createAssistant(
-          model,
-          [{ type: "text", text: "Details recorded." }],
+          activeModel,
+          [
+            {
+              type: "text",
+              text: foreground
+                ? "ACK"
+                : "The project retains accessible blue buttons. ".repeat(220),
+            },
+          ],
           "stop",
-          priorInputTokens,
+          tokens,
         ),
       );
-      const { session } = await createTestSession({
-        model,
-        settingsManager,
-        sessionManager,
-        systemPrompt,
-        resourceLoader: createResourceLoader(),
-      });
-      const transcriptPrompt = "Answer the new request with ACK.";
-      const prependContext = "Prepared hook context. ".repeat(210);
-      const appendContext = "End of prepared hook context.";
-      const runtimeContextMessage = runtimeOnly
-        ? undefined
-        : buildRuntimeContextCustomMessage("Prepared runtime context.");
-      const pendingPrompt = [prependContext, transcriptPrompt, appendContext].join("\n\n");
-      const compactionRequestBudget = createCompactionRequestBudget({
-        contextWindow: model.contextWindow,
-        reserveTokens: settingsManager.getCompactionReserveTokens(),
-        systemPrompt,
-        tools: session.state.tools,
-        pendingPrompt,
-        pendingAdditivePrompt: [prependContext, appendContext].join("\n\n"),
-        pendingQueuedContextMessages: runtimeContextMessage ? [runtimeContextMessage] : [],
-      });
-      const requests: Array<{ text: string; tokens: number; committedBefore: number }> = [];
-      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-        const text =
-          context.messages
-            .filter((message) => message.role === "user")
-            .map((message) =>
-              typeof message.content === "string"
-                ? message.content
-                : message.content
-                    .map((block) => (block.type === "text" ? block.text : ""))
-                    .join(""),
-            )
-            .find((content) => content.includes(transcriptPrompt)) ?? "";
-        const tokens = Math.ceil(
-          JSON.stringify({
-            system: context.systemPrompt,
-            tools: context.tools,
-            messages: context.messages.map(({ role, content }) => ({ role, content })),
-          }).length / 4,
-        );
-        const foreground = !session.isCompacting;
-        if (foreground) {
-          requests.push({
-            text,
-            tokens,
-            committedBefore: sessionManager
-              .getEntries()
-              .filter((entry) => entry.type === "compaction").length,
-          });
-        }
-        return createAssistantResultStream(
-          createAssistant(
-            activeModel,
-            [
-              {
-                type: "text",
-                text: foreground
-                  ? "ACK"
-                  : "The project retains accessible blue buttons. ".repeat(220),
-              },
-            ],
-            "stop",
-            tokens,
-          ),
-        );
-      });
-      const submission = {
-        ...createBaseInput(),
-        activeSession: session,
-        contextTokenBudget: model.contextWindow,
-        compactionRequestBudget,
-        appendOnlyRuntimeContext: true,
-        runtimeOnly,
-        runtimeContextMessage,
-        systemPrompt,
-        transcriptPrompt,
-        modelPrompt: pendingPrompt,
-        prependContext,
-        appendContext,
-        promptActiveSession: (prompt: string, options: PromptOptions) =>
-          session.prompt(prompt, options),
-      };
+    });
+    const submission = {
+      ...createBaseInput(),
+      activeSession: session,
+      contextTokenBudget: model.contextWindow,
+      compactionRequestBudget,
+      appendOnlyRuntimeContext: true,
+      runtimeOnly: false,
+      runtimeContextMessage,
+      systemPrompt,
+      transcriptPrompt,
+      modelPrompt: pendingPrompt,
+      prependContext,
+      appendContext,
+      promptActiveSession: (prompt: string, options: PromptOptions) =>
+        session.prompt(prompt, options),
+    };
 
-      await submitEmbeddedAttemptPrompt(submission);
+    await submitEmbeddedAttemptPrompt(submission);
 
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.text).toBe(pendingPrompt);
-      expect(requests[0]?.committedBefore).toBeGreaterThan(0);
-      expect(requests[0]?.tokens).toBeLessThanOrEqual(3_072);
-      expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "ACK" }] });
-    },
-  );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.text).toBe(pendingPrompt);
+    expect(requests[0]?.committedBefore).toBeGreaterThan(0);
+    expect(requests[0]?.tokens).toBeLessThanOrEqual(3_072);
+    expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "ACK" }] });
+  });
 
   it.each(["handled", "rejected"] as const)(
     "retires queued context when prompt preflight is %s",
@@ -321,7 +316,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     },
   );
 
-  it.each(["append-only", "transient", "none"] as const)(
+  it.each(["append-only", "transient"] as const)(
     "reuses a persisted turn with %s retry context",
     async (retryContext) => {
       const sessionManager = SessionManager.inMemory();
@@ -372,8 +367,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         appendContext: undefined,
         prependContext: undefined,
         modelPrompt: user.content,
-        runtimeContextMessage:
-          retryContext === "none" ? undefined : contextMessage("rebuilt context"),
+        runtimeContextMessage: contextMessage("rebuilt context"),
         promptActiveSession: (prompt, options) => session.prompt(prompt, options),
       });
       expect(requests).toHaveLength(1);
@@ -443,14 +437,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(session.getLastAssistantText()).toBe("recovered");
   });
 
-  it.each([
-    [false, false],
-    [true, false],
-    [false, true],
-    [true, true],
-  ])(
-    "persists context across retry and reopen: append-only=%s runtime-only=%s",
-    async (appendOnlyRuntimeContext, runtimeOnly) => {
+  it.each([false, true])(
+    "persists context across retry and reopen: append-only=%s",
+    async (appendOnlyRuntimeContext) => {
       await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
         const target = {
           agentId: "main",
@@ -488,7 +477,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
             ...input,
             activeSession: session,
             appendOnlyRuntimeContext,
-            runtimeOnly,
             appendContext: undefined,
             prependContext: undefined,
             transcriptPrompt: text,
@@ -547,8 +535,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
 
   it.each([
     ["first-turn", true],
-    ["after-reset", true],
-    ["after-reset-metadata", true],
     ["skipped-prepared", false],
     ["raw-probe", false],
     ["settled-finalization", false],
@@ -632,9 +618,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
         const expectedSnapshotMessages = isFinalization ? [currentUser] : [];
         expect(activeSession.messages).toEqual(expectedSnapshotMessages);
         expect(sessionManager.getLeafId()).toBe(appended.entryId);
-        if (scenario === "after-reset-metadata") {
-          await sessionManager.appendThinkingLevelChange("low");
-        }
         const persistedBefore = loadTranscriptEventsSync(target);
         setActiveEmbeddedRun(sessionId, handle, target.sessionKey);
         const assembly = await prepareEmbeddedAttemptPromptAssembly({
@@ -684,49 +667,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
       }
     });
   });
-
-  it.each([
-    { skipPreparedUserTurnMessage: false, expectedKey: "persisted-current-user" },
-    { skipPreparedUserTurnMessage: true, expectedKey: undefined },
-  ])(
-    "passes persisted user identity when prepared-user skipping is $skipPreparedUserTurnMessage",
-    async ({ skipPreparedUserTurnMessage, expectedKey }) => {
-      const { activeSession } = createSession();
-      const input = createBaseInput();
-      const persistedUser = {
-        role: "user" as const,
-        content: "transcript prompt",
-        idempotencyKey: "persisted-current-user",
-        timestamp: 1,
-      };
-      const recorder = createUserTurnTranscriptRecorder({
-        message: persistedUser,
-        target: async () => undefined,
-      });
-      recorder.markRuntimePersisted(persistedUser);
-      const promptActiveSession = vi.fn(
-        async (_prompt: string, _options?: PromptOptions) => undefined,
-      );
-
-      await submitEmbeddedAttemptPrompt({
-        ...input,
-        attempt: {
-          sessionId,
-          skipPreparedUserTurnMessage,
-          userTurnTranscriptRecorder: recorder,
-        },
-        activeSession,
-        promptActiveSession,
-      });
-
-      const promptOptions = promptActiveSession.mock.calls[0]?.[1];
-      if (expectedKey) {
-        expect(promptOptions).toMatchObject({ persistedUserIdempotencyKey: expectedKey });
-      } else {
-        expect(promptOptions).not.toHaveProperty("persistedUserIdempotencyKey");
-      }
-    },
-  );
 
   it("submits runtime-only prompts without images and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
@@ -962,4 +902,90 @@ describe("submitEmbeddedAttemptPrompt", () => {
       null,
     ]);
   });
+});
+
+describe("embedded provider dispatch admission", () => {
+  it.each(["committed", "failed", "sync-failed"] as const)(
+    "waits for fresh runtime admission before provider dispatch (%s)",
+    async (outcome) => {
+      await withOpenClawTestState({ label: "prompt-admission" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:prompt-admission",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+        const message = {
+          role: "user" as const,
+          content: "transcript prompt",
+          idempotencyKey: "prompt-admission:user",
+          timestamp: 1,
+        };
+        const recorder = createUserTurnTranscriptRecorder({
+          message,
+          target: { ...target, sessionEntry: { sessionId, updatedAt: 1 } },
+        });
+        const admission = createDeferred();
+        recorder.setAdmissionHandler?.(() => {
+          if (outcome === "sync-failed") {
+            throw new Error("durable admission failed");
+          }
+          return admission.promise;
+        });
+        const dispatchBoundary = createDeferred();
+        const waitForPersistence = recorder.waitForRuntimePersistence;
+        vi.spyOn(recorder, "waitForRuntimePersistence").mockImplementation(() => {
+          dispatchBoundary.resolve();
+          return waitForPersistence();
+        });
+        streamMocks.streamSimple.mockImplementation((model) => {
+          // The unfixed path reaches the provider instead of the persistence wait.
+          dispatchBoundary.resolve();
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "done" }]),
+          );
+        });
+        const sessionManager = guardSessionManager(
+          SessionManager.open(target, state.workspaceDir),
+          { preparedUserTurnMessage: message, preparedUserTurnTranscriptRecorder: recorder },
+        );
+        const { session } = await createTestSession({ sessionManager });
+        expect(recorder.getAdmissionReceipt()).toBeUndefined();
+        const submitting = submitEmbeddedAttemptPrompt({
+          ...createBaseInput(),
+          modelPrompt: message.content,
+          prependContext: undefined,
+          appendContext: undefined,
+          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+          activeSession: session,
+          promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+        });
+        try {
+          // The actual user append starts admission; the test never calls the waiter.
+          await Promise.race([dispatchBoundary.promise, submitting]);
+          expect(recorder.getAdmissionReceipt()).toMatchObject({ sessionId });
+          expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+        } finally {
+          if (outcome === "failed") {
+            admission.reject(new Error("durable admission failed"));
+          } else {
+            admission.resolve();
+          }
+          await submitting;
+        }
+        if (outcome !== "committed") {
+          expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+          expect(session.messages.at(-1)).toMatchObject({
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: expect.stringContaining("durable admission failed"),
+          });
+        } else {
+          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+          expect(session.getLastAssistantText()).toBe("done");
+        }
+      });
+    },
+  );
 });

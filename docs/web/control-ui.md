@@ -26,6 +26,8 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
+Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. A restart rejection holds these reads on that connection, with one delayed probe at a time in case the restart is canceled. Readiness or a new connection resumes loading automatically; writes are never replayed by this mechanism.
+
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
@@ -69,7 +71,7 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
-For messages forwarded from an automation, the **From** link opens that automation's History tab and highlights the originating run. Open the run's transcript from History when needed.
+Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 

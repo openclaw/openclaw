@@ -531,23 +531,15 @@ export async function listSlackEmojis(opts: SlackActionClientOpts = {}) {
   return await client.emoji.list();
 }
 
-export async function pinSlackMessage(
-  channelId: string,
-  messageId: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  await client.pins.add({ channel: channelId, timestamp: messageId });
+function createSlackPinUpdater(method: "add" | "remove") {
+  return async (channelId: string, messageId: string, opts: SlackActionClientOpts = {}) => {
+    const client = await getClient(opts, "write");
+    await client.pins[method]({ channel: channelId, timestamp: messageId });
+  };
 }
 
-export async function unpinSlackMessage(
-  channelId: string,
-  messageId: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  await client.pins.remove({ channel: channelId, timestamp: messageId });
-}
+export const pinSlackMessage = createSlackPinUpdater("add");
+export const unpinSlackMessage = createSlackPinUpdater("remove");
 
 export async function listSlackPins(
   channelId: string,

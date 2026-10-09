@@ -438,9 +438,6 @@ export function isCommandMarkedMessage(message: unknown): boolean {
 }
 
 function formatTokens(total?: number | null, context?: number | null) {
-  if (total == null && context == null) {
-    return "tokens ?";
-  }
   const totalLabel = total == null ? "?" : formatTokenCount(total);
   if (context == null) {
     return `tokens ${totalLabel}`;
@@ -497,10 +494,7 @@ export function formatContextUsageLine(params: {
 }
 
 export function formatPrimitiveString(value: unknown, fallback = ""): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   return fallback;

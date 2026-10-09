@@ -80,6 +80,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
 async function prepareGatewaySessionStoreReadInWorker(
   params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0],
   retainPlan = false,
+  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void,
 ): Promise<{ target: GatewaySessionStoreTargetWithStore; readPlan?: GatewaySessionStoreReadPlan }> {
   params.assertActive?.();
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
@@ -187,10 +188,11 @@ async function prepareGatewaySessionStoreReadInWorker(
           }
           return select();
         },
+        { ordered: onSelected !== undefined },
       );
     };
     const selected = retainPlan
-      ? await prepareGatewaySessionStoreTargetReadPlan(lookup, prepareReads)
+      ? await prepareGatewaySessionStoreTargetReadPlan(lookup, prepareReads, onSelected)
       : {
           target: await prepareGatewaySessionStoreTargetReadOnly(lookup, prepareReads),
           plan: undefined,
@@ -431,6 +433,7 @@ export async function loadGatewaySessionEntryReadOnlyInWorker(
 /** Retain the original lookup domain for a later synchronous admission predicate. */
 export async function prepareGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
+  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void,
 ): Promise<{
   loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   readPlan?: GatewaySessionEntryReadPlan;
@@ -442,6 +445,7 @@ export async function prepareGatewaySessionEntryReadOnlyInWorker(
       projection: params.projection ?? "full",
     },
     true,
+    onSelected,
   );
   params.assertActive?.();
   const select = (current: GatewaySessionStoreTargetWithStore) => {
