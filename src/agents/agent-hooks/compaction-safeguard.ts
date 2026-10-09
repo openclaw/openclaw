@@ -1003,7 +1003,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return cancelCompaction(authResult.reason);
     }
     try {
-
       const headers = buildCompactionSummaryHeaders({
         model,
         messages: baseMessagesToSummarize,
@@ -1057,7 +1056,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         turnPrefixMessages.length > 0
           ? oracleMessages
           : [];
-
 
       let correctiveInstructions = "";
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
