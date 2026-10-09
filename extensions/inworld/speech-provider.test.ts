@@ -109,6 +109,8 @@ describe("buildInworldSpeechProvider", () => {
             voiceId: "Ashley",
             modelId: "inworld-tts-1.5-mini",
             temperature: 0.8,
+            speakingRate: 1.3,
+            deliveryMode: "balanced",
           },
         },
       },
@@ -120,15 +122,43 @@ describe("buildInworldSpeechProvider", () => {
       voiceId: "Ashley",
       modelId: "inworld-tts-1.5-mini",
       temperature: 0.8,
+      speakingRate: 1.3,
+      deliveryMode: "BALANCED",
+    });
+  });
+
+  it("drops out-of-range speakingRate from provider config", () => {
+    const resolved = provider.resolveConfig?.({
+      cfg: {},
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: { inworld: { apiKey: "basic-key", speakingRate: 2, deliveryMode: "wild" } },
+      },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "basic-key",
+      baseUrl: "https://api.inworld.ai",
+      voiceId: "Sarah",
+      modelId: "inworld-tts-1.5-max",
+      temperature: undefined,
+      speakingRate: undefined,
+      deliveryMode: undefined,
     });
   });
 
   it("preserves inherited Talk settings when overrides are blank", () => {
-    const params = { voiceId: " ", modelId: " inworld-tts-1.5-mini ", temperature: 0.5 };
+    const talkProviderConfig = {
+      voiceId: " ",
+      modelId: " inworld-tts-1.5-mini ",
+      temperature: 0.5,
+      speakingRate: 1.2,
+      deliveryMode: "stable",
+    };
     const talk = provider.resolveTalkConfig?.({
       cfg: {},
       baseTtsConfig: { providers: { inworld: { apiKey: "base-key", voiceId: "Ashley" } } },
-      talkProviderConfig: { ...params, apiKey: " ", baseUrl: " " },
+      talkProviderConfig: { ...talkProviderConfig, apiKey: " ", baseUrl: " " },
       timeoutMs: 1000,
     });
     expect(talk).toMatchObject({
@@ -137,11 +167,26 @@ describe("buildInworldSpeechProvider", () => {
       voiceId: "Ashley",
       modelId: "inworld-tts-1.5-mini",
       temperature: 0.5,
+      speakingRate: 1.2,
+      deliveryMode: "STABLE",
     });
-    expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+    // talk.speak params carry pace as `speed`; per-call deliveryMode is not part of the Talk schema.
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: {},
+        params: { voiceId: " ", modelId: " inworld-tts-1.5-mini ", temperature: 0.5, speed: 1.3 },
+      }),
+    ).toStrictEqual({
       modelId: "inworld-tts-1.5-mini",
       temperature: 0.5,
+      speakingRate: 1.3,
     });
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: {},
+        params: { text: "Hello", speed: 3 },
+      }),
+    ).toStrictEqual({});
   });
 
   it("parses Inworld TTS directive overrides", () => {
@@ -162,6 +207,41 @@ describe("buildInworldSpeechProvider", () => {
     expect(provider.parseDirectiveToken?.({ key: "temperature", value: "0.7", policy })).toEqual({
       handled: true,
       overrides: { temperature: 0.7 },
+    });
+    expect(provider.parseDirectiveToken?.({ key: "speed", value: "1.3", policy })).toEqual({
+      handled: true,
+      overrides: { speakingRate: 1.3 },
+    });
+    expect(provider.parseDirectiveToken?.({ key: "speaking_rate", value: "0.9", policy })).toEqual({
+      handled: true,
+      overrides: { speakingRate: 0.9 },
+    });
+  });
+
+  it("parses and validates Inworld delivery mode directives", () => {
+    expect(provider.parseDirectiveToken?.({ key: "delivery", value: "creative", policy })).toEqual({
+      handled: true,
+      overrides: { deliveryMode: "CREATIVE" },
+    });
+    expect(provider.parseDirectiveToken?.({ key: "delivery_mode", value: "wild", policy })).toEqual(
+      {
+        handled: true,
+        warnings: ['invalid Inworld delivery mode "wild" (stable, balanced, creative)'],
+      },
+    );
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "delivery",
+        value: "creative",
+        policy: { ...policy, allowVoiceSettings: false },
+      }),
+    ).toEqual({ handled: true });
+  });
+
+  it.each(["2", "0.4", "fast"])("warns on invalid directive speaking rate %s", (value) => {
+    expect(provider.parseDirectiveToken?.({ key: "speed", value, policy })).toEqual({
+      handled: true,
+      warnings: [`invalid Inworld speaking rate "${value}" (0.5-1.5)`],
     });
   });
 
@@ -198,7 +278,12 @@ describe("buildInworldSpeechProvider", () => {
 
     const result = await provider.synthesize({
       ...request,
-      providerOverrides: { voice: "Ashley", model: "inworld-tts-1.5-mini", temperature: 0.6 },
+      providerOverrides: {
+        voice: "Ashley",
+        model: "inworld-tts-1.5-mini",
+        temperature: 0.6,
+        speed: 1.3,
+      },
       target: "voice-note",
     });
 
@@ -210,6 +295,8 @@ describe("buildInworldSpeechProvider", () => {
       modelId: "inworld-tts-1.5-mini",
       audioEncoding: "OGG_OPUS",
       temperature: 0.6,
+      speakingRate: 1.3,
+      deliveryMode: undefined,
       timeoutMs: 30_000,
     });
     expect(result).toEqual({
@@ -237,6 +324,8 @@ describe("buildInworldSpeechProvider", () => {
       audioEncoding: "PCM",
       sampleRateHertz: 22_050,
       temperature: 0.6,
+      speakingRate: undefined,
+      deliveryMode: undefined,
       timeoutMs: 30_000,
     });
     expect(result).toEqual({

@@ -104,9 +104,11 @@ and resolved values still fail startup or reject the update.
 
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
-    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
+    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`, `inworld-tts-2`, `inworld-tts-2-flash`.</ParamField>
     <ParamField path="speakerVoiceId" type="string">Default `Sarah`. Legacy alias: `voiceId`.</ParamField>
-    <ParamField path="temperature" type="number">Sampling temperature `0..2` (exclusive of 0).</ParamField>
+    <ParamField path="temperature" type="number">Sampling temperature `0..2` (exclusive of 0). Ignored by `inworld-tts-2`, which uses `deliveryMode` instead.</ParamField>
+    <ParamField path="speakingRate" type="number">Speaking rate `0.5..1.5`; `1.0` is the voice's native speed. Sent as `audioConfig.speakingRate`.</ParamField>
+    <ParamField path="deliveryMode" type='"STABLE" | "BALANCED" | "CREATIVE"'>Delivery preset. Honored only by `inworld-tts-2` (where it replaces `temperature`); Inworld ignores it on other models, including `inworld-tts-2-flash`.</ParamField>
 
   </Accordion>
 

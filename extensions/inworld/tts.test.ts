@@ -235,7 +235,7 @@ describe("inworldTTS", () => {
     });
   });
 
-  it("includes temperature and sampleRateHertz when provided", async () => {
+  it("includes temperature, sampleRateHertz, and speakingRate when provided", async () => {
     queueAudioResponse();
 
     await inworldTTS({
@@ -245,15 +245,35 @@ describe("inworldTTS", () => {
       modelId: "inworld-tts-1.5-mini",
       audioEncoding: "PCM",
       sampleRateHertz: 22_050,
+      speakingRate: 1.3,
       temperature: 0.8,
     });
 
     const callBody = JSON.parse(readRequestBody(lastGuardRequest()));
     expect(callBody.voiceId).toBe("Ashley");
     expect(callBody.modelId).toBe("inworld-tts-1.5-mini");
-    expect(callBody.audioConfig.audioEncoding).toBe("PCM");
-    expect(callBody.audioConfig.sampleRateHertz).toBe(22_050);
+    expect(callBody.audioConfig).toEqual({
+      audioEncoding: "PCM",
+      sampleRateHertz: 22_050,
+      speakingRate: 1.3,
+    });
     expect(callBody.temperature).toBe(0.8);
+    expect(callBody).not.toHaveProperty("deliveryMode");
+  });
+
+  it("sends deliveryMode for inworld-tts-2", async () => {
+    queueAudioResponse();
+
+    await inworldTTS({
+      text: "Hello",
+      apiKey: "test-key",
+      modelId: "inworld-tts-2",
+      deliveryMode: "CREATIVE",
+    });
+
+    const callBody = JSON.parse(readRequestBody(lastGuardRequest()));
+    expect(callBody.modelId).toBe("inworld-tts-2");
+    expect(callBody.deliveryMode).toBe("CREATIVE");
   });
 
   it("uses custom base URL", async () => {
