@@ -13,10 +13,11 @@ export async function flushNativeTranscript(
   const voiceSessionId = requireString(result, "voiceSessionId");
   const prefix = voiceTranscriptEventId(voiceSessionId, "");
   const committed = createDeferredCore();
+  let remainingWrites = expectedWrites;
   const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     if (update.sessionId === SESSION_ID && update.messageId?.startsWith(prefix)) {
-      expectedWrites -= 1;
-      if (expectedWrites === 0) {
+      remainingWrites -= 1;
+      if (remainingWrites === 0) {
         committed.resolve();
       }
     }
