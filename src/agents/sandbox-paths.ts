@@ -67,9 +67,6 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
-  if (!relative || relative === "") {
-    return { resolved, relative: "" };
-  }
   if (
     relative === ".." ||
     relative.startsWith("../") ||
@@ -325,13 +322,8 @@ function mapContainerWorkspaceFileUrl(params: {
   sandboxRoot: string;
   containerWorkdir: string;
 }): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.fileUrl);
-  } catch {
-    return undefined;
-  }
-  if (parsed.protocol !== "file:") {
+  const parsed = URL.parse(params.fileUrl);
+  if (parsed?.protocol !== "file:") {
     return undefined;
   }
   const host = parsed.hostname.trim().toLowerCase();
@@ -370,9 +362,6 @@ function mapContainerWorkspacePath(params: {
     return undefined;
   }
   const rel = normalized.slice(prefix.length);
-  if (!rel) {
-    return path.resolve(params.sandboxRoot);
-  }
   return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
 }
 

@@ -5,10 +5,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "./live-transports/shared/credential-lease.runtime.js";
-import {
-  createQaChannelTransport,
-  QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
-} from "./qa-channel-transport.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
 import type {
   QaTransportAdapterFactory,
   QaTransportFactoryMatchContext,
@@ -32,14 +29,7 @@ export type QaTransportFactoryContext = {
   state: QaBusState;
 };
 
-export type QaTransportAdapterFactoryResult<
-  TAdapter extends QaTransportAdapter = QaTransportAdapter,
-> = {
-  adapter: TAdapter;
-  cleanupBeforeGatewayStop: () => Promise<void>;
-  cleanupAfterGatewayStop: () => Promise<void>;
-  cleanupWithoutGateway: () => Promise<void>;
-};
+export type QaTransportAdapterFactoryResult = Awaited<ReturnType<typeof createQaTransportAdapter>>;
 
 const QA_CRABLINE_TRANSPORT_FACTORY_METADATA = createQaCrablineTransportAdapterFactory();
 
@@ -81,17 +71,6 @@ export async function prepareQaTransportAdapterFactories(params: {
 }
 
 const DEFAULT_QA_TRANSPORT_ID: QaTransportId = "qa-channel";
-
-function requireQaTransportFactory(
-  factories: readonly QaTransportAdapterFactory[],
-  context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
-) {
-  const factory = factories.find((candidate) => candidate.matches(context));
-  if (!factory) {
-    throw new Error(`no QA transport factory for ${context.driver}:${context.channelId}`);
-  }
-  return factory;
-}
 
 export function qaTransportSupportsModuleFlows(
   factories: readonly QaTransportAdapterFactory[] | undefined,
@@ -145,16 +124,18 @@ async function collectQaTransportCleanupErrors(
 export async function createQaTransportAdapter(
   context: QaTransportFactoryContext,
   factories: readonly QaTransportAdapterFactory[] = [],
-): Promise<QaTransportAdapterFactoryResult> {
+) {
   let adapter: QaTransportAdapter;
   try {
     if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
       adapter = createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
     } else {
-      const factory = requireQaTransportFactory(
-        [...factories, createQaCrablineTransportAdapterFactory(context.state)],
-        context,
+      const factory = [...factories, createQaCrablineTransportAdapterFactory(context.state)].find(
+        (candidate) => candidate.matches(context),
       );
+      if (!factory) {
+        throw new Error(`no QA transport factory for ${context.driver}:${context.channelId}`);
+      }
       const definition = await factory.create({
         adapterOptions: context.adapterOptions,
         channelId: context.channelId,
@@ -241,8 +222,4 @@ export function selectQaTransportDriver(params: {
     return params.channelId ? "live" : params.transportId;
   }
   return params.channelDriver ?? params.transportId;
-}
-
-export function defaultQaSuiteConcurrencyForTransport(id: QaTransportId): number {
-  return id === "qa-channel" ? QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY : 1;
 }

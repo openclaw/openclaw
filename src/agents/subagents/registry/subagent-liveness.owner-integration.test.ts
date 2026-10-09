@@ -37,26 +37,26 @@ import {
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
 import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import {
   buildSubagentSessionListReadIndex,
-  countActiveDescendantRuns,
   countPendingDescendantRuns,
-  hasDescendantRunAwaitingSettle,
   isSubagentRunLive,
   isSubagentRunQueued,
   isSubagentSessionRunActive,
+  listActiveSubagentSessionKeys,
 } from "./subagent-registry-read.js";
-import { preserveSubagentRunForRestart } from "./subagent-registry-run-wait.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   countActiveRunsForSession,
   markSubagentRunTerminated,
   registerSubagentRun,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { addSubagentRunForTests, testing } from "./subagent-registry.test-helpers.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
@@ -94,6 +94,59 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   return subagentRuns.get(id)!;
 }
 
+it("admits new work at the child cap when finished descendants have suspended delivery", async () => {
+  const now = Date.now();
+  const completed = Array.from({ length: 5 }, (_, index) => ({
+    runId: `completed-orchestrator-${index}`,
+    childSessionKey: `agent:main:subagent:completed-orchestrator-${index}`,
+    requesterSessionKey: parent,
+    requesterAgentId: "main",
+    requesterDisplayKey: parent,
+    task: "completed orchestration",
+    cleanup: "keep" as const,
+    createdAt: now - 120_000,
+    execution: { status: "terminal" as const, endedAt: now - 60_000 },
+  }));
+  for (const entry of completed) {
+    await addSubagentRunForTests(entry);
+    await addSubagentRunForTests({
+      ...entry,
+      runId: `${entry.runId}-child`,
+      childSessionKey: `${entry.childSessionKey}:subagent:child`,
+      requesterSessionKey: entry.childSessionKey,
+      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+    });
+  }
+  const admission = () =>
+    resolveSpawnAdmission({
+      cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 5 } } } },
+      requesterSessionKey: parent,
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      configuredAgentIds: ["main"],
+    });
+
+  expect(admission().ok).toBe(true);
+  expect(countActiveRunsForSession(parent)).toBe(0);
+  expect(subagentRuns.size).toBe(10);
+
+  for (const entry of completed) {
+    await addSubagentRunForTests({
+      ...entry,
+      runId: `${entry.runId}-grandchild`,
+      childSessionKey: `${entry.childSessionKey}:subagent:grandchild`,
+      requesterSessionKey: `${entry.childSessionKey}:subagent:child`,
+      createdAt: now,
+      execution: { status: "running", startedAt: now },
+    });
+  }
+  expect(admission()).toMatchObject({
+    ok: false,
+    governingCap: "subagents.maxChildrenPerAgent",
+  });
+  expect(countActiveRunsForSession(parent)).toBe(5);
+});
+
 it("retains quiet admitted execution in listing, admission count, and requester settlement after two hours", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("quiet-owned");
@@ -122,7 +175,15 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     await entered.promise;
     now.mockReturnValue(olderThanCutoff);
     expect(getCommandLaneSnapshot("test:liveness-quiet").activeCount).toBe(1);
+    await mutateSubagentRuns([entry.runId], (rows) => ({
+      value: undefined,
+      postimages: new Map([[entry.runId, { ...rows.get(entry.runId)!, label: "still working" }]]),
+    }));
+    const updated = subagentRuns.get(entry.runId)!;
+    expect(updated).not.toBe(entry);
     expect(isSubagentRunLive(entry)).toBe(true);
+    expect(isSubagentRunLive(updated)).toBe(true);
+    expect(isSubagentRunLive({ ...updated })).toBe(false);
     expect(sweepStaleRunContexts()).toBe(0);
     await testing.sweepOnceForTests();
     expect(entry.execution.endedAt).toBeUndefined();
@@ -139,9 +200,11 @@ it("retains quiet admitted execution in listing, admission count, and requester 
       )
       .toBe(false);
     expect.soft(countActiveRunsForSession(parent)).toBe(1);
-    expect.soft(countActiveDescendantRuns(parent)).toBe(1);
-    expect.soft(countPendingDescendantRuns(parent)).toBe(1);
-    expect.soft(hasDescendantRunAwaitingSettle(parent)).toBe(true);
+    expect.soft(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(1);
+    expect.soft(await countPendingDescendantRuns(parent, () => {})).toBe(1);
+    expect
+      .soft(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent))
+      .toBe(true);
     expect.soft(isSubagentSessionRunActive(entry.childSessionKey)).toBe(true);
     expect
       .soft(
@@ -151,7 +214,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
       )
       .toEqual([{ runId: entry.runId, execution: "running" }]);
     // A persisted completed sibling already owns an unfrozen settle outbox.
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "settled-sibling",
       childSessionKey: "agent:main:subagent:settled-sibling",
       requesterSessionKey: parent,
@@ -200,6 +263,8 @@ it("retains an exact queued collector reservation without calling it executor-li
     }),
   ).toBe(true);
   const entry = await register("queued-owned", true);
+  expect(getAgentRunContext(entry.runId)).toBeUndefined();
+  expect(listActiveSubagentSessionKeys()).toEqual([entry.childSessionKey]);
   const launch = vi.fn(async () => {});
   activateSwarmRun({
     groupId: "liveness-group",
@@ -230,15 +295,26 @@ it("retains an exact queued collector reservation without calling it executor-li
   expect(buildSubagentsStatusLine({ context: agedContext, verboseEnabled: false })).toContain(
     "Subagents: 1 active",
   );
-  expect(isSwarmRunWaitingForCapacity(entry.runId, entry)).toBe(true);
+  expect(isSwarmRunWaitingForCapacity(entry.runId, getSubagentRunRuntimeKey(entry))).toBe(true);
   expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "queued" });
+  await mutateSubagentRuns([entry.runId], (rows) => ({
+    value: undefined,
+    postimages: new Map([[entry.runId, { ...rows.get(entry.runId)!, label: "still queued" }]]),
+  }));
+  const updated = subagentRuns.get(entry.runId)!;
+  expect(updated).not.toBe(entry);
   expect(isSubagentRunQueued(entry)).toBe(true);
-  expect(isSubagentRunQueued({ ...entry })).toBe(false);
+  expect(isSubagentRunQueued(updated)).toBe(true);
+  expect(listActiveSubagentSessionKeys()).toEqual([entry.childSessionKey]);
+  expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "queued" });
+  const copied = { ...updated };
+  expect(isSubagentRunQueued(copied)).toBe(false);
+  expect(prepared.getExecutionObservation(copied)).toMatchObject({ state: "queued" });
   expect(isSubagentRunLive(entry)).toBe(false);
   expect(resolveSubagentSessionStatus(subagentRuns.get(entry.runId))).toBe("queued");
   expect(launch).not.toHaveBeenCalled();
-  // sessions.list projects compact copies for descendant accounting, while its
-  // direct display lookup deliberately preserves the exact process-local row.
+  // Compact projections carry facts; only the captured runtime owner supplies
+  // the live scheduler reservation.
   const index = buildSubagentSessionListReadIndex();
   const projected = index.listDescendantRunsForRequester(parent)[0]!;
   expect(projected).not.toBe(entry);
@@ -252,8 +328,7 @@ it("retains an exact queued collector reservation without calling it executor-li
     .toMatchObject({ hasActiveSubagentRun: true });
   expect.soft(countActiveRunsForSession(parent, { collect: true })).toBe(1);
   expect.soft(countActiveRunsForSession(parent, { collect: false })).toBe(0);
-  expect.soft(countPendingDescendantRuns(parent)).toBe(1);
-  expect.soft(hasDescendantRunAwaitingSettle(parent)).toBe(true);
+  expect.soft(await countPendingDescendantRuns(parent, () => {})).toBe(1);
   expect
     .soft(
       (
@@ -273,9 +348,9 @@ it("retains an exact queued collector reservation without calling it executor-li
     expect(captured.countPendingDescendantRuns(parent)).toBe(0);
     expect(captured.hasDescendantRunAwaitingSettle(parent)).toBe(false);
     expect(isSubagentRunQueued(entry)).toBe(false);
+    expect(listActiveSubagentSessionKeys()).toEqual([]);
     expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "unknown" });
     expect(countActiveRunsForSession(parent, { collect: true })).toBe(0);
-    expect(hasDescendantRunAwaitingSettle(parent)).toBe(false);
     const released = buildSubagentSessionListReadIndex();
     expect(released.countActiveDescendantRuns(parent)).toBe(0);
     expect(released.countPendingDescendantRuns(parent)).toBe(0);
@@ -312,8 +387,10 @@ it("does not retain an old run after its last claim releases preserved routing m
     expect.soft(isSubagentRunLive(entry)).toBe(false);
     expect.soft(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
     expect.soft(countActiveRunsForSession(parent)).toBe(0);
-    expect.soft(countPendingDescendantRuns(parent)).toBe(0);
-    expect.soft(hasDescendantRunAwaitingSettle(parent)).toBe(false);
+    expect.soft(await countPendingDescendantRuns(parent, () => {})).toBe(0);
+    expect
+      .soft(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent))
+      .toBe(false);
     expect.soft(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(0);
   } finally {
     releaseAgentRunContext(entry.runId, claim);
@@ -367,13 +444,13 @@ it("does not borrow a same-run-ID successor's live claim through a prepared obse
     }
     expect(resolveSubagentSessionStatus(subagentRuns.get(successor.runId))).toBe("running");
     expect(countActiveRunsForSession(parent)).toBe(1);
-    expect(countPendingDescendantRuns(parent)).toBe(1);
+    expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
   } finally {
     releaseAgentRunContext(successor.runId, claim);
   }
 });
 
-it("does not transfer read retention across replaced queue owners or copied reservations", async () => {
+it("preserves queued retention across row values while rejecting replaced reservation owners", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const id = "queue-generation";
   const reserve = () =>
@@ -504,19 +581,23 @@ it("does not keep a recent orphan executor-live after its admitted owner closes"
 
 it("retains durable suspended completion debt without reporting a live executor or awaiting automatic settlement", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("suspended-debt", false, true);
+  let entry = await register("suspended-debt", false, true);
   // Restore a terminal result awaiting delivery, then use the real atomic suspension owner.
-  entry.execution = {
-    ...entry.execution,
-    status: "terminal",
-    endedAt: start + 1,
-    outcome: { status: "ok" },
-  };
-  entry.completion = { required: true, resultText: "completed result", capturedAt: start + 1 };
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [entry.runId]);
+  await mutateSubagentRuns([entry.runId], (rows) => {
+    const draft = structuredClone(rows.get(entry.runId)!);
+    draft.execution = {
+      ...draft.execution,
+      status: "terminal",
+      endedAt: start + 1,
+      outcome: { status: "ok" },
+    };
+    draft.completion = { required: true, resultText: "completed result", capturedAt: start + 1 };
+    return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+  });
+  entry = subagentRuns.get(entry.runId)!;
   now.mockReturnValue(olderThanCutoff);
-  expect(countPendingDescendantRuns(parent)).toBe(1);
-  expect(hasDescendantRunAwaitingSettle(parent)).toBe(true);
+  expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
+  expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(true);
   expect(
     await blockSubagentCompletionDelivery({
       subagent: entry,
@@ -526,8 +607,8 @@ it("retains durable suspended completion debt without reporting a live executor 
   ).toBe(true);
   const suspended = subagentRuns.get(entry.runId)!;
   expect(suspended.delivery?.status).toBe("suspended");
-  expect(countPendingDescendantRuns(parent)).toBe(1);
-  expect(hasDescendantRunAwaitingSettle(parent)).toBe(false);
+  expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
+  expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(false);
   expect(isSubagentRunLive(suspended)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(0);
@@ -543,22 +624,30 @@ it("keeps a restart-preserved native record distinct from an executor", async ()
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("interrupted-task");
   expect(
-    preserveSubagentRunForRestart({
-      entry,
-      terminal: { reason: "cancelled", status: "error", stopReason: "restart", endedAt: start + 1 },
-      persist: (...ids) => persistSubagentRunsToDiskOrThrow(subagentRuns, ids),
-    }),
+    (
+      await preserveSubagentRunForRestart({
+        entry,
+        terminal: {
+          reason: "cancelled",
+          status: "error",
+          stopReason: "restart",
+          endedAt: start + 1,
+        },
+        runs: subagentRuns,
+      })
+    ).preserved,
   ).toBe(true);
+  const interrupted = subagentRuns.get(entry.runId)!;
   now.mockReturnValue(olderThanCutoff);
-  expect(entry.execution.status).toBe("interrupted");
-  expect(entry.execution.endedAt).toBeUndefined();
-  expect(isSubagentRunLive(entry)).toBe(false);
+  expect(interrupted.execution.status).toBe("interrupted");
+  expect(interrupted.execution.endedAt).toBeUndefined();
+  expect(isSubagentRunLive(interrupted)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   subagentRuns.clear();
   expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: parent,
-    execution: entry.execution,
+    execution: interrupted.execution,
   });
 });
 

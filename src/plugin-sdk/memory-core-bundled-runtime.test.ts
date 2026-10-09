@@ -2,6 +2,7 @@
  * Tests bundled memory core runtime facade loading.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 const configureMemoryCoreDreamingStateImpl = vi.hoisted(() => vi.fn());

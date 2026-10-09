@@ -5,14 +5,13 @@ import type { ChatGoalDraftMode, ChatReplyTarget } from "../../lib/chat/chat-typ
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import {
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatComposerPersistence,
-  loadChatComposerSnapshot,
-  loadChatComposerDraftRevision,
+  loadChatComposerState,
   restoreChatComposerState,
   persistChatComposerState,
 } from "./composer-persistence.ts";
@@ -86,7 +85,7 @@ it.each([
     if (privateSource) {
       expect(persistChatComposerState(state)).toBe(true);
     }
-    const destinationKey = storageTargetForGateway(state.settings.gatewayUrl).key;
+    const destinationKey = storageTargetForComposer(state).key;
     const destinationMetadata = sessionStorage.getItem(destinationKey);
     vi.mocked(draftStore.writeDurableComposerDraft).mockClear();
     retire.mockClear();
@@ -97,7 +96,9 @@ it.each([
       expect(sessionStorage.getItem(destinationKey)).toBe(destinationMetadata);
       if (privateSource) {
         expect(draftStore.writeDurableComposerDraft).not.toHaveBeenCalled();
-        expect(loadChatComposerSnapshot(state, state.sessionKey)?.draft).toBe("Destination input");
+        expect(loadChatComposerState(state, state.sessionKey).snapshot?.draft).toBe(
+          "Destination input",
+        );
       } else {
         expect(draftStore.writeDurableComposerDraft).toHaveBeenCalledWith(
           sourceScope,
@@ -157,7 +158,7 @@ it("retires private tab input when a pending snapshot predates the authenticated
   state.connected = false;
   state.client = { recoveryScope: "", recoveryScopeReady: false };
   state.chatMessage = "Previously persisted private input";
-  expect(persistChatComposerState(state)).toBe(true);
+  expect(persistChatComposerState(state)).toBe(false);
   let owner: typeof state | undefined = state;
   const persistence = new ChatComposerPersistence(() => owner);
   persistence.start();
@@ -170,9 +171,9 @@ it("retires private tab input when a pending snapshot predates the authenticated
     state.selectedChatSessionIncognito = true;
     persistence.persistChangedState();
     await settleStorage();
-    const stored = sessionStorage.getItem(storageTargetForGateway(state.settings.gatewayUrl).key);
-    expect(stored).not.toContain("Previously persisted private input");
-    expect(stored).not.toContain("Current private input");
+    const stored = sessionStorage.getItem(storageTargetForComposer(state).key);
+    expect(stored ?? "").not.toContain("Previously persisted private input");
+    expect(stored ?? "").not.toContain("Current private input");
     expect(state.chatMessage).toBe("Current private input");
     expect(retire).toHaveBeenCalledWith(
       expect.objectContaining({ recoveryScope: "authenticated-owner" }),
@@ -202,7 +203,7 @@ it.each([false, true])(
     const state = {
       ...createState(),
       connected: false,
-      client: { recoveryScope: "", recoveryScopeReady: false },
+      client: { recoveryScope: "", recoveryScopeReady: false, offlineRecoveryScope: "test-owner" },
       chatMessage: "Saved draft",
       chatGoalDraftMode: null as ChatGoalDraftMode | null,
     };
@@ -371,7 +372,7 @@ it.each(["goal", "reply"] as const)(
     }
     persistence.schedule();
     persistence.persistNow();
-    const revision = loadChatComposerDraftRevision(state, state.sessionKey);
+    const revision = loadChatComposerState(state, state.sessionKey).revisions.latestAttempt;
     const restored = {
       ...createState(),
       client: null,
@@ -386,8 +387,10 @@ it.each(["goal", "reply"] as const)(
     state.chatReplyTarget = null;
     persistence.schedule();
     persistence.persistNow();
-    expect(loadChatComposerDraftRevision(state, state.sessionKey)).toBeGreaterThan(revision);
-    expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+    expect(loadChatComposerState(state, state.sessionKey).revisions.latestAttempt).toBeGreaterThan(
+      revision,
+    );
+    expect(loadChatComposerState(state, state.sessionKey).snapshot).toBeNull();
     persistence.stop();
   },
 );

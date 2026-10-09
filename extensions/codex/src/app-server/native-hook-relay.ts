@@ -14,17 +14,19 @@ import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
+import { createCodexNativeHookRemoteCredential } from "./native-hook-relay-remote.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "pre_tool_use",
@@ -113,34 +115,14 @@ export function scheduleCodexNativeHookRelayUnregister(params: {
   relay: ReturnType<typeof registerNativeHookRelayForBundledRuntime>;
   hookTimeoutSec?: number;
 }): void {
-  let pending: { timeout: ReturnType<typeof setTimeout>; unregister: () => void } | undefined;
-  const unregister = () => {
-    if (!pending) {
-      return;
-    }
-    const current = pending;
-    pending = undefined;
-    if (!nativeHookRelayUnregisterQueue.delete(current)) {
-      return;
-    }
-    params.relay.unregister();
-    nativeHookRelayUnregisterQueue.track(params.relay.drain());
-  };
-  const timeout = setTimeout(
-    unregister,
-    resolveCodexNativeHookRelayUnregisterGraceMs(params.hookTimeoutSec),
-  );
-  pending = { timeout, unregister };
-  nativeHookRelayUnregisterQueue.add(pending);
-  timeout.unref();
-}
-
-function resolveCodexNativeHookRelayUnregisterGraceMs(hookTimeoutSec: number | undefined): number {
   const hookTimeoutMs =
-    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(hookTimeoutSec)) ?? 0;
-  return Math.max(
-    CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
-    addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
+    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(params.hookTimeoutSec)) ?? 0;
+  nativeHookRelayUnregisterQueue.schedule(
+    params.relay,
+    Math.max(
+      CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
+      addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
+    ),
   );
 }
 
@@ -213,6 +195,12 @@ export function createCodexNativeHookRelay(params: {
     tools?: CodexNativeModelInputTools;
     readQualification: (threadId: string) => CodexInferenceThreadQualification | undefined;
   };
+  remoteCallback?: {
+    config: NonNullable<CodexAppServerRuntimeOptions["nativeHookRelay"]>;
+    client: CodexAppServerClient;
+    timeoutMs: number;
+    onCleanupFailure(error: Error): void;
+  };
   assertCurrent?: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
@@ -225,12 +213,7 @@ export function createCodexNativeHookRelay(params: {
   const directChildClaims = new Map<string, symbol>();
   const pendingDirectChildAdmissions = new Map<
     string,
-    {
-      promise: Promise<symbol>;
-      resolve: (claim: symbol) => void;
-      reject: (reason: Error) => void;
-      waiters: number;
-    }
+    ReturnType<typeof createDeferred<symbol>> & { waiters: number }
   >();
   let foregroundClosed = false;
   let successfulYieldRetentionAuthorized = false;
@@ -244,6 +227,8 @@ export function createCodexNativeHookRelay(params: {
   };
   let releaseProcessAdmission: (() => void) | undefined;
   let processAdmissionDisposed = false;
+  let remoteCredential: ReturnType<typeof createCodexNativeHookRemoteCredential> | undefined;
+  let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -290,7 +275,7 @@ export function createCodexNativeHookRelay(params: {
               if (params.nativeModelAdmission && toolName && modelInputTools.includes(toolName)) {
                 const admission = params.nativeModelAdmission;
                 if (toolName.endsWith("spawn_agent")) {
-                  const assertSpawnAllowed = () => {
+                  return () => {
                     assertAdmissionCurrent();
                     // An admitted child's inherited relay has its own source custody.
                     if (!readCodexNativeChildThreadId(payload)) {
@@ -302,7 +287,6 @@ export function createCodexNativeHookRelay(params: {
                     }
                     return undefined;
                   };
-                  return assertSpawnAllowed;
                 }
                 const input = isJsonObject(payload) ? payload.tool_input : undefined;
                 const targetThreadId =
@@ -417,6 +401,16 @@ export function createCodexNativeHookRelay(params: {
         rejectPendingAdmissions("native hook relay registration closed");
         processAdmissionDisposed = true;
         releaseProcessAdmission?.();
+        if (remoteCredential) {
+          remoteCleanup = remoteCredential
+            .dispose()
+            .catch((error: unknown) =>
+              params.remoteCallback?.onCleanupFailure(
+                toErrorObject(error, "Native hook relay credential cleanup failed"),
+              ),
+            );
+          nativeHookRelayUnregisterQueue.track(remoteCleanup);
+        }
       },
     },
     onPreToolUseFailure: params.onPreToolUseFailure,
@@ -435,14 +429,40 @@ export function createCodexNativeHookRelay(params: {
       throw error;
     }
   }
-  const unregister = () => {
-    foregroundClosed = true;
-    rejectPendingAdmissions("native hook relay foreground closed");
-    relay.unregister();
-  };
+  if (params.remoteCallback) {
+    remoteCredential = createCodexNativeHookRemoteCredential({
+      ...params.remoteCallback,
+      relay,
+      signal: params.signal,
+      assertCurrent: () => {
+        params.hostCapabilities.assertActive();
+        params.assertCurrent?.();
+      },
+    });
+    if (processAdmissionDisposed) {
+      void remoteCredential.dispose();
+    }
+  }
   return {
     ...relay,
-    unregister,
+    unregister: () => {
+      foregroundClosed = true;
+      rejectPendingAdmissions("native hook relay foreground closed");
+      relay.unregister();
+    },
+    prepareInvocation: async () => {
+      await relay.prepareInvocation();
+      await remoteCredential?.prepare();
+    },
+    drain: async () => {
+      await relay.drain();
+      await remoteCleanup;
+    },
+    commandForEvent: (event, commandOptions) =>
+      relay.commandForEvent(event, {
+        ...commandOptions,
+        ...(remoteCredential ? { remoteCredentialPath: remoteCredential.path } : {}),
+      }),
     authorizeRetentionAfterSuccessfulYield: () => {
       successfulYieldRetentionAuthorized = true;
     },
@@ -458,11 +478,7 @@ export function createCodexNativeHookRelay(params: {
     },
     claimDirectChild: (threadIdInput) => {
       const threadId = threadIdInput.trim();
-      if (!threadId) {
-        return () => undefined;
-      }
-      const existingClaim = directChildClaims.get(threadId);
-      if (existingClaim) {
+      if (!threadId || directChildClaims.has(threadId)) {
         return () => undefined;
       }
       const claim = Symbol(threadId);
@@ -470,12 +486,7 @@ export function createCodexNativeHookRelay(params: {
       const pending = pendingDirectChildAdmissions.get(threadId);
       pendingDirectChildAdmissions.delete(threadId);
       pending?.resolve(claim);
-      let released = false;
       return () => {
-        if (released) {
-          return;
-        }
-        released = true;
         if (directChildClaims.get(threadId) !== claim) {
           return;
         }
@@ -544,18 +555,14 @@ export function buildCodexNativeHookRelayId(params: {
   return `codex-${hash.digest("hex").slice(0, 40)}`;
 }
 
-const CODEX_HOOK_EVENT_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, CodexHookEventName> = {
-  pre_tool_use: "PreToolUse",
-  post_tool_use: "PostToolUse",
-  permission_request: "PermissionRequest",
-  before_agent_finalize: "Stop",
-};
-
-const CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, string> = {
-  pre_tool_use: "pre_tool_use",
-  post_tool_use: "post_tool_use",
-  permission_request: "permission_request",
-  before_agent_finalize: "stop",
+const CODEX_HOOK_EVENTS: Record<
+  NativeHookRelayEvent,
+  { name: CodexHookEventName; keyLabel: string }
+> = {
+  pre_tool_use: { name: "PreToolUse", keyLabel: "pre_tool_use" },
+  post_tool_use: { name: "PostToolUse", keyLabel: "post_tool_use" },
+  permission_request: { name: "PermissionRequest", keyLabel: "permission_request" },
+  before_agent_finalize: { name: "Stop", keyLabel: "stop" },
 };
 
 const CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS = [
@@ -568,6 +575,7 @@ export function buildCodexNativeHookRelayConfig(params: {
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;
+  remoteCredentialPath?: string;
 }): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
@@ -576,16 +584,16 @@ export function buildCodexNativeHookRelayConfig(params: {
   };
   const hookState: JsonObject = {};
   for (const event of CODEX_NATIVE_HOOK_RELAY_EVENTS) {
-    const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
+    const { name, keyLabel } = CODEX_HOOK_EVENTS[event];
     const selected = selectedEvents.has(event);
     const shouldRelay = params.relay.shouldRelayEvent(event);
     if (!selected || !shouldRelay) {
       if (selected || params.clearOmittedEvents) {
-        config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
+        config[`hooks.${name}`] = [] satisfies JsonValue;
       }
       if (params.clearOmittedEvents) {
         for (const sourcePath of CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS) {
-          hookState[`${sourcePath}:${CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event]}:0:0`] = {
+          hookState[`${sourcePath}:${keyLabel}:0:0`] = {
             enabled: false,
           } satisfies JsonValue;
         }
@@ -595,6 +603,7 @@ export function buildCodexNativeHookRelayConfig(params: {
     const timeout = normalizeHookTimeoutSec(params.hookTimeoutSec);
     const command = params.relay.commandForEvent(event, {
       timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
+      ...(params.remoteCredentialPath ? { remoteCredentialPath: params.remoteCredentialPath } : {}),
     });
     const matcher = buildCodexNativeToolMatcher(params.relay.toolMatcherForEvent(event));
     // Codex hashes the installed matcher group; retain the omitted match-all
@@ -611,17 +620,16 @@ export function buildCodexNativeHookRelayConfig(params: {
         },
       ],
     };
-    config[`hooks.${codexEvent}`] = [group];
+    config[`hooks.${name}`] = [group];
     const state = {
       enabled: true,
       trusted_hash: `sha256:${fingerprintCodexPolicy({
-        event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event],
+        event_name: keyLabel,
         ...group,
       })}`,
     };
     for (const sourcePath of CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS) {
-      hookState[`${sourcePath}:${CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event]}:0:0`] =
-        state satisfies JsonValue;
+      hookState[`${sourcePath}:${keyLabel}:0:0`] = state satisfies JsonValue;
     }
   }
   config["hooks.state"] = hookState;
@@ -680,8 +688,5 @@ function buildCodexNativeToolMatcher(toolNames: readonly string[] | undefined): 
   if (!hasCustomToolName && sortedNames.every((toolName) => /^[A-Za-z0-9_]+$/.test(toolName))) {
     return sortedNames.join("|");
   }
-  const escapedNames = sortedNames.map((toolName) =>
-    toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  );
-  return `(?i)^(?:${escapedNames.join("|")})$`;
+  return `(?i)^(?:${sortedNames.map(escapeRegExp).join("|")})$`;
 }

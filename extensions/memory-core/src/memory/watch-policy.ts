@@ -18,7 +18,13 @@ import type { MemoryWatchFile } from "./watch-settle.js";
 
 type Settings = MemoryWorkspaceWatchRequest["settings"];
 type Target = { path: string; kind: WatchScope["kind"]; core: boolean };
-type Selection = { scope: WatchScope; lexical: string; core: boolean; alias: boolean };
+type Selection = {
+  scope: WatchScope;
+  resolved: string;
+  lexical: string;
+  core: boolean;
+  alias: boolean;
+};
 export type MemoryObservation = { root: ObservationRoot; selections: Selection[] };
 const IGNORED = new Set([
   ".git",
@@ -111,6 +117,7 @@ export class MemoryWatchPolicy {
           scope: link
             ? { path: link, kind: "entry" }
             : { path: relative, kind: target.kind, depth: 128 },
+          resolved: path.resolve(authority.rootDir, link ?? relative),
           lexical: target.path,
           core: target.core,
           alias: link !== undefined,
@@ -157,7 +164,7 @@ export class MemoryWatchPolicy {
   exclude(group: MemoryObservation, entry: WatchEntry): boolean {
     const absolute = path.resolve(group.root.rootDir, entry.path);
     for (const selection of group.selections) {
-      const selected = path.resolve(group.root.rootDir, selection.scope.path);
+      const selected = selection.resolved;
       if (
         absolute === selected ||
         (selection.scope.kind === "tree" && isPathInside(selected, absolute))
@@ -165,8 +172,9 @@ export class MemoryWatchPolicy {
         if (selection.alias && absolute === selected) {
           return false;
         }
-        const lexical = path.join(selection.lexical, path.relative(selected, absolute));
-        if (!this.ignored(path.relative(selected, absolute), lexical, entry.kind)) {
+        const relative = path.relative(selected, absolute);
+        const lexical = path.join(selection.lexical, relative);
+        if (!this.ignored(relative, lexical, entry.kind)) {
           return false;
         }
       } else if (isPathInside(absolute, selected)) {
@@ -184,7 +192,7 @@ export class MemoryWatchPolicy {
   ): MemoryWatchFile | undefined {
     const absolute = path.resolve(group.root.rootDir, relative);
     for (const selection of group.selections) {
-      const selected = path.resolve(group.root.rootDir, selection.scope.path);
+      const selected = selection.resolved;
       if (
         absolute !== selected &&
         (selection.scope.kind !== "tree" || !isPathInside(selected, absolute))

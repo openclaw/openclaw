@@ -1,16 +1,32 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
 } from "../infra/worker-task-capacity.js";
-import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { SessionRowPlacementFacts } from "./session-row-placement-projection.types.js";
-import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
-import type { Row, Lookup } from "./session-row-projection-record.js";
+import {
+  privateSessionRowReadKey,
+  readPreparedSessionRows,
+  type withPreparedSessionRows,
+  type PreparedPrivateSessionRepository,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
+import { withBoundIncognitoSessionRows } from "./session-row-projection-read.js";
+import {
+  createIncognitoSessionRow,
+  isCurrentGeneration,
+  type Row,
+  type Lookup,
+} from "./session-row-projection-record.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
@@ -18,9 +34,11 @@ const MAX_CONCURRENT_PLACEMENT_READS = 2;
 const MAX_COALESCED_PLACEMENT_IDS = 256;
 const MAX_COALESCED_PLACEMENT_BYTES = 64 * 1024;
 type PlacementReadKind = "resident" | "exact";
+type PrivatePlacementTarget = Pick<Row, "storeTarget"> & { sessionId: string };
 type PlacementReadBatch = {
   kind: PlacementReadKind;
   ids: Set<string>;
+  privateSessions: Map<string, PrivatePlacementTarget>;
   inputBytes: number;
   stale: Set<string>;
   staleAll: boolean;
@@ -33,9 +51,14 @@ type PlacementReadBatch = {
 
 /** Placement facts share the resident row lifecycle; private exact reads retain only their frame. */
 export function createSessionRowPlacementProjection(
-  reader: Pick<WorkerSessionPlacementStore, "readProjection"> | undefined,
+  reader:
+    | (Pick<WorkerSessionPlacementStore, "readProjection"> &
+        Partial<Pick<WorkerSessionPlacementStore, "readPublishedProjection">>)
+    | undefined,
   prepareReadFacts: () => Promise<void> | undefined,
+  inputEnv: NodeJS.ProcessEnv = process.env,
 ) {
+  const env = captureSessionTranscriptStorageEnvironment(inputEnv);
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const resident = new Map<string, SessionRowPlacementFacts>();
   const registered = new Set<string>();
@@ -89,14 +112,26 @@ export function createSessionRowPlacementProjection(
       dispatchQueuedReads();
     }
   }
-  const acquireRead = (ids: readonly string[], kind: PlacementReadKind) => {
+  const acquireRead = (
+    ids: readonly string[],
+    kind: PlacementReadKind,
+    privateSessions: ReadonlyMap<string, PrivatePlacementTarget> = new Map(),
+  ) => {
     if (disposed) {
       throw new Error("Session row projection is no longer active");
     }
     const covers = (batch: PlacementReadBatch) =>
       batch.kind === kind &&
       !batch.staleAll &&
-      ids.every((id) => batch.ids.has(id) && !batch.stale.has(id));
+      ids.every((id) => batch.ids.has(id) && !batch.stale.has(id)) &&
+      [...privateSessions].every(([key, target]) => {
+        const previous = batch.privateSessions.get(key);
+        return (
+          previous?.sessionId === target.sessionId &&
+          previous.storeTarget.agentId === target.storeTarget.agentId &&
+          previous.storeTarget.storePath === target.storeTarget.storePath
+        );
+      });
     // Exact requests must not join broader resident preparation and wait for unrelated work.
     let read = [...activeReads].find(covers) ?? queuedReads.find(covers);
     let addedBytes = 0;
@@ -139,6 +174,7 @@ export function createSessionRowPlacementProjection(
       const batch: PlacementReadBatch = {
         kind,
         ids: new Set(),
+        privateSessions: new Map(),
         inputBytes: 0,
         stale: new Set(),
         staleAll: false,
@@ -155,6 +191,9 @@ export function createSessionRowPlacementProjection(
     if (!read.started) {
       for (const id of ids) {
         read.ids.add(id);
+      }
+      for (const [key, id] of privateSessions) {
+        read.privateSessions.set(key, id);
       }
       read.inputBytes += addedBytes;
       retainedInputBytes += addedBytes;
@@ -219,6 +258,16 @@ export function createSessionRowPlacementProjection(
       dirty.delete(id);
       resident.delete(id);
     },
+    publish(id: string, change: SessionRowChange): boolean {
+      const published = reader?.readPublishedProjection?.(change);
+      if (!published?.placements.has(id) || !registered.has(id)) {
+        return false;
+      }
+      invalidateReads(id);
+      resident.set(id, select(published, id));
+      dirty.delete(id);
+      return true;
+    },
     invalidate(id?: string) {
       invalidateReads(id);
       if (id) {
@@ -234,6 +283,21 @@ export function createSessionRowPlacementProjection(
       }
     },
     invalidateChange(change: SessionRowChange) {
+      if ("sessionKey" in change && change.scope === "acp") {
+        return;
+      }
+      if ("sessionKey" in change) {
+        for (const read of reads) {
+          const target = read.privateSessions.get(change.sessionKey);
+          if (
+            target &&
+            (!change.agentId || change.agentId === target.storeTarget.agentId) &&
+            (!change.storePath || change.storePath === target.storeTarget.storePath)
+          ) {
+            invalidateReads(target.sessionId);
+          }
+        }
+      }
       if (
         "all" in change &&
         (change.scope === "worker-placements" ||
@@ -264,26 +328,92 @@ export function createSessionRowPlacementProjection(
       }
     },
     async withPreparedRows<T>(
-      projection: SessionRowReadView & { isCurrent(row: Row): boolean },
+      projection: SessionRowReadView & {
+        isCurrent(row: Row): boolean;
+        getPolicyConfig(): OpenClawConfig;
+      },
       isActive: () => boolean,
       lookup: (query: Lookup) => Row | undefined,
       queries: (config: OpenClawConfig) => readonly Lookup[],
       prepareRows: (queries: readonly Lookup[]) => Promise<void> | undefined,
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
+      prepareSelection?: () => Promise<void> | undefined,
     ): ReturnType<typeof withPreparedSessionRows<T>> {
-      let deferred: { kind: "pending"; database: { agentId: string; path: string } } | undefined;
+      const signal = getAsyncWorkSignal();
+      const binding = captureIncognitoSessionBinding();
+      const assertActive = () => {
+        signal?.throwIfAborted();
+        if (disposed || !isActive()) {
+          throw new Error("Session row projection is no longer active");
+        }
+      };
+      const prepareFacts = () => prepareReadFacts() ?? prepareSelection?.();
+      let deferred:
+        | Extract<ReturnType<typeof withCanonicalSessionValidationDeferral>, { kind: "pending" }>
+        | undefined;
       let preparedQueries: readonly Lookup[] = [];
       let selectedIds: readonly string[] = [];
+      const privateTargets = new Map<string, PrivatePlacementTarget>();
+      const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
+      let privateSelections: Array<{ key: string; row: Row; workspaceId: string }> = [];
+      let selectedConfig: OpenClawConfig | undefined;
       const selectRows = () => {
         const selected = withCanonicalSessionValidationDeferral(() => {
-          preparedQueries = queries(projection.state.cfg);
-          return preparedQueries.flatMap((query) => {
-            const row = inOwnerContext(() => lookup(query));
-            return row?.entry ? [row.entry.sessionId] : [];
-          });
-        });
+          const cfg = projection.state.cfg;
+          if (selectedConfig !== cfg) {
+            privateRepositories.clear();
+            selectedConfig = cfg;
+          }
+          privateSelections = [];
+          privateTargets.clear();
+          preparedQueries = queries(cfg);
+          const ids: string[] = [];
+          for (const query of preparedQueries) {
+            const key = privateSessionRowReadKey(cfg, query);
+            const privateBinding =
+              key && binding
+                ? captureIncognitoSessionBinding({ ...query, sessionKey: query.key, env })
+                : undefined;
+            const entry = privateBinding?.actor.sessions.readSharing(query.key)?.entry;
+            const row = privateBinding
+              ? entry &&
+                createIncognitoSessionRow({
+                  cfg,
+                  key: query.key,
+                  agentId: query.agentId,
+                  storePath: privateBinding.actor.path,
+                  entry,
+                  source: {
+                    identity: privateBinding.actor.identity.incarnation,
+                    assertCurrent: () => privateBinding.actor.assertReadable(),
+                  },
+                })
+              : inOwnerContext(() => lookup(query));
+            if (key && !privateBinding && row?.entry?.repositoryWorkspaceId) {
+              privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
+            }
+            if (row?.entry) {
+              ids.push(row.entry.sessionId);
+              if (key) {
+                privateTargets.set(row.key, {
+                  sessionId: row.entry.sessionId,
+                  storeTarget: row.storeTarget,
+                });
+              }
+            }
+          }
+          return ids;
+        }, env);
         deferred = selected.kind === "pending" ? selected : undefined;
         selectedIds = selected.kind === "complete" ? selected.value : [];
+        if (privateRepositories.size) {
+          const selectedPrivateKeys = new Set(privateSelections.map(({ key }) => key));
+          for (const key of privateRepositories.keys()) {
+            if (!selectedPrivateKeys.has(key)) {
+              privateRepositories.delete(key);
+            }
+          }
+        }
       };
       const prepareSelectedRows = () => {
         if (deferred) {
@@ -292,32 +422,96 @@ export function createSessionRowPlacementProjection(
         let pending: Promise<void> | undefined;
         const prepared = withCanonicalSessionValidationDeferral(() => {
           pending = inOwnerContext(() => prepareRows(preparedQueries));
-        });
+          if (pending) {
+            return;
+          }
+          for (const { key, row, workspaceId } of privateSelections) {
+            const existing = privateRepositories.get(key);
+            if (existing?.workspaceId === workspaceId && isCurrentGeneration(existing.row, row)) {
+              continue;
+            }
+            const cfg = selectedConfig;
+            pending = inOwnerContext(async () => {
+              const repository = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
+              assertActive();
+              if (projection.state.cfg === cfg) {
+                privateRepositories.set(key, { row, workspaceId, repository });
+              }
+            });
+            break;
+          }
+        }, env);
         deferred = prepared.kind === "pending" ? prepared : undefined;
         return pending;
       };
-      const consumeRows = () =>
-        deferred ??
-        withPreparedSessionRows(
-          projection,
-          isActive,
-          () => preparedQueries,
-          (read) => consume(read, preparedQueries),
-        );
+      const stalePrivatePreparation = Symbol("stale-private-row-preparation");
+      const consumeRows = (
+        placement?: ReadonlyMap<string, SessionRowPlacementFacts>,
+        placementCurrent: () => boolean = () => true,
+      ) => {
+        if (deferred) {
+          return Promise.resolve(deferred);
+        }
+        const cfg = projection.state.cfg;
+        const consumePrepared = (
+          privateRows?: ReadonlyMap<string, Row | undefined>,
+        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation => {
+          assertActive();
+          const privateIds = privateRows
+            ? [...privateRows.values()].flatMap((row) => (row?.entry ? [row.entry.sessionId] : []))
+            : [];
+          if (
+            !placementCurrent() ||
+            projection.state.cfg !== cfg ||
+            missing(privateIds).some((id) => !placement?.has(id))
+          ) {
+            return stalePrivatePreparation;
+          }
+          const previous = exact;
+          if (placement) {
+            exact = placement;
+          }
+          try {
+            return readPreparedSessionRows(
+              projection,
+              isActive,
+              () => preparedQueries,
+              (read) => consume(read, preparedQueries),
+              privateRepositories,
+              privateRows,
+              env,
+            );
+          } finally {
+            exact = previous;
+          }
+        };
+        return binding
+          ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
+          : consumePrepared();
+      };
       const prepare = () => {
-        const pending = prepareReadFacts();
+        const pending = prepareFacts();
         if (pending) {
           return pending;
         }
         selectRows();
         return prepareSelectedRows();
       };
-      while (true) {
-        for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
-          await pending;
+      const assertPublicationCurrent = (placementCurrent = true) => {
+        // Only actor-backed preparation retains resources past the synchronous consumer.
+        if (!binding) {
+          return;
         }
-        if (disposed) {
-          break;
+        assertActive();
+        if (!placementCurrent || projection.state.cfg !== selectedConfig) {
+          throw new Error("Session row facts changed during cleanup");
+        }
+      };
+      while (true) {
+        assertActive();
+        for (let pending = prepareFacts(); pending; pending = prepareFacts()) {
+          await pending;
+          assertActive();
         }
         selectRows();
         const requested = missing(selectedIds);
@@ -327,17 +521,21 @@ export function createSessionRowPlacementProjection(
             await pending;
             continue;
           }
-          return await consumeRows();
+          const result = await consumeRows();
+          if (result === stalePrivatePreparation) {
+            continue;
+          }
+          assertPublicationCurrent();
+          return result;
         }
-        const read = acquireRead(requested, "exact");
+        const read = acquireRead(requested, "exact", privateTargets);
         try {
           const snapshot = await read.result;
+          assertActive();
           // Caller facts can retire while the placement read yields.
           for (let pending = prepare(); pending; pending = prepare()) {
             await pending;
-          }
-          if (disposed) {
-            break;
+            assertActive();
           }
           const prepared = new Map(requested.map((id) => [id, select(snapshot, id)]));
           if (
@@ -352,22 +550,18 @@ export function createSessionRowPlacementProjection(
               dirty.delete(id);
             }
           }
-          const previous = exact;
-          let result: ReturnType<typeof consumeRows>;
-          // Owner context restoration must retain this synchronous frame, never its async descendants.
-          exact = prepared;
-          try {
-            result = consumeRows();
-          } finally {
-            exact = previous;
-            prepared.clear();
+          const result = await consumeRows(prepared, () =>
+            requested.every((id) => read.isCurrent(id)),
+          );
+          if (result === stalePrivatePreparation) {
+            continue;
           }
-          return await result;
+          assertPublicationCurrent(requested.every((id) => read.isCurrent(id)));
+          return result;
         } finally {
           read.release();
         }
       }
-      throw new Error("Session row projection is no longer active");
     },
     async prepare() {
       const requested = [...dirty];

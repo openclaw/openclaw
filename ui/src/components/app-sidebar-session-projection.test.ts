@@ -87,7 +87,6 @@ function subtitleParams(
   return {
     session,
     hasDisplay: false,
-    displaySubtitle: undefined,
     sidebarLiveActivity: true,
     showPreview: true,
     narrationLine: undefined,
@@ -405,6 +404,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
                 attention: {
                   kind: "error" as const,
                   reason: "Child validation failed",
+                  sourceSessionKey: "agent:main:validation",
                   childLabel: "Validation",
                 },
               }

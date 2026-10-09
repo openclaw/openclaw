@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -55,9 +56,6 @@ func main() {
 	)
 	flag.Parse()
 	files := flag.Args()
-	if len(files) == 0 {
-		fatal(fmt.Errorf("no doc files provided"))
-	}
 
 	if err := runDocsI18N(context.Background(), runConfig{
 		targetLang:   *targetLang,
@@ -70,10 +68,11 @@ func main() {
 		allowPartial: *allowPartial,
 		maxFiles:     *maxFiles,
 		parallel:     *parallel,
-	}, files, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
+	}, files, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) docsTranslator {
 		return NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
 	}); err != nil {
-		fatal(err)
+		_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
+		os.Exit(1)
 	}
 }
 
@@ -142,11 +141,7 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 		if parallel > 1 {
 			processed, skipped, outputs, translationErr = runDocParallel(ctx, ordered, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial, parallel, glossary, cfg.thinking, newTranslator)
 		} else {
-			translator, err := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
-			if err != nil {
-				return err
-			}
-			defer translator.Close()
+			translator := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
 			processed, skipped, outputs, translationErr = runDocSequential(ctx, ordered, translator, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial)
 		}
 		localizedFiles = append(localizedFiles, outputs...)
@@ -154,17 +149,10 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 		if parallel > 1 {
 			return fmt.Errorf("parallel processing is only supported in doc mode")
 		}
-		translator, err := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
-		if err != nil {
-			return err
-		}
-		defer translator.Close()
-		proc, outputs, err := runSegmentSequential(ctx, ordered, translator, tm, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang)
-		processed += proc
+		translator := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
+		var outputs []string
+		processed, outputs, translationErr = runSegmentSequential(ctx, ordered, translator, tm, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang)
 		localizedFiles = append(localizedFiles, outputs...)
-		if err != nil {
-			translationErr = err
-		}
 	default:
 		return fmt.Errorf("unknown mode: %s", cfg.mode)
 	}
@@ -233,12 +221,7 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			translator, err := newTranslator(srcLang, tgtLang, glossary, thinking)
-			if err != nil {
-				results <- docResult{err: err}
-				return
-			}
-			defer translator.Close()
+			translator := newTranslator(srcLang, tgtLang, glossary, thinking)
 			for job := range jobs {
 				if ctx.Err() != nil {
 					return
@@ -330,11 +313,10 @@ func runSegmentSequential(ctx context.Context, ordered []string, translator docs
 }
 
 func resolveRelPath(docsRoot, file string) string {
-	relPath := file
 	if _, rel, err := resolveDocsPath(docsRoot, file); err == nil {
-		relPath = rel
+		return rel
 	}
-	return relPath
+	return file
 }
 
 func filterDocQueue(docsRoot, targetLang string, ordered []string, maxFiles int) ([]string, int, []string, error) {

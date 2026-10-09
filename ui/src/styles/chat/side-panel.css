@@ -152,7 +152,10 @@
 }
 
 .side-panel__header
-  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base) {
+  .tabstrip-tab:not([active]):is(:hover, :has(+ .tabstrip-tab__close:hover))::part(base),
+.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
+.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
 }
@@ -249,13 +252,6 @@
 .side-panel__header .tabstrip-tab__close:hover,
 .side-panel__header .tabstrip-tab__close:focus-visible {
   opacity: 1;
-}
-
-.side-panel__header .tabstrip-tab:not([active]):hover + .tabstrip-tab__close,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:hover,
-.side-panel__header .tabstrip-tab:not([active]) + .tabstrip-tab__close:focus-visible {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
 }
 
 .side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close {

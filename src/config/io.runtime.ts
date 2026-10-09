@@ -380,8 +380,9 @@ export async function recoverConfigFromLastKnownGood(params: {
 
 export async function recoverConfigFromJsonRootSuffix(
   snapshot: ConfigFileSnapshot,
+  assertRecoveryCandidate?: (config: unknown) => void,
 ): Promise<boolean> {
-  return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot);
+  return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot, assertRecoveryCandidate);
 }
 
 export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {

@@ -22,11 +22,7 @@ export type ZaloGroup = {
   memberCount?: number;
 };
 
-export type ZaloGroupMember = {
-  userId: string;
-  displayName: string;
-  avatar?: string;
-};
+export type ZaloGroupMember = ZcaFriend;
 
 export type ZaloEventMessage = {
   msgId: string;
@@ -62,11 +58,7 @@ export type ZaloInboundMessage = {
   raw: unknown;
 };
 
-export type ZcaUserInfo = {
-  userId: string;
-  displayName: string;
-  avatar?: string;
-};
+export type ZcaUserInfo = ZcaFriend;
 
 export type ZaloSendHandoff = Pick<
   ChannelMessageSendTextContext,

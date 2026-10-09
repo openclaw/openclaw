@@ -238,28 +238,18 @@ class MessageImageResourceDirective extends AsyncDirective {
           : decodeFailed
             ? t("chat.imageLightbox.loadFailed")
             : undefined;
-      if (reason === undefined) {
-        return this.present(this.renderImagePlaceholder(image));
-      }
       return this.present(
-        this.renderImageFrame(
-          image,
-          renderAssistantAttachmentStatusCard({
-            label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
-            badge: t("chat.attachments.unavailable"),
-            reason,
-            path: isLocalAssistantAttachmentSource(source) ? source : undefined,
-            onAllow:
-              !decodeFailed && availability.status === "unavailable" && availability.canAllow
-                ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
-                : undefined,
-            onRetry:
-              !decodeFailed && availability.status === "unavailable" && availability.recoverable
-                ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
-                : undefined,
-          }),
-          "unavailable",
-        ),
+        this.renderImagePlaceholder(image, reason, {
+          path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+          onAllow:
+            !decodeFailed && availability.status === "unavailable" && availability.canAllow
+              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
+              : undefined,
+          onRetry:
+            !decodeFailed && availability.status === "unavailable" && availability.recoverable
+              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
+              : undefined,
+        }),
       );
     }
     if (!this.managed) {
@@ -342,15 +332,11 @@ class MessageImageResourceDirective extends AsyncDirective {
               : html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`
           }
         </button>
-        ${
-          this.managed && previewUrl
-            ? renderChatImageActions(title, () =>
-                loadManagedImageBlob(img.url, opts, img.artifactId),
-              )
-            : nothing
-        }
       `,
       previewUrl ? undefined : "loading",
+      this.managed && previewUrl
+        ? renderChatImageActions(title, () => loadManagedImageBlob(img.url, opts, img.artifactId))
+        : nothing,
     );
   }
 
@@ -380,19 +366,21 @@ class MessageImageResourceDirective extends AsyncDirective {
     img: ImageBlock,
     content: TemplateResult | typeof nothing,
     state?: "loading" | "unavailable",
+    actions: TemplateResult | typeof nothing = nothing,
   ) {
+    const { width: imageWidth = 0, height: imageHeight = 0 } = img;
     const sized =
-      Number.isFinite(img.width) &&
-      img.width! > 0 &&
-      Number.isFinite(img.height) &&
-      img.height! > 0;
+      Number.isFinite(imageWidth) &&
+      imageWidth > 0 &&
+      Number.isFinite(imageHeight) &&
+      imageHeight > 0;
     const pending = state === "loading";
     const compact = state === "unavailable";
-    const ratio = sized ? img.width! / img.height! : 3 / 2;
+    const ratio = sized ? imageWidth / imageHeight : 3 / 2;
     const previewWidth = sized
-      ? img.width! < MIN_CHAT_IMAGE_PREVIEW_WIDTH
+      ? imageWidth < MIN_CHAT_IMAGE_PREVIEW_WIDTH
         ? MIN_CHAT_IMAGE_PREVIEW_WIDTH
-        : Math.min(img.width!, 400, 360 * ratio)
+        : Math.min(imageWidth, 400, 360 * ratio)
       : 400;
     const width = compact ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, previewWidth) : previewWidth;
     const height = Math.min(360, width / ratio);
@@ -406,11 +394,18 @@ class MessageImageResourceDirective extends AsyncDirective {
       aria-busy=${pending ? "true" : "false"}
       role=${pending ? "status" : nothing}
       aria-label=${pending ? t("common.loading") : nothing}
-      >${content}</span
+      >${compact ? content : html`<span class="chat-image-surface">${content}</span>`}${actions}</span
     >`;
   }
 
-  private renderImagePlaceholder(image: ImageBlock, reason?: string) {
+  private renderImagePlaceholder(
+    image: ImageBlock,
+    reason?: string,
+    actions?: Pick<
+      Parameters<typeof renderAssistantAttachmentStatusCard>[0],
+      "path" | "onAllow" | "onRetry"
+    >,
+  ) {
     if (reason === undefined) {
       return this.renderImageElement(image, undefined, this.options);
     }
@@ -434,6 +429,7 @@ class MessageImageResourceDirective extends AsyncDirective {
               this.refreshImage();
             }
           : undefined,
+        ...actions,
       }),
       "unavailable",
     );
@@ -497,21 +493,17 @@ function openMessageImage(
   const index = images?.indexOf(img) ?? -1;
   const onOpenImage = opts?.onOpenImage;
   const open = (item: ImageLightboxItem) => {
-    const sizedItem = { ...item, width: img.width, height: img.height };
-    const nextItem =
-      images && images.length > 1 && index >= 0
-        ? {
-            ...sizedItem,
-            gallery: {
-              index,
-              items: images.map(
-                (image) =>
-                  (retryFailed = false) =>
-                    loadGalleryImage(image, opts, retryFailed),
-              ),
-            },
-          }
-        : sizedItem;
+    const nextItem = { ...item, width: img.width, height: img.height };
+    if (images && images.length > 1 && index >= 0) {
+      nextItem.gallery = {
+        index,
+        items: images.map(
+          (image) =>
+            (retryFailed = false) =>
+              loadGalleryImage(image, opts, retryFailed),
+        ),
+      };
+    }
     if (requestVersion === undefined) {
       onOpenImage?.(nextItem);
     } else {

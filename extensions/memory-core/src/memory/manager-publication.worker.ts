@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import {
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtensionFromPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,
@@ -11,7 +14,16 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import {
+  clearMemoryEmbeddingCacheIdentities,
+  countMemoryEmbeddingCache,
+  loadMemoryEmbeddingCache,
+  pruneMemoryEmbeddingCache,
+  upsertMemoryEmbeddingCache,
+} from "./manager-embedding-cache.js";
 import type {
+  MemoryEmbeddingCacheEntry,
+  MemoryEmbeddingCacheHeader,
   MemoryPublicationConnection,
   MemoryPublicationOperations,
   MemoryPublicationResult,
@@ -19,9 +31,14 @@ import type {
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
+  readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import {
+  loadMemorySourceFileState,
+  refreshMemorySessionSourceState,
+} from "./manager-source-state.js";
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -61,7 +78,7 @@ export function bindSqliteWorkerBackend(
     database: DatabaseSync;
     admit(stage: "transaction" | "commit"): void;
   },
-): SqliteWorkerBackend<MemoryPublicationOperations> {
+) {
   return createPublicationBackend(input, context.databasePath, context.database, false, (stage) =>
     context.admit(stage),
   );
@@ -73,16 +90,18 @@ function createPublicationBackend(
   db: DatabaseSync,
   ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
-): SqliteWorkerBackend<MemoryPublicationOperations> {
+) {
   const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
   let staged:
-    | {
+    | ({
         operation: string;
-        header: MemorySourceIndexHeader;
         rows: number;
         row: number;
         part: number;
-      }
+      } & (
+        | { kind: "source"; header: MemorySourceIndexHeader }
+        | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
+      ))
     | undefined;
   let loadedExtension: string | undefined;
   try {
@@ -117,11 +136,29 @@ function createPublicationBackend(
       db.exec("DELETE FROM temp.memory_publication_input");
       staged = undefined;
     };
+    const finish = <T>(outcome: MemoryPublicationResult<T>): MemoryPublicationResult<T> => {
+      // Failed commands close through their host owner; cleanup must not hide the write outcome.
+      if (outcome.ok) {
+        try {
+          discard();
+        } catch (error) {
+          return { ok: false, error: failure(error), entered: true, committed: true };
+        }
+      }
+      return outcome;
+    };
     const transact = <T>(
       run: (hooks: { onBegin: () => void; withCommit: (commit: () => void) => void }) => T,
     ): MemoryPublicationResult<T> => {
       let entered = false;
       let committed = false;
+      let restoredBusyTimeout = false;
+      const restoreBusyTimeout = () => {
+        if (!restoredBusyTimeout) {
+          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+          restoredBusyTimeout = true;
+        }
+      };
       try {
         assertPath();
         // Failed BEGIN is returned to the preparing host without sleeping here.
@@ -130,7 +167,7 @@ function createPublicationBackend(
         const value = run({
           onBegin: () => {
             entered = true;
-            db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+            restoreBusyTimeout();
             assertPath();
             admit("transaction");
           },
@@ -146,10 +183,21 @@ function createPublicationBackend(
         return { ok: false, error: failure(error), entered, committed };
       } finally {
         if (db.isOpen) {
-          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+          restoreBusyTimeout();
         }
       }
     };
+    const write = <T>(run: () => T): MemoryPublicationResult<T> =>
+      transact((hooks) =>
+        runSqliteImmediateTransactionSync(
+          db,
+          () => {
+            hooks.onBegin();
+            return run();
+          },
+          { withCommit: hooks.withCommit },
+        ),
+      );
     return {
       assertSettled() {
         assertTransactionUsable(db);
@@ -159,11 +207,42 @@ function createPublicationBackend(
       },
       execute(command) {
         assertPath();
-        if (command.type === "stage.start") {
+        if (command.type === "schema.admit") {
+          // Storage/STRICT migration must disable foreign keys before BEGIN.
+          db.exec("PRAGMA foreign_keys = OFF");
+          try {
+            return write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          } finally {
+            if (db.isOpen) {
+              db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
+            }
+          }
+        }
+        if (command.type === "source.hash") {
+          return readMemorySourceHash(db, command.input.source, command.input.path);
+        }
+        if (command.type === "source.state") {
+          return loadMemorySourceFileState({ db, ...command.input });
+        }
+        if (command.type === "source.refresh") {
+          return write(() => refreshMemorySessionSourceState(db, command.input));
+        }
+        if (command.type === "session.current") {
+          return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
+            ? "forgotten"
+            : "current";
+        }
+        if (command.type === "cache.read") {
+          return loadMemoryEmbeddingCache({ ...command.input, db });
+        }
+        if (command.type === "stage.start" || command.type === "cache.stage.start") {
           if (staged) {
             throw new Error("Memory publication input already belongs to another operation");
           }
-          staged = { ...command.input, row: 0, part: 0 };
+          staged =
+            command.type === "stage.start"
+              ? { ...command.input, kind: "source", row: 0, part: 0 }
+              : { ...command.input, kind: "cache", row: 0, part: 0 };
           return undefined;
         }
         if (command.type === "stage.discard") {
@@ -194,6 +273,61 @@ function createPublicationBackend(
           }
           return undefined;
         }
+        if (command.type === "cache.prune") {
+          if (countMemoryEmbeddingCache(db) <= command.input.maxEntries) {
+            return { ok: true, value: false };
+          }
+          return write(() => {
+            pruneMemoryEmbeddingCache(db, command.input.maxEntries);
+            return true;
+          });
+        }
+        if (command.type === "cache.clear") {
+          return write(() => {
+            if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+              return false;
+            }
+            clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
+            return true;
+          });
+        }
+        if (command.type === "cache.write") {
+          if (
+            !staged ||
+            staged.kind !== "cache" ||
+            staged.operation !== command.input.operation ||
+            staged.row !== staged.rows ||
+            staged.part !== 0
+          ) {
+            throw new Error("Memory cache input was not sealed");
+          }
+          const header = staged.header;
+          return finish(
+            write(() => {
+              if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+                return false;
+              }
+              const eligible = new Map<string, boolean>();
+              function* entries() {
+                for (const entry of readStagedRows<MemoryEmbeddingCacheEntry>(db)) {
+                  if (entry.sessionId) {
+                    let current = eligible.get(entry.sessionId);
+                    if (current === undefined) {
+                      current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
+                      eligible.set(entry.sessionId, current);
+                    }
+                    if (!current) {
+                      continue;
+                    }
+                  }
+                  yield entry;
+                }
+              }
+              upsertMemoryEmbeddingCache({ ...header, db, entries });
+              return true;
+            }),
+          );
+        }
         const extensionPath = command.input.state.extensionPath;
         if (extensionPath && extensionPath !== loadedExtension) {
           loadSqliteVecExtensionFromPath(db, extensionPath);
@@ -216,21 +350,13 @@ function createPublicationBackend(
           });
         }
         if (command.type === "source.delete") {
-          return transact((hooks) =>
-            runSqliteImmediateTransactionSync(
-              db,
-              () => {
-                hooks.onBegin();
-                return new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
-                  command.input,
-                );
-              },
-              { withCommit: hooks.withCommit },
-            ),
+          return write(() =>
+            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
           );
         }
         if (
           !staged ||
+          staged.kind !== "source" ||
           staged.operation !== command.input.operation ||
           staged.row !== staged.rows ||
           staged.part !== 0
@@ -238,44 +364,23 @@ function createPublicationBackend(
           throw new Error("Memory publication input was not sealed");
         }
         const header = staged.header;
-        const outcome = transact((hooks) =>
-          runSqliteImmediateTransactionSync(
-            db,
-            () => {
-              hooks.onBegin();
-              if (
-                header.source === "sessions" &&
-                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-              ) {
-                throw new Error(
-                  "A session was forgotten while memory indexing was running; retry the memory index.",
-                );
-              }
-              const beforeRevision = readMemoryDatabaseRevision(db);
-              new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-                header,
-                readStagedRows(db),
-              );
-              return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
-            },
-            { withCommit: hooks.withCommit },
-          ),
-        );
-        // Failed publication closes the Worker at its host owner. Preserve the
-        // transaction error instead of replacing it with a staging-cleanup error.
-        if (outcome.ok) {
-          try {
-            discard();
-          } catch (error) {
-            return {
-              ok: false,
-              error: failure(error),
-              entered: true,
-              committed: true,
-            };
+        const outcome = write(() => {
+          if (
+            header.source === "sessions" &&
+            hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+          ) {
+            throw new Error(
+              "A session was forgotten while memory indexing was running; retry the memory index.",
+            );
           }
-        }
-        return outcome;
+          const beforeRevision = readMemoryDatabaseRevision(db);
+          new MemorySourceIndexKernel(db, command.input.state).replaceRows(
+            header,
+            readStagedRows<MemorySourceIndexRow>(db),
+          );
+          return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
+        });
+        return finish(outcome);
       },
       close() {
         if (ownsConnection) {
@@ -284,7 +389,7 @@ function createPublicationBackend(
           db.exec("DROP TABLE temp.memory_publication_input");
         }
       },
-    };
+    } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
   } catch (error) {
     if (ownsConnection) {
       db.close();
@@ -293,22 +398,24 @@ function createPublicationBackend(
   }
 }
 
-function* readStagedRows(db: DatabaseSync): Generator<MemorySourceIndexRow> {
+function* readStagedRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
+  db: DatabaseSync,
+): Generator<Row> {
+  // SAFETY: Only the paired source/cache producer writes these sealed records.
+  const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
   let parts: string[] = [];
   let row = 0;
   for (const fragment of db
     .prepare("SELECT row, json FROM temp.memory_publication_input ORDER BY row, part")
     .iterate()) {
     if (fragment.row !== row) {
-      // SAFETY: Only the paired typed producer writes these sealed JSON records.
-      yield JSON.parse(parts.join("")) as MemorySourceIndexRow;
+      yield parse(parts);
       parts = [];
       row = Number(fragment.row);
     }
     parts.push(String(fragment.json));
   }
   if (parts.length) {
-    // SAFETY: Only the paired typed producer writes these sealed JSON records.
-    yield JSON.parse(parts.join("")) as MemorySourceIndexRow;
+    yield parse(parts);
   }
 }

@@ -18,9 +18,7 @@ ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES = [
   "OPENCLAW_ANDROID_KEY_PASSWORD"
 ].freeze
 
-def load_env_file(path)
-  return unless File.exist?(path)
-
+def each_android_property(path)
   File.foreach(path) do |line|
     stripped = line.strip
     next if stripped.empty? || stripped.start_with?("#")
@@ -28,6 +26,14 @@ def load_env_file(path)
     key, value = stripped.split("=", 2)
     next if key.nil? || key.empty? || value.nil?
 
+    yield key, value
+  end
+end
+
+def load_env_file(path)
+  return unless File.exist?(path)
+
+  each_android_property(path) do |key, value|
     ENV[key] = value if ENV[key].nil? || ENV[key].strip.empty?
   end
 end
@@ -298,13 +304,15 @@ end
 def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, version_metadata:, upload_metadata:, upload_images:, upload_screenshots:)
   phone_notes = render_android_release_notes!(version_metadata, "phone")
   wear_notes = render_android_release_notes!(version_metadata, "wear")
+  internal_track = play_track == "internal"
   previous_supply_config = Supply.config
   client = nil
   begin
     Supply.config = {
       ack_bundle_installation_warning: fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false),
-      changes_not_sent_for_review: fastlane_boolean_env("SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW", default: false),
-      rescue_changes_not_sent_for_review: fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)
+      # Play rejects this parameter for automatic internal review; nil omits it, false still sends it.
+      changes_not_sent_for_review: internal_track ? nil : fastlane_boolean_env("SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW", default: false),
+      rescue_changes_not_sent_for_review: !internal_track && fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)
     }
     client = Supply::Client.make_from_config(params: play_auth_options.merge(timeout: (ENV["SUPPLY_TIMEOUT"] || "300").to_i))
     client.begin_edit(package_name: play_package_name)
@@ -376,16 +384,10 @@ def validate_android_screenshots!
   end
 end
 
-def release_artifact_path(version)
-  File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-play-release.aab")
-end
-
-def wear_release_artifact_path(version)
-  File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-wear-release.aab")
-end
-
 def play_release_artifact_paths(version)
-  [release_artifact_path(version), wear_release_artifact_path(version)]
+  %w(play wear).map do |flavor|
+    File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-#{flavor}-release.aab")
+  end
 end
 
 def build_release_artifacts!
@@ -425,15 +427,7 @@ def read_android_release_signing_properties!(path)
   UI.user_error!("Missing materialized Android release signing properties at #{path}.") unless File.exist?(path)
 
   properties = {}
-  File.foreach(path) do |line|
-    stripped = line.strip
-    next if stripped.empty? || stripped.start_with?("#")
-
-    key, value = stripped.split("=", 2)
-    next if key.nil? || key.empty? || value.nil?
-
-    properties[key] = value.strip
-  end
+  each_android_property(path) { |key, value| properties[key] = value.strip }
 
   missing = ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES.reject { |key| env_present?(properties[key]) }
   UI.user_error!("Materialized Android release signing properties are missing: #{missing.join(', ')}.") unless missing.empty?
@@ -630,16 +624,26 @@ platform :android do
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
   end
 
-  desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
-  lane :release_upload do
+  desc "Build and upload Android phone and Wear bundles, with store assets for play-store releases"
+  lane :release_upload do |options|
+    destination = options.fetch(:destination, "play-store").to_s
+    UI.user_error!("Android release destination must be play-store or internal.") unless %w(play-store internal).include?(destination)
+    internal = destination == "internal"
+    if internal
+      ENV["GOOGLE_PLAY_TRACK"] = "internal"
+      ENV["GOOGLE_PLAY_RELEASE_STATUS"] = "completed"
+      %w(METADATA SCREENSHOTS IMAGES).each { |kind| ENV["SUPPLY_UPLOAD_#{kind}"] = "0" }
+    end
     sync_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
-    screenshots
-    ENV["SUPPLY_UPLOAD_METADATA"] = "1"
-    ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    unless internal
+      screenshots
+      ENV["SUPPLY_UPLOAD_METADATA"] = "1"
+      ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    end
     build_release_artifacts!
-    upload_play_store_build!(version_metadata, upload_metadata: true, upload_screenshots: true)
+    upload_play_store_build!(version_metadata, upload_metadata: !internal, upload_screenshots: !internal)
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
     UI.important("Production promotion remains manual in Google Play Console.")
   end

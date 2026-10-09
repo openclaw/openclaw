@@ -14,7 +14,8 @@ import {
 } from "../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
+import { createGatewayHttpServer } from "./server-http.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import {

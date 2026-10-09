@@ -85,28 +85,17 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
     sandbox: params.sandbox,
     surface: `app-server method \`${params.method}\``,
   });
-  if (!sandboxBlock) {
-    return undefined;
-  }
-  if (
+  return sandboxBlock &&
     params.method === "thread/start" &&
     hasOpenClawSandboxEnvironmentSelection(params.requestParams)
-  ) {
-    return undefined;
-  }
-  return sandboxBlock;
+    ? undefined
+    : sandboxBlock;
 }
 
 /** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */
-export function resolveCodexNativeExecutionBlock(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  sandbox?: Pick<SandboxContext, "enabled"> | null;
-  sandboxEnvironmentSelected?: boolean;
-  surface: string;
-}): string | undefined {
+export function resolveCodexNativeExecutionBlock(
+  params: Parameters<typeof resolveCodexNativeSandboxBlock>[0],
+): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 

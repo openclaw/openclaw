@@ -6,6 +6,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type {
   TranscriptEntryAnchor,
   SessionTranscriptWriteLockParams,
@@ -37,12 +38,8 @@ import {
 } from "./upstream-prompt-provenance.js";
 import {
   buildResolvedCodexUserPromptMessage,
-  buildCodexUserPromptMessage,
   resolveFinalCodexMirrorMessages,
 } from "./user-prompt-message.js";
-
-export { buildCodexUserPromptMessage };
-export { projectBoundedCodexThreadHistory };
 
 type UserMessagePersistenceNotifier = (receipt: MirroredUserMessageReceipt) => void;
 
@@ -279,7 +276,10 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         return;
       }
       const mirrorResult = await mirror({
-        assertCurrent: params.params.hostCapabilities.assertActive,
+        assertCurrent: createNativeSessionBindingAuthority(
+          [],
+          params.params.hostCapabilities.assertActive,
+        ).assertLegacyCurrent,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,

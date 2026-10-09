@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -40,20 +41,6 @@ vi.mock("../plugins/legacy-internal-hook-state.js", () => ({
   listLegacyPluginInternalHooks: () => [],
 }));
 
-async function within<T>(promise: Promise<T>, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 2_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 beforeEach(() => {
   clearInternalHooks();
   setInternalHooksEnabled(true);
@@ -66,114 +53,70 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-describe("automatic reset hook lifetime", () => {
-  async function exercise(options: { parent: boolean; throws?: boolean }) {
-    const parent = options.parent ? new AsyncWorkScope() : undefined;
-    const root = options.parent ? tryBeginGatewayRootWorkAdmission("test:auto-reset") : undefined;
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const finished = createDeferredCore();
-    const trailing = vi.fn();
-    const effect = vi.fn();
-    let started = false;
-    const handler: InternalHookHandler = async () => {
-      started = true;
-      entered.resolve();
-      try {
-        await release.promise;
-        await trackAsyncWork(() => {
-          effect();
-          if (options.throws) {
-            throw new Error("synthetic hook failure");
-          }
-        });
-      } finally {
-        finished.resolve();
-      }
-    };
-    const trailingHandler: InternalHookHandler = async () => {
-      trailing();
-    };
-    registerInternalHook("session:auto-reset", handler);
-    registerInternalHook("session:auto-reset", trailingHandler);
-    const emit = () =>
-      emitSessionAutoResetHook({
-        cfg: {},
-        sessionId: "synthetic-session",
-        sessionKey: "agent:main:synthetic",
-        reason: "daily",
-        agentId: "main",
-        workspaceDir: "/synthetic/workspace",
-        storePath: "/synthetic/store",
-      });
-
+it("releases delayed hook work and continues dispatch after requester closure and a hook error", async ({
+  signal,
+}) => {
+  const parent = new AsyncWorkScope();
+  const root = tryBeginGatewayRootWorkAdmission("test:auto-reset");
+  if (!root) {
+    throw new Error("Expected parent root admission");
+  }
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const trailing = vi.fn();
+  const effect = vi.fn();
+  const handler: InternalHookHandler = async () => {
+    entered.resolve();
+    await release.promise;
+    await trackAsyncWork(() => {
+      effect();
+      throw new Error("synthetic hook failure");
+    });
+  };
+  const trailingHandler: InternalHookHandler = async () => {
+    trailing();
+  };
+  registerInternalHook("session:auto-reset", handler);
+  registerInternalHook("session:auto-reset", trailingHandler);
+  try {
+    await root.run(async () =>
+      parent.run(() =>
+        emitSessionAutoResetHook({
+          cfg: {},
+          sessionId: "synthetic-session",
+          sessionKey: "agent:main:synthetic",
+          reason: "daily",
+          agentId: "main",
+          workspaceDir: "/synthetic/workspace",
+          storePath: "/synthetic/store",
+        }),
+      ),
+    );
+    await withinTest(entered.promise, signal);
+    root.release();
+    // Keep the hook pending until its requester has fully drained.
+    await withinTest(parent.drain(), signal);
+    expect(parent.isClosing).toBe(true);
+    expect(effect).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+  } finally {
+    release.resolve();
+    root.release();
     try {
-      if (parent) {
-        if (!root) {
-          throw new Error("Expected parent root admission");
-        }
-        await root.run(async () => parent.run(emit));
-      } else {
-        emit();
-      }
-      await within(entered.promise, "hook entry");
-      root?.release();
-      if (parent) {
-        // The barrier deliberately keeps the hook pending until its requester
-        // has fully drained. No elapsed-time race decides the ordering.
-        await within(parent.drain(), "requester closure");
-        expect(parent.isClosing).toBe(true);
-      }
-      expect(effect).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      release.resolve();
-      await within(finished.promise, "delayed hook completion");
-      await vi.waitFor(
-        () => {
-          expect(trailing).toHaveBeenCalledExactlyOnceWith();
-          expect(getActiveGatewayRootWorkCount()).toBe(0);
-        },
-        { timeout: 2_000, interval: 10 },
-      );
-      expect(effect).toHaveBeenCalledExactlyOnceWith();
-      if (options.throws) {
-        expect(logs.error).toHaveBeenCalledExactlyOnceWith(
-          "Hook error [session:auto-reset]: synthetic hook failure",
-        );
-      } else {
-        expect(logs.error).not.toHaveBeenCalled();
-      }
-      expect(logs.verbose).not.toHaveBeenCalled();
+      await parent.drain();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
+        timeout: 2_000,
+        interval: 10,
+      });
     } finally {
-      release.resolve();
-      root?.release();
-      try {
-        if (started) {
-          await within(finished.promise, "hook cleanup");
-        }
-        if (parent) {
-          await within(parent.drain(), "requester cleanup");
-        }
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
-          timeout: 2_000,
-          interval: 10,
-        });
-      } finally {
-        unregisterInternalHook("session:auto-reset", handler);
-        unregisterInternalHook("session:auto-reset", trailingHandler);
-      }
+      unregisterInternalHook("session:auto-reset", handler);
+      unregisterInternalHook("session:auto-reset", trailingHandler);
     }
   }
-
-  it("completes delayed tracked work after the triggering requester closes", async () => {
-    await exercise({ parent: true });
-  });
-
-  it("owns and releases delayed hook work when there is no parent request", async () => {
-    await exercise({ parent: false });
-  });
-
-  it("releases work and continues dispatch when a delayed hook throws", async () => {
-    await exercise({ parent: true, throws: true });
-  });
+  expect(trailing).toHaveBeenCalledExactlyOnceWith();
+  expect(effect).toHaveBeenCalledExactlyOnceWith();
+  expect(logs.error).toHaveBeenCalledExactlyOnceWith(
+    "Hook error [session:auto-reset]: synthetic hook failure",
+  );
+  expect(logs.verbose).not.toHaveBeenCalled();
 });

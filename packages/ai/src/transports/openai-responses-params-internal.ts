@@ -1,10 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  ResponseFormatTextConfig,
-  ResponseInput,
-} from "openai/resources/responses/responses.js";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
@@ -17,8 +13,10 @@ import {
   resolveOpenAISimpleReasoningEffort,
   resolveOpenAIRequestReasoning,
 } from "../providers/openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-format.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -46,25 +44,6 @@ const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
   "github-copilot",
 ]);
-
-function hasResponsesWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some((tool) => {
-    if (!isRecord(tool)) {
-      return false;
-    }
-    if (tool.type === "web_search") {
-      return true;
-    }
-    if (tool.type === "function" && tool.name === "web_search") {
-      return true;
-    }
-    const fn = tool.function;
-    return isRecord(fn) && fn.name === "web_search";
-  });
-}
 
 function raiseMinimalReasoningForResponsesWebSearch(params: {
   model: Model;
@@ -151,11 +130,8 @@ function resolveOpenAIResponsesInstructions(
 // xAI /responses/compact needs the system prompt first in input, not instructions:
 // https://docs.x.ai/developers/advanced-api-usage/context-compaction
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
-  // SAFETY: only reached from postOpenAIResponsesCompaction (Responses-API compact endpoint), so model is always OpenAI-mode here.
-  const compat = getCompat(model as OpenAIModeModel);
-  const supportsDeveloperRole =
-    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
-  const role = model.reasoning && supportsDeveloperRole !== false ? "developer" : "system";
+  const compat = getCompat(model);
+  const role = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
   return buildResponsesInputMessage(role, [{ type: "input_text", text: instructions }]);
 }
 
@@ -177,23 +153,6 @@ function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Co
       { type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT },
     ]),
   );
-}
-
-export function resolveOpenAIResponsesTextFormat(
-  responseFormat: Record<string, unknown>,
-): ResponseFormatTextConfig {
-  if (
-    responseFormat.type === "json_schema" &&
-    responseFormat.json_schema &&
-    typeof responseFormat.json_schema === "object" &&
-    !Array.isArray(responseFormat.json_schema)
-  ) {
-    return {
-      ...(responseFormat.json_schema as Record<string, unknown>),
-      type: "json_schema",
-    } as unknown as ResponseFormatTextConfig;
-  }
-  return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
 export function buildOpenAIResponsesParams(
@@ -310,9 +269,6 @@ export function buildOpenAIResponsesParams(
       }
     }
   }
-  applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
-  return sanitizeOpenAICodexResponsesParams(
-    model,
-    params as Record<string, unknown>,
-  ) as typeof params;
+  applyOpenAIResponsesPayloadPolicy(params, payloadPolicy);
+  return sanitizeOpenAICodexResponsesParams(model, params);
 }

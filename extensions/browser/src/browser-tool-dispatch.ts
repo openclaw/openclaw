@@ -1,6 +1,16 @@
 /** Browser tab action dispatch. Execution routing is prepared once by the tool owner. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   type createBrowserToolSessionTabs,
@@ -16,29 +26,22 @@ import {
   executeTabsAction,
   formatBrowserExternalToolResult,
 } from "./browser-tool.actions.js";
-import {
-  type BrowserToolCapabilities,
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserCloseTab,
-  browserFocusTab,
-  browserNavigate,
-  browserOpenTab,
-  browserPdfSave,
-  jsonResult,
-  normalizeOptionalString,
-  readPositiveIntegerParam,
-  readStringParam,
-  readStringValue,
-  resolveExistingUploadPaths,
-} from "./browser-tool.runtime.js";
+import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 import {
   executeScreenshotAction,
   type BrowserScreenshotOptions,
 } from "./browser-tool.screenshot.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserNavigate,
+  browserPdfSave,
+} from "./browser/client-actions.js";
+import { browserCloseTab, browserFocusTab, browserOpenTab } from "./browser/client.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
+import { resolveExistingUploadPaths } from "./browser/paths.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
@@ -56,7 +59,6 @@ function readTargetUrlParam(params: Record<string, unknown>) {
   return targetUrl;
 }
 
-/** Run tab actions against the prepared host, node, or sandbox route. */
 export async function executeBrowserTabAction(context: {
   action: string;
   actRequest?: Parameters<typeof browserAct>[1];
@@ -98,22 +100,22 @@ export async function executeBrowserTabAction(context: {
     await touchTab(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
     return jsonResult(result);
   };
-  const actionOptions = { input: params, baseUrl, profile, proxyRequest, signal };
+  const target = proxyRequest ?? baseUrl;
+  const actionOptions = { input: params, target, profile, signal };
   const clientOptions = { profile, timeoutMs: toolTimeoutMs, signal };
   switch (action) {
     case "tabs":
       return await executeTabsAction({
-        baseUrl,
+        target,
         profile,
         timeoutMs: toolTimeoutMs,
-        proxyRequest,
         targetId: context.boundTargetId,
         signal,
       });
     case "open": {
       const targetUrl = readTargetUrlParam(params);
       const label = normalizeOptionalString(params.label);
-      const opened = await browserOpenTab(proxyRequest ?? baseUrl, targetUrl, {
+      const opened = await browserOpenTab(target, targetUrl, {
         ...clientOptions,
         label,
       });
@@ -141,14 +143,14 @@ export async function executeBrowserTabAction(context: {
       const targetId = readStringParam(params, "targetId", {
         required: true,
       });
-      const result = await browserFocusTab(proxyRequest ?? baseUrl, targetId, clientOptions);
+      const result = await browserFocusTab(target, targetId, clientOptions);
       return await trackedTabResult(result, targetId);
     }
     case "close": {
       const targetId = readStringParam(params, "targetId");
       const result = targetId
-        ? await browserCloseTab(proxyRequest ?? baseUrl, targetId, clientOptions)
-        : await browserAct(proxyRequest ?? baseUrl, { kind: "close" }, clientOptions);
+        ? await browserCloseTab(target, targetId, clientOptions)
+        : await browserAct(target, { kind: "close" }, clientOptions);
       await sessionTabs.untrack(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
       return jsonResult(result);
     }
@@ -167,7 +169,7 @@ export async function executeBrowserTabAction(context: {
     case "navigate": {
       const targetUrl = readTargetUrlParam(params);
       const targetId = readStringParam(params, "targetId");
-      const result = await browserNavigate(proxyRequest ?? baseUrl, {
+      const result = await browserNavigate(target, {
         url: targetUrl,
         targetId,
         timeoutMs: requestedTimeoutMs,
@@ -188,9 +190,8 @@ export async function executeBrowserTabAction(context: {
       return await appendNavigatedPageState({
         result: formatted,
         targetId: navigatedTargetId,
-        baseUrl,
+        target,
         profile,
-        proxyRequest,
         signal,
       });
     }
@@ -217,12 +218,9 @@ export async function executeBrowserTabAction(context: {
     }
     case "pdf": {
       const targetId = normalizeOptionalString(params.targetId);
-      const result = await browserPdfSave(proxyRequest ?? baseUrl, { targetId, profile, signal });
+      const result = await browserPdfSave(target, { targetId, profile, signal });
       await touchTab(readStringValue(result.targetId) ?? targetId);
-      return {
-        content: [{ type: "text" as const, text: `FILE:${result.path}` }],
-        details: result,
-      };
+      return textResult(`FILE:${result.path}`, result);
     }
     case "download":
     case "waitfordownload":
@@ -245,7 +243,7 @@ export async function executeBrowserTabAction(context: {
       const element = readStringParam(params, "element");
       const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
       return await trackedTabResult(
-        await browserArmFileChooser(proxyRequest ?? baseUrl, {
+        await browserArmFileChooser(target, {
           paths: resolvedResult.paths,
           ref,
           inputRef,
@@ -265,7 +263,7 @@ export async function executeBrowserTabAction(context: {
       const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
       const request = { accept, promptText, dialogId, targetId, timeoutMs };
       return await trackedTabResult(
-        await browserArmDialog(proxyRequest ?? baseUrl, { ...request, profile, signal }),
+        await browserArmDialog(target, { ...request, profile, signal }),
         targetId,
       );
     }

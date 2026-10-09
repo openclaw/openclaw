@@ -1,4 +1,5 @@
 // Minimal Codex app-server fixture for the QA auth product proof.
+import { randomUUID } from "node:crypto";
 import {
   createFakeInitializeResponse,
   createFakeThreadStartResponse,
@@ -14,11 +15,14 @@ if (!appServerVersion) {
   throw new Error("missing OPENCLAW_QA_CODEX_APP_SERVER_VERSION");
 }
 
+// The config-only fixture contract can run standalone without receipt observation.
+const receipts = process.argv[2] ? await import(process.argv[2]) : undefined;
+
 let turnCount = 0;
-const threadResponse = (params) =>
+const threadResponse = (params, threadId) =>
   createFakeThreadStartResponse({
     params,
-    threadId: "thread-qa-codex-auth",
+    threadId,
     sessionId: "session-qa-codex-auth",
     version: appServerVersion,
   });
@@ -35,7 +39,10 @@ runFakeCodexAppServer({
           userAgent: `openclaw/${appServerVersion} (test)`,
         }),
       ),
-    "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
+    "account/login/start": ({ params, sendResult }) => {
+      receipts?.sendReceipt(requestLog, "account/login/start");
+      sendResult({ type: params?.type });
+    },
     "model/list": ({ sendResult }) =>
       sendResult({
         data: ["gpt-5.6-luna"].map((model) => ({
@@ -77,9 +84,11 @@ runFakeCodexAppServer({
         },
         requiresOpenaiAuth: true,
       }),
-    "thread/start": ({ params, sendResult }) => sendResult(threadResponse(params)),
-    "thread/resume": ({ params, sendResult }) => sendResult(threadResponse(params)),
+    "thread/start": ({ params, sendResult }) => sendResult(threadResponse(params, randomUUID())),
+    "thread/resume": ({ params, sendResult }) =>
+      sendResult(threadResponse(params, params.threadId)),
     "turn/start": ({ notify, params, sendResult }) => {
+      receipts?.sendReceipt(requestLog, "turn/start");
       const threadId = params?.threadId ?? "thread-qa-codex-auth";
       const turnId = `turn-qa-codex-auth-${++turnCount}`;
       const message = {

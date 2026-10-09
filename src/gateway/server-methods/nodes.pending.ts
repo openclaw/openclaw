@@ -42,7 +42,7 @@ function resolveAllowedPendingNodeActions(params: {
   // Re-filter queued actions against the node's current declared commands and
   // allowlist; app upgrades or permission changes can make old actions unsafe.
   const connect = params.client?.connect;
-  const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
+  const declaredCommands = connect?.commands ?? [];
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,

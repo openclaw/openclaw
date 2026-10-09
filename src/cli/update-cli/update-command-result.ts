@@ -27,6 +27,7 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
@@ -37,7 +38,10 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
+import {
+  resolveUpdateRunVerifiedServingVersion,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -399,6 +403,7 @@ export class UpdateCommandFailure extends Error {
     options?: ErrorOptions & { automaticTriage?: TriageFailureContext },
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
+    this.result = normalizeUpdateFailureResult(result, options?.cause);
     this.name = "UpdateCommandFailure";
     this.automaticTriage = options?.automaticTriage;
   }
@@ -411,6 +416,10 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
       {
         ...result,
         status: "error",
+        reason:
+          result.status === "error"
+            ? (result.reason ?? "update-recovery-pending")
+            : "update-recovery-pending",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       },
       1,
@@ -433,11 +442,7 @@ export async function reportUpdateCommandPendingRecovery(
 }
 
 /** Reporting-only marker: the outcome was recorded and printed; no follow-up triage. */
-export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
-  constructor(result: UpdateRunResult) {
-    super(result, 1);
-  }
-}
+export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {}
 
 export function mergeWindowsTaskRecoveryFailure(
   failure: { error: unknown } | undefined,
@@ -517,6 +522,7 @@ export type UpdateAdmissionReportParams = {
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: readonly UpdateFailureFact[];
   root: string;
+  serviceRoot?: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
   message?: string;
@@ -570,11 +576,9 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
       throw err;
     }
     const message = `Failed to write update.run restart sentinel: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
-    }
+    defaultRuntime[params.jsonMode ? "error" : "log"](
+      params.jsonMode ? message : theme.warn(message),
+    );
   }
 }
 
@@ -591,11 +595,9 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
     await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, params.env);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
-    }
+    defaultRuntime[params.jsonMode ? "error" : "log"](
+      params.jsonMode ? message : theme.warn(message),
+    );
   }
 }
 
@@ -622,6 +624,10 @@ export function recordUpdateResultNextAction(
       restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
       serviceRunning: verification.serviceRunning,
       runningVersion: verification.runningVersion,
+      verifiedServingVersion: resolveUpdateRunVerifiedServingVersion(
+        verification,
+        steps.findLast((step) => step.step === "gateway recovery verification"),
+      ),
       verificationFailure: failedVerification?.failureFacts?.length
         ? failedVerification.failureFacts.map(formatUpdateFailureFact).join("; ")
         : failedVerification?.detail,

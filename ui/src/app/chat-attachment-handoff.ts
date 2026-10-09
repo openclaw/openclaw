@@ -284,15 +284,7 @@ export function createChatAttachmentHandoff(
     },
     retainedAttachmentIds: (attachments) => {
       const requested = new Set(attachments.map((attachment) => attachment.id));
-      const retained = new Set<string>();
-      for (const handoff of pending.values()) {
-        for (const attachment of handoffAttachments(handoff)) {
-          if (requested.has(attachment.id)) {
-            retained.add(attachment.id);
-          }
-        }
-      }
-      return retained;
+      return new Set([...retainedPayloadIds()].filter((id) => requested.has(id)));
     },
     retireScope: (scopeKey, beforeRevision) => {
       // Optimistic navigation may unmount the pane before deletion confirms.

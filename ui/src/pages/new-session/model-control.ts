@@ -99,11 +99,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           }
           this.updateMetadataState({
             ...this.metadataState,
-            status: this.metadataState.hasSnapshot
-              ? this.metadataState.status === "error"
-                ? "error"
-                : "ready"
-              : "loading",
+            status:
+              this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+                ? "ready"
+                : "loading",
           });
         } else {
           this.notify();
@@ -112,20 +111,12 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       {
         timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
         onResult: (result) => {
-          if (
-            this.metadataClient &&
-            this.metadataScope &&
-            this.ownsMetadata(this.metadataClient, this.metadataScope)
-          ) {
+          if (this.ownsMetadata()) {
             this.publishMetadataCatalog(result);
           }
         },
         onError: () => {
-          if (
-            this.metadataClient &&
-            this.metadataScope &&
-            this.ownsMetadata(this.metadataClient, this.metadataScope)
-          ) {
+          if (this.ownsMetadata()) {
             this.metadataFailed();
           }
         },
@@ -147,16 +138,18 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     this.metadataGateway = undefined;
   }
 
-  private ownsMetadata(client: NewSessionMetadataClient, scope: ModelCatalogReadScope): boolean {
+  private ownsMetadata(client = this.metadataClient, scope = this.metadataScope): boolean {
     const snapshot = this.pendingContext?.gateway.snapshot;
-    return (
+    return Boolean(
+      client &&
+      scope &&
       this.metadataClient === client &&
       this.metadataGateway === this.pendingContext?.gateway &&
       this.metadataScope === scope &&
       snapshot?.phase === "connected" &&
       snapshot.client === client &&
       snapshot.hello === this.metadataHello &&
-      snapshot.selfUser?.id === this.metadataIdentityId
+      snapshot.selfUser?.id === this.metadataIdentityId,
     );
   }
 
@@ -281,15 +274,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     this.clearMetadataSubscription();
     this.metadataState = createEmptyDraftModelMetadata();
     return true;
-  }
-
-  private retryPickerCatalogs() {
-    const client = this.metadataClient;
-    const scope = this.metadataScope;
-    if (!this.metadataReader.pending && client && scope) {
-      void this.metadataReader.read();
-    }
-    this.catalogTargets.retry(client, this.agentId);
   }
 
   invalidate(resetSelection = false) {
@@ -438,7 +422,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     });
   }
 
-  modelSelectionBlockedReason(agent: GatewayAgentRow | undefined): string | undefined {
+  modelSelectionBlockedReason(
+    agent: GatewayAgentRow | undefined,
+    inference?: "worker",
+  ): string | undefined {
+    const runtime = this.resolveAgentRuntime({ agent, context: this.pendingContext });
     return resolveDraftModelSelectionBlockedReason({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
@@ -448,6 +436,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       accountSelected: Boolean(this.draftAccount),
       accountReady: this.accountSelectionReady(),
       metadataPending: this.metadataReader.pending,
+      inference:
+        runtime?.id === "openclaw" && runtime.cloudPlacementExecutionMode === "worker-turn"
+          ? inference
+          : undefined,
     });
   }
 
@@ -465,9 +457,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     }
     const selection = this.metadataState.accountSelection;
     if (
-      !this.metadataClient ||
-      !this.metadataScope ||
-      !this.ownsMetadata(this.metadataClient, this.metadataScope) ||
+      !this.ownsMetadata() ||
       this.metadataReader.pending ||
       this.metadataState.status !== "ready" ||
       selection?.kind !== "personal" ||
@@ -714,7 +704,14 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       onModelSetup: () => options.context?.navigate("model-setup"),
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
-      onModelPickerOpen: () => this.retryPickerCatalogs(),
+      onModelPickerOpen: () => {
+        const metadataClient = this.metadataClient;
+        const metadataScope = this.metadataScope;
+        if (!this.metadataReader.pending && metadataClient && metadataScope) {
+          void this.metadataReader.read();
+        }
+        this.catalogTargets.retry(metadataClient, this.agentId);
+      },
       onRequestUpdate: this.notify,
     });
   }

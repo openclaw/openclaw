@@ -7,36 +7,18 @@ import {
   questionGatewayRuntime,
 } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
-
-type WhatsAppQuestionReactionIdentity = {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-};
-
-function buildKey(identity: WhatsAppQuestionReactionIdentity): string | undefined {
-  const parts = [identity.accountId, identity.remoteJid, identity.messageId].map((part) =>
-    part.trim(),
-  );
-  return parts.every(Boolean) ? parts.join(":") : undefined;
-}
+import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 
 const questionReactionTargets = createQuestionReactionTargetStore({
   channel: "whatsapp",
   channelDisplayName: "WhatsApp",
-  buildKey,
+  buildKey: buildWhatsAppReactionTargetKey,
   registerChannelDelivery: questionGatewayRuntime.registerChannelDelivery,
   resolveReaction: questionGatewayRuntime.resolveReaction,
 });
-
-function addCandidate(values: string[], value: string | null | undefined): void {
-  const normalized = value?.trim();
-  if (normalized && !values.includes(normalized)) {
-    values.push(normalized);
-  }
-}
 
 export function registerWhatsAppQuestionReactionTargetForDeliveredPayload(params: {
   cfg: OpenClawConfig;
@@ -76,18 +58,16 @@ export async function maybeResolveWhatsAppQuestionReaction(params: {
   if (optionIndex === undefined || !messageId) {
     return false;
   }
-  const remoteJids: string[] = [];
-  addCandidate(remoteJids, reaction?.key?.remoteJid);
-  addCandidate(remoteJids, params.msg.key?.remoteJid);
+  const remoteJids = normalizeUniqueTrimmedStringList([
+    reaction?.key?.remoteJid,
+    params.msg.key?.remoteJid,
+  ]);
   const candidates: string[] = [];
   for (const remoteJid of remoteJids) {
-    addCandidate(candidates, remoteJid);
-    for (const mapped of (await params.resolveReactionTargetJids?.(remoteJid)) ?? []) {
-      addCandidate(candidates, mapped);
-    }
+    candidates.push(remoteJid, ...((await params.resolveReactionTargetJids?.(remoteJid)) ?? []));
   }
   return await questionReactionTargets.resolve({
-    identities: candidates.map((remoteJid) => ({
+    identities: normalizeUniqueTrimmedStringList(candidates).map((remoteJid) => ({
       accountId: params.accountId,
       remoteJid,
       messageId,

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -49,6 +50,7 @@ export async function serveMemoryFiles(options: {
   watch?: boolean;
 }): Promise<void> {
   if (options.watch) {
+    const runInBackgroundContext = AsyncLocalStorage.snapshot();
     const { MemoryFileWatcher } = await import("../memory/file-watcher.js");
     const lines = createInterface({ input: options.input, crlfDelay: Infinity });
     let watcher: InstanceType<typeof MemoryFileWatcher> | undefined;
@@ -83,6 +85,7 @@ export async function serveMemoryFiles(options: {
         const request = JSON.parse(line) as MemoryWorkspaceWatchRequest;
         const notify = (event: "change" | "unavailable") => notifier?.send(event);
         watcher = new MemoryFileWatcher({
+          runInBackgroundContext,
           workspaceDir: path.resolve(options.workspace),
           agentId: request.agentId,
           settings: request.settings,

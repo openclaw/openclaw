@@ -23,6 +23,7 @@ type CodeModeBridgeMethod =
   | "agentSpawn"
   | "agentWait"
   | "skillsList"
+  | "skillsSearch"
   | "skillsRead"
   | "sleep"
   | "swarmNote";

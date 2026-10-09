@@ -33,21 +33,6 @@ function createTestTransport(transport: typeof import("./server-runtime-state.js
 }
 
 describe("reserved Gateway test listeners", () => {
-  it("adopts a single reservation through the transport dispatcher", async () => {
-    const transport = await import("./server-runtime-state.js");
-    const reservation = await reserveGatewayTestListener();
-    try {
-      await expect(
-        reservation.start(() => createTestTransport(transport, reservation.port)),
-      ).resolves.toBe(reservation.listener);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        reservation.listener.close((error) => (error ? reject(error) : resolve()));
-      });
-      await reservation.closeUnadopted();
-    }
-  });
-
   it.each(["first", "second"] as const)(
     "adopts overlapping reservations when %s startup settles first",
     async (firstToSettle) => {
@@ -85,10 +70,7 @@ describe("reserved Gateway test listeners", () => {
         // The synthetic transport returns the listener but does not own its close.
         await Promise.all(
           reservations.map(async (reservation) => {
-            await new Promise<void>((resolve, reject) => {
-              const { listener } = reservation;
-              listener.close((error) => (error ? reject(error) : resolve()));
-            });
+            await closeListener(reservation.listener);
             await reservation.closeUnadopted();
           }),
         );
@@ -143,7 +125,11 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
       return {
         getTailscaleIngressEndpoint: () => undefined,
         startupSettled: Promise.resolve(),
-        close: () => closeListener(observed.adopted.mock.lastCall?.[0]),
+        close: async () => {
+          await closeListener(observed.adopted.mock.lastCall?.[0]);
+          // Rebind before startClaimedGateway releases the cooperative port claim.
+          await listen(competitor, claim.port);
+        },
       };
     }),
   );
@@ -167,7 +153,6 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
 
       await harness.close();
       reclaimed = await acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] });
-      await listen(competitor, claim.port);
       expect(competitor.address()).toMatchObject({ address: "127.0.0.1", port: claim.port });
     },
     () => proceed.resolve(),

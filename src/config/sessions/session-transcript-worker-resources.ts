@@ -1,5 +1,8 @@
 import { channel } from "node:diagnostics_channel";
+import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -10,14 +13,10 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { joinOwnedWorkerTasks } from "../../infra/worker-task-pool-owned.js";
-import {
-  createOwnedWorkerTaskPool,
-  WorkerTaskError,
-  WorkerTaskPool,
-} from "../../infra/worker-task-pool.js";
+import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
+import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
@@ -25,6 +24,8 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { assertOpenClawAgentWriterReleased } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   sessionHistoryCleanupError,
@@ -32,6 +33,7 @@ import {
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
 import {
+  isSessionStoreReadCandidateCurrent,
   measureSessionStoreTargetInventoryInputBytes,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
@@ -41,38 +43,19 @@ import type {
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
-import type {
-  SessionHistoryWorkerInput,
-  SessionTranscriptWorkerReply,
-} from "./session-transcript-worker.types.js";
+import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
+import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-function createHistoryPool() {
-  return createOwnedWorkerTaskPool<
-    SessionHistoryWorkerInput,
-    SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
-  >({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      return { options: {} };
-    },
-  });
-}
-
-const historyPages = createHistoryPool();
-const maintenancePages = createHistoryPool();
 
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    // Foreground reads must remain available while refresh awaits a host writer.
-    sharedCompute: kind === "refresh",
+    // A retired task releases lane-wide database custody, which requires one native worker.
+    workerClass: kind === "refresh" ? "writer" : "singleton",
+    // Host writes can wait for a writer-held shared-compute reader; neither usage lane may hold its permit.
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
@@ -101,10 +84,15 @@ export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
 };
 
 export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
-  pool: ReturnType<typeof createHistoryPool>;
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
 };
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
+
+/** Physical path for work; callers' lexical paths select the same owner for cleanup. */
+export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
+  requestedPaths?: readonly string[];
+};
 
 export type HistoryDatabaseResource = {
   database: { agentId: string; path: string };
@@ -117,52 +105,83 @@ export type HistoryDatabaseResource = {
   aborters: Set<() => void>;
   closing?: Promise<void>;
   unregister: () => void;
+  retainAlias: (alias: string) => void;
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
-export const historyLane: SessionHistoryWorkerLane = {
-  name: "Session history",
-  pool: historyPages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-// Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane: SessionHistoryWorkerLane = {
-  name: "Session projection",
-  pool: createHistoryPool(),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-// Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane: SessionHistoryWorkerLane = {
-  name: "Session maintenance",
-  pool: maintenancePages,
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costReadLane: SessionCostWorkerLane = {
-  name: "Session usage read",
-  pool: createUsageCostPool("read"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
-export const costRefreshLane: SessionCostWorkerLane = {
-  name: "Session usage refresh",
-  pool: createUsageCostPool("refresh"),
-  nativeSequence: 0,
-  retiredSequence: 0,
-  pending: 0,
-};
+function createDatabaseWorkerLane<Pool extends SessionDatabaseWorkerLane["pool"]>(
+  name: string,
+  pool: Pool,
+): SessionDatabaseWorkerLane & { pool: Pool } {
+  return { name, pool, nativeSequence: 0, retiredSequence: 0, pending: 0 };
+}
 
-const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+export const historyLane = createDatabaseWorkerLane(
+  "Session history",
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS),
+);
+// Search retains its reader while the host checks writable index readiness.
+// It must never occupy the workers serving committed history and metadata.
+export const transcriptSearchLane = createDatabaseWorkerLane(
+  "Session transcript search",
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS),
+);
+// Keep list materialization independent of large history pages, with one extra reader per store.
+export const projectionLane = createDatabaseWorkerLane(
+  "Session projection",
+  createSessionTranscriptHistoryPool(),
+);
+// Full-store validation cannot yield its snapshot to a foreground history read.
+export const maintenanceLane = createDatabaseWorkerLane(
+  "Session maintenance",
+  createSessionTranscriptHistoryPool(),
+);
+// Writers retain FIFO admission through target discovery and cleanup. These reads
+// cannot share a worker with history tasks that await a host-side database write.
+export const targetDiscoveryLane = createDatabaseWorkerLane(
+  "Session target discovery",
+  createSessionTranscriptHistoryPool(),
+);
+export const costReadLane = createDatabaseWorkerLane(
+  "Session usage read",
+  createUsageCostPool("read"),
+);
+export const costRefreshLane = createDatabaseWorkerLane(
+  "Session usage refresh",
+  createUsageCostPool("refresh"),
+);
+
+const independentHistoryLanes = [
+  historyLane,
+  transcriptSearchLane,
+  projectionLane,
+  maintenanceLane,
+];
+const historyWorkerLanes = [...independentHistoryLanes, targetDiscoveryLane];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
+
+// Install only in development: production dispatch/cleanup has no context check.
+// Target discovery is reserved with the writer; its cold-read host callbacks
+// reenter that reservation. Other pools can wait on an independent writer.
+if (process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development") {
+  for (const lane of [...independentHistoryLanes, costReadLane, costRefreshLane]) {
+    const rotate = lane.pool.rotate.bind(lane.pool);
+    lane.pool.rotate = () => {
+      assertOpenClawAgentWriterReleased(`drain the ${lane.name} reader pool`);
+      return rotate();
+    };
+  }
+  for (const lane of independentHistoryLanes) {
+    const close = lane.pool.closeResources;
+    lane.pool.closeResources = (key) => {
+      assertOpenClawAgentWriterReleased(`close the ${lane.name} reader pool`);
+      return close(key);
+    };
+  }
+}
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
 
@@ -294,9 +313,9 @@ async function closeDatabaseWorkerResource(
   idle: boolean,
 ): Promise<void> {
   const pool = historyWorkerLanes.find((candidate) => candidate === lane)?.pool;
-  // Active reads and Bun retain native-exit custody. Idle Node readers can
-  // release the exact database while retaining the worker's loaded code.
-  if (!idle || process.versions.bun || !pool) {
+  // Active or unqualified readers keep native-exit custody. Proven idle readers
+  // release the exact database while retaining this worker's loaded code.
+  if (!idle || !pool?.canCloseNativeResources()) {
     await rotateDatabaseWorkers(lane);
     return;
   }
@@ -317,8 +336,20 @@ async function closeDatabaseWorkerResource(
   }
 }
 
+/** One worker's eviction requests pool-wide cleanup before releasing database custody. */
+export async function settleSessionHistoryWorkerEviction(
+  lane: SessionHistoryWorkerLane,
+  database: SessionHistoryDatabaseTarget,
+): Promise<void> {
+  const resource = historyDatabases.get(JSON.stringify(database));
+  if (resource) {
+    // Preparing tasks can own input before a worker exists to receive a native close.
+    await closeDatabaseWorkerResource(resource, lane, lane.pool.getSnapshot().activeTasks === 0);
+  }
+}
+
 export function acquireHistoryDatabaseResource(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
 ): HistoryDatabaseResource {
   const database = {
     agentId: normalizeAgentId(options.agentId),
@@ -326,7 +357,9 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
+  let created = false;
   if (!resource || resource.revoked) {
+    const aliases = new Map<string, () => void>();
     const owned: HistoryDatabaseResource = {
       database,
       generation: ++historyGeneration,
@@ -337,6 +370,21 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      retainAlias(alias) {
+        if (!aliases.has(alias)) {
+          aliases.set(
+            alias,
+            runOutsideOpenClawDatabaseMaintenanceScope(() =>
+              registerOpenClawAgentDatabaseAsyncResource({
+                ...database,
+                path: alias,
+                revoke,
+                close,
+              }),
+            ),
+          );
+        }
+      },
     };
     const close = () => {
       if (!owned.closing) {
@@ -351,6 +399,9 @@ export function acquireHistoryDatabaseResource(
           for (const cleanup of owned.cleanups) {
             await cleanup.run();
           }
+          if (owned.revoked) {
+            owned.unregister();
+          }
         })().finally(() => {
           owned.closing = undefined;
           pruneHistoryDatabases();
@@ -362,19 +413,45 @@ export function acquireHistoryDatabaseResource(
       }
       return owned.closing;
     };
-    owned.unregister = registerOpenClawAgentDatabaseAsyncResource({
+    const revoke = () => {
+      owned.revoked = true;
+      for (const abort of owned.aborters) {
+        abort();
+      }
+      void close();
+    };
+    let unregister: (() => void) | undefined = registerOpenClawAgentDatabaseAsyncResource({
       ...database,
-      revoke: () => {
-        owned.revoked = true;
-        for (const abort of owned.aborters) {
-          abort();
-        }
-        void close();
-      },
+      revoke,
       close,
     });
-    historyDatabases.set(key, owned);
+    // A revoked close and a later prune can both retire this owner; release custody once.
+    owned.unregister = () => {
+      unregister?.();
+      unregister = undefined;
+      for (const release of aliases.values()) {
+        release();
+      }
+      aliases.clear();
+    };
     resource = owned;
+    created = true;
+  }
+  try {
+    for (const requestedPath of options.requestedPaths ?? []) {
+      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: requestedPath });
+      if (alias !== database.path) {
+        resource.retainAlias(alias);
+      }
+    }
+  } catch (error) {
+    if (created) {
+      resource.unregister();
+    }
+    throw error;
+  }
+  if (created) {
+    historyDatabases.set(key, resource);
   }
   return resource;
 }
@@ -396,8 +473,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  const capturedCandidates = candidates.map(({ path, physicalPath, scope }) => ({
-    path,
+  const capturedCandidates = candidates.map(({ path: requestedPath, physicalPath, scope }) => ({
+    path: requestedPath,
     physicalPath,
     scope,
   }));
@@ -423,7 +500,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     };
     const releases: Array<() => void> = [];
     const release = () => {
-      for (const unregister of releases.toReversed()) {
+      for (const unregister of releases.splice(0).toReversed()) {
         unregister();
       }
     };
@@ -440,21 +517,70 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       return closing;
     };
     const settleCandidates = async () => {
-      // Bun and failed discovery can retain native handles outside candidate custody.
-      if (discoveryFailed || process.versions.bun) {
+      // Failed discovery can retain handles outside candidate custody even on a proven worker.
+      if (discoveryFailed || revoked || !lane.pool.canCloseNativeResources()) {
         await retire();
         return;
       }
       const through = lane.nativeSequence;
       candidateCleanupPending = true;
       try {
-        await lane.pool.closeResources(JSON.stringify(selected));
+        const retained = new Map<string, HistoryDatabaseResource>();
+        for (const resource of historyDatabases.values()) {
+          if (resource.revoked || resource.closing || !resource.nativeSequences.has(lane)) {
+            continue;
+          }
+          for (const candidate of capturedCandidates) {
+            if (
+              !matchesAgentDatabaseReadCandidatePath(
+                { ...candidate, path: candidate.physicalPath },
+                resource.database.path,
+              )
+            ) {
+              continue;
+            }
+            const alias = candidate.scope
+              ? path.join(path.dirname(candidate.path), path.basename(resource.database.path))
+              : candidate.path;
+            if (
+              !isSessionStoreReadCandidateCurrent({
+                path: alias,
+                physicalPath: resource.database.path,
+              })
+            ) {
+              throw new Error("Session discovery alias changed before reader custody transfer");
+            }
+            // The known owner must retain lexical close custody before discovery releases it.
+            if (alias !== resource.database.path) {
+              resource.retainAlias(alias);
+            }
+            retained.set(resource.database.path, resource);
+          }
+        }
+        await lane.pool.closeResources(
+          encodeAgentDatabaseReaderRequest({
+            kind: "close",
+            candidates: selected,
+            retainedPaths: [...retained.keys()],
+            deleted: false,
+          }),
+        );
+        if (
+          revoked ||
+          [...retained.values()].some((resource) => resource.revoked || Boolean(resource.closing))
+        ) {
+          throw new WorkerTaskError(
+            "Session reader custody was revoked during discovery cleanup",
+            "unavailable",
+          );
+        }
         candidateCleanupPending = false;
         for (const resource of historyDatabases.values()) {
           const sequence = resource.nativeSequences.get(lane);
           if (
             sequence !== undefined &&
             sequence <= through &&
+            !retained.has(resource.database.path) &&
             selected.some((candidate) =>
               matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
             )
@@ -502,7 +628,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       const readStoreTargetResult = async (
         request: Omit<SessionStoreTargetReadRequest, "candidates">,
       ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = { ...request, candidates: capturedCandidates };
+        const preparedRequest = {
+          ...request,
+          env: captureSessionTranscriptStorageEnvironment(request.env),
+          candidates: capturedCandidates,
+        };
         const reply = await lane.pool.run(
           () => {
             assertCurrent();
@@ -538,7 +668,11 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           return read.value;
         },
         readTargetInventory: async (request) => {
-          const preparedRequest = { ...request, candidates: capturedCandidates };
+          const preparedRequest = {
+            ...request,
+            env: captureSessionTranscriptStorageEnvironment(request.env),
+            candidates: capturedCandidates,
+          };
           const reply = await lane.pool.run(
             () => {
               assertCurrent();

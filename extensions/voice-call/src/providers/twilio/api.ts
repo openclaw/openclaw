@@ -1,110 +1,61 @@
-// Voice Call API module exposes the plugin public contract.
-import { fetchWithSsrFGuard } from "../../../api.js";
-import {
-  cancelProviderResponseBody,
-  readProviderErrorResponseSnippet,
-  readVoiceCallProviderJsonResponse,
-} from "../shared/response-body.js";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isProviderStatusTerminal, normalizeProviderStatus } from "../shared/call-status.js";
+import { createCarrierApi } from "../shared/carrier-api.js";
 import { requireSupportedTwilioApiHostname } from "../twilio-region.js";
 
-// Guarded Twilio REST API client helpers.
-
-/** Minimal Twilio REST API error payload. */
-type ParsedTwilioApiError = {
-  code?: number;
-  message?: string;
-};
-
-const TWILIO_API_TIMEOUT_MS = 30_000;
-
-/** Parse Twilio JSON error responses without trusting response shape. */
-function parseTwilioApiError(text: string): ParsedTwilioApiError {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const record = parsed as Record<string, unknown>;
-    return {
-      code: typeof record.code === "number" ? record.code : undefined,
-      message: typeof record.message === "string" ? record.message : undefined,
-    };
-  } catch {
-    return {};
-  }
-}
-
-/** Error thrown for non-2xx Twilio REST API responses. */
 export class TwilioApiError extends Error {
   readonly httpStatus: number;
   readonly responseText: string;
   readonly twilioCode?: number;
 
   constructor(httpStatus: number, responseText: string) {
-    const parsed = parseTwilioApiError(responseText);
-    const detail = parsed.message ?? responseText;
+    const parsed = asNullableObjectRecord(safeParseJson<unknown>(responseText));
+    const detail = typeof parsed?.message === "string" ? parsed.message : responseText;
     super(`Twilio API error: ${httpStatus} ${detail}`);
     this.name = "TwilioApiError";
     this.httpStatus = httpStatus;
     this.responseText = responseText;
-    this.twilioCode = parsed.code;
+    this.twilioCode = typeof parsed?.code === "number" ? parsed.code : undefined;
   }
 }
 
-/** POST a form-encoded Twilio REST API request through the SSRF guard. */
-export async function twilioApiRequest<T = unknown>(params: {
+export function createTwilioApi(params: {
   baseUrl: string;
   accountSid: string;
   authToken: string;
-  endpoint: string;
-  body: URLSearchParams | Record<string, string | string[]>;
-  allowNotFound?: boolean;
-}): Promise<T> {
-  const bodyParams =
-    params.body instanceof URLSearchParams
-      ? params.body
-      : Object.entries(params.body).reduce((acc, [key, value]) => {
-          if (Array.isArray(value)) {
-            for (const entry of value) {
-              acc.append(key, entry);
-            }
-          } else if (typeof value === "string") {
-            acc.append(key, value);
-          }
-          return acc;
-        }, new URLSearchParams());
-
-  const requestUrl = `${params.baseUrl}${params.endpoint}`;
-  const allowedHostname = requireSupportedTwilioApiHostname(params.baseUrl);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: requestUrl,
-    init: {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: bodyParams,
+}) {
+  requireSupportedTwilioApiHostname(params.baseUrl);
+  const api = createCarrierApi(
+    "Twilio",
+    params.baseUrl,
+    `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
+    {
+      contentType: "application/x-www-form-urlencoded",
+      malformedJsonMessage: "Twilio API returned malformed JSON.",
+      createError: (status, text) => new TwilioApiError(status, text),
     },
-    policy: { allowedHostnames: [allowedHostname] },
-    timeoutMs: TWILIO_API_TIMEOUT_MS,
-    auditContext: "voice-call.twilio.api",
-  });
-  try {
-    if (!response.ok) {
-      if (params.allowNotFound && response.status === 404) {
-        await cancelProviderResponseBody(response);
-        return undefined as T;
+  );
+  return {
+    request: <T = unknown>(
+      endpoint: string,
+      body: URLSearchParams | Record<string, string | string[]>,
+      options?: { allowNotFound?: boolean },
+    ): Promise<T> => {
+      const form = body instanceof URLSearchParams ? body : new URLSearchParams();
+      if (!(body instanceof URLSearchParams)) {
+        for (const [key, value] of Object.entries(body)) {
+          for (const entry of Array.isArray(value) ? value : [value]) {
+            form.append(key, entry);
+          }
+        }
       }
-      const errorText = await readProviderErrorResponseSnippet(response);
-      throw new TwilioApiError(response.status, errorText);
-    }
-
-    return (await readVoiceCallProviderJsonResponse<T>(
-      response,
-      "Twilio API returned malformed JSON.",
-    )) as T;
-  } finally {
-    await release();
-  }
+      return api.request<T>(endpoint, form, options);
+    },
+    getCallStatus: ({ providerCallId }: { providerCallId: string }) =>
+      api.getCallStatus<{ status?: string }>(`/Calls/${providerCallId}.json`, (data) => {
+        const status = normalizeProviderStatus(data.status);
+        return { status, isTerminal: isProviderStatusTerminal(status) };
+      }),
+  };
 }

@@ -7,6 +7,7 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { assertCodexBindingMayBeReplaced } from "./app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
@@ -18,7 +19,6 @@ import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
 } from "./conversation-binding-data.js";
-import { isIncognitoSessionKey } from "./incognito-session.js";
 import type { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 type CodexConversationRunOptions = {
@@ -75,9 +75,9 @@ export async function handleCodexConversationInboundClaim(
     return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   const sessionKey = event.sessionKey ?? ctx.sessionKey;
-  if (data.kind === "codex-cli-node-session") {
-    try {
-      const result = await getNodeConversationState().queue.enqueue(
+  try {
+    if (data.kind === "codex-cli-node-session") {
+      const text = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
           const { resolveCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
@@ -87,24 +87,16 @@ export async function handleCodexConversationInboundClaim(
             surface: "Codex CLI node conversation binding",
           });
           if (blocked) {
-            return { reply: { text: blocked } };
+            return blocked;
           }
           const resume = options.resumeCodexCliSessionOnNode;
           if (!resume) {
-            return {
-              reply: {
-                text: "Codex CLI node binding is unavailable because Gateway node runtime is not attached.",
-              },
-            };
+            return "Codex CLI node binding is unavailable because Gateway node runtime is not attached.";
           }
           const { getSessionBindingService } =
             await import("openclaw/plugin-sdk/conversation-binding-runtime");
           if (!isCurrentPublicBinding(publicBinding, getSessionBindingService())) {
-            return {
-              reply: {
-                text: "This Codex conversation was detached or changed before its message could run.",
-              },
-            };
+            return "This Codex conversation was detached or changed before its message could run.";
           }
           const resumed = await resume({
             nodeId: data.nodeId,
@@ -115,22 +107,11 @@ export async function handleCodexConversationInboundClaim(
             cwd: data.cwd,
             timeoutMs: options.timeoutMs,
           });
-          return {
-            reply: { text: resumed.text.trim() || "Codex completed without a text reply." },
-          };
+          return resumed.text.trim() || "Codex completed without a text reply.";
         },
       );
-      return { handled: true, reply: result.reply };
-    } catch (error) {
-      return {
-        handled: true,
-        reply: {
-          text: `Codex CLI node turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
-        },
-      };
+      return { handled: true, reply: { text } };
     }
-  }
-  try {
     const identity = { kind: "conversation" as const, bindingId: data.bindingId };
     // Capture and reserve before any import yields: retirement must not overtake
     // an already-arrived message, even when the execution module is still cold.
@@ -144,7 +125,7 @@ export async function handleCodexConversationInboundClaim(
         surface: "Codex app-server conversation binding",
       });
       if (nativeExecutionBlock) {
-        return { reply: { text: nativeExecutionBlock } };
+        return { text: nativeExecutionBlock };
       }
       const { getSessionBindingService } =
         await import("openclaw/plugin-sdk/conversation-binding-runtime");
@@ -159,9 +140,7 @@ export async function handleCodexConversationInboundClaim(
         (!expected && current && data.start?.id && current.conversationStartId !== data.start.id)
       ) {
         return {
-          reply: {
-            text: "This Codex conversation was detached or changed before its message could run.",
-          },
+          text: "This Codex conversation was detached or changed before its message could run.",
         };
       }
       return await runBoundTurnWithMissingThreadRecovery({
@@ -179,12 +158,13 @@ export async function handleCodexConversationInboundClaim(
         timeoutMs: options.timeoutMs,
       });
     });
-    return { handled: true, reply: result.reply };
+    return { handled: true, reply: result };
   } catch (error) {
+    const runtime = data.kind === "codex-cli-node-session" ? "Codex CLI node" : "Codex app-server";
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
+        text: `${runtime} turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
       },
     };
   }

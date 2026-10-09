@@ -5,6 +5,7 @@ import type {
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
@@ -23,13 +24,11 @@ import {
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
-  buildUpdateInboxEntry,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {
   type CronAttentionJob,
   buildSidebarAttentionEntries,
-  compareSidebarAttentionEntries,
   cronOverdueAt,
 } from "./sidebar-attention-items.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
@@ -87,6 +86,7 @@ export class SidebarAttentionStoreController implements StoreController {
       sources.overlays.subscribe(onChange),
       this.mentions.subscribe(onChange),
       subscribeStoredChatOutboxChanges(onChange),
+      subscribeChatOutboxAttentionChanges(onChange),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
     void import("../pages/chat/chat-outbox-owner.ts")
@@ -231,15 +231,7 @@ export class SidebarAttentionStoreController implements StoreController {
       return outbox;
     }
     const overlay = this.sources.overlays.snapshot;
-    const updateState = resolveSidebarUpdateAttention(this.sources);
-    const update = buildUpdateInboxEntry({
-      canDismiss: updateState.canUpdate,
-      dismissal: updateState.dismissal,
-      forced: updateState.forced,
-      requiresAction: updateState.forced || (updateState.canUpdate && updateState.actionable),
-      severity: overlay.updateStatusBanner?.tone === "danger" ? "error" : "warning",
-      visible: updateState.present,
-    });
+    const update = resolveSidebarUpdateAttention(this.sources);
     const scopeUpgrade = buildScopeUpgradeInboxEntry({
       scopes: gateway.hello?.auth?.scopes,
       state: this.sources.scopeUpgrade.state,
@@ -251,7 +243,7 @@ export class SidebarAttentionStoreController implements StoreController {
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,
       now: Date.now(),
-    }).toSorted(compareSidebarAttentionEntries);
+    });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
       attention,

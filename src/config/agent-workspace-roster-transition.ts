@@ -44,11 +44,10 @@ export function pinSurvivorWorkspaceForRosterCollapse(
     ...entry,
     workspace: resolveAgentWorkspaceDir(sourceConfig, survivorId, env),
   };
-  const { list: _legacyList, ...canonicalAgents } = targetAgents;
   return {
     config: {
       ...targetConfig,
-      agents: { ...canonicalAgents, entries },
+      agents: { ...targetAgents, entries },
     },
     insertedPaths: [["agents", "entries", entryKey, "workspace"]],
   };

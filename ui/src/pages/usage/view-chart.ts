@@ -1,6 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -34,24 +34,6 @@ export const USAGE_TOKEN_CATEGORIES = [
   tokenCategory("cacheWrite", "usage.details.tokensWrittenToCache", "CW"),
   tokenCategory("cacheRead", "usage.details.tokensReadFromCache", "CR"),
 ] as const;
-
-function pct(part: number, total: number): number {
-  return total === 0 ? 0 : (part / total) * 100;
-}
-
-function handleDailyBarKeydown(
-  event: KeyboardEvent,
-  day: string,
-  orderedDays: string[],
-  onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"],
-) {
-  if (event.key !== "Enter" && event.key !== " ") {
-    return;
-  }
-
-  event.preventDefault();
-  onSelectDay(day, event.shiftKey, orderedDays);
-}
 
 type UsageChartRange = { startDate: string; endDate: string; complete: boolean };
 
@@ -92,6 +74,7 @@ export function renderDailyChartCompact(
 
   const orderedDays = daily.map((entry) => entry.date);
   const isTokenMode = chartMode === "tokens";
+  const stacked = dailyChartMode === "by-type";
   const values = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
   const scaleMaximum = Math.max(...values, 0);
   const maxValue = scaleMaximum > 0 ? scaleMaximum : isTokenMode ? 1 : 0.0001;
@@ -105,14 +88,6 @@ export function renderDailyChartCompact(
   const usesCompressedScale = spread > 50;
   const chartAreaPx = 200;
   const minBarPx = 6;
-  const barHeights = values.map((v): number => {
-    if (v <= 0) {
-      return 0;
-    }
-    const ratio = usesCompressedScale ? Math.sqrt(v / maxValue) : v / maxValue;
-    return Math.max(minBarPx, ratio * chartAreaPx);
-  });
-
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
   const selectedDaySet = new Set(selectedDays);
@@ -170,7 +145,9 @@ export function renderDailyChartCompact(
           </div>
           <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
             ${daily.map((d, idx) => {
-              const heightPx = expectDefined(barHeights[idx], "daily usage bar height");
+              const total = isTokenMode ? d.totalTokens : d.totalCost;
+              const ratio = usesCompressedScale ? Math.sqrt(total / maxValue) : total / maxValue;
+              const heightPx = total <= 0 ? 0 : Math.max(minBarPx, ratio * chartAreaPx);
               const isSelected = selectedDaySet.has(d.date);
               const showDateLabel =
                 daily.length <= 14 ||
@@ -179,14 +156,13 @@ export function renderDailyChartCompact(
               const labelClass = showDateLabel
                 ? "daily-bar-label"
                 : "daily-bar-label daily-bar-label--hidden";
-              const segments =
-                dailyChartMode === "by-type"
-                  ? USAGE_TOKEN_CATEGORIES.map(({ key, className, labelKey }) => ({
-                      value: isTokenMode ? d[key] : (d[`${key}Cost`] ?? 0),
-                      className,
-                      labelKey,
-                    }))
-                  : [];
+              const segments = stacked
+                ? USAGE_TOKEN_CATEGORIES.map(({ key, className, labelKey }) => ({
+                    value: isTokenMode ? d[key] : (d[`${key}Cost`] ?? 0),
+                    className,
+                    labelKey,
+                  }))
+                : [];
               const breakdownLines = segments.map(
                 ({ value, labelKey }) =>
                   `${t(labelKey)} ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}`,
@@ -211,33 +187,32 @@ export function renderDailyChartCompact(
                     tabindex="0"
                     aria-pressed=${isSelected ? "true" : "false"}
                     aria-label=${`${dateLabel}: ${tokensLabel}, ${costLabel}`}
-                    @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, orderedDays, onSelectDay)}
+                    @keydown=${(event: KeyboardEvent) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectDay(d.date, event.shiftKey, orderedDays);
+                      }
+                    }}
                     @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey, orderedDays)}
                   >
-                    ${
-                      dailyChartMode === "by-type"
-                        ? html`
-                            <div
-                              class="daily-bar daily-bar--stacked ${heightPx === 0 ? "daily-bar--empty" : ""}"
-                              style="height: ${heightPx.toFixed(0)}px;"
-                            >
-                              ${segments.map(
-                                ({ className, value }) => html`
-                                  <div
-                                    class="cost-segment ${className}"
-                                    style="height: ${(value / segmentTotal) * 100}%"
-                                  ></div>
-                                `,
-                              )}
-                            </div>
-                          `
-                        : html`
-                            <div
-                              class="daily-bar ${heightPx === 0 ? "daily-bar--empty" : ""}"
-                              style="height: ${heightPx.toFixed(0)}px"
-                            ></div>
-                          `
-                    }
+                    ${keyed(
+                      dailyChartMode,
+                      html`
+                        <div
+                          class="daily-bar ${stacked ? "daily-bar--stacked " : ""}${heightPx === 0 ? "daily-bar--empty" : ""}"
+                          style="height: ${heightPx.toFixed(0)}px${stacked ? ";" : ""}"
+                        >
+                          ${segments.map(
+                            ({ className, value }) => html`
+                              <div
+                                class="cost-segment ${className}"
+                                style="height: ${(value / segmentTotal) * 100}%"
+                              ></div>
+                            `,
+                          )}
+                        </div>
+                      `,
+                    )}
                     ${
                       showTotals
                         ? html`<div class="daily-bar-total">${totalLabel}</div>`
@@ -266,7 +241,7 @@ export function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" |
     return {
       className,
       labelKey,
-      percentage: pct(value, total),
+      percentage: total === 0 ? 0 : (value / total) * 100,
       formatted: isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value),
     };
   });

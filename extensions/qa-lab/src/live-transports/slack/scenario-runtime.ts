@@ -62,50 +62,48 @@ export {
   slackQaTopLevelReplyShapeScenario,
 } from "./slack-live.scenario-implementations.js";
 
-async function runSlackMessageScenario(params: {
-  environment: SlackQaScenarioEnvironment;
-  run: SlackQaMessageScenarioRun;
-  scenarioId: string;
-  scenarioTitle: string;
-  timeoutMs: number;
-}) {
-  let scenarioContext = params.environment.context;
+async function runSlackMessageScenario(
+  environment: SlackQaScenarioEnvironment,
+  run: SlackQaMessageScenarioRun,
+) {
+  const { scenario } = environment;
+  let scenarioContext = environment.context;
   try {
-    const beforeRunResult = await params.run.beforeRun?.(params.environment.context);
+    const beforeRunResult = await run.beforeRun?.(environment.context);
     const beforeRunDetails =
       typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
     const channelId =
       typeof beforeRunResult === "object" && beforeRunResult.inputChannelId?.trim()
         ? beforeRunResult.inputChannelId.trim()
-        : params.environment.channelId;
-    scenarioContext = { ...params.environment.context, channelId };
-    const observedMessageStartIndex = params.environment.observedMessages.length;
-    const messageWriteCursor = await params.environment.getMessageWriteCursor();
+        : environment.channelId;
+    scenarioContext = { ...environment.context, channelId };
+    const observedMessageStartIndex = environment.observedMessages.length;
+    const messageWriteCursor = await environment.getMessageWriteCursor();
     const requestStartedAt = new Date();
     const sent = await sendSlackChannelMessage({
       channelId,
-      client: params.environment.context.driverClient,
-      text: params.run.input,
+      client: environment.context.driverClient,
+      text: run.input,
       threadTs: typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
     });
     const requestThreadTs =
       (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ?? sent.ts;
     const observation = {
       channelId,
-      client: params.environment.context.sutReadClient,
-      matchText: params.run.matchText,
-      observedMessages: params.environment.observedMessages,
-      observationScenarioId: params.scenarioId,
-      observationScenarioTitle: params.scenarioTitle,
+      client: environment.context.sutReadClient,
+      matchText: run.matchText,
+      observedMessages: environment.observedMessages,
+      observationScenarioId: scenario.id,
+      observationScenarioTitle: scenario.title,
       sentTs: sent.ts,
-      sutIdentity: params.environment.sutIdentity,
+      sutIdentity: environment.sutIdentity,
     };
-    if (!params.run.expectReply) {
+    if (!run.expectReply) {
       await waitForSlackNoReply({
         ...observation,
-        timeoutMs: params.run.noReplyObservationMs ?? params.timeoutMs,
+        timeoutMs: run.noReplyObservationMs ?? scenario.timeoutMs,
       });
-      const afterNoReplyDetails = await params.run.afterNoReply?.({
+      const afterNoReplyDetails = await run.afterNoReply?.({
         ...scenarioContext,
         sentTs: sent.ts,
       });
@@ -113,39 +111,39 @@ async function runSlackMessageScenario(params: {
         details: ["no reply", beforeRunDetails, afterNoReplyDetails].filter(Boolean).join("; "),
       };
     }
-    if (params.run.captureBeforeReply) {
+    if (run.captureBeforeReply) {
       // Native presentation identity belongs to the successful write capture. Resolve it
       // before shared channel history can evict the earlier message while awaiting the final reply.
       await waitForSlackPreReplyCapture({
-        capture: params.run.captureBeforeReply,
+        capture: run.captureBeforeReply,
         channelId,
-        readMessages: () => params.environment.readMessageWrites(messageWriteCursor),
-        scenarioId: params.scenarioId,
-        timeoutMs: params.timeoutMs,
+        readMessages: () => environment.readMessageWrites(messageWriteCursor),
+        scenarioId: scenario.id,
+        timeoutMs: scenario.timeoutMs,
       });
     }
     const reply = await waitForSlackScenarioReply({
       ...observation,
       threadTs: requestThreadTs,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: scenario.timeoutMs,
     });
-    params.run.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
-    if (params.run.settleObservedMs) {
+    run.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
+    if (run.settleObservedMs) {
       await observeSlackScenarioMessages({
         ...observation,
-        settleMs: params.run.settleObservedMs,
+        settleMs: run.settleObservedMs,
         threadTs: requestThreadTs,
       });
     }
-    const capturedMessages = await params.environment.readMessageWrites(messageWriteCursor);
-    const observedDetails = params.run.verifyObserved?.({
+    const capturedMessages = await environment.readMessageWrites(messageWriteCursor);
+    const observedDetails = run.verifyObserved?.({
       finalMessage: reply.message,
       messages: [
-        ...params.environment.observedMessages.slice(observedMessageStartIndex),
+        ...environment.observedMessages.slice(observedMessageStartIndex),
         ...capturedMessages.filter((message) => message.channelId === channelId),
       ],
     });
-    const afterReplyDetails = await params.run.afterReply?.(reply.message, {
+    const afterReplyDetails = await run.afterReply?.(reply.message, {
       ...scenarioContext,
       sentTs: sent.ts,
     });
@@ -161,7 +159,7 @@ async function runSlackMessageScenario(params: {
       ),
     };
   } finally {
-    await params.run.cleanup?.(scenarioContext);
+    await run.cleanup?.(scenarioContext);
   }
 }
 
@@ -219,11 +217,5 @@ export async function runSlackScenario(
       ...buildLiveTransportRttResult(approval, "approval-request-to-resolution"),
     };
   }
-  return await runSlackMessageScenario({
-    environment,
-    run,
-    scenarioId: scenario.id,
-    scenarioTitle: scenario.title,
-    timeoutMs: scenario.timeoutMs,
-  });
+  return await runSlackMessageScenario(environment, run);
 }

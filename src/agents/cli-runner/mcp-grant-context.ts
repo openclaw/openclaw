@@ -10,6 +10,7 @@ import {
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
+import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
 const cliMcpDelegationCapability = Symbol("cliMcpDelegationCapability");
@@ -164,6 +165,10 @@ export function buildCliMcpGrantContext(params: {
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
   const execSession = buildCliMcpExecSession(params.run.sessionEntry, params.run.execOverrides);
+  const sessionPermissionPolicy = resolveStoredSessionPermissionPolicy(
+    params.run.sessionEntry,
+    params.run.workspaceDir,
+  );
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
@@ -190,6 +195,16 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
+    ...(params.run.conversationToolPolicy
+      ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
+      : {}),
+    ...(params.run.trustedInternalHandoff
+      ? {
+          trustedInternalHandoff: params.run.trustedInternalHandoff,
+          inputProvenance: params.run.inputProvenance,
+        }
+      : {}),
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
@@ -201,9 +216,6 @@ export function buildCliMcpGrantContext(params: {
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
-    ...(params.run.skillWorkshopProposalRevision
-      ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
-      : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
     ...(delegationCapability ? { delegationCapability } : {}),
@@ -248,6 +260,7 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(params.run.continuesConversation ? { continuesConversation: true } : {}),
     ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

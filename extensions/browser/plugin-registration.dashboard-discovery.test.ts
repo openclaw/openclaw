@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawPluginGatewayEvents,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenKeyedStoreOptions,
@@ -13,18 +13,23 @@ import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
-import { getBrowserStateRuntime } from "./src/browser-runtime-state.js";
+import { getBrowserStateRuntime, setBrowserStateRuntime } from "./src/browser-runtime-state.js";
+import { resolveBrowserConfig } from "./src/browser/config.js";
+import { createBrowserRuntimeState, stopBrowserRuntime } from "./src/browser/runtime-lifecycle.js";
+import { browserSessionTabStorageKey } from "./src/browser/session-tab-identity.js";
 import {
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
 } from "./src/browser/session-tab-registry.js";
 import {
-  browserSessionTabStorageKey,
   getBrowserSessionTabStore,
   persistBrowserDashboardStopIntent,
 } from "./src/browser/session-tab-store.js";
@@ -41,8 +46,57 @@ const serviceScope = new AsyncLocalStorage<string>();
 beforeEach(() => reconcile.mockReset());
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["stop", "replacement"] as const)(
+  "runs cleanup under service authority until %s",
+  async (end) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      // Native timers retain async context; keep that contract in the fake clock.
+      const schedule = globalThis.setTimeout;
+      vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
+        schedule(AsyncLocalStorage.bind(callback), delay, ...args),
+      );
+      const lifecycle = await registerDiscovery(state.stateDir);
+      const observed = createDeferred<void>();
+      const scopes: Array<string | undefined> = [];
+      reconcile.mockImplementation(async () => {
+        scopes.push(serviceScope.getStore());
+        observed.resolve();
+        return 0;
+      });
+      await lifecycle.start();
+      const runtime = await serviceScope.run("ended-caller", () =>
+        createBrowserRuntimeState({
+          resolved: resolveBrowserConfig(undefined),
+          port: 18_791,
+        }),
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(300_000);
+        await observed.promise;
+        expect(scopes).toEqual(["discovery-service"]);
+        if (end === "stop") {
+          await lifecycle.stop();
+        } else {
+          setBrowserStateRuntime({ ...getBrowserStateRuntime() });
+        }
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(scopes).toHaveLength(1);
+      } finally {
+        await lifecycle.stop();
+        await stopBrowserRuntime({
+          current: runtime,
+          clearState: vi.fn(),
+          onWarn: vi.fn(),
+        });
+        vi.useRealTimers();
+      }
+    });
+  },
+);
+
 async function registerDiscovery(stateDir: string) {
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const hooks = vi.fn();
   const store = createPluginStateKeyedStoreForTests<unknown>("browser", {
     namespace: "browser.session-tabs",
@@ -92,7 +146,10 @@ async function registerDiscovery(stateDir: string) {
     onBoardChanged = handler;
     return vi.fn();
   });
-  const context: OpenClawPluginServiceContext = {
+  const scheduler = createTestPluginServiceScheduler();
+  onTestFinished(() => scheduler.stop());
+  const context: OpenClawPluginServiceContextV2 = {
+    scheduler,
     config: {},
     stateDir,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

@@ -97,13 +97,33 @@ export function readNodeSessionMarker(
   };
 }
 
+const nodeAdoptionsByRevision = new WeakMap<
+  object,
+  {
+    config?: OpenClawConfig;
+    agentId?: string;
+    includeInitializing?: boolean;
+    adopted: ReadonlyMap<string, AdoptedSessionEntry>;
+  }
+>();
+
 export function listNodeAdoptedSessionEntries(params: {
   agentId?: string;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
   includeInitializing?: boolean;
   sessionEntries?: SessionCatalogEntrySnapshot;
-}): Map<string, AdoptedSessionEntry> {
+}): ReadonlyMap<string, AdoptedSessionEntry> {
+  const revision = params.sessionEntries?.revision;
+  const cached = revision ? nodeAdoptionsByRevision.get(revision) : undefined;
+  if (
+    cached &&
+    cached.config === params.config &&
+    cached.agentId === params.agentId &&
+    cached.includeInitializing === params.includeInitializing
+  ) {
+    return cached.adopted;
+  }
   const adopted = new Map<string, AdoptedSessionEntry>();
   for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -142,6 +162,15 @@ export function listNodeAdoptedSessionEntries(params: {
       sessionId,
       agentId,
       ...(marker.initializing === true ? { initializing: true } : {}),
+    });
+  }
+  if (revision) {
+    // Retain only derived identities, never the request's session entries.
+    nodeAdoptionsByRevision.set(revision, {
+      config: params.config,
+      agentId: params.agentId,
+      includeInitializing: params.includeInitializing,
+      adopted,
     });
   }
   return adopted;

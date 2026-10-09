@@ -1,15 +1,22 @@
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeQaProviderMode,
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   remapModelRefForForcedRuntime,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
-import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import {
+  getQaProvider,
+  DEFAULT_QA_PROVIDER_MODE,
+  QA_DEFAULT_IMAGE_MODEL,
+} from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
 import {
   QA_SESSION_OBSERVER_HEADER,
@@ -17,11 +24,11 @@ import {
 } from "./providers/shared/session-observer-registry.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-id.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
-export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
   "http://localhost:18789",
   "http://127.0.0.1:43124",
@@ -33,13 +40,6 @@ export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["memory-core"]);
 export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
-
-export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
-  const normalizedExtra = (extraOrigins ?? [])
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-  return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
 
 function buildQaModelSelection(primaryModel: string, alternateModel: string) {
   const fallbacks = alternateModel !== primaryModel ? [alternateModel] : undefined;
@@ -69,12 +69,13 @@ export function buildQaGatewayConfig(params: {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockSessionObserverUrl =
     params.mockSessionObserverUrl ?? resolveQaSessionObserverUrl(providerBaseUrl);
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
-  const provider = getQaProvider(providerMode);
+  const provider = getQaProvider(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
+  const providerMode = provider.mode;
   const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
   const { primaryModel: normalizedPrimaryModel, alternateModel: normalizedAlternateModel } =
     resolveQaRuntimeModelPair({
@@ -92,9 +93,11 @@ export function buildQaGatewayConfig(params: {
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
-      : provider.defaultImageGenerationModel({ modelProviderIds });
+      : modelProviderIds.includes("openai")
+        ? QA_DEFAULT_IMAGE_MODEL
+        : null;
   const selectedProviderIds =
-    provider.usesModelProviderPlugins || usesCodexMockAppServer
+    provider.kind === "live" || usesCodexMockAppServer
       ? [
           ...new Set(
             [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
@@ -105,11 +108,7 @@ export function buildQaGatewayConfig(params: {
           ),
         ]
       : [];
-  const configuredPluginIds = uniqueStrings(
-    (params.enabledPluginIds ?? [])
-      .map((pluginId) => pluginId.trim())
-      .filter((pluginId) => pluginId.length > 0),
-  );
+  const configuredPluginIds = normalizeUniqueStringEntries(params.enabledPluginIds);
   // Only canonical frontier provider ids are also plugin ids. Provider aliases
   // and custom providers rely on the explicit owner mapping supplied above.
   const inferredProviderPluginIds = selectedProviderIds.filter((providerId) =>
@@ -117,7 +116,7 @@ export function buildQaGatewayConfig(params: {
   );
   const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
-    : provider.usesModelProviderPlugins
+    : provider.kind === "live"
       ? uniqueStrings([...configuredPluginIds, ...inferredProviderPluginIds])
       : configuredPluginIds;
   // A forced Codex cell must stage its harness even when the provider owner is
@@ -126,9 +125,7 @@ export function buildQaGatewayConfig(params: {
     params.forcedRuntime === "codex"
       ? uniqueStrings([...providerSelectedPluginIds, "codex"])
       : providerSelectedPluginIds;
-  const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
-    .map((pluginId) => pluginId.trim())
-    .filter((pluginId) => pluginId.length > 0);
+  const transportPluginIds = normalizeStringEntries(uniqueStrings(params.transportPluginIds ?? []));
   const pluginEntries = Object.fromEntries(
     selectedPluginIds.map((pluginId) => [
       pluginId,
@@ -165,6 +162,9 @@ export function buildQaGatewayConfig(params: {
     // Codex owns its app-server transport. OpenClaw provider params would make
     // the forced parity cell an authored route that Codex correctly rejects.
     if (params.forcedRuntime === "codex") {
+      if (params.runtimeSelection === "configured") {
+        return { agentRuntime: { id: "codex" as const } };
+      }
       return {};
     }
     return {
@@ -175,7 +175,10 @@ export function buildQaGatewayConfig(params: {
       }),
     };
   };
-  const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
+  const allowedOrigins = uniqueStrings([
+    ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+    ...normalizeStringEntries(params.controlUiAllowedOrigins),
+  ]);
   const providerGatewayModels = provider.buildGatewayModels({
     providerBaseUrl,
     primaryModel,

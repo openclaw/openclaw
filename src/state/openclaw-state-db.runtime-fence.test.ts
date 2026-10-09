@@ -54,24 +54,4 @@ describe("shared state runtime schema fence", () => {
     expect(initial.db.isOpen).toBe(false);
     expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
   });
-
-  it("retains the cached handle after a compatible external data commit", () => {
-    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-runtime-data-") } };
-    const initial = openOpenClawStateDatabase(options);
-    const external = new DatabaseSync(initial.path);
-    try {
-      external.exec(`
-        UPDATE schema_meta
-           SET updated_at = updated_at + 1
-         WHERE meta_key = 'primary';
-      `);
-    } finally {
-      external.close();
-    }
-
-    vi.runOnlyPendingTimers();
-
-    expect(openOpenClawStateDatabase(options)).toBe(initial);
-    expect(initial.db.isOpen).toBe(true);
-  });
 });

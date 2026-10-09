@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isFutureDateTimestampMs,
@@ -59,12 +60,7 @@ function setCachedProbeResult(
     return result;
   }
   probeCache.set(cacheKey, { result, expiresAt });
-  if (probeCache.size > MAX_PROBE_CACHE_SIZE) {
-    const oldest = probeCache.keys().next().value;
-    if (oldest !== undefined) {
-      probeCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
   return result;
 }
 
@@ -82,7 +78,7 @@ export async function probeFeishu(
     return {
       ok: false,
       appId: creds.appId,
-      error: "probe aborted",
+      error: "check aborted",
     };
   }
 
@@ -120,11 +116,11 @@ export async function probeFeishu(
       return {
         ok: false,
         appId: creds.appId,
-        error: "probe aborted",
+        error: "check aborted",
       };
     }
     if (responseResult.status === "timeout") {
-      return cacheError(`probe timed out after ${timeoutMs}ms`);
+      return cacheError(`check timed out after ${timeoutMs}ms`);
     }
 
     const response = responseResult.value;
@@ -132,7 +128,7 @@ export async function probeFeishu(
       return {
         ok: false,
         appId: creds.appId,
-        error: "probe aborted",
+        error: "check aborted",
       };
     }
 

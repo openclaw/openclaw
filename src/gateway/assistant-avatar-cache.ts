@@ -1,7 +1,8 @@
 // Prepared avatar representations retain their source revision through delivery.
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
+import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import type { PreparedLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
 
@@ -11,7 +12,7 @@ export type GatewayAvatarImageSource =
 
 const fileSources = new WeakMap<PreparedLocalAgentAvatarFile, GatewayAvatarImageSource>();
 const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
-const dataSources = new Map<string, GatewayAvatarImageSource>();
+const dataSources = new WeakMap<object, Extract<GatewayAvatarImageSource, { dataUrl: string }>>();
 
 export function prepareGatewayAvatarFile(
   file: PreparedLocalAgentAvatarFile,
@@ -20,37 +21,35 @@ export function prepareGatewayAvatarFile(
   if (!source) {
     source = {
       file,
-      revision: createHash("sha256")
-        .update("thumbnail-128-png-v1:")
-        .update(JSON.stringify([file.path, file.stat]))
-        .digest("hex")
-        .slice(0, 16),
+      revision: sha256HexPrefixCore(
+        `thumbnail-128-png-v1:${JSON.stringify([file.path, file.stat])}`,
+        16,
+      ),
     };
     fileSources.set(file, source);
   }
   return source;
 }
 
-export function prepareGatewayAvatarDataUrl(dataUrl: string): GatewayAvatarImageSource | undefined {
-  const cached = dataSources.get(dataUrl);
-  if (cached) {
-    dataSources.delete(dataUrl);
-    dataSources.set(dataUrl, cached);
+export function prepareGatewayAvatarDataUrl(
+  cfg: OpenClawConfig,
+  agentId: string,
+  dataUrl: string,
+): GatewayAvatarImageSource | undefined {
+  const owner = resolveMutableAgentEntry(cfg, agentId) ?? cfg;
+  const cached = dataSources.get(owner);
+  if (cached?.dataUrl === dataUrl) {
     return cached;
   }
   if (!isRenderableAvatarImageDataUrl(dataUrl)) {
+    dataSources.delete(owner);
     return undefined;
   }
   const source: GatewayAvatarImageSource = {
     dataUrl,
-    revision: createHash("sha256")
-      .update("thumbnail-128-png-v1:")
-      .update(dataUrl)
-      .digest("hex")
-      .slice(0, 16),
+    revision: sha256HexPrefixCore(`thumbnail-128-png-v1:${dataUrl}`, 16),
   };
-  dataSources.set(dataUrl, source);
-  pruneMapToMaxSize(dataSources, 4);
+  dataSources.set(owner, source);
   return source;
 }
 

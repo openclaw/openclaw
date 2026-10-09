@@ -23,9 +23,9 @@ import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   approveDevicePairing,
@@ -41,7 +41,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
-import { readSystemInfo } from "../../lib/system-info.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -51,6 +51,8 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
 import { renderDevices } from "./view.ts";
+
+registerDevicesEnglish();
 
 const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
@@ -75,7 +77,6 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() private desktopEnvironments: EnvironmentSummary[] = [];
   private systemInfoUnavailable = false;
   @state() private pageState = createInitialDevicesState();
-  @state() private canPairDevice = false;
   @state() private canManagePairing = false;
   @state() private canAdmin = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
@@ -185,10 +186,7 @@ class DevicesPage extends OpenClawLightDomElement {
     "visible",
   );
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
+    .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.gateway,
       (gateway) =>
@@ -248,7 +246,6 @@ class DevicesPage extends OpenClawLightDomElement {
     void this.presenceTask.run([null, null]);
     this.resetInventoryDetails();
     this.presence = [];
-    this.canPairDevice = false;
     this.canManagePairing = false;
     this.canAdmin = false;
     super.disconnectedCallback();
@@ -263,7 +260,10 @@ class DevicesPage extends OpenClawLightDomElement {
     this.pageState.client = snapshot.client;
     this.pageState.connected = snapshot.phase === "connected";
     this.pageState.requestGeneration = this.gateway.epoch;
-    this.syncGatewayState(snapshot);
+    const connected = snapshot.phase === "connected";
+    const auth = snapshot.hello?.auth ?? null;
+    this.canAdmin = connected && hasOperatorAdminAccess(auth);
+    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
     if (!this.canLoadSystemInfo) {
       void this.systemInfoTask.run([null, null]);
       this.gatewaySystemInfo = null;
@@ -283,14 +283,6 @@ class DevicesPage extends OpenClawLightDomElement {
       void this.loadPresence();
     }
     this.syncPolling();
-  }
-
-  private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
-    const connected = snapshot.phase === "connected";
-    const auth = snapshot.hello?.auth ?? null;
-    this.canAdmin = connected && hasOperatorAdminAccess(auth);
-    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
-    this.canPairDevice = this.canAdmin;
   }
 
   private applyRouteData() {
@@ -351,6 +343,32 @@ class DevicesPage extends OpenClawLightDomElement {
     }
   }
 
+  private runAdminTask(task: (pageState: DevicesPageDataState) => unknown) {
+    if (this.canAdmin) {
+      void this.runPageTask(task);
+    }
+  }
+
+  private bindNode(nodeId: string | null, agentId?: string) {
+    if (!this.canAdmin) {
+      return;
+    }
+    const config = this.context.runtimeConfig;
+    const target =
+      agentId === undefined
+        ? { path: [] }
+        : config.agentEntry(agentId, { ensure: Boolean(nodeId) });
+    if (!target) {
+      return;
+    }
+    const path = [...target.path, "tools", "exec", "node"];
+    if (nodeId) {
+      config.patchForm(path, nodeId);
+    } else {
+      config.removeFormValue(path);
+    }
+  }
+
   private ensureInitialData() {
     const pageState = this.pageState;
     if (!pageState.connected || !pageState.client || !this.routeDataInitialized) {
@@ -388,12 +406,7 @@ class DevicesPage extends OpenClawLightDomElement {
 
   private get canLoadSystemInfo(): boolean {
     const snapshot = this.gateway.snapshot;
-    return (
-      this.isConnected &&
-      snapshot?.phase === "connected" &&
-      !this.systemInfoUnavailable &&
-      isGatewayMethodAdvertised(snapshot, "system.info") === true
-    );
+    return this.isConnected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
   }
 
   private get canLoadDesktopEnvironments(): boolean {
@@ -478,6 +491,29 @@ class DevicesPage extends OpenClawLightDomElement {
         }));
   }
 
+  // Retargeting discards the draft for the target being left, so a dirty form
+  // asks first. Cancelling restores nothing because nothing is written until the
+  // operator confirms: the target, the form, the scope and the dirty flag are
+  // still the ones the selector was rendered from, and the re-render puts the
+  // selector itself back on that target.
+  private async changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
+    const devices = this.pageState;
+    if (devices.execApprovalsDirty && !(await this.dialogs.confirmExecApprovalsDiscard())) {
+      this.requestUpdate();
+      return;
+    }
+    if (this.pageState !== devices) {
+      return;
+    }
+    this.execApprovalsTarget = kind;
+    this.execApprovalsTargetNodeId = nodeId;
+    devices.execApprovalsSnapshot = null;
+    devices.execApprovalsForm = null;
+    devices.execApprovalsDirty = false;
+    devices.execApprovalsSelectedAgent = null;
+    this.requestUpdate();
+  }
+
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
     return this.execApprovalsTarget === "node" && this.execApprovalsTargetNodeId
       ? { kind: "node", nodeId: this.execApprovalsTargetNodeId }
@@ -514,7 +550,7 @@ class DevicesPage extends OpenClawLightDomElement {
           devicesLoading: devices.devicesLoading,
           devicesError: devices.devicesError,
           devicesList: devices.devicesList,
-          canPairDevice: this.canPairDevice,
+          canPairDevice: this.canAdmin,
           canManagePairing: this.canManagePairing,
           canAdmin: this.canAdmin,
           configForm: currentConfigObject(config),
@@ -561,72 +597,30 @@ class DevicesPage extends OpenClawLightDomElement {
           onDeviceRename: (device) => void this.dialogs.editAlias(device),
           onLoadConfig: () => void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
           onLoadExecApprovals: () =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) =>
-                  loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-                )
-              : undefined,
-          onBindDefault: (nodeId) => {
-            if (!this.canAdmin) {
-              return;
-            }
-            if (nodeId) {
-              this.context.runtimeConfig.patchForm(["tools", "exec", "node"], nodeId);
-            } else {
-              this.context.runtimeConfig.removeFormValue(["tools", "exec", "node"]);
-            }
-          },
-          onBindAgent: (agentId, nodeId) => {
-            if (!this.canAdmin) {
-              return;
-            }
-            const target = this.context.runtimeConfig.agentEntry(agentId, {
-              ensure: Boolean(nodeId),
-            });
-            if (!target) {
-              return;
-            }
-            const path = [...target.path, "tools", "exec", "node"];
-            if (nodeId) {
-              this.context.runtimeConfig.patchForm(path, nodeId);
-            } else {
-              this.context.runtimeConfig.removeFormValue(path);
-            }
-          },
+            this.runAdminTask((pageState) =>
+              loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+            ),
+          onBindDefault: (nodeId) => this.bindNode(nodeId),
+          onBindAgent: (agentId, nodeId) => this.bindNode(nodeId, agentId),
           onSaveBindings: () => {
             if (this.canAdmin) {
               void this.context.runtimeConfig.save();
             }
           },
-          onExecApprovalsTargetChange: (kind, nodeId) => {
-            this.execApprovalsTarget = kind;
-            this.execApprovalsTargetNodeId = nodeId;
-            devices.execApprovalsSnapshot = null;
-            devices.execApprovalsForm = null;
-            devices.execApprovalsDirty = false;
-            devices.execApprovalsSelectedAgent = null;
-            this.requestUpdate();
-          },
+          onExecApprovalsTargetChange: (kind, nodeId) =>
+            void this.changeExecApprovalsTarget(kind, nodeId),
           onExecApprovalsSelectAgent: (agentId) => {
             devices.execApprovalsSelectedAgent = agentId;
             this.requestUpdate();
           },
           onExecApprovalsPatch: (path, value) =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) =>
-                  updateExecApprovalsFormValue(pageState, path, value),
-                )
-              : undefined,
+            this.runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
           onExecApprovalsRemove: (path) =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path))
-              : undefined,
+            this.runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
           onSaveExecApprovals: () =>
-            this.canAdmin
-              ? void this.runPageTask((pageState) =>
-                  saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-                )
-              : undefined,
+            this.runAdminTask((pageState) =>
+              saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+            ),
         }),
       )}
     `;

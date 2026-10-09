@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -18,8 +18,8 @@ import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
-import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -32,12 +32,12 @@ import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
-import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
+import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
+import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
@@ -125,7 +125,23 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
-    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal };
+    const fuseRecallMetadata =
+      (opts?.lexicalOnly === true || this.providerRequirement.mode === "fts-only") &&
+      sourceFilterList.length === 1 &&
+      sourceFilterList[0] === "sessions";
+    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
+    const database = this.publishedDatabase;
+    const databasePath = resolveUserPath(this.settings.store.databasePath);
+    const fileIdentity = fuseRecallMetadata ? readMemoryShadowIdentity(databasePath) : undefined;
+    const assertReadOwner = () => {
+      opts?.signal?.throwIfAborted();
+      if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
+        throw new Error("Memory retrieval changed its captured database owner");
+      }
+      if (fileIdentity) {
+        assertMemoryShadowIdentity(databasePath, fileIdentity);
+      }
+    };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;
     let releaseGeneration: (() => Promise<void>) | undefined;
     const releaseReadGeneration = async () => {
@@ -138,7 +154,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
+        fuseRecallMetadata,
       );
+      assertReadOwner();
       preparedKeyword = undefined;
       if (
         sourceFilterAllowed &&
@@ -183,7 +201,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           if (err instanceof WorkerTaskError && err.code === "overloaded") {
             throw err;
           }
-          if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
+          if (
+            this.providerRequirement.mode === "optional" &&
+            isMemoryEmbeddingOperationError(err)
+          ) {
             const failedProvider = this.provider?.id ?? this.settings.provider;
             await this.retireCurrentProvider().catch((retireErr: unknown) => {
               const message = redactSensitiveText(formatErrorMessage(retireErr), {
@@ -220,13 +241,20 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return [];
       }
       const recoveringEmbeddingProvider = this.embeddingBootstrapFailure !== undefined;
-      if (recoveringEmbeddingProvider) {
+      if (recoveringEmbeddingProvider || (fuseRecallMetadata && !this.providerInitialized)) {
         await releaseReadGeneration();
       }
       const embeddingBootstrapKeywordOnly = await this.ensureEmbeddingProviderForSearch(
         indexState,
         opts?.onDebug,
       );
+      const refreshSearchIdentity = () =>
+        embeddingBootstrapKeywordOnly
+          ? this.refreshKeywordFallbackIndexIdentity(indexState)
+          : this.refreshIndexIdentityDirty({
+              providerKeyKnown: this.providerInitialized,
+              indexState,
+            });
       if (recoveringEmbeddingProvider) {
         indexState = await readIndexState();
       }
@@ -245,6 +273,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         // Reinitialize it before identity validation; leaving the lifecycle pending
         // makes a valid existing index look mismatched and drops keyword results.
         this.resetProviderInitializationForRetry();
+        if (fuseRecallMetadata) {
+          await releaseReadGeneration();
+        }
         await this.ensureProviderInitialized();
       }
       this.assertRequiredProviderAvailable("search");
@@ -253,28 +284,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         !this.provider &&
         this.providerLifecycle.mode === "degraded"
       ) {
-        const activatedFallback = await this.activateFallbackProvider(
-          this.providerLifecycle.reason,
-        ).catch((fallbackErr: unknown) => {
-          log.warn(
-            `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
-          );
-          return false;
-        });
+        if (fuseRecallMetadata) {
+          await releaseReadGeneration();
+        }
+        const activatedFallback = await this.activateSearchFallback(this.providerLifecycle.reason);
         if (activatedFallback) {
-          this.refreshIndexIdentityDirty({
-            providerKeyKnown: this.providerInitialized,
-            indexState,
-          });
+          refreshSearchIdentity();
         }
       }
-      const refreshSearchIdentity = () =>
-        embeddingBootstrapKeywordOnly
-          ? this.refreshKeywordFallbackIndexIdentity(indexState)
-          : this.refreshIndexIdentityDirty({
-              providerKeyKnown: this.providerInitialized,
-              indexState,
-            });
       const indexIdentity = refreshSearchIdentity();
       const shouldRepairIdentity =
         hasIndexedContent &&
@@ -304,10 +321,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         !embeddingBootstrapKeywordOnly &&
         (await this.adoptPublishedFallbackProviderIfMatched(indexState))
       ) {
-        repairedIndexIdentity = this.refreshIndexIdentityDirty({
-          providerKeyKnown: this.providerInitialized,
-          indexState,
-        });
+        repairedIndexIdentity = refreshSearchIdentity();
       }
       // A pending OpenClaw chunking upgrade keeps the stored keyword rows
       // readable: the resolver only marks chunkingVersionOnly when every
@@ -398,6 +412,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (chunkingUpgradePendingKeywordOnly(effectiveIdentity)) {
         opts?.onDebug?.({ backend: "builtin", effectiveMode: "keyword-only" });
       }
+      const handleRetrievalError = (kind: "FTS keyword" | "vector", error: unknown): [] => {
+        opts?.signal?.throwIfAborted();
+        if (error instanceof WorkerTaskError && error.code === "overloaded") {
+          throw error;
+        }
+        log.warn(`memory search: ${kind} query failed: ${formatErrorMessage(error)}`);
+        return [];
+      };
       const loadKeywordResults = async () => {
         const initialResult = preparedKeyword;
         preparedKeyword = undefined;
@@ -409,14 +431,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
                 keywordOptions,
                 sourceFilterList,
                 initialResult,
-              ).catch((err: unknown) => {
-                opts?.signal?.throwIfAborted();
-                if (err instanceof WorkerTaskError && err.code === "overloaded") {
-                  throw err;
-                }
-                log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
-                return [];
-              })
+              ).catch((error: unknown) => handleRetrievalError("FTS keyword", error))
             : [];
         if (!keywordOnly && opts?.onPartialResults) {
           const memoryResults = results.filter((entry) => entry.source === "memory");
@@ -437,101 +452,67 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return await finalizeKeywords(await loadKeywordResults());
       }
       let semanticProvider = this.provider;
-      let semanticProviderRuntime = this.providerRuntime;
-      let vectorProviderIdentity = {
-        model: semanticProvider.model,
-        aliases: this.resolveProviderIndexIdentities()
-          .slice(1)
-          .map((identity) => identity.model),
-      };
-
-      const embedQuery = () =>
-        this.embedQueryWithRetry(
-          normalizedQuery,
-          opts?.signal,
-          semanticProvider,
-          false,
-          semanticProviderRuntime,
-          opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
-        );
+      let vectorProviderIdentity: { model: string; aliases: string[] };
       let keywordResults: Awaited<ReturnType<typeof loadKeywordResults>> = [];
       let queryVec: number[];
-      const releaseSemanticProvider = this.acquireProviderUse(semanticProvider);
-      try {
-        keywordResults = await loadKeywordResults();
+      for (let fallbackAttempt = false; ; fallbackAttempt = true) {
+        const semanticProviderRuntime = this.providerRuntime;
+        vectorProviderIdentity = {
+          model: semanticProvider.model,
+          aliases: this.resolveProviderIndexIdentities()
+            .slice(1)
+            .map((identity) => identity.model),
+        };
+        const releaseProvider = this.acquireProviderUse(semanticProvider);
         try {
-          queryVec = await embedQuery();
-        } catch (err) {
-          releaseSemanticProvider();
-          // An aborted caller already stopped waiting; keep the provider generation
-          // healthy and skip fallback activation instead of poisoning later searches.
-          if (opts?.signal?.aborted) {
-            throw err;
-          }
-          // A provider transition can change index identity; never retain candidates
-          // from the previous generation while fallback activation is pending.
-          opts?.onPartialResults?.(null);
-          this.markLocalEmbeddingProviderDegraded(err);
-          const message = formatErrorMessage(err);
-          const activatedFallback = this.shouldFallbackOnError(err)
-            ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
-                log.warn(
-                  `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
-                );
-                return false;
-              })
-            : false;
-          if (activatedFallback) {
-            if (
-              this.refreshIndexIdentityDirty({
-                providerKeyKnown: this.providerInitialized,
-                indexState,
-              }).status !== "valid"
-            ) {
-              return [];
-            }
-            if (!this.provider) {
-              return [];
-            }
-            semanticProvider = this.provider;
-            semanticProviderRuntime = this.providerRuntime;
-            vectorProviderIdentity = {
-              model: semanticProvider.model,
-              aliases: this.resolveProviderIndexIdentities()
-                .slice(1)
-                .map((identity) => identity.model),
-            };
-            const releaseFallbackProvider = this.acquireProviderUse(semanticProvider);
-            try {
-              keywordResults = await loadKeywordResults();
-              try {
-                queryVec = await embedQuery();
-              } catch (fallbackErr) {
-                releaseFallbackProvider();
-                if (!opts?.signal?.aborted) {
-                  this.markLocalEmbeddingProviderDegraded(fallbackErr);
-                }
-                throw fallbackErr;
-              }
-            } finally {
-              releaseFallbackProvider();
-            }
-          } else if (
-            (!this.provider || this.providerRequirement.mode !== "required") &&
-            this.fts.enabled &&
-            this.fts.available
-          ) {
-            this.assertRequiredProviderAvailable("search");
-            log.warn(
-              `memory search: embeddings unavailable; using keyword-only results: ${message}`,
+          keywordResults = await loadKeywordResults();
+          try {
+            queryVec = await this.embedQueryWithRetry(
+              normalizedQuery,
+              opts?.signal,
+              semanticProvider,
+              semanticProviderRuntime,
+              opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
             );
-            return await finalizeKeywords(keywordResults);
-          } else {
-            throw err;
+            break;
+          } catch (err) {
+            releaseProvider();
+            // Cancellation leaves the provider healthy. A fallback failure is final;
+            // only the first attempt can change provider and invalidate lexical recall.
+            if (opts?.signal?.aborted) {
+              throw err;
+            }
+            if (fallbackAttempt) {
+              this.markLocalEmbeddingProviderDegraded(err);
+              throw err;
+            }
+            opts?.onPartialResults?.(null);
+            this.markLocalEmbeddingProviderDegraded(err);
+            const message = formatErrorMessage(err);
+            const activatedFallback =
+              isMemoryEmbeddingOperationError(err) && (await this.activateSearchFallback(message));
+            if (activatedFallback) {
+              if (refreshSearchIdentity().status !== "valid" || !this.provider) {
+                return [];
+              }
+              semanticProvider = this.provider;
+            } else if (
+              (!this.provider || this.providerRequirement.mode !== "required") &&
+              this.fts.enabled &&
+              this.fts.available
+            ) {
+              this.assertRequiredProviderAvailable("search");
+              log.warn(
+                `memory search: embeddings unavailable; using keyword-only results: ${message}`,
+              );
+              return await finalizeKeywords(keywordResults);
+            } else {
+              throw err;
+            }
           }
+        } finally {
+          releaseProvider();
         }
-      } finally {
-        releaseSemanticProvider();
       }
       const hasVector = queryVec.some((v) => v !== 0);
       const vectorResults = hasVector
@@ -542,14 +523,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             vectorProviderIdentity,
             indexState,
             opts?.signal,
-          ).catch((err: unknown) => {
-            opts?.signal?.throwIfAborted();
-            if (err instanceof WorkerTaskError && err.code === "overloaded") {
-              throw err;
-            }
-            log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
-            return [];
-          })
+          ).catch((error: unknown) => handleRetrievalError("vector", error))
         : [];
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
@@ -562,7 +536,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         });
         // Decay and importance can reverse the order returned by vector retrieval.
         const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
+        return applyRetrievalRanking(decayed, activeProjects)
           .filter((entry) => entry.score >= minScore)
           .toSorted(
             (left, right) =>
@@ -606,10 +580,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     };
     return await this.withManagerOperation(async () => {
       try {
-        return await runSearch();
+        const results = await runSearch();
+        assertReadOwner();
+        return results;
       } finally {
         await releaseReadGeneration();
       }
+    });
+  }
+
+  private async activateSearchFallback(reason: string): Promise<boolean> {
+    return await this.activateFallbackProvider(reason).catch((error: unknown) => {
+      log.warn(`memory search: failed to activate fallback provider: ${formatErrorMessage(error)}`);
+      return false;
     });
   }
 
@@ -627,13 +610,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     indexState: MemoryRetrievalIndexState,
     signal?: AbortSignal,
   ): Promise<Array<MemoryRetrievalResult & { id: string }>> {
-    const results = await searchVector({
-      vectorTable: VECTOR_TABLE,
+    const query = {
       providerModel: providerIdentity.model,
       providerModelAliases: providerIdentity.aliases,
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
+    };
+    const results = await searchVector({
+      vectorTable: VECTOR_TABLE,
+      ...query,
       signal,
       ensureVectorReady: async (dimensions) => {
         if (!this.vector.enabled) {
@@ -658,11 +644,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             databasePath: resolveUserPath(this.settings.store.databasePath),
           },
           {
-            providerModel: providerIdentity.model,
-            providerModelAliases: providerIdentity.aliases,
-            queryVec,
-            limit,
-            snippetMaxChars: SNIPPET_MAX_CHARS,
+            ...query,
             sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
           },
           signal,
@@ -684,6 +666,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       },
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
     });
-    return this.attachRecallMetadata(results, signal, sourceFilterList);
+    return this.attachRecallMetadata(results, signal);
   }
 }

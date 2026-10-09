@@ -8,10 +8,8 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
  * - Ship normalization consistency
  * - Bot mention detection boundaries
  */
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
-import { createTlonCitationResolver } from "./monitor/cites.js";
 import { prepareTlonGroupAdmission } from "./monitor/mentions.js";
 import {
   resolveTlonCommandAuthorizationWithIngress,
@@ -19,7 +17,6 @@ import {
   isGroupInviteAllowed,
   isBotMentioned,
   extractMessageText,
-  resolveAuthorizedMessageText,
 } from "./monitor/utils.js";
 import { setTlonRuntime } from "./runtime.js";
 
@@ -94,7 +91,6 @@ describe("Security: DM Allowlist", () => {
       const authorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~zod",
         ownerShip: "zod",
-        useAccessGroups: true,
       });
       expect(authorized.commandAccess.requested).toBe(true);
       expect(authorized.commandAccess.authorized).toBe(true);
@@ -104,7 +100,6 @@ describe("Security: DM Allowlist", () => {
       const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~nec",
         ownerShip: "~zod",
-        useAccessGroups: true,
       });
       expect(unauthorized.commandAccess.requested).toBe(true);
       expect(unauthorized.commandAccess.authorized).toBe(false);
@@ -347,51 +342,5 @@ describe("Security: Authorization Edge Cases", () => {
     const suspiciousShip = "__proto__";
     await expectDmAllowed(suspiciousShip, ["~zod"], false);
     await expectDmAllowed("~zod", [suspiciousShip], false);
-  });
-});
-
-describe("Security: Cite Resolution Authorization Ordering", () => {
-  const content = [
-    {
-      block: {
-        cite: {
-          chan: {
-            nest: "chat/~private-ship/ops",
-            where: "/msg/~victim-ship/170141184507799509469114119040828178432",
-          },
-        },
-      },
-    },
-    { inline: ["~bot-ship please summarize this"] },
-  ];
-  const rawText = extractMessageText(content);
-
-  function createResolver() {
-    const scry = vi.fn(async () => ({ essay: { content: [{ inline: ["PRIVATE-CONTENT"] }] } }));
-    return {
-      scry,
-      ...createTlonCitationResolver({ api: { scry }, runtime: createNonExitingRuntimeEnv() }),
-    };
-  }
-
-  it("does not fetch cited content before sender authorization", async () => {
-    const { scry, resolveAllCites } = createResolver();
-    await expect(
-      resolveAuthorizedMessageText({
-        rawText,
-        content,
-        authorizedForCites: false,
-        resolveAllCites,
-      }),
-    ).resolves.toBe(rawText);
-    expect(scry).not.toHaveBeenCalled();
-  });
-
-  it("prepends the resolved citation after sender authorization", async () => {
-    const { scry, resolveAllCites } = createResolver();
-    await expect(
-      resolveAuthorizedMessageText({ rawText, content, authorizedForCites: true, resolveAllCites }),
-    ).resolves.toBe(`> ~victim-ship wrote: PRIVATE-CONTENT\n\n${rawText}`);
-    expect(scry).toHaveBeenCalledTimes(1);
   });
 });

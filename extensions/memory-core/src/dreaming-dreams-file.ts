@@ -1,4 +1,3 @@
-// Memory Core helpers for safe managed DREAMS.md updates.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -215,18 +214,17 @@ export function clampDreamDiaryContextEntry(entry: string): string {
   return `${truncateUtf16Safe(normalized, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
 }
 
+function diaryTextLines(block: string): string[] {
+  return block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("<!--") && !line.startsWith("#"));
+}
+
 function normalizeDiaryBlockBody(block: string): string {
-  const bodyLines: string[] = [];
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("<!--") || trimmed.startsWith("#")) {
-      continue;
-    }
-    if (trimmed.startsWith("*") && trimmed.endsWith("*") && trimmed.length > 2) {
-      continue;
-    }
-    bodyLines.push(trimmed);
-  }
+  const bodyLines = diaryTextLines(block).filter(
+    (line) => !(line.startsWith("*") && line.endsWith("*") && line.length > 2),
+  );
   return clampDreamDiaryContextEntry(bodyLines.join(" "));
 }
 
@@ -273,27 +271,17 @@ export async function readRecentDreamDiaryEntries(params: {
 }
 
 function normalizeDiaryBlockFingerprint(block: string): string {
-  const lines = block
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
   let dateLine = "";
   const bodyLines: string[] = [];
-  for (const line of lines) {
+  for (const line of diaryTextLines(block)) {
     if (!dateLine && line.startsWith("*") && line.endsWith("*") && line.length > 2) {
       dateLine = line.slice(1, -1).trim();
-      continue;
-    }
-    if (line.startsWith("<!--") || line.startsWith("#")) {
       continue;
     }
     bodyLines.push(line);
   }
   const normalizedDate = dateLine.replace(/\s+/g, " ").trim();
-  const normalizedBody = bodyLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .trim();
+  const normalizedBody = bodyLines.join("\n");
   return `${normalizedDate}\n${normalizedBody}`;
 }
 
@@ -312,17 +300,24 @@ function dedupeDiaryBlocks(blocks: string[], seen = new Set<string>()): string[]
   });
 }
 
-function stripBackfillDiaryBlocks(existing: string): { updated: string; removed: number } {
+function filterDiaryContent(existing: string, filter: (blocks: string[]) => string[]) {
   const ensured = ensureDiarySection(existing);
   const blocks = readDiaryBlocks(ensured);
   if (!blocks) {
-    return { updated: ensured, removed: 0 };
+    return { updated: ensured, removed: 0, kept: 0 };
   }
-  const kept = blocks.filter((block) => !block.includes(BACKFILL_ENTRY_MARKER));
+  const kept = filter(blocks);
   return {
     updated: replaceDiaryContent(ensured, joinDiaryBlocks(kept)),
     removed: blocks.length - kept.length,
+    kept: kept.length,
   };
+}
+
+function stripBackfillDiaryBlocks(existing: string) {
+  return filterDiaryContent(existing, (blocks) =>
+    blocks.filter((block) => !block.includes(BACKFILL_ENTRY_MARKER)),
+  );
 }
 
 function formatBackfillDiaryDate(isoDay: string): string {
@@ -418,24 +413,10 @@ export async function dedupeDreamDiaryEntries(params: {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
-      const ensured = ensureDiarySection(existing);
-      const blocks = readDiaryBlocks(ensured);
-      if (!blocks) {
-        return {
-          content: ensured,
-          result: { dreamsPath, removed: 0, kept: 0 },
-          shouldWrite: false,
-        };
-      }
-      const keptBlocks = dedupeDiaryBlocks(blocks);
-      const removed = blocks.length - keptBlocks.length;
+      const { updated, removed, kept } = filterDiaryContent(existing, dedupeDiaryBlocks);
       return {
-        content: replaceDiaryContent(ensured, joinDiaryBlocks(keptBlocks)),
-        result: {
-          dreamsPath,
-          removed,
-          kept: keptBlocks.length,
-        },
+        content: updated,
+        result: { dreamsPath, removed, kept },
         shouldWrite: removed > 0,
       };
     },

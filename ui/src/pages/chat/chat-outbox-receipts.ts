@@ -1,8 +1,17 @@
-import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  CHAT_HISTORY_MAX_ENTRIES,
+  CHAT_INPUT_RUN_ID_MAX_CHARS,
+} from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   findChatSubmissionMessage,
+  prependUniqueNativeMessages,
   readChatInputReceipt,
 } from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
@@ -19,10 +28,14 @@ import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import {
+  isHistoryCursor,
+  type ChatHistoryResponse,
+  type ChatHistoryResult,
+} from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
+import { CHAT_OUTBOX_RETRY_DEFAULT_MS, retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   clearPendingQueueItemsForRun,
@@ -40,6 +53,95 @@ import {
 } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { reconcileChatRunFromSessionRow } from "./run-lifecycle.ts";
+
+// Legacy recovery previously searched a 1,000-message, 6 MiB display window.
+const LEGACY_RECOVERY_HISTORY_BYTES = 6 * 1024 * 1024;
+
+async function findChatOutboxSubmission(
+  history: ChatHistoryResult,
+  item: ChatQueueItem,
+  userRoleOnly: boolean,
+  readOlder: (offset: number, limit: number) => Promise<ChatHistoryResult>,
+  isCurrent: () => boolean,
+) {
+  let page = history;
+  let submission = findChatSubmissionMessage(page.messages, item.sendRunId, userRoleOnly);
+  const sessionId = history.sessionInfo?.sessionId ?? history.sessionId;
+  if (
+    submission ||
+    !history.hasMore ||
+    !item.sendRunId ||
+    ((item.sendAttempts ?? 0) === 0 &&
+      item.sendRequestStartedAtMs === undefined &&
+      item.sendState !== "unconfirmed") ||
+    readChatInputReceipt(history, item) ||
+    (item.sessionId && item.sessionId !== sessionId)
+  ) {
+    return { submission };
+  }
+  let inspected: unknown[] = [];
+  let inspectedActivity: unknown[] = [];
+  const encoder = new TextEncoder();
+  const measureNewPage = (pageResult: ChatHistoryResult) => {
+    const combined = prependUniqueNativeMessages(pageResult.messages ?? [], inspected);
+    const fresh = combined.slice(0, combined.length - inspected.length);
+    inspected = combined;
+    const activity = prependUniqueNativeMessages(pageResult.activity ?? [], inspectedActivity);
+    const freshActivity = activity.slice(0, activity.length - inspectedActivity.length);
+    const activityFraming = freshActivity.length && !inspectedActivity.length ? 13 : 0;
+    inspectedActivity = activity;
+    return {
+      count: fresh.length,
+      // Array items include their separator; the activity field's framing is charged once.
+      bytes:
+        (fresh.length ? encoder.encode(JSON.stringify(fresh)).byteLength - 1 : 0) +
+        (freshActivity.length
+          ? encoder.encode(JSON.stringify(freshActivity)).byteLength - 1 + activityFraming
+          : 0),
+    };
+  };
+  const initial = measureNewPage(page);
+  let observed = initial.count;
+  let bytes = initial.bytes + 1;
+  let remainingPages = CHAT_HISTORY_MAX_ENTRIES;
+  // Keep normal display projection: a different text cap can change serialized
+  // size, so it cannot establish coverage of the former response byte window.
+  while (
+    !submission &&
+    page.hasMore &&
+    observed < CHAT_HISTORY_MAX_ENTRIES &&
+    bytes < LEGACY_RECOVERY_HISTORY_BYTES
+  ) {
+    const offset = page.nextOffset;
+    if (
+      offset === undefined ||
+      offset <= (page.offset ?? 0) ||
+      !isCurrent() ||
+      remainingPages === 0
+    ) {
+      return undefined;
+    }
+    remainingPages -= 1;
+    page = await readOlder(offset, CHAT_HISTORY_MAX_ENTRIES - observed);
+    if (
+      !isCurrent() ||
+      page.windowReset ||
+      page.offset !== offset ||
+      (page.sessionInfo?.sessionId ?? page.sessionId) !== sessionId ||
+      page.totalMessages !== history.totalMessages
+    ) {
+      return undefined;
+    }
+    submission = findChatSubmissionMessage(page.messages, item.sendRunId, userRoleOnly);
+    const added = measureNewPage(page);
+    if (page.hasMore && (page.nextOffset === undefined || page.nextOffset <= offset)) {
+      return undefined;
+    }
+    observed += added.count;
+    bytes += added.bytes;
+  }
+  return { submission };
+}
 
 export function isInterruptedChatInput(history: ChatHistoryResult, item: ChatQueueItem): boolean {
   return (
@@ -121,17 +223,6 @@ function reconcilePendingChatOutboxInput(
   return undefined;
 }
 
-function sessionRunProvesQueuedDelivery(
-  sessionInfo: ChatHistoryResult["sessionInfo"],
-  item: ChatQueueItem,
-): boolean {
-  return Boolean(
-    item.sendRunId &&
-    (sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
-      sessionInfo?.lastRunId === item.sendRunId),
-  );
-}
-
 export async function readCurrentStoredChatHistory(
   host: ChatHost,
   outbox: StoredChatOutbox,
@@ -171,6 +262,14 @@ export async function readCurrentStoredChatHistory(
   const reconcileRecovery = recoveryObservation?.captureReconcile();
   const isCurrent = () =>
     host.client === client && host.connectionEpoch === connectionEpoch && host.connected;
+  const historyRead = chatOutboxOwner(host).history.capture(
+    host,
+    outbox,
+    item,
+    client,
+    connectionEpoch,
+  );
+  let cursor = historyRead.cursor;
   const isRecoveryCurrent = () =>
     isCurrent() &&
     host.sessions === sessions &&
@@ -178,10 +277,12 @@ export async function readCurrentStoredChatHistory(
     readRecoveryAgentId() === recoveryAgentId &&
     visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
   try {
-    let history: ChatHistoryResult;
+    let history: ChatHistoryResult | undefined;
+    let proof: Awaited<ReturnType<typeof findChatOutboxSubmission>>;
     let pendingBefore: number | undefined;
     const request = {
       sessionKey: outbox.sessionKey,
+      toolResultMaxChars: 2_000,
       ...(isUiGlobalSessionKey(outbox.sessionKey) && outbox.agentId
         ? { agentId: outbox.agentId }
         : {}),
@@ -189,11 +290,42 @@ export async function readCurrentStoredChatHistory(
         ? { inputRunIds: [item.sendRunId] }
         : {}),
     };
+    const readHistory = async (limit: number, before?: number) => {
+      const read = (requestCursor?: string) =>
+        client.request<ChatHistoryResponse>(
+          "chat.history",
+          {
+            ...request,
+            limit,
+            ...(before ? { pendingBefore: before } : {}),
+            ...(requestCursor ? { cursor: requestCursor } : {}),
+          },
+          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+        );
+      let response = await read(cursor);
+      if (isHistoryCursor(response) && response.kind === "reset") {
+        if (!isCurrent()) {
+          return undefined;
+        }
+        cursor = undefined;
+        historyRead.accept(undefined);
+        response = await read();
+      }
+      if (!isHistoryCursor(response)) {
+        return response;
+      }
+      return response.kind === "delta"
+        ? {
+            ...response,
+            messages: response.messages.map((entry) => asOptionalRecord(entry)?.message),
+          }
+        : undefined;
+    };
     try {
-      history = await client.request<ChatHistoryResult>("chat.history", {
-        ...request,
-        limit: 1000,
-      });
+      history = await readHistory(1000);
+      if (!history) {
+        return "blocked";
+      }
       // Custody receipts are exact but display pages contain only twenty inputs.
       // Follow their bounded cursor instead of stranding an older accepted head.
       while (
@@ -206,14 +338,33 @@ export async function readCurrentStoredChatHistory(
           return "blocked";
         }
         pendingBefore = history.pendingInputs.nextBefore;
-        history = await client.request<ChatHistoryResult>("chat.history", {
-          ...request,
-          limit: 20,
-          pendingBefore,
-        });
+        history = await readHistory(20, pendingBefore);
+        if (!history) {
+          return "blocked";
+        }
+      }
+      proof = await findChatOutboxSubmission(
+        history,
+        item,
+        requiresChatInputConsumption(item),
+        (offset, limit) =>
+          client.request<ChatHistoryResult>(
+            "chat.history",
+            { ...request, offset, limit },
+            { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+          ),
+        isCurrent,
+      );
+      if (!proof) {
+        return "blocked";
       }
     } catch (err) {
-      const retryDelayMs = retryableGatewayDelayMs(err);
+      // A receipt read is safe to retry. Its deadline says nothing about whether
+      // the original send arrived, and must not leave the FIFO lane stranded.
+      const retryDelayMs =
+        err instanceof GatewayProtocolRequestTimeoutError
+          ? CHAT_OUTBOX_RETRY_DEFAULT_MS
+          : retryableGatewayDelayMs(err);
       if (retryDelayMs !== null) {
         if (isCurrent()) {
           scheduleRetry(retryDelayMs);
@@ -259,8 +410,22 @@ export async function readCurrentStoredChatHistory(
     if (!isCurrent()) {
       return "blocked";
     }
-    if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
+    if (
+      !currentOutbox ||
+      !currentItem ||
+      currentItem.sessionId !== item.sessionId ||
+      !sameQueuedDeliveryVersion(currentItem, item)
+    ) {
       return "continue";
+    }
+    const { submission } = proof;
+    // Retain a legacy transcript receipt until retirement succeeds. Otherwise the
+    // next delta may omit the only proof that this exact submission was delivered.
+    if (!submission) {
+      const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
+      historyRead.accept(
+        !item.sessionId || item.sessionId === historySessionId ? history.deltaCursor : undefined,
+      );
     }
     chatOutboxOwner(host).syncHost(host);
     const pendingInput = reconcilePendingChatOutboxInput(
@@ -278,13 +443,11 @@ export async function readCurrentStoredChatHistory(
     // their separate contract when no user transcript message is produced.
     if (
       inputReceipt ||
-      findChatSubmissionMessage(
-        history.messages,
-        item.sendRunId,
-        requiresChatInputConsumption(item),
-      ) ||
+      submission ||
       (!requiresChatInputConsumption(item) &&
-        sessionRunProvesQueuedDelivery(history.sessionInfo, item))
+        item.sendRunId &&
+        (history.sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
+          history.sessionInfo?.lastRunId === item.sendRunId))
     ) {
       const retired =
         (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox, {

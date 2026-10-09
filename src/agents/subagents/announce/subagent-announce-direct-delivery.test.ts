@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -40,7 +41,7 @@ describe("late exact requester recovery", () => {
       lifecycleRevision: "requester-revision",
       updatedAt: 1,
     };
-    const state = { entry: initialEntry, allowed: true };
+    const state = { entry: initialEntry, allowed: true, active: false };
     const storePath = "/synthetic/requester-recovery/sessions.json";
     const cfg: OpenClawConfig = { session: { store: storePath } };
     let executionStarted: (() => unknown) | undefined;
@@ -101,9 +102,12 @@ describe("late exact requester recovery", () => {
         canonicalKey: key,
         agentId: "main",
         storePath,
-        entry: initialEntry,
+        entry: state.entry,
       }),
-      getRequesterSessionActivity: () => ({ sessionId: initialEntry.sessionId, isActive: false }),
+      getRequesterSessionActivity: () => ({
+        sessionId: initialEntry.sessionId,
+        isActive: state.active,
+      }),
       dispatchGatewayMethodInProcess: dispatch,
       sendMessage: send,
       queueEmbeddedAgentMessageWithOutcome: steer,
@@ -113,7 +117,6 @@ describe("late exact requester recovery", () => {
       requesterAgentId: "main",
       targetRequesterSessionKey: sessionKey,
       triggerMessage: "All children settled",
-      steerMessage: "All children settled",
       directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
       sourceTool: "subagent_settle",
       requesterIsSubagent: false,
@@ -148,6 +151,46 @@ describe("late exact requester recovery", () => {
     };
   }
 
+  it.each(["subagent_settle", "subagent_announce"])(
+    "joins an interrupted %s continuation and consumes its final receipt without replay",
+    async (sourceTool) => {
+      const fixture = setup();
+      fixture.params.sourceTool = sourceTool;
+      fixture.params.expectsCompletionMessage = sourceTool === "subagent_announce";
+      fixture.state.entry = {
+        ...fixture.state.entry,
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+        restartRecoveryDeliveryRunId: "recovery-successor",
+      };
+      fixture.dispatchDone.resolve({
+        status: "ok",
+        result: {
+          payloads: [{ text: "Unexpected duplicate" }],
+          deliveryStatus: sentDeliveryStatus,
+        },
+      });
+      await expect(fixture.startDelivery()).resolves.toMatchObject({
+        delivered: false,
+        reason: "requester_turn_pending",
+      });
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+      fixture.state.active = true;
+      fixture.state.entry = {
+        ...fixture.state.entry,
+        ...finalReceipt,
+        restartRecoveryDeliveryRunId: undefined,
+        restartRecoveryDeliverySourceRunId: undefined,
+      };
+      await expect(deliverSubagentAnnouncement(fixture.params)).resolves.toMatchObject({
+        delivered: true,
+        requesterVisibleFinalDelivered: true,
+      });
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+      expect(fixture.send).not.toHaveBeenCalled();
+      expect(fixture.steer).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     "completed",
     "cancelled",
@@ -171,6 +214,7 @@ describe("late exact requester recovery", () => {
       throw new Error("unexpected recovery dispatch");
     };
     const unregister = registerGatewayRecoveryRuntime({
+      prepareRestartRecovery: unused,
       dispatchSessionMethod: unused,
       dispatchAgent: unused,
       waitForAgent: unused,
@@ -188,6 +232,7 @@ describe("late exact requester recovery", () => {
     if (ending === "private") {
       fixture.params.completionTarget = "parent";
       fixture.params.completionRequesterSessionId = "requester-session";
+      fixture.params.completionRequesterLifecycleRevision = "requester-revision";
     }
     if (ending === "child") {
       fixture.params.requesterIsSubagent = true;
@@ -241,97 +286,106 @@ describe("late exact requester recovery", () => {
     expect(clearTyping).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
-    { name: "accepted turn", response: { status: "accepted" } },
-    { name: "in-flight turn", response: { status: "in_flight" } },
-    { name: "restart interruption", response: { status: "error", stopReason: "restart" } },
-    { name: "old keyed-input rejection", error: new Error("old keyed input rejected") },
-  ])("uses a late exact receipt after $name without replay", async (outcome) => {
+  it.each<{
+    name: string;
+    sourceTool?: string;
+    response?: unknown;
+    error?: Error;
+    patch: Partial<SessionEntry>;
+    expected: { delivered: boolean; requesterVisibleFinalDelivered?: boolean; reason?: string };
+    disposition?: string;
+  }>([
+    {
+      name: "announcement completed while waiting for recovery",
+      sourceTool: "subagent_announce",
+      error: createSessionWorkStartChangedError(sessionKey),
+      patch: finalReceipt,
+      expected: { delivered: true, requesterVisibleFinalDelivered: true },
+    },
+    ...[
+      { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
+      { name: "accepted turn", response: { status: "accepted" } },
+      { name: "in-flight turn", response: { status: "in_flight" } },
+      { name: "restart interruption", response: { status: "error", stopReason: "restart" } },
+      { name: "old keyed-input rejection", error: new Error("old keyed input rejected") },
+    ].map((outcome) =>
+      Object.assign(outcome, {
+        patch: finalReceipt,
+        expected: { delivered: true, requesterVisibleFinalDelivered: true },
+      }),
+    ),
+    ...[
+      {
+        name: "live claim",
+        patch: {
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoveryDeliveryRunId: "successor",
+        },
+        reason: "requester_turn_pending",
+        disposition: "retryable",
+      },
+      {
+        name: "terminal without receipt",
+        patch: { restartRecoveryTerminalRunIds: [sourceRunId] },
+        reason: "visible_reply_missing",
+        disposition: "permanent_failure",
+      },
+      {
+        name: "unrelated source",
+        patch: { restartRecoveryTerminalRunIds: ["another-source"] },
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+      {
+        name: "replacement session",
+        patch: { ...finalReceipt, sessionId: "replacement" },
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+      {
+        name: "replacement lifecycle",
+        patch: { ...finalReceipt, lifecycleRevision: "replacement" },
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+      {
+        name: "unsent external final",
+        patch: {
+          restartRecoveryTerminalDeliveryEvidence: [
+            { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
+          ],
+        } satisfies Partial<SessionEntry>,
+        reason: "visible_reply_missing",
+        disposition: undefined,
+      },
+    ].map(({ reason, ...outcome }) =>
+      Object.assign(outcome, {
+        response: { status: "ok", result: { payloads: [] } },
+        expected: { delivered: false, reason },
+      }),
+    ),
+  ])("reconciles the exact late receipt for $name without replay", async (outcome) => {
     const fixture = setup();
+    if (outcome.sourceTool) {
+      fixture.params.sourceTool = outcome.sourceTool;
+      fixture.params.expectsCompletionMessage = true;
+    }
     const delivery = fixture.startDelivery();
     await fixture.dispatchEntered.promise;
-    fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
+    fixture.state.entry = { ...fixture.state.entry, ...outcome.patch };
     fixture.readDone.resolve();
-    if ("error" in outcome) {
+    if (outcome.error) {
       fixture.dispatchDone.reject(outcome.error);
     } else {
       fixture.dispatchDone.resolve(outcome.response);
     }
-    await expect(delivery).resolves.toMatchObject({
-      delivered: true,
-      requesterVisibleFinalDelivered: true,
-    });
+    const result = await delivery;
+    expect(result).toMatchObject(outcome.expected);
+    expect(result.disposition).toBe(outcome.disposition);
     expect(fixture.dispatch).toHaveBeenCalledOnce();
     expect(fixture.send).not.toHaveBeenCalled();
     expect(fixture.steer).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      name: "live claim",
-      patch: {
-        restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoveryDeliveryRunId: "successor",
-      },
-      reason: "requester_turn_pending",
-      disposition: "retryable",
-    },
-    {
-      name: "terminal without receipt",
-      patch: { restartRecoveryTerminalRunIds: [sourceRunId] },
-      reason: "visible_reply_missing",
-      disposition: "permanent_failure",
-    },
-    {
-      name: "unrelated source",
-      patch: { restartRecoveryTerminalRunIds: ["another-source"] },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-    {
-      name: "replacement session",
-      patch: { ...finalReceipt, sessionId: "replacement" },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-    {
-      name: "replacement lifecycle",
-      patch: { ...finalReceipt, lifecycleRevision: "replacement" },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-    {
-      name: "unsent external final",
-      patch: {
-        restartRecoveryTerminalDeliveryEvidence: [
-          { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
-        ],
-      },
-      reason: "visible_reply_missing",
-      disposition: undefined,
-    },
-  ] satisfies Array<{
-    name: string;
-    patch: Partial<SessionEntry>;
-    reason: string;
-    disposition: string | undefined;
-  }>)(
-    "does not manufacture successful delivery from $name",
-    async ({ patch, reason, disposition }) => {
-      const fixture = setup();
-      const delivery = fixture.startDelivery();
-      await fixture.dispatchEntered.promise;
-      fixture.state.entry = { ...fixture.state.entry, ...patch };
-      fixture.readDone.resolve();
-      fixture.dispatchDone.resolve({ status: "ok", result: { payloads: [] } });
-      const result = await delivery;
-      expect(result).toMatchObject({ delivered: false, reason });
-      expect(result.disposition).toBe(disposition);
-      expect(fixture.dispatch).toHaveBeenCalledOnce();
-      expect(fixture.send).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     {
@@ -412,18 +466,17 @@ describe("late exact requester recovery", () => {
     expect(fixture.send).not.toHaveBeenCalled();
   });
 
-  it.each(["private", "incognito", "ordinary announcement"] as const)(
+  it.each(["private", "incognito"] as const)(
     "does not add recovery reads to %s delivery",
     async (scope) => {
       const fixture = setup();
       if (scope === "private") {
         fixture.params.completionTarget = "parent";
         fixture.params.completionRequesterSessionId = "requester-session";
-      } else if (scope === "incognito") {
+        fixture.params.completionRequesterLifecycleRevision = "requester-revision";
+      } else {
         fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
         fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
-      } else {
-        fixture.params.sourceTool = "subagent_announce";
       }
       const delivery = fixture.startDelivery();
       await fixture.dispatchEntered.promise;

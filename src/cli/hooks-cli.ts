@@ -37,34 +37,19 @@ import {
   formatHookMissingSummary,
   formatHooksCheck,
   formatHooksList,
-  type HookInfoOptions,
-  type HooksCheckOptions,
   type HooksListOptions,
+  type HooksReportOptions,
 } from "./hooks-cli.format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
-
-type HooksUpdateOptions = {
-  acknowledgeInstallPolicyWarning?: boolean;
-  all?: boolean;
-  dryRun?: boolean;
-};
-
-type HooksInstallOptions = {
-  acknowledgeInstallPolicyWarning?: boolean;
-  force?: boolean;
-  link?: boolean;
-  pin?: boolean;
-};
+import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
+import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
 
 const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
 
-type HooksReportTarget = {
-  agentId: string;
-  workspaceDir: string;
-};
+type HooksReportTarget = ReturnType<typeof resolveHooksReportTarget>;
 
-function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
+function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string) {
   const requested = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requested) {
     throw new Error("--agent must not be blank");
@@ -273,15 +258,18 @@ export function registerHooksCli(program: Command): void {
     }
   });
 
-  const runHooksList = (opts: HooksListOptions, command: Command) =>
-    runOneShotHooksCliAction(async () => {
-      const json = hasJsonOutput(opts);
-      const output = await loadHooksReport(
-        resolveOptionFromCommand<string>(command, "agent"),
-        (report) => formatHooksList(report, { ...opts, json }),
-      );
-      writeHooksOutput(output, json);
-    }, "root");
+  const reportAction =
+    (format: (report: HookStatusReport, opts: HooksListOptions) => string) =>
+    (opts: HooksListOptions, command: Command) =>
+      runOneShotHooksCliAction(async () => {
+        const json = hasJsonOutput(opts);
+        const output = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => format(report, { ...opts, json }),
+        );
+        writeHooksOutput(output, json);
+      }, "root");
+  const runHooksList = reportAction(formatHooksList);
 
   hooks
     .command("list")
@@ -297,7 +285,7 @@ export function registerHooksCli(program: Command): void {
     .description("Show detailed information about a hook")
     .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .action(async (name, opts: HookInfoOptions, command: Command) =>
+    .action(async (name, opts: HooksReportOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
         const json = hasJsonOutput(opts);
         const result = await loadHooksReport(
@@ -320,16 +308,7 @@ export function registerHooksCli(program: Command): void {
     .description("Check hooks eligibility status")
     .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .action(async (opts: HooksCheckOptions, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        const json = hasJsonOutput(opts);
-        const output = await loadHooksReport(
-          resolveOptionFromCommand<string>(command, "agent"),
-          (report) => formatHooksCheck(report, { ...opts, json }),
-        );
-        writeHooksOutput(output, json);
-      }, "root"),
-    );
+    .action(reportAction(formatHooksCheck));
 
   for (const enabled of [true, false]) {
     hooks
@@ -349,6 +328,7 @@ export function registerHooksCli(program: Command): void {
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
     .option("--state-db <path>", "Shared state database path")
+    .option("--remote-credential <path>", "Dedicated harness relay credential file")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
     .option(
@@ -372,7 +352,7 @@ export function registerHooksCli(program: Command): void {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .action(async (raw: string, opts: HooksInstallOptions) => {
+    .action(async (raw: string, opts: RunPluginInstallCommandParams["opts"]) => {
       const { runPluginInstallCommand } = await import("./plugins-install-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
@@ -396,7 +376,7 @@ export function registerHooksCli(program: Command): void {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
+    .action(async (id: string | undefined, opts: RunPluginUpdateCommandParams["opts"]) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks update` is deprecated; use `openclaw plugins update`."),

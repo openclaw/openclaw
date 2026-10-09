@@ -1,4 +1,3 @@
-// Resolves package managers for update build steps.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,8 +5,6 @@ import { detectPackageManager } from "./detect-package-manager.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
-// Update package-manager resolution chooses the package manager for update
-// builds and can bootstrap pnpm when a managed checkout requires it.
 type BuildManager = "pnpm" | "bun" | "npm";
 
 export function resolvePnpmCandidateEnv(
@@ -40,7 +37,6 @@ type ResolvedBuildManager =
   | {
       kind: "resolved";
       manager: BuildManager;
-      preferred: BuildManager;
       fallback: boolean;
       env?: NodeJS.ProcessEnv;
       cleanup?: () => Promise<void>;
@@ -151,7 +147,6 @@ export function parsePnpmPackageManagerVersion(pin: string | null): string | und
   return /^pnpm@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+.*)?$/u.exec(pin ?? "")?.[1];
 }
 
-/** Resolve the package manager and environment to use for an update build. */
 export async function resolveUpdateBuildManager(
   commandRunner: PackageManagerCommandRunner,
   root: string,
@@ -167,7 +162,7 @@ export async function resolveUpdateBuildManager(
   const pnpmVersion = parsePnpmPackageManagerVersion(pin);
   if (preferred === "pnpm") {
     if (await isManagerAvailable(runCommand, "pnpm", timeoutMs, baseEnv, pnpmVersion)) {
-      return { kind: "resolved", manager: "pnpm", preferred, fallback: false };
+      return { kind: "resolved", manager: "pnpm", fallback: false };
     }
 
     const corepackStatus = await enablePnpmViaCorepack(
@@ -178,7 +173,7 @@ export async function resolveUpdateBuildManager(
       work,
     );
     if (corepackStatus === "enabled") {
-      return { kind: "resolved", manager: "pnpm", preferred, fallback: false };
+      return { kind: "resolved", manager: "pnpm", fallback: false };
     }
 
     const npmAvailable = await isManagerAvailable(runCommand, "npm", timeoutMs, baseEnv);
@@ -194,7 +189,6 @@ export async function resolveUpdateBuildManager(
         return {
           kind: "resolved",
           manager: "pnpm",
-          preferred,
           fallback: false,
           env: pnpmBootstrap.env,
           cleanup: pnpmBootstrap.cleanup,
@@ -221,36 +215,9 @@ export async function resolveUpdateBuildManager(
         manager === "pnpm" ? pnpmVersion : undefined,
       )
     ) {
-      return { kind: "resolved", manager, preferred, fallback: manager !== preferred };
+      return { kind: "resolved", manager, fallback: manager !== preferred };
     }
   }
 
   return { kind: "missing-required", preferred, reason: "preferred-manager-unavailable" };
-}
-
-/** Build argv for running a package-manager script. */
-export function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
-  if (manager === "pnpm") {
-    return ["pnpm", script, ...args];
-  }
-  if (manager === "bun") {
-    return ["bun", "run", script, ...args];
-  }
-  if (args.length > 0) {
-    return ["npm", "run", script, "--", ...args];
-  }
-  return ["npm", "run", script];
-}
-
-/** Build argv for installing dependencies with a package manager. */
-export function managerInstallArgs(manager: BuildManager, opts?: { compatFallback?: boolean }) {
-  if (manager === "npm" && opts?.compatFallback) {
-    return ["npm", "install", "--no-package-lock", "--legacy-peer-deps"];
-  }
-  return [manager, "install"];
-}
-
-/** Build argv for installing dependencies while skipping lifecycle scripts. */
-export function managerInstallIgnoreScriptsArgs(manager: BuildManager): string[] {
-  return [manager, "install", "--ignore-scripts"];
 }

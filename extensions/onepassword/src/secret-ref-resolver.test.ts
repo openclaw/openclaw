@@ -9,6 +9,12 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createStateSchemaInlinePlugin } from "../../../scripts/lib/state-schema-inline-plugin.mjs";
@@ -36,8 +42,10 @@ let timeoutResolverPath: string;
 let stagedResolverRoot: string | undefined;
 let trustedNodeRoot: string | undefined;
 let trustedNodePath: string;
+let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
   const tempRoot = path.join(process.cwd(), ".tmp");
   fs.mkdirSync(tempRoot, { recursive: true });
   stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
@@ -81,7 +89,8 @@ beforeAll(async () => {
   trustedNodePath = createTrustedNodeFixture(trustedNodeRoot);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await receipts?.close();
   if (stagedResolverRoot) {
     fs.rmSync(stagedResolverRoot, { recursive: true, force: true });
   }
@@ -92,18 +101,6 @@ afterAll(() => {
 
 function writeOpScript(opPath: string, body: string): void {
   fs.writeFileSync(opPath, `#!${trustedNodePath}\n${body}`, { mode: 0o755 });
-}
-
-async function waitForPath(filePath: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(filePath)) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for test path: ${filePath}`);
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -749,26 +746,28 @@ setInterval(() => {}, 1000);
 
   it(
     "kills the op process tree when a read times out",
-    async () => {
+    async ({ signal }) => {
       const tempDir = fixtureWorkspace.dir;
       const descendantPidPath = path.join(tempDir, "timed-out-descendant.pid");
-      const descendantBody = `const fs = require("node:fs");
+      const descendantBody = `import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 process.on("SIGTERM", () => {});
 fs.writeFileSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, String(process.pid));
 fs.renameSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, ${JSON.stringify(descendantPidPath)});
+sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");
 setInterval(() => {}, 1000);
 `;
       let opPath = process.execPath;
       if (process.platform === "win32") {
         const opBody = `const { spawn } = require("node:child_process");
-spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: "ignore" });
+spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(descendantBody)}], { stdio: "ignore" });
 setInterval(() => {}, 1000);
 `;
         fs.writeFileSync(path.join(tempDir, "read"), opBody);
       } else {
         // Executable trust validation requires the literal shebang path to be canonical.
         const shellPath = fs.realpathSync("/bin/sh");
-        const descendantPath = path.join(tempDir, "descendant.cjs");
+        const descendantPath = path.join(tempDir, "descendant.mjs");
         opPath = path.join(tempDir, "op");
         fs.writeFileSync(descendantPath, descendantBody);
         fs.writeFileSync(
@@ -788,20 +787,25 @@ while true; do sleep 1; done
       });
       let descendantPid: number | undefined;
       try {
-        // The child publishes its PID after installing SIGTERM immunity. Windows also
-        // needs time for executable-owner and ACL preflight before that child can start.
-        await Promise.race([
-          waitForPath(descendantPidPath, process.platform === "win32" ? 15_000 : 10_000),
-          resultPromise.then((result) => {
-            throw new Error(
-              `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
-            );
-          }),
-        ]);
+        // The PID record precedes the receipt, but the resolver's exit uses another pipe.
+        // If exit wins, the durable record still proves SIGTERM immunity was installed.
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(descendantPidPath, "ready"),
+            resultPromise.then((result) => {
+              if (!fs.existsSync(descendantPidPath)) {
+                throw new Error(
+                  `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
+                );
+              }
+            }),
+          ]),
+          signal,
+        );
         const pid = Number(fs.readFileSync(descendantPidPath, "utf8"));
         descendantPid = pid;
         expect(Number.isInteger(pid) && pid > 0).toBe(true);
-        const result = await resultPromise;
+        const result = await withinTest(resultPromise, signal);
         expect(JSON.parse(result.stdout).errors).toEqual({
           "op://Engineering/OpenRouter/apiKey": {
             message: `op read timed out after ${TEST_OP_READ_TIMEOUT_MS}ms.`,
@@ -814,6 +818,11 @@ while true; do sleep 1; done
           )
           .toBe("exited");
       } finally {
+        // Join resolver-owned cleanup even when the test aborts before readiness arrives.
+        await resultPromise;
+        if (descendantPid === undefined && fs.existsSync(descendantPidPath)) {
+          descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        }
         if (descendantPid && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }

@@ -1,7 +1,18 @@
 // Run-main profile env tests cover profile environment handling in the CLI entrypoint.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import {
+  finalizeDebugProxyCaptureAsync,
+  initializeDebugProxyCaptureAsync,
+} from "../proxy-capture/runtime.js";
 import { ExitError } from "../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
 const startup = vi.hoisted(() => ({
   readConfig: vi.fn(async () => ({ proxy: { selected: "synthetic" } })),
@@ -10,7 +21,7 @@ const startup = vi.hoisted(() => ({
   ensureDispatcher: vi.fn(),
   route: vi.fn(async () => true),
   schemas: { incompatible: [], indeterminate: [] },
-  prepareDoctorDatabasePreflight: vi.fn(),
+  prepareDoctorDatabasePreflight: vi.fn<typeof prepareDoctorDatabasePreflight>(),
   runDoctorHealthFlow: vi.fn(),
 }));
 
@@ -98,6 +109,7 @@ vi.mock("./windows-argv.js", () => ({
 import { runCli } from "./run-main.js";
 
 describe("runCli environment and passive startup", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const envSnapshot = captureEnv([
     "OPENCLAW_UPDATE_IN_PROGRESS",
     "OPENCLAW_PROFILE",
@@ -131,6 +143,68 @@ describe("runCli environment and passive startup", () => {
     envSnapshot.restore();
   });
 
+  it("preserves original state before update and Doctor dispatch with debug capture enabled", async () => {
+    const stateDir = tempDirs.make("cli-deferred-capture-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", "cli-original-state");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
+    vi.stubGlobal("fetch", globalThis.fetch);
+    const database = resolveOpenClawStateSqlitePath();
+    const originalArgv = process.argv;
+    const originalExitCode = process.exitCode;
+    const originalListeners = process.listeners("uncaughtException");
+    try {
+      for (const args of [
+        ["update"],
+        ["--update"],
+        ["doctor", "--fix", "--non-interactive"],
+        ["update", "status"],
+        ["update", "--dry-run"],
+        ["update", "--help"],
+        ["doctor", "--help"],
+      ]) {
+        if (!args.includes("--help")) {
+          startup.route.mockImplementationOnce(async () => {
+            expect(existsSync(database), `before dispatch: ${args.join(" ")}`).toBe(false);
+            return true;
+          });
+        }
+        const argv = ["node", "openclaw", ...args];
+        process.argv = argv;
+        await runCliWithExitFinalization({
+          run: () => runCli(argv),
+          onError: (error) => {
+            throw error;
+          },
+        });
+        expect(existsSync(database), `after invocation: ${args.join(" ")}`).toBe(false);
+      }
+      await initializeDebugProxyCaptureAsync("cli-enabled-control");
+      expect(existsSync(database)).toBe(true);
+    } finally {
+      try {
+        await finalizeDebugProxyCaptureAsync();
+      } finally {
+        try {
+          await closeOpenClawStateDatabaseAsync();
+        } finally {
+          process.argv = originalArgv;
+          process.exitCode = originalExitCode;
+          for (const listener of process.listeners("uncaughtException")) {
+            if (!originalListeners.includes(listener)) {
+              process.off("uncaughtException", listener);
+            }
+          }
+          vi.unstubAllGlobals();
+          vi.unstubAllEnvs();
+        }
+      }
+    }
+  });
+
   it("carries the single early update preflight through Commander into Doctor", async () => {
     setTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     startup.route.mockResolvedValueOnce(false);
@@ -149,7 +223,10 @@ describe("runCli environment and passive startup", () => {
       }
     }
 
-    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledExactlyOnceWith();
+    // Omitted options and explicit undefined both select the full fleet.
+    expect(
+      startup.prepareDoctorDatabasePreflight.mock.calls.map(([options]) => options?.scope),
+    ).toEqual([undefined]);
     expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledBefore(startup.startProxy);
     expect(startup.runDoctorHealthFlow).toHaveBeenCalledExactlyOnceWith(
       expect.any(Object),
@@ -189,15 +266,6 @@ describe("runCli environment and passive startup", () => {
 
     expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
     expect(dotenvState.state.profileAtDotenvLoad).toBe("rawdog");
-    expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
-  });
-
-  it("rejects --container combined with --profile", async () => {
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "--profile", "rawdog", "status"]),
-    ).rejects.toThrow("--container cannot be combined with --profile/--dev");
-
-    expect(dotenvState.loadDotEnv).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
   });
 

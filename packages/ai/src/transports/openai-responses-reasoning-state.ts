@@ -1,6 +1,5 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isOpenAIResponsesReplayContext } from "./openai-responses-compaction-replay.js";
 import {
   responsesContinuationPrefixFingerprint,
   responsesContinuationRequestFingerprint,
@@ -14,6 +13,7 @@ import {
 } from "./openai-responses-reasoning-update.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 
@@ -67,7 +67,7 @@ export function restoreResponsesReasoningState(
   }
   const { effort, inputLength, outputLength, controls, prefixHash, requestHash } = state;
   if (
-    !isOpenAIResponsesReplayContext(state) ||
+    !isProviderReplayContext(state) ||
     !providerReplayContextMatches(state, buildProviderReplayContext(model, identity)) ||
     latest?.providerReplay ||
     !supportsResponsesReasoningUpdate(request) ||

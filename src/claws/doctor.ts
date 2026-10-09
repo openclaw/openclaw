@@ -1,12 +1,12 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
@@ -14,6 +14,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { clawCronGatewayInput } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import { isExperimentalClawsEnabled } from "./experimental.js";
 import { readClawStatus, type ClawStatusRecord } from "./lifecycle-state.js";
 
@@ -49,17 +50,13 @@ type CronInventorySnapshot =
   | { ok: false; error: string }
   | undefined;
 
-function cronExecutionDigest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
 function expectedCronExecutionDigest(
   record: ClawStatusRecord,
   cron: ClawStatusRecord["cronJobs"][number],
 ): string {
   const input = clawCronGatewayInput(record.install.agentId, cron);
   const staggerMs = resolveDefaultCronStaggerMs(cron.job.schedule.cron);
-  return cronExecutionDigest({
+  return digestClawValue({
     declarationKey: input.declarationKey,
     ownerAgentId: input.owner.agentId,
     enabled: input.enabled,
@@ -75,7 +72,7 @@ function expectedCronExecutionDigest(
 }
 
 function liveCronExecutionDigest(job: CronJob): string {
-  return cronExecutionDigest({
+  return digestClawValue({
     declarationKey: job.declarationKey,
     ownerAgentId: job.owner?.agentId ?? job.agentId,
     enabled: job.enabled,
@@ -111,7 +108,7 @@ function collectInstallFindings(
           record.agentState === "missing"
             ? `Claw-owned agent ${JSON.stringify(agentId)} is missing from config.`
             : `Claw-owned agent ${JSON.stringify(agentId)} changed after installation.`,
-        path: `agents.list.${agentId}`,
+        path: `agents.entries.${agentId}`,
         target: agentId,
         requirement: "Claw-owned agent config should match its recorded install digest",
         fixHint: "Inspect the agent change before removing or replacing Claw-owned state.",
@@ -248,14 +245,6 @@ function collectInstallFindings(
   return findings;
 }
 
-function tableExists(db: DatabaseSync, name: string): boolean {
-  return Boolean(
-    db /* sqlite-allow-raw: read-only Claw doctor table-existence probe with bound table name. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name),
-  );
-}
-
 function orphanedAgentIds(options: OpenClawStateDatabaseOptions): string[] {
   const { db } = openOpenClawStateDatabase(options);
   const installed = new Set<string>();
@@ -318,14 +307,14 @@ export async function collectClawStateHealthFindings(
   }
   let database: OpenClawStateDatabase | undefined;
   try {
-    database = await openExistingOpenClawStateDatabaseReadOnly(options);
+    database = await openExistingOpenClawStateDatabaseReadOnly({
+      ...options,
+      requireCanonicalSchema: true,
+    });
     if (!database) {
       return [];
     }
     const orphanedRefs = orphanedAgentIds({ ...options, database, readOnly: true });
-    if (!tableExists(database.db, "claw_installs")) {
-      return orphanedRefs.map(orphanedReferenceFinding);
-    }
     let sourceMcpServers = options.sourceMcpServers ?? {};
     if (hasClawMcpServerRefs(database.db) && !options.sourceMcpServers) {
       const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();

@@ -63,8 +63,7 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   connectionStatus: GatewayStatus | null;
   lastError: string | null;
-  outboxAttentionCountForSession: (sessionKey: string) => number;
-  hasSessionDraft: (sessionKey: string) => boolean;
+  storedOutboxes: AppSidebarSessionNavigationElement["storedOutboxes"];
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -83,6 +82,7 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
+  readonly sidebarMenus: AppSidebarSessionNavigationElement["sidebarMenus"];
   findSidebarSessionByKey: AppSidebarSessionNavigationElement["findSidebarSessionByKey"];
   findSidebarHovercardRowByKey: AppSidebarSessionNavigationElement["findSidebarHovercardRowByKey"];
   readonly sessionOrganizer: SessionOrganizerController;
@@ -242,9 +242,11 @@ export function successfulSessionPatch(key: string) {
 
 export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
+  let revision = 0;
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const notify = () => {
+    revision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -330,11 +332,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return assigned;
   });
   const sessions = {
+    get revision() {
+      return revision;
+    },
     get state() {
       return state;
     },
     get presentation() {
       return state;
+    },
+    get eventSubscriptionError() {
+      return scopedSessions?.eventSubscriptionError ?? null;
     },
     get canonicalListRevision() {
       return canonicalListRevision;
@@ -391,12 +399,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
       return scopedSessions!.listSnapshot(scope);
     },
-    subscribeList(
-      scope: Parameters<SessionCapability["subscribeList"]>[0],
-      listener: Parameters<SessionCapability["subscribeList"]>[1],
-    ) {
-      return scopedSessions!.subscribeList(scope, listener);
-    },
+    subscribeList: (...args: Parameters<SessionCapability["subscribeList"]>) =>
+      scopedSessions!.subscribeList(...args),
     observeList: (...args: Parameters<SessionCapability["observeList"]>) =>
       scopedSessions!.observeList(...args),
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
@@ -580,7 +584,7 @@ export function createContext(
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
-      subscribe: () => () => undefined,
+      subscribe: vi.fn<ApplicationOverlays["subscribe"]>(() => () => undefined),
     } as unknown as ApplicationOverlays,
   } as unknown as ApplicationContext;
 }
@@ -615,12 +619,11 @@ export async function mountSidebarContext(
   await sidebar.updateComplete;
   const sidebarWithPreloads = sidebar as unknown as {
     preloadCatalogRenderer: () => Promise<unknown>;
-    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
-    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+    sidebar.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
   if (sidebar.querySelector("openclaw-channel-avatar")) {
@@ -637,6 +640,7 @@ export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
   const gateway = createGatewayHarness(client);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });

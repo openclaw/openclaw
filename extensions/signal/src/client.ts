@@ -3,8 +3,9 @@ import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { asPositiveFiniteNumber, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { SignalRpcOptions } from "./client-types.js";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
 export type { SignalRpcOptions } from "./client-types.js";
@@ -31,12 +32,6 @@ export class SignalSseRejectionError extends Error {
     super(`Signal SSE failed (${status} ${statusText})`);
   }
 }
-
-type SignalSseEvent = {
-  event?: string;
-  data?: string;
-  id?: string;
-};
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1_048_576;
@@ -125,6 +120,13 @@ function requestSignalHttp(
     maxResponseBytes?: number;
     assertDirectAdapterHandoff?: () => void;
   },
+): Promise<SignalHttpResponse> {
+  return captureEffectAuthority().initiate(() => initiateSignalHttp(url, options));
+}
+
+function initiateSignalHttp(
+  url: URL,
+  options: Parameters<typeof requestSignalHttp>[1],
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);

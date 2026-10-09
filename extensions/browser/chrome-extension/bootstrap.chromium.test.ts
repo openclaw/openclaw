@@ -6,17 +6,19 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getChromeMcpPid } from "../src/browser/chrome-mcp-session.js";
 import {
   chromeProductRoots,
-  generateChromeExtensionIdForPath,
+  installChromeExtensionBootstrap,
   stableChromeExtensionDir,
-} from "../src/browser/extension-install-layout.js";
-import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
+} from "../src/browser/extension-install-fixture.test-support.js";
+import { generateChromeExtensionIdForPath } from "../src/browser/extension-install-layout.js";
 import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
-import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { getGatewayExtensionRelayModule } from "../src/browser/extension-relay.runtime.js";
+import { DEFAULT_UPLOAD_DIR } from "../src/browser/paths.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
@@ -153,7 +155,9 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 }
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
-  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async ({
+    signal,
+  }) => {
     const diagnostic = createBootstrapDiagnostic();
     cleanups.push(async () => {
       diagnostic.dispose();
@@ -208,6 +212,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           root,
           path.resolve("dist/extensions/browser/native-host-entry.js"),
         );
+        const pluginRoot = path.join(root, "browser-plugin");
+        await fs.mkdir(pluginRoot, { mode: 0o700 });
         const deps = {
           platform: process.platform,
           homeDir,
@@ -221,6 +227,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           },
           ...launchFixture,
         };
+        const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
         const gatewayServer = http.createServer((req, res) => {
           if (req.url === "/browser-owner-proof") {
             diagnostic.mark("http.request", true);
@@ -304,21 +311,29 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .map((productRoot) =>
             path.join(productRoot.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"),
           );
+        const registered = Promise.withResolvers<void>();
         const installPromise = installChromeExtensionBootstrap({
           bundledDir: extensionSource,
-          pluginRoot: path.resolve("extensions/browser"),
+          pluginRoot,
           waitMs: 15_000,
           deps,
+          signal,
+          onProgress: (message) => {
+            if (message.startsWith("Native bootstrap is ready.")) {
+              registered.resolve();
+            }
+          },
         });
         try {
-          await expect
-            .poll(
-              async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
-              {
-                timeout: 15_000,
-              },
-            )
-            .toBe(true);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              registered.promise,
+              installPromise,
+              "Native host pre-registration failed",
+            ),
+            signal,
+          );
+          expect(await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins)).toBe(true);
         } catch (error) {
           const status = await installPromise;
           const modes = await Promise.all(
@@ -416,6 +431,20 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           throw new Error("Gateway wakeup did not start the configured extension relay");
         }
         diagnostic.watchRelay(relay.bridge);
+        let uploadPathHandoffs = 0;
+        const attachCdpClientSocket = relay.bridge.attachCdpClientSocket.bind(relay.bridge);
+        relay.bridge.attachCdpClientSocket = (socket) => {
+          const handlers = attachCdpClientSocket(socket);
+          return {
+            onMessage: (raw) => {
+              if (JSON.parse(raw).method === "DOM.setFileInputFiles") {
+                uploadPathHandoffs += 1;
+              }
+              handlers.onMessage(raw);
+            },
+            onClose: handlers.onClose,
+          };
+        };
         const browserState = getBrowserControlState();
         const extensionProfile = browserState?.resolved.profiles.e2e;
         if (!browserState || !extensionProfile) {
@@ -478,6 +507,70 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         process.stderr.write(
           `[browser-extension-e2e] doctor version match ${chromeExtensionManifest.version}\n`,
         );
+        const uploadPage = await context.newPage();
+        cleanups.push(async () => await uploadPage.close());
+        await uploadPage.goto(`http://127.0.0.1:${gatewayPort}/browser-owner-proof`);
+        await uploadPage.evaluate(() => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.id = "upload";
+          document.body.append(input);
+        });
+        const previousUploadPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: true };
+        try {
+          let uploadTargetId: string | undefined;
+          await expect
+            .poll(
+              async () => {
+                const response = await dispatcher.dispatch({
+                  method: "GET",
+                  path: "/tabs",
+                  query: { profile: "e2e" },
+                });
+                // The in-process dispatcher erases the registered /tabs response type.
+                const body = response.body as {
+                  tabs?: Array<{ targetId?: string; url?: string }>;
+                };
+                uploadTargetId = body.tabs?.find((tab) => tab.url === uploadPage.url())?.targetId;
+                return uploadTargetId;
+              },
+              { timeout: 15_000 },
+            )
+            .toBeTruthy();
+          await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
+          // 47 MiB accounts for base64 expansion and framing in a 64 MiB relay frame.
+          for (const { size, pathHandoff } of [
+            { size: 30, pathHandoff: false },
+            { size: 46 * 1024 * 1024, pathHandoff: false },
+            { size: 47 * 1024 * 1024, pathHandoff: true },
+          ]) {
+            const file = path.join(
+              DEFAULT_UPLOAD_DIR,
+              `extension-upload-${Date.now()}-${size}.bin`,
+            );
+            cleanups.push(async () => await fs.rm(file, { force: true }));
+            await fs.writeFile(file, Buffer.alloc(size, 7));
+            const before = uploadPathHandoffs;
+            const response = await dispatcher.dispatch({
+              method: "POST",
+              path: "/hooks/file-chooser",
+              query: { profile: "e2e" },
+              body: { targetId: uploadTargetId, element: "#upload", paths: [file] },
+            });
+            expect(response.status, JSON.stringify(response.body)).toBe(200);
+            const received = await uploadPage
+              .locator("#upload")
+              .evaluate((input: HTMLInputElement) => {
+                const receivedFile = input.files?.[0];
+                return receivedFile ? { name: receivedFile.name, size: receivedFile.size } : null;
+              });
+            expect(received).toEqual({ name: path.basename(file), size });
+            expect(uploadPathHandoffs - before).toBe(pathHandoff ? 1 : 0);
+          }
+        } finally {
+          browserState.resolved.ssrfPolicy = previousUploadPolicy;
+        }
         const tabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",
