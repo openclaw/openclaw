@@ -37,11 +37,6 @@ export function composerFixture(
   document.body.append(container);
   const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
   const request = vi.spyOn(client, "request").mockResolvedValue(people);
-  const eventListeners = new Set<Parameters<GatewayBrowserClient["addEventListener"]>[0]>();
-  vi.spyOn(client, "addEventListener").mockImplementation((listener) => {
-    eventListeners.add(listener);
-    return () => eventListeners.delete(listener);
-  });
   const controller = new NewSessionComposerTextareaController();
   controllers.push(controller);
   let draft = initial;
@@ -148,11 +143,6 @@ export function composerFixture(
     abort,
     slashCommand,
     value: () => ({ draft, mentions }),
-    emitEvent: (event: "presence" | "sessions.changed") => {
-      for (const listener of eventListeners) {
-        listener({ type: "event", event, payload: { sessionKey: "agent:main:unrelated" } });
-      }
-    },
     replaceOwner: () => {
       ownerKey = "sender-two";
       renderCurrent();

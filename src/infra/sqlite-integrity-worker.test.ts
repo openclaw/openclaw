@@ -15,7 +15,7 @@ import {
   assertSqliteIntegrityInWorker,
   withSqliteIntegrityWorkerScope,
 } from "./sqlite-integrity-worker.js";
-import type { SqliteIntegrityCheckTiming, SqliteIntegrityTableCheck } from "./sqlite-integrity.js";
+import type { SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
 import * as inspectionBudget from "./sqlite-readonly-worker.js";
 
 const progress = vi.hoisted(() => vi.fn());
@@ -72,24 +72,17 @@ describe("SQLite integrity child", () => {
       vi.useRealTimers();
     }
   });
-  it.each(["healthy", "quick_check", "integrity_check"] as const)(
-    "settles bounded table readers and detects non-ok rows: %s",
+  it.each(["healthy", "damaged"] as const)(
+    "closes the native reader and reports structural integrity: %s",
     async (damage) => {
-      const source = path.join(tempDirs.make("openclaw-integrity-tables-"), "source.sqlite");
+      const source = path.join(tempDirs.make("openclaw-integrity-file-"), "source.sqlite");
       const database = new (requireNodeSqlite().DatabaseSync)(source);
-      const tables: SqliteIntegrityTableCheck[] = Array.from({ length: 9 }, (_, index) => ({
-        table: `records_${index}`,
-        check: index === 0 ? "quick_check" : "integrity_check",
-      }));
       let fragmentCountOffset: number | undefined;
       try {
-        for (const { table } of tables) {
-          database.exec(`CREATE TABLE ${table}(value INTEGER); INSERT INTO ${table} VALUES(1)`);
-        }
+        database.exec("CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)");
         if (damage !== "healthy") {
-          const table = damage === "quick_check" ? "records_0" : "records_1";
           const root = Number(
-            database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(table)
+            database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
               ?.rootpage,
           );
           const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
@@ -115,30 +108,19 @@ describe("SQLite integrity child", () => {
             new AbortController().signal,
             undefined,
             timing,
-            tables,
           ),
       );
       if (damage === "healthy") {
         await expect(check).resolves.toBeUndefined();
-        expect(timing.tables).toHaveLength(tables.length);
-        expect(timing.tables).toEqual(
-          expect.arrayContaining(
-            tables.map(({ table, check: pragma }) => ({
-              table,
-              check: pragma,
-              elapsedMs: expect.any(Number),
-            })),
-          ),
-        );
       } else {
         await expect(check).rejects.toMatchObject({
           name: "SqliteIntegrityError",
           message: expect.stringMatching(
-            new RegExp(`${damage} failed[\\s\\S]*Fragmentation of 0 bytes reported as 1`),
+            /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
           ),
         });
       }
-      expect(fork).toHaveBeenCalledTimes(4);
+      expect(fork).toHaveBeenCalledOnce();
       for (const result of vi.mocked(fork).mock.results) {
         expect(result.type).toBe("return");
         expect(result.value.exitCode).toBe(0);

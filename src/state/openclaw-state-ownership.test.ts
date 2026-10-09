@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
@@ -710,7 +711,7 @@ describe("external shared-state ownership", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const damaged = new DatabaseSync(databasePath);
     damaged.exec(
-      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
     );
     damaged.enableDefensive?.(false);
     damaged.exec("PRAGMA writable_schema = ON;");
@@ -850,6 +851,29 @@ describe("external shared-state ownership", () => {
     const unmarkedEnv = withoutExternalMarker(externalEnv);
     const opened = openOpenClawStateDatabase({ env: unmarkedEnv });
     expect(openOpenClawStateDatabase({ env: unmarkedEnv })).toBe(opened);
+    const indexedOwnershipSql =
+      "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1";
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      expect(openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toBe(opened);
+      expect(reads.queries).toEqual([indexedOwnershipSql]);
+      reads.queries.length = 0;
+      runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
+      expect(reads.queries).toEqual([
+        expect.stringMatching(/^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu),
+        indexedOwnershipSql,
+      ]);
+    } finally {
+      reads.restore();
+    }
+    expect(
+      opened.db.prepare(`EXPLAIN QUERY PLAN ${indexedOwnershipSql}`).all(STATE_SUPERVISION_KEY),
+    ).toEqual([
+      expect.objectContaining({
+        detail:
+          "SEARCH config_machine_state USING INDEX sqlite_autoindex_config_machine_state_1 (state_key=?)",
+      }),
+    ]);
     const ownership = {
       version: 1 as const,
       mode: "external" as const,
@@ -858,13 +882,29 @@ describe("external shared-state ownership", () => {
     };
     const { DatabaseSync } = requireNodeSqlite();
     const claimant = new DatabaseSync(opened.path);
+    const originalExec = opened.db.exec.bind(opened.db);
+    let claimedBeforeBegin = false;
+    const begin = vi.spyOn(opened.db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN IMMEDIATE" && !claimedBeforeBegin) {
+        claimant
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+          )
+          .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
+        claimedBeforeBegin = true;
+      }
+      originalExec(sql);
+    });
+    const write = vi.fn();
     try {
-      claimant
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        )
-        .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
+      expect(() =>
+        runOpenClawStateWriteTransaction(write, { env: unmarkedEnv, database: opened }),
+      ).toThrow(OpenClawStateOwnershipError);
+      expect(claimedBeforeBegin).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      expect(opened.db.isTransaction).toBe(false);
     } finally {
+      begin.mockRestore();
       claimant.close();
     }
 
@@ -874,7 +914,6 @@ describe("external shared-state ownership", () => {
     expect(() => openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toThrow(
       OpenClawStateOwnershipError,
     );
-    const write = vi.fn();
     expect(() => runOpenClawStateWriteTransaction(write, { env: unmarkedEnv })).toThrow(
       OpenClawStateOwnershipError,
     );

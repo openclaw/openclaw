@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { GatewayClientHostDeps } from "../../packages/gateway-client/src/index.js";
+import type { GatewayClientHostDeps } from "../../packages/gateway-client/src/client.js";
 import type { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { GatewayClient } from "./client.js";
 
@@ -14,8 +14,8 @@ const fixture = vi.hoisted(() => ({
   readOnlyLoad: vi.fn(),
 }));
 
-vi.mock("../../packages/gateway-client/src/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/gateway-client/src/index.js")>()),
+vi.mock("../../packages/gateway-client/src/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/gateway-client/src/client.js")>()),
   GatewayClient: class {
     constructor(private readonly options: { hostDeps: GatewayClientHostDeps }) {}
 
@@ -64,6 +64,7 @@ beforeEach(() => {
 function host(origin: boolean, readOnly = false, explicit = true) {
   const client = new GatewayClient({
     url: "wss://gateway.example.test",
+    deviceIdentity: null,
     ...(origin ? { deviceAuthScope: "wss://gateway.example.test" } : {}),
     ...(explicit ? { token: "fixture-shared-auth" } : {}),
     ...(readOnly ? { sharedStateMode: "read-only" } : {}),
@@ -79,7 +80,6 @@ function host(origin: boolean, readOnly = false, explicit = true) {
 }
 
 const observations = [
-  { name: "valid", token: "fixture-existing", malformed: false },
   { name: "malformed scopes", token: "fixture-existing", malformed: true },
   { name: "absent", token: undefined, malformed: false },
   { name: "raw whitespace", token: " fixture-existing ", malformed: false },

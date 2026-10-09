@@ -1,12 +1,12 @@
-import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawWorkspaceActionsById } from "./application-provenance.js";
+import { digestClawBytes } from "./digest.js";
 import type { ClawAddPlan } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
-import { collectClawRollbackFailures } from "./update-rollback.js";
+import { rollbackClawUpdate } from "./update-rollback.js";
 import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   deleteClawWorkspaceFileRecord,
@@ -19,7 +19,6 @@ import {
 const MAX_UPDATE_FILE_BYTES = 1024 * 1024;
 
 export type ClawWorkspaceUpdateExecution = {
-  appliedPaths: string[];
   rollback: () => Promise<void>;
 };
 
@@ -33,10 +32,6 @@ export class ClawWorkspaceUpdateError extends Error {
   }
 }
 
-function digest(content: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
-}
-
 export async function applyClawWorkspaceUpdate(
   updatePlan: ClawUpdatePlan,
   targetAddPlan: ClawAddPlan,
@@ -46,7 +41,7 @@ export async function applyClawWorkspaceUpdate(
     (action) => action.kind === "workspaceFile" && action.action !== "unchanged",
   );
   if (actions.length === 0) {
-    return { appliedPaths: [], rollback: async () => undefined };
+    return { rollback: async () => undefined };
   }
   const workspaceRoot = resolve(targetAddPlan.agent.workspace);
   const packageRoot = resolve(targetAddPlan.claw.packageRoot);
@@ -65,14 +60,8 @@ export async function applyClawWorkspaceUpdate(
   );
   const targetActions = clawWorkspaceActionsById(targetAddPlan.actions);
   const undo: Array<() => Promise<void>> = [];
-  const appliedPaths: string[] = [];
 
-  const rollback = async () => {
-    const failures = await collectClawRollbackFailures(undo.toReversed());
-    if (failures.length > 0) {
-      throw new ClawWorkspaceUpdateError(failures.join("; "), true);
-    }
-  };
+  const rollback = () => rollbackClawUpdate(undo, ClawWorkspaceUpdateError, true);
 
   try {
     for (const action of actions) {
@@ -95,7 +84,7 @@ export async function applyClawWorkspaceUpdate(
       if (
         previousContent &&
         action.currentDigest &&
-        digest(previousContent) !== action.currentDigest
+        digestClawBytes(previousContent) !== action.currentDigest
       ) {
         throw new ClawWorkspaceUpdateError(
           `Workspace file ${JSON.stringify(path)} changed after planning.`,
@@ -123,7 +112,6 @@ export async function applyClawWorkspaceUpdate(
           await workspace.remove(path);
         }
         deleteClawWorkspaceFileRecord(updatePlan.agentId, path, options);
-        appliedPaths.push(path);
         continue;
       }
 
@@ -139,7 +127,7 @@ export async function applyClawWorkspaceUpdate(
         sourceRoot: source,
       });
       const content = resolvedSource.content;
-      if (digest(content) !== target.digest || target.digest !== action.desiredDigest) {
+      if (digestClawBytes(content) !== target.digest || target.digest !== action.desiredDigest) {
         throw new ClawWorkspaceUpdateError(
           `Workspace source for ${JSON.stringify(path)} changed after planning.`,
         );
@@ -163,7 +151,7 @@ export async function applyClawWorkspaceUpdate(
         const currentContent = await workspace.readBytes(path, {
           maxBytes: MAX_UPDATE_FILE_BYTES,
         });
-        if (digest(currentContent) !== target.digest) {
+        if (digestClawBytes(currentContent) !== target.digest) {
           throw new Error(`Workspace file ${JSON.stringify(path)} changed before rollback.`);
         }
         if (previousContent) {
@@ -179,7 +167,6 @@ export async function applyClawWorkspaceUpdate(
       });
       await workspace.write(path, content, { mkdir: true, overwrite: existed });
       upsertClawWorkspaceFile(record, options);
-      appliedPaths.push(path);
     }
   } catch (error) {
     try {
@@ -192,5 +179,5 @@ export async function applyClawWorkspaceUpdate(
     }
     throw error;
   }
-  return { appliedPaths, rollback };
+  return { rollback };
 }

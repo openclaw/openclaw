@@ -12,6 +12,7 @@ import type {
   SessionSuggestionDispatchClaim,
   SessionSuggestionFinalizeParams,
   SessionSuggestionReleaseParams,
+  SessionSuggestionListParams,
   StoredSessionSuggestion,
   StoredSessionSuggestionResolution,
   StoredSessionSuggestionState,
@@ -25,7 +26,7 @@ const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
 export const SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS = 30_000;
 
-function suggestionDb(database: OpenClawAgentDatabase) {
+function suggestionDb(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SuggestionDatabase>(database.db);
 }
 
@@ -139,9 +140,9 @@ export function addSessionSuggestionInDatabase(
 }
 
 export function listSessionSuggestionsInDatabase(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
-  params: { authorId?: string; pendingOnly?: boolean } = {},
+  params: SessionSuggestionListParams = {},
 ): StoredSessionSuggestion[] {
   let query = suggestionDb(database)
     .selectFrom("session_suggestions")
@@ -189,11 +190,10 @@ export function claimSessionSuggestionDispatchInDatabase(
     return null;
   }
   const now = params.now ?? Date.now();
-  const claimTtlMs = params.claimTtlMs ?? SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
   if (
     row.dispatch_token &&
     row.dispatch_started_at !== null &&
-    now - row.dispatch_started_at < claimTtlMs
+    now - row.dispatch_started_at < SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS
   ) {
     return { kind: "busy" };
   }

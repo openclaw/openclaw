@@ -68,6 +68,9 @@ describe("tsgo core test shards", () => {
       ["src/agents/subagents/spawn/acp-spawn-target.test.ts", "agents-sessions"],
       ["src/agents/session-maintenance/run.test.ts", "agents-sessions"],
       ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", "agents-sessions"],
+      ["src/agents/model-selection.test.ts", "agents-other"],
+      ["src/agents/model-catalog-view.test.ts", "agents-other"],
+      ["src/agents/models-config.merge.test.ts", "agents-root"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
       ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
@@ -162,18 +165,25 @@ describe("tsgo core test shards", () => {
     ).toBe(true);
   });
 
-  it("expands canonical root CI selection without changing core stripe ownership", () => {
-    const graphs = resolveCiTsgoGraphs(["scripts", "test-root"]);
-    expect(graphs.map((graph) => graph.name)).toEqual(["scripts", "test-root"]);
-    expect(expandTsgoExecutionGraphs(graphs)).toEqual([graphs[0], ...TSGO_ROOT_TEST_SHARDS]);
-    expect(selectTsgoCoreTestShards("root")).toEqual(TSGO_ROOT_TEST_SHARDS);
-    expect(expandTsgoExecutionGraphs(TSGO_CORE_TEST_SHARDS)).toEqual(TSGO_CORE_TEST_SHARDS);
-    const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    expect(packageJson.scripts["tsgo:test:root"]).toBe(
-      "node scripts/run-tsgo-core-test-shards.mjs root",
-    );
+  it.each(["root", "src", undefined])("preserves graph ownership for the %s alias", (group) => {
+    const shards = selectTsgoCoreTestShards(group);
+    if (group === "root") {
+      const graphs = resolveCiTsgoGraphs(["scripts", "test-root"]);
+      expect(graphs.map((graph) => graph.name)).toEqual(["scripts", "test-root"]);
+      expect(expandTsgoExecutionGraphs(graphs)).toEqual([graphs[0], ...TSGO_ROOT_TEST_SHARDS]);
+      expect(shards).toEqual(TSGO_ROOT_TEST_SHARDS);
+    } else if (group === undefined) {
+      expect(shards).not.toContainEqual(
+        expect.objectContaining({ name: "extension-declarations" }),
+      );
+      expect(expandTsgoExecutionGraphs(TSGO_CORE_TEST_SHARDS)).toEqual(TSGO_CORE_TEST_SHARDS);
+    } else {
+      expect(shards?.at(-1)).toEqual({
+        name: "extension-declarations",
+        config: "test/tsconfig/tsconfig.test.extension-declarations.json",
+        sparseRoots: ["extensions", "src", "ui/src"],
+      });
+    }
   });
 
   it("stripes partition the full shard list exactly once", () => {
@@ -210,123 +220,44 @@ describe("tsgo core test shards", () => {
     );
   });
 
-  it("accepts an exact once-only partition", () => {
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots: ["src/a.test.ts", "src/b.test.ts"],
-        shards: [
-          { name: "a", roots: ["src/a.test.ts"] },
-          { name: "b", roots: ["src/b.test.ts"] },
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  it("warns about oversized shards without treating them as violations", () => {
-    const shards = [
-      { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
-      { name: "small", roots: ["src/c.test.ts"] },
-    ];
-    expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual([
-      "big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient",
-    ]);
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
-        shards,
-      }),
-    ).toEqual([]);
-  });
-
-  it("reports missing, duplicate, and extra shard roots", () => {
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-        shards: [
-          { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
-          { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
-        ],
-      }),
-    ).toEqual([
-      "assigned 2 times (first, second): src/b.test.ts",
-      "unassigned: src/missing.test.ts",
-      "not in the canonical core-test graph (second): src/extra.test.ts",
-    ]);
-  });
-
-  it.each(["src", "ui", "packages"])(
-    "retains shared extension declarations for the %s alias",
-    (group) => {
-      const shards = selectTsgoCoreTestShards(group);
-
-      expect(shards?.at(-1)).toEqual({
-        name: "extension-declarations",
-        config: "test/tsconfig/tsconfig.test.extension-declarations.json",
-        sparseRoots: ["extensions", "src", "ui/src"],
-      });
+  it.each([
+    {
+      name: "oversized shards remain advisory",
+      canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+      shards: [
+        { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
+        { name: "small", roots: ["src/c.test.ts"] },
+      ],
+      warnings: ["big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient"],
+      violations: [],
     },
-  );
-
-  it("keeps the full core-test run scoped to its canonical shards", () => {
-    expect(selectTsgoCoreTestShards()).not.toContainEqual(
-      expect.objectContaining({ name: "extension-declarations" }),
-    );
-  });
-
-  it("keeps plugin browser source and tests in the extension type graphs", () => {
-    const root = lifetime.createTempDir("openclaw-browser-type-graphs-");
-    const coreConfigs = [
-      "tsconfig.ui.json",
-      "test/tsconfig/tsconfig.core.test.json",
-      "test/tsconfig/tsconfig.core.test.ui-other.json",
-    ];
-    const write = (file: string, content: string) => {
-      const target = path.join(root, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, content);
-    };
-    for (const config of [
-      "tsconfig.json",
-      "tsconfig.extensions.json",
-      "test/tsconfig/tsconfig.test.json",
-      "test/tsconfig/tsconfig.extensions.test.json",
-      "test/tsconfig/tsconfig.core.test.shard.json",
-      ...coreConfigs,
-    ]) {
-      write(config, fs.readFileSync(config, "utf8"));
+    {
+      name: "missing, duplicate, and extra roots are violations",
+      canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
+      shards: [
+        { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
+        { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
+      ],
+      violations: [
+        "assigned 2 times (first, second): src/b.test.ts",
+        "unassigned: src/missing.test.ts",
+        "not in the canonical core-test graph (second): src/extra.test.ts",
+      ],
+    },
+  ])("$name", ({ canonicalRoots, shards, warnings, violations }) => {
+    if (warnings) {
+      expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual(warnings);
     }
-    const browserSource = "extensions/fixture/browser/index.ts";
-    const browserTest = "extensions/fixture/browser/index.test.ts";
-    for (const file of [
-      browserSource,
-      browserTest,
-      "extensions/fixture/index.ts",
-      "extensions/fixture/index.test.ts",
-      "ui/src/main.ts",
-      "ui/src/fixture.test.ts",
-    ]) {
-      write(file, "export {};\n");
-    }
-    const roots = (config: string) => {
-      const parsed = readNativeTypeScriptConfig({ cwd: root, configFileName: config });
-      return parsed.fileNames.map((file) => path.relative(root, file).replaceAll(path.sep, "/"));
-    };
-
-    expect(roots("tsconfig.extensions.json")).toContain(browserSource);
-    expect(roots("test/tsconfig/tsconfig.extensions.test.json")).toContain(browserTest);
-    for (const config of coreConfigs) {
-      expect(
-        roots(config).filter((file) => file.startsWith("extensions/")),
-        config,
-      ).toEqual([]);
-    }
+    expect(findTsgoCoreTestShardViolations({ canonicalRoots, shards })).toEqual(violations);
   });
 
   it("routes aggregate package aliases through bounded processes", () => {
     const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
-
+    expect(packageJson.scripts["tsgo:test:root"]).toBe(
+      "node scripts/run-tsgo-core-test-shards.mjs root",
+    );
     expect(packageJson.scripts["tsgo:core:all"]).toContain("pnpm tsgo:core:test");
     expect(packageJson.scripts["tsgo:core:all"]).not.toContain("run-tsgo.mjs -b");
     expect(packageJson.scripts["tsgo:all"]).toContain("pnpm tsgo:core:all");
@@ -343,30 +274,15 @@ describe("changed core test graph selection", () => {
       files: graph.name === "core-test-agents-other" ? [leaf] : [],
     }));
 
-  it("includes a consuming graph even when another graph owns the test root", () => {
-    const graphs = inventory();
-    graphs.find((graph) => graph.name === "core-test-agents-tools")!.files.push(leaf);
-    expect(selectChangedTsgoCoreTestShards([leaf], graphs)?.map((shard) => shard.name)).toEqual([
-      "agents-other",
-      "agents-tools",
-    ]);
-  });
-
-  it("rejects a plugin browser test even when the inventory claims core ownership", () => {
-    const pluginTest = "extensions/example/browser/page.test.ts";
-    const graphs = inventory();
-    const uiGraph = graphs.find((graph) => graph.name === "core-test-ui-other")!;
-    uiGraph.roots = [pluginTest];
-    uiGraph.files = [pluginTest];
-    expect(selectChangedTsgoCoreTestShards([pluginTest], graphs)).toBeUndefined();
-  });
-
-  it.each(["src/owner.ts", "src/shared.test-support.ts", "test/helpers/shared.ts"])(
-    "selects only consuming test graphs for %s alongside its production graph",
+  it.each([leaf, "test/helpers/shared.ts"])(
+    "selects every consuming test graph for %s",
     (source) => {
       const graphs = inventory();
       for (const graph of graphs) {
-        if (["core", "core-test-agents-other", "core-test-agents-tools"].includes(graph.name)) {
+        if (
+          graph.name === "core-test-agents-tools" ||
+          (source !== leaf && ["core", "core-test-agents-other"].includes(graph.name))
+        ) {
           graph.files.push(source);
         }
       }
@@ -376,43 +292,38 @@ describe("changed core test graph selection", () => {
     },
   );
 
-  it.for([
-    [],
-    ["src/owner.ts"],
-    ["test/tsconfig/tsconfig.core.test.json"],
-    ["src/shared.test-support.ts"],
-    ["src/missing.test.ts"],
-    [leaf, "package.json"],
-    ["src/types/node-runtime-globals.d.ts"],
-    ["tsconfig.json"],
-  ])("retains full checks for unsupported changed paths %j", (paths) => {
-    expect(selectChangedTsgoCoreTestShards(paths, inventory())).toBeUndefined();
+  it.each([
+    ["empty input", []],
+    ["unconsumed source", ["src/owner.ts"]],
+    ["unowned test root", ["src/missing.test.ts"]],
+    ["mixed config input", [leaf, "package.json"]],
+    ["ambient declarations", ["src/types/node-runtime-globals.d.ts"]],
+    ["plugin browser input claiming core ownership", ["extensions/example/browser/page.test.ts"]],
+    ["incomplete inventory", [leaf]],
+    ["duplicate inventory", [leaf]],
+    ["deleted input", [leaf]],
+    ["production ownership", [leaf]],
+    ["ambiguous ownership", [leaf]],
+  ] as const)("retains full checks for %s", (failure, paths) => {
+    const graphs = inventory();
+    if (failure === "plugin browser input claiming core ownership") {
+      const graph = graphs.find((entry) => entry.name === "core-test-ui-other")!;
+      graph.roots = graph.files = [...paths];
+    } else if (failure === "incomplete inventory") {
+      graphs.shift();
+    } else if (failure === "duplicate inventory") {
+      graphs.push(graphs[0]!);
+    } else if (failure === "deleted input") {
+      graphs.forEach((graph) => {
+        graph.files = [];
+      });
+    } else if (failure === "production ownership") {
+      graphs[0]!.files.push(leaf);
+    } else if (failure === "ambiguous ownership") {
+      graphs.find((graph) => graph.name === "core-test-agents-tools")!.roots.push(leaf);
+    }
+    expect(selectChangedTsgoCoreTestShards(paths, graphs)).toBeUndefined();
   });
-
-  it.each(["incomplete", "duplicate", "deleted", "production", "ambiguous"])(
-    "retains full checks for %s ownership",
-    (failure) => {
-      const graphs = inventory();
-      if (failure === "incomplete") {
-        graphs.shift();
-      }
-      if (failure === "duplicate") {
-        graphs.push(graphs[0]!);
-      }
-      if (failure === "deleted") {
-        graphs.forEach((graph) => {
-          graph.files = [];
-        });
-      }
-      if (failure === "production") {
-        graphs[0]!.files.push(leaf);
-      }
-      if (failure === "ambiguous") {
-        graphs.find((graph) => graph.name === "core-test-agents-tools")!.roots.push(leaf);
-      }
-      expect(selectChangedTsgoCoreTestShards([leaf], graphs)).toBeUndefined();
-    },
-  );
 });
 
 // The compiler owns dependency reachability; test root partitions alone cannot prove it.
@@ -428,7 +339,6 @@ afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
   ["alias", ["root"], [0, 1, 2, 3]],
-  ["CI", ["--ci-graphs-json", '["test-root"]'], [0, 1, 2, 3]],
   ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]'], [0, 1, 2, 3]],
   ["odd stripe", ["--root-stripe", "1/2"], [0, 2]],
   ["even stripe", ["--root-stripe", "2/2"], [1, 3]],

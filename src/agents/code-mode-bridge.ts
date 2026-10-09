@@ -15,6 +15,10 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
 import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
+import {
+  isCodeModeSessionStoreRequest,
+  type CodeModeSessionStoreAccess,
+} from "./code-mode-session-store.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -22,7 +26,7 @@ import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capabili
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
-import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
+import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -34,15 +38,7 @@ const loadSwarmHandlers = createLazyRuntimeNamedExport(
 
 export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
-type CodeModeNode = {
-  id: string;
-  name: string;
-  platform?: string;
-  connected: boolean;
-  commands: string[];
-};
-
-function projectCodeModeNode(node: NodeListNode): CodeModeNode {
+function projectCodeModeNode(node: NodeListNode) {
   return {
     id: node.nodeId,
     name: node.displayName?.trim() || node.nodeId,
@@ -54,36 +50,6 @@ function projectCodeModeNode(node: NodeListNode): CodeModeNode {
   };
 }
 
-async function callNodesTool(params: {
-  runtime: ToolSearchRuntime;
-  parentToolCallId: string;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  input: Record<string, unknown>;
-}): Promise<unknown> {
-  return await params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, params.input, {
-    includeMcp: false,
-    parentToolCallId: params.parentToolCallId,
-    signal: params.signal,
-    onUpdate: params.onUpdate,
-    recoverySurface: "catalog",
-  });
-}
-
-async function listCodeModeNodes(params: {
-  runtime: ToolSearchRuntime;
-  parentToolCallId: string;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-}): Promise<NodeListNode[]> {
-  return parseNodeList(
-    await callNodesTool({
-      ...params,
-      input: { action: "status" },
-    }),
-  );
-}
-
 async function runNodesBridge(params: {
   runtime: ToolSearchRuntime;
   parentToolCallId: string;
@@ -91,10 +57,18 @@ async function runNodesBridge(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<unknown> {
+  const call = (input: Record<string, unknown>) =>
+    params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, input, {
+      includeMcp: false,
+      parentToolCallId: params.parentToolCallId,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
+      recoverySurface: "catalog",
+    });
   const values = params.request.args;
   const action = values[0];
   if (action === "list") {
-    return (await listCodeModeNodes(params))
+    return parseNodeList(await call({ action: "status" }))
       .filter((node) => node.paired === true)
       .map(projectCodeModeNode);
   }
@@ -104,7 +78,7 @@ async function runNodesBridge(params: {
       throw new ToolInputError("nodes.get id or name must be a non-empty string.");
     }
     const node = resolveEligibleNodeFromList(
-      await listCodeModeNodes(params),
+      parseNodeList(await call({ action: "status" })),
       query,
       (candidate) => candidate.paired === true,
       {
@@ -137,14 +111,11 @@ async function runNodesBridge(params: {
     if (typeof command !== "string" || !command.trim()) {
       throw new ToolInputError("nodes.invoke command must be a non-empty string.");
     }
-    return await callNodesTool({
-      ...params,
-      input: {
-        action: "invoke",
-        node,
-        invokeCommand: command,
-        invokeParamsJson: JSON.stringify(values[3] ?? {}),
-      },
+    return await call({
+      action: "invoke",
+      node,
+      invokeCommand: command,
+      invokeParamsJson: JSON.stringify(values[3] ?? {}),
     });
   }
   throw new ToolInputError("unsupported nodes bridge action.");
@@ -202,7 +173,9 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   // events and agents.run launches collectors. A run that executes only an allowlist
   // (detached skill review) gets the same refusal as the tool, never the foreground session.
   if (ctx.toolExecutionAllow && !isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) {
-    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+    throw new ToolInputError(
+      formatToolExecutionGatedMessage("sessions_spawn", ctx.toolExecutionAllow),
+    );
   }
 }
 
@@ -215,7 +188,7 @@ export function requiresCodeModeCompletion(
     if (
       request.method !== "callValue" ||
       !isRecord(request.args[1]) ||
-      request.args[1].required !== true
+      request.args[1].awaitResults !== true
     ) {
       return false;
     }
@@ -235,6 +208,7 @@ export async function runBridgeRequest(params: {
   codeModeRunId: string;
   reply: CodeModeReplyLease;
   results: CodeModeResultsAccess;
+  sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
   ctx: ToolSearchToolContext;
@@ -243,6 +217,7 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<void> {
   const catalogProjection = params.catalogProjection;
+  const sessionStoreRequest = isCodeModeSessionStoreRequest(params.request);
   try {
     params.signal?.throwIfAborted();
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -251,14 +226,33 @@ export async function runBridgeRequest(params: {
       case "resultSave":
       case "resultLoad":
       case "resultDelete": {
+        const sessionStore = sessionStoreRequest ? params.sessionStore : undefined;
+        if (sessionStoreRequest && !sessionStore) {
+          throw new ToolInputError(
+            "Code Mode store/load is unavailable in headless execution; use an interactive session-bound cell.",
+          );
+        }
         if (params.request.method === "resultSave") {
-          value = params.results.save(values[0], params.runtime.hasNetworkContent());
+          if (sessionStore) {
+            await sessionStore.save(values[2], values[0], params.runtime.hasNetworkContent());
+          } else {
+            value = params.results.save(values[0], params.runtime.hasNetworkContent());
+          }
         } else if (params.request.method === "resultLoad") {
-          const loaded = params.results.load(values[0]);
+          const loaded = sessionStore
+            ? await sessionStore.load(values[0])
+            : params.results.load(values[0]);
           if (loaded.networkContent) {
             params.runtime.observeNetworkContent(params.parentToolCallId);
           }
-          value = loaded.value;
+          // Session values need an envelope to preserve missing/undefined across the JSON bridge.
+          value = sessionStore
+            ? loaded.value === undefined
+              ? {}
+              : { value: loaded.value }
+            : loaded.value;
+        } else if (sessionStore) {
+          await sessionStore.delete(values[0]);
         } else {
           value = params.results.delete(values[0]);
         }
@@ -350,7 +344,7 @@ export async function runBridgeRequest(params: {
           input.background !== true &&
           params.completionRequired
         ) {
-          input = { ...input, required: true };
+          input = { ...input, awaitResults: true };
         } else if (
           binding.source === "openclaw" &&
           binding.name === "exec" &&
@@ -372,7 +366,7 @@ export async function runBridgeRequest(params: {
           isRecord(input) &&
           input.timeoutSeconds === undefined
         ) {
-          input = { ...input, required: true };
+          input = { ...input, awaitResults: true };
         }
         value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",
@@ -452,7 +446,9 @@ export async function runBridgeRequest(params: {
           params.ctx.toolExecutionAllow &&
           !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "skills_search")
         ) {
-          throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+          throw new ToolInputError(
+            formatToolExecutionGatedMessage("skills_search", params.ctx.toolExecutionAllow),
+          );
         }
         const offset = values[0] ?? 0;
         if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
@@ -515,8 +511,12 @@ export async function runBridgeRequest(params: {
     params.reply.settle(false, {
       message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
       code:
-        getToolContractFailureCode(classified) ??
-        (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error"),
+        sessionStoreRequest && error instanceof RangeError
+          ? "store_range"
+          : sessionStoreRequest && error instanceof TypeError
+            ? "store_type"
+            : (getToolContractFailureCode(classified) ??
+              (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error")),
       effectStatus: "unknown",
     });
   }

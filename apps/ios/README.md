@@ -60,7 +60,7 @@ build compiles the native Watch WebRTC library. Install the official
 and standard-library sources:
 
 ```bash
-rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src
+rustup toolchain install nightly-2026-10-01 --profile minimal --component rust-src
 ```
 
 Both `rustup` and the rustup-managed `cargo` shim must be on the build's `PATH`.
@@ -80,7 +80,7 @@ phase's `PATH`; exporting it in a terminal alone does not configure Xcode.
 Verify the pinned Cargo is reachable from the build environment:
 
 ```bash
-cargo +nightly-2026-09-05 --version
+cargo +nightly-2026-10-01 --version
 ```
 
 `apps/shared/OpenClawWatchRTC/build.sh` uses that exact toolchain with
@@ -108,7 +108,7 @@ Prereqs:
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
-- Ruby 3.4.10 and Bundler 4.0.21 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
+- Ruby 3.4.11 and Bundler 4.0.22 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the canonical OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the canonical OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
@@ -204,7 +204,7 @@ Use this when a clone is missing local iOS release setup and you want the shorte
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check
 ```
 
 2. If auth is missing, bootstrap it once on this Mac:

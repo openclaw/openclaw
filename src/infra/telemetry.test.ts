@@ -277,14 +277,14 @@ describe("anonymous telemetry", () => {
   });
 
   it("counts only session creation events from the previous 24 hours", async () => {
-    const { recordSessionStateEvent } = await import("../sessions/session-state-events.js");
+    const { recordSessionStateEventAsync } = await import("../sessions/session-state-events.js");
     const now = Date.now();
     for (const event of [
       { sessionKey: "recent", kind: "created" as const, occurredAt: now - 1000 },
       { sessionKey: "older", kind: "created" as const, occurredAt: now - DAY_MS - 1000 },
       { sessionKey: "other", kind: "run_completed" as const, occurredAt: now - 1000 },
     ]) {
-      recordSessionStateEvent(
+      await recordSessionStateEventAsync(
         {
           ...event,
           agentId: "main",

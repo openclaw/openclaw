@@ -47,6 +47,7 @@ import {
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,
+  resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredSessionStoreTargets,
 } from "./targets.js";
 
@@ -73,11 +74,16 @@ export type SessionStoreTargetReadResult =
       database: { agentId: string; path: string };
     };
 
-/** Resolve a single configured store without inspecting or listing its session rows. */
-function readSessionStoreTarget(
+class SessionStoreTargetDataReadError extends Error {
+  constructor(readonly readError: unknown) {
+    super("Session store target data read failed", { cause: readError });
+  }
+}
+
+/** Preserve positive locator failures without catching native close or candidate revocation. */
+export function readSessionStoreTargetResult(
   request: SessionStoreTargetReadRequest,
-  onReadError?: (error: unknown) => never,
-): SessionStoreTargetReadResult {
+): Result<SessionStoreTargetReadResult, unknown> {
   try {
     const target = resolveSqliteTargetFromSessionStorePath(request.storePath, {
       agentId: request.agentId,
@@ -85,7 +91,9 @@ function readSessionStoreTarget(
       env: request.env,
       registeredDatabases: request.registeredDatabases,
       readCandidates: request.candidates,
-      onReadError,
+      onReadError(error) {
+        throw new SessionStoreTargetDataReadError(error);
+      },
     });
     let agentId: string | undefined;
     try {
@@ -98,10 +106,9 @@ function readSessionStoreTarget(
         throw new Error("Cannot resolve SQLite session scope without an agent id");
       }
     } catch (error) {
-      onReadError?.(error);
-      throw error;
+      throw new SessionStoreTargetDataReadError(error);
     }
-    return {
+    return ok({
       kind: "session-store-target",
       sourcePath: target.path,
       logicalAgentId: agentId,
@@ -109,32 +116,11 @@ function readSessionStoreTarget(
         agentId: target.shared ? (target.agentId ?? agentId) : agentId,
         path: assertSessionStoreReadCandidate(target.path, request.candidates),
       },
-    };
+    });
   } catch (error) {
     if (error instanceof SessionStoreRegistryReadRequired) {
-      return { kind: "session-target-registry-required" };
+      return ok({ kind: "session-target-registry-required" });
     }
-    throw error;
-  }
-}
-
-class SessionStoreTargetDataReadError extends Error {
-  constructor(readonly readError: unknown) {
-    super("Session store target data read failed", { cause: readError });
-  }
-}
-
-/** Preserve positive locator failures without catching native close or candidate revocation. */
-export function readSessionStoreTargetResult(
-  request: SessionStoreTargetReadRequest,
-): Result<SessionStoreTargetReadResult, unknown> {
-  try {
-    return ok(
-      readSessionStoreTarget(request, (error) => {
-        throw new SessionStoreTargetDataReadError(error);
-      }),
-    );
-  } catch (error) {
     if (error instanceof SessionStoreTargetDataReadError) {
       return err(error.readError);
     }
@@ -144,25 +130,25 @@ export function readSessionStoreTargetResult(
 
 export function captureSessionStoreReadCandidates(storePath: string): SessionStoreReadCandidate[] {
   const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-  const candidates = new Map<string, SessionStoreReadCandidate>();
-  const add = (candidate: SessionStoreReadCandidate) =>
-    candidates.set(JSON.stringify(candidate), candidate);
-  if (!target.agentId && !target.shared) {
-    add(captureSessionStoreReadCandidate(target.path, "sibling-family"));
+  const candidates = [captureSessionStoreReadCandidate(target.path)];
+  if (target.agentId || target.shared) {
+    return candidates;
   }
-  add(captureSessionStoreReadCandidate(target.path));
+  candidates.unshift(captureSessionStoreReadCandidate(target.path, "sibling-family"));
   try {
     for (const candidate of listSqliteTargetCandidatePathsForSessionStorePath(storePath)) {
-      add(captureSessionStoreReadCandidate(candidate));
+      if (candidate !== target.path) {
+        candidates.push(captureSessionStoreReadCandidate(candidate));
+      }
     }
   } catch {
     // The worker refuses an unreadable or changed target outside this captured family.
   }
-  return [...candidates.values()];
+  return candidates;
 }
 
 export type SessionStoreTargetInventoryRequest = {
-  selection?: "configured";
+  selection?: "configured" | "recovery";
   config: OpenClawConfig;
   agentIds: string[];
   env: NodeJS.ProcessEnv;
@@ -281,7 +267,7 @@ export function prepareSessionStoreTargetInventory(
   cfg: OpenClawConfig,
   inputAgentIds: readonly string[],
   inputEnv: NodeJS.ProcessEnv = process.env,
-  selection?: "configured",
+  selection?: SessionStoreTargetInventoryRequest["selection"],
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
   const env = cloneEnvWithPlatformSemantics(inputEnv);
   const stateDir = resolveStateDir(env);
@@ -318,19 +304,18 @@ export function prepareSessionStoreTargetInventory(
       roots.add(root);
     }
   }
-  if (perAgent) {
-    if (retired.size > 0) {
-      for (const root of roots) {
-        try {
-          for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(root, (name) =>
-            retired.has(normalizeAgentId(name)),
-          )) {
-            logicalPaths.add(path.join(sessionsDir, "sessions.json"));
-          }
-        } catch (error) {
-          if (!shouldSkipDiscoveryError(error)) {
-            throw error;
-          }
+  if (selection === "recovery" || (perAgent && retired.size > 0)) {
+    for (const root of roots) {
+      try {
+        for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(
+          root,
+          (name) => selection === "recovery" || retired.has(normalizeAgentId(name)),
+        )) {
+          logicalPaths.add(path.join(sessionsDir, "sessions.json"));
+        }
+      } catch (error) {
+        if (!shouldSkipDiscoveryError(error)) {
+          throw error;
         }
       }
     }
@@ -340,9 +325,9 @@ export function prepareSessionStoreTargetInventory(
     candidates.set(JSON.stringify(candidate), candidate);
   for (const storePath of logicalPaths) {
     const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-    // Configured inventory resolves locators only; native reads retain the process-held owner.
+    // Locator-only inventories keep incognito reads with their process-held owner.
     if (
-      selection !== "configured" &&
+      selection === undefined &&
       agentIds.some((agentId) => isIncognitoOpenClawAgentSqlitePath(target.path, { agentId, env }))
     ) {
       throw new Error("Incognito session discovery requires its process-held owner");
@@ -409,44 +394,58 @@ export function readSessionStoreTargetInventory(
   const cache: SessionStoreTargetsReadCache = new Map();
   let readFailed = false;
   try {
-    if (request.selection === "configured") {
+    if (request.selection === "configured" || request.selection === "recovery") {
       const agents: Extract<
         SessionStoreTargetInventoryResult,
         { kind: "session-target-inventory" }
       >["agents"] = [];
-      dedupeSessionStoreTargetsBySqliteTarget(
-        resolveConfiguredSessionStoreTargets(config, env, request.paths),
-        {
-          defaultAgentId: resolveSessionStoreCompatibilityAgentId(config),
-          env,
-          registeredDatabases: request.registeredDatabases,
-          readCandidates: request.candidates,
-          onResolvedTarget(target, physical) {
-            const databasePath = assertSessionStoreReadCandidate(
-              physical.storePath,
-              request.candidates,
-            );
-            agents.push({
-              agentId: target.agentId,
-              result: { available: true, targets: [target] },
-              reads: [
-                {
-                  target: physical,
-                  database: {
+      const options = {
+        defaultAgentId: resolveSessionStoreCompatibilityAgentId(config),
+        env,
+        registeredDatabases: request.registeredDatabases,
+        readCandidates: request.candidates,
+        readPaths: request.paths,
+        onResolvedTarget(target: SessionStoreTarget, physical: SessionStoreTarget) {
+          const databasePath = assertSessionStoreReadCandidate(
+            physical.storePath,
+            request.candidates,
+          );
+          const selected =
+            request.selection === "recovery" ? { ...target, agentId: physical.agentId } : target;
+          agents.push({
+            agentId: selected.agentId,
+            result: { available: true, targets: [selected] },
+            reads: [
+              {
+                target: physical,
+                database: {
+                  agentId: physical.agentId,
+                  path: isIncognitoOpenClawAgentSqlitePath(physical.storePath, {
                     agentId: physical.agentId,
-                    path: isIncognitoOpenClawAgentSqlitePath(physical.storePath, {
-                      agentId: physical.agentId,
-                      env,
-                    })
-                      ? physical.storePath
-                      : databasePath,
-                  },
+                    env,
+                  })
+                    ? physical.storePath
+                    : databasePath,
                 },
-              ],
-            });
-          },
+              },
+            ],
+          });
         },
-      );
+      };
+      if (request.selection === "recovery") {
+        const selected = new Set(request.agentIds);
+        resolveAllAgentSessionStoreTargetsSync(config, {
+          ...options,
+          ...(isPerAgentSessionStoreConfig(config.session?.store)
+            ? { agentIds: selected }
+            : { fixedStoreAgentIds: selected }),
+        });
+      } else {
+        dedupeSessionStoreTargetsBySqliteTarget(
+          resolveConfiguredSessionStoreTargets(config, env, request.paths),
+          options,
+        );
+      }
       return { kind: "session-target-inventory", agents };
     }
     return {

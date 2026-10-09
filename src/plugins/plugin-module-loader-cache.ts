@@ -1,6 +1,5 @@
 /** Caches plugin module loaders and native-load stats for runtime/source module imports. */
 import fs from "node:fs";
-import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
@@ -13,6 +12,7 @@ import {
   resolvePluginLoaderTryNative,
   tryNativeRequireJavaScriptModule,
   tryNativeRequireModule,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import { isPathInside, openPluginRootFileSync } from "./path-safety.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
@@ -204,7 +204,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
         pluginSdkResolution: params.pluginSdkResolution,
       });
   const moduleConfigCacheKey = `${tryNative ? "native" : "transform"}\0${aliases.cacheKey}`;
-  const lazyNativeAliasFallback = tryNative && typeof Module.registerHooks !== "function";
+  const lazyNativeAliasFallback = tryNative && !useNodeModuleHooks();
   const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
   return {
     loaderFilename,

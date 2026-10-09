@@ -6,23 +6,14 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type MemoryConfig = {
-  embedding: {
-    provider: string;
-    model: string;
-    apiKey?: string;
-    baseUrl?: string;
-    dimensions?: number;
+type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
+type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
+type OptionalEmbeddingFields = "apiKey" | "baseUrl" | "dimensions";
+export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemoryFields> &
+  Partial<Pick<ProducedMemoryConfig, OptionalMemoryFields>> & {
+    embedding: Omit<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields> &
+      Partial<Pick<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields>>;
   };
-  dreaming?: Record<string, unknown>;
-  dbPath?: string;
-  autoCapture?: boolean;
-  autoRecall?: boolean;
-  captureMaxChars: number;
-  customTriggers?: string[];
-  recallMaxChars: number;
-  storageOptions?: Record<string, string>;
-};
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
@@ -75,16 +66,10 @@ function resolveEmbeddingModel(
   return model;
 }
 
-function resolveBoundedIntegerConfig(params: {
-  value: unknown;
-  fallback: number;
-  min: number;
-  max: number;
-  label: string;
-}): number {
-  const resolved = resolveOptionalIntegerOption(params.value) ?? params.fallback;
-  if (resolved < params.min || resolved > params.max) {
-    throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
+function resolveTextLimit(value: unknown, fallback: number, label: string): number {
+  const resolved = resolveOptionalIntegerOption(value) ?? fallback;
+  if (resolved < 100 || resolved > 10_000) {
+    throw new Error(`${label} must be between 100 and 10000`);
   }
   return resolved;
 }
@@ -102,7 +87,7 @@ function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number 
 }
 
 export const memoryConfigSchema = {
-  parse(value: unknown): MemoryConfig {
+  parse(value: unknown) {
     if (!isRecord(value)) {
       throw new Error("memory config required");
     }
@@ -139,20 +124,16 @@ export const memoryConfigSchema = {
       throw new Error("embedding.provider must not be empty");
     }
 
-    const captureMaxChars = resolveBoundedIntegerConfig({
-      value: cfg.captureMaxChars,
-      fallback: DEFAULT_CAPTURE_MAX_CHARS,
-      min: 100,
-      max: 10_000,
-      label: "captureMaxChars",
-    });
-    const recallMaxChars = resolveBoundedIntegerConfig({
-      value: cfg.recallMaxChars,
-      fallback: DEFAULT_RECALL_MAX_CHARS,
-      min: 100,
-      max: 10_000,
-      label: "recallMaxChars",
-    });
+    const captureMaxChars = resolveTextLimit(
+      cfg.captureMaxChars,
+      DEFAULT_CAPTURE_MAX_CHARS,
+      "captureMaxChars",
+    );
+    const recallMaxChars = resolveTextLimit(
+      cfg.recallMaxChars,
+      DEFAULT_RECALL_MAX_CHARS,
+      "recallMaxChars",
+    );
     let customTriggers: string[] | undefined;
     if (cfg.customTriggers !== undefined) {
       if (!Array.isArray(cfg.customTriggers)) {

@@ -19,13 +19,8 @@ import {
 } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
-  mergeAssistantText,
-  mergePendingAssistantText,
+  createAssistantTextStream,
   resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -53,18 +48,17 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
-  type CreateResponseBody,
   type OutputItem,
   type ResponseResource,
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
+import { resolveOpenAiStreamParams } from "./openai-compat-errors.js";
 import {
   type OpenAiCompatiblePendingToolCall,
   readOpenAiHttpRunTerminal,
@@ -80,7 +74,6 @@ import {
 } from "./openai-tool-choice.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { lookupResponseSession, rememberResponseSession } from "./openresponses-session-store.js";
-import type { ResponseSessionScope } from "./openresponses-session-store.types.js";
 import {
   createAssistantOutputItem,
   createFunctionCallOutputItem,
@@ -110,35 +103,8 @@ function resolveResponseSessionAuthSubject(params: {
   return `gateway-auth:${params.auth.mode}`;
 }
 
-function createResponseSessionScope(params: {
-  req: IncomingMessage;
-  auth: ResolvedGatewayAuth;
-  requestAuth: AuthorizedGatewayHttpRequest;
-  agentId: string;
-  resolveGatewayContext?: GatewayContextResolver;
-}): ResponseSessionScope {
-  return {
-    authSubject: resolveResponseSessionAuthSubject(params).trim(),
-    agentId: params.agentId,
-    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key")?.trim() || undefined,
-  };
-}
-
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-}
-
-function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  // Normalize from Responses API flat format to the internal wrapped format.
-  return (body.tools ?? []).map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      strict: tool.strict,
-    },
-  }));
 }
 
 function extractUsageFromResult(result: unknown): Usage {
@@ -158,9 +124,6 @@ export async function handleOpenResponsesHttpRequest(
     ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {
@@ -326,7 +289,15 @@ export async function handleOpenResponsesHttpRequest(
   if (rejectDisabledGatewayUpload(res, hasMedia)) {
     return true;
   }
-  const clientTools = extractClientTools(payload);
+  const clientTools: ClientToolDefinition[] = (payload.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
   let toolChoice: ReturnType<typeof applyToolChoice>;
   try {
     toolChoice = applyToolChoice(clientTools, resolveResponsesToolChoice(payload.tool_choice));
@@ -342,8 +313,6 @@ export async function handleOpenResponsesHttpRequest(
       model,
       user,
       sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     });
   } catch (err) {
     if (isGatewayRequestContextError(err)) {
@@ -352,13 +321,16 @@ export async function handleOpenResponsesHttpRequest(
     }
     throw err;
   }
-  const responseSessionScope = createResponseSessionScope({
-    req,
-    auth: opts.auth,
-    requestAuth: handled.requestAuth,
+  const responseSessionScope = {
+    authSubject: resolveResponseSessionAuthSubject({
+      req,
+      auth: opts.auth,
+      requestAuth: handled.requestAuth,
+      resolveGatewayContext: opts.resolveGatewayContext,
+    }).trim(),
     agentId: resolved.agentId,
-    resolveGatewayContext: opts.resolveGatewayContext,
-  });
+    requestedSessionKey: getHeader(req, "x-openclaw-session-key")?.trim() || undefined,
+  };
   // Resolve session key: reuse previous_response_id only when it matches the
   // same auth-subject/agent/requested-session scope as the current request.
   const previousSessionKey = payload.previous_response_id
@@ -436,17 +408,11 @@ export async function handleOpenResponsesHttpRequest(
     }
   };
   const outputItemId = `msg_${randomUUID()}`;
-  const streamMaxTokens = payload.max_output_tokens;
-  const streamTemperature = payload.temperature;
-  const streamTopP = payload.top_p;
-  const streamParams =
-    streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
-      ? {
-          ...(streamMaxTokens !== undefined ? { maxTokens: streamMaxTokens } : {}),
-          ...(streamTemperature !== undefined ? { temperature: streamTemperature } : {}),
-          ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
-        }
-      : undefined;
+  const streamParams = resolveOpenAiStreamParams({
+    maxTokens: payload.max_output_tokens,
+    temperature: payload.temperature,
+    topP: payload.top_p,
+  });
   const runAgentCommand = async () => {
     let result;
     try {
@@ -569,9 +535,7 @@ export async function handleOpenResponsesHttpRequest(
 
   setSseHeaders(res);
 
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  const textStream = createAssistantTextStream(Boolean(toolChoice.constraint));
   let finalResultText: string | undefined;
   let finalToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
   let unrepresentableAssistantReplacement = false;
@@ -608,18 +572,15 @@ export async function handleOpenResponsesHttpRequest(
       }
       const usage = finalUsage;
       const status = finalizeRequested.status === "failed" ? "failed" : finalOutputStatus;
-      const finalText = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!finalText.startsWith(streamedAssistantText.text)) {
+      const finalText = textStream.complete(
+        finalResultText,
+        finalToolCalls ? "" : "No response from OpenClaw.",
+      );
+      if (!finalText.startsWith(textStream.streamedText)) {
         finalizeUnrepresentableAssistantReplacement();
         return;
       }
-      const delta = finalText.slice(streamedAssistantText.text.length);
+      const delta = finalText.slice(textStream.streamedText.length);
       if (delta) {
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -784,45 +745,10 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
+      const { delta: content, replacement } = textStream.update(evt.data);
+      if (replacement) {
+        unrepresentableAssistantReplacement = replacement === "unrepresentable";
       }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        if (
-          !input.replaceable &&
-          input.replace &&
-          input.text !== undefined &&
-          pendingAssistantText.text.startsWith(streamedAssistantText.text)
-        ) {
-          unrepresentableAssistantReplacement = false;
-        }
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Unconfirmed tool-choice prose may still be corrected before it is sent.
-      if (toolChoice.constraint) {
-        return;
-      }
-      // Keep physical wire progress separate from a corrected item snapshot.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
-        unrepresentableAssistantReplacement = true;
-        return;
-      }
-      if (input.replace && input.text !== undefined) {
-        unrepresentableAssistantReplacement = false;
-      }
-      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }

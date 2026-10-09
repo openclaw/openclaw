@@ -14,6 +14,7 @@ import {
   resolvePositionRailReaderViewport,
   type PositionRailReaderState,
 } from "./chat-transcript-geometry.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import {
   readTranscriptViewport,
   subscribeTranscriptScroll,
@@ -486,10 +487,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       }
     }
     const indexes = this.windowIndexes();
-    if (
-      indexes.length !== this.renderedIndexes.length ||
-      indexes.some((index, position) => index !== this.renderedIndexes[position])
-    ) {
+    if (!transcriptArraysEqual(indexes, this.renderedIndexes)) {
       this.refreshWindow();
       this.syncMountedMarkers();
       this.syncTabStop();
@@ -588,9 +586,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.pendingFocusId = undefined;
     this.bindPreview();
     this.bindScroller();
-    this.interaction.hoveredId = null;
-    this.interaction.focusedId = null;
-    this.interaction.dismissed = false;
+    Object.assign(this.interaction, initialInteraction());
   }
 
   protected override reconnected() {
@@ -631,18 +627,14 @@ class ChatPositionRailDirective extends AsyncDirective {
       return nothing;
     }
     const interaction = this.interaction;
-    if (!markers.some((candidate) => candidate.id === interaction.focusedId)) {
-      interaction.focusedId = null;
-    }
-    if (!markers.some((candidate) => candidate.id === interaction.hoveredId)) {
-      interaction.hoveredId = null;
+    for (const field of ["focusedId", "hoveredId"] as const) {
+      if (!markers.some((candidate) => candidate.id === interaction[field])) {
+        interaction[field] = null;
+      }
     }
 
     const ids = markers.map((marker) => marker.id);
-    if (
-      ids.length !== this.markerIds.length ||
-      ids.some((id, index) => id !== this.markerIds[index])
-    ) {
+    if (!transcriptArraysEqual(ids, this.markerIds)) {
       this.projectionChanged ||= this.markerIds.some((id, index) => id !== ids[index]);
       this.markerIds = ids;
       this.markerIndexes = new Map(ids.map((id, index) => [id, index]));
@@ -655,11 +647,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.requestObservation();
     }
     const indexes = this.windowIndexes();
-    if (
-      indexes.length !== this.renderedIndexes.length ||
-      indexes.some((index, position) => index !== this.renderedIndexes[position]) ||
-      this.markersChanged
-    ) {
+    if (!transcriptArraysEqual(indexes, this.renderedIndexes) || this.markersChanged) {
       this.renderedIndexes = indexes;
       this.mountedMarkersChanged = true;
     }
@@ -691,7 +679,6 @@ class ChatPositionRailDirective extends AsyncDirective {
       assistant,
       markers,
       renderedIndexes: this.renderedIndexes,
-      markerHeight: MARKER_HEIGHT,
       activeId: this.activeId,
       visibleIds: this.visibleIds,
       rovingId,

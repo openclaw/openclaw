@@ -6,7 +6,9 @@ import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
 
-export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
+export type McpLoopbackTool = Awaited<
+  ReturnType<typeof resolveGatewayScopedTools>
+>["tools"][number];
 
 export type McpToolSchemaEntry = {
   name: string;

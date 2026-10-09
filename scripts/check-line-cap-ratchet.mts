@@ -26,7 +26,7 @@ type OxlintDiagnostic = {
   help?: string;
 };
 
-export function compareLineCapViolations(
+function compareLineCapViolations(
   head: ReadonlyMap<string, LineCapViolation>,
   base: ReadonlyMap<string, LineCapViolation>,
   renames: readonly { from: string; to: string }[] = [],

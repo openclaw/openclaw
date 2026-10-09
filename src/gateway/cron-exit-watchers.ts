@@ -4,8 +4,8 @@ import type { CronJob } from "../cron/types.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 
 /**
@@ -83,6 +83,7 @@ export function createCronExitWatchers(
   options?: { retryBackoffMs?: readonly number[] },
 ): CronExitWatchers {
   let handlers = initialHandlers;
+  let retries = scheduler.scope();
   const ownerSettlements = new Set<Promise<void>>();
   const settleOwnerCallback = async <T>(operation: Promise<T>): Promise<T> => {
     const settlement = operation.then(
@@ -219,7 +220,7 @@ export function createCronExitWatchers(
       }
       const delayMs =
         retryBackoffMs[Math.min(slot.consecutiveFailures - 1, retryBackoffMs.length - 1)]!;
-      slot.retryJob = scheduler.schedule({
+      slot.retryJob = retries.schedule({
         id: `${scopeKey(job.id)}:retry`,
         delayMs,
         run: () => {
@@ -364,6 +365,9 @@ export function createCronExitWatchers(
   };
 
   const reconcile = (jobs: CronJob[]) => {
+    if (retries.signal.aborted) {
+      retries = scheduler.scope();
+    }
     const jobsById = new Map(jobs.map((job) => [job.id, job] as const));
     const want = new Map(
       jobs
@@ -407,6 +411,8 @@ export function createCronExitWatchers(
   };
 
   const cancelAll = async () => {
+    const closingRetries = retries;
+    closingRetries.beginClose();
     const jobIds = new Set([
       ...active.keys(),
       ...Array.from(settlingCancelledSlots, (slot) => slot.job.id),
@@ -414,7 +420,10 @@ export function createCronExitWatchers(
     for (const jobId of jobIds) {
       cancel(jobId);
     }
-    await Promise.all(Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise));
+    await Promise.all([
+      closingRetries.stop(),
+      ...Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise),
+    ]);
   };
 
   return {

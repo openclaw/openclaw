@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   nativeChromeExtensionSetupActionSchema,
   nativeChromeExtensionSetupResultSchema,
@@ -364,10 +365,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     set: (key, value, onSettled) => void send({ type: "set", key, value }, onSettled),
     requestPermission: (id) => void send({ type: "request-permission", id }),
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),

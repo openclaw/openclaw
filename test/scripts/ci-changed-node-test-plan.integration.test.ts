@@ -32,6 +32,18 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
+function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
+  const job = expectDefined(
+    jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
+    `canonical job for ${shardName}`,
+  );
+  const group = expectDefined(
+    job.groups.find((candidate) => candidate.shard_name === shardName),
+    `canonical group for ${shardName}`,
+  );
+  return { job, group };
+}
+
 it("keeps the aggressive fixed smoke within two Node rows", () => {
   let smoke: string[] = [];
   resolveChangedNodeTestTargets(["src/infra/new-unlisted-module.ts"], {
@@ -191,7 +203,6 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
   const options = {
     runnerBackend: "hybrid",
     dedicatedUiE2e: true,
-    includeReleaseOnlyToolingShards: false,
     includeReleaseOnlyRuntimeTests: false,
   };
   const shards = createChangedNodeTestShards(paths, options);
@@ -282,16 +293,7 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
         ? canonicalTooling
         : canonical;
-      const ownerJob = expectDefined(
-        owners.find((candidate) =>
-          candidate.groups.some((owner) => owner.shard_name === group.shard_name),
-        ),
-        `canonical UI consumer job for ${group.shard_name}`,
-      );
-      const owner = expectDefined(
-        ownerJob.groups.find((candidate) => candidate.shard_name === group.shard_name),
-        "canonical UI consumer group",
-      );
+      const { group: owner } = canonicalOwner(owners, group.shard_name);
       if (group.includePatterns) {
         expect(group.includePatterns.length).toBeGreaterThan(0);
       } else {
@@ -299,15 +301,9 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       }
       expect(group.configs.every((config) => owner.configs.includes(config))).toBe(true);
       // Tooling capacity follows selected files; an excluded compiler can require a larger full job.
-      const selectedJob = expectDefined(
-        selectedCanonical.find((candidate) =>
-          candidate.groups.some((selected) => selected.shard_name === group.shard_name),
-        ),
-        `selected UI consumer job for ${group.shard_name}`,
-      );
-      const selectedGroup = expectDefined(
-        selectedJob.groups.find((selected) => selected.shard_name === group.shard_name),
-        "selected UI consumer group",
+      const { job: selectedJob, group: selectedGroup } = canonicalOwner(
+        selectedCanonical,
+        group.shard_name,
       );
       for (const key of [
         "configs",
@@ -438,9 +434,7 @@ it("keeps new-plugin, core, and manifest changes within the complete PR matrix c
     createChangedNodeTestShards(changedPaths, {
       runnerBackend: "hybrid",
       compactNodeJobCap: 130,
-      dedicatedCoreTypeChecks: true,
       dedicatedBuildArtifacts: false,
-      includeReleaseOnlyToolingShards: false,
       includeReleaseOnlyRuntimeTests: false,
       includePrExemptRuntimeTests: false,
       dedicatedUiE2e: true,

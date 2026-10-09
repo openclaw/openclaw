@@ -107,6 +107,38 @@ beforeEach(() => {
   endpointMockState.responses = [];
 });
 describe.each(["paid", "free"] as const)("Parallel %s cache policy", (transport) => {
+  it.each(["field delimiter", "query delimiter", "default sentinel"])(
+    "keeps requests with a %s collision in separate cache entries",
+    async (collision) => {
+      const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
+      const prefix = `parallel-${transport}-${collision}`;
+      const [firstArgs, secondArgs]: [JsonRecord, JsonRecord] =
+        collision === "field delimiter"
+          ? [
+              { objective: `${prefix}:a:b`, search_queries: ["c"] },
+              { objective: `${prefix}:a`, search_queries: ["b:c"] },
+            ]
+          : collision === "query delimiter"
+            ? [
+                { objective: prefix, search_queries: ["a\u0000b", "c"] },
+                { objective: prefix, search_queries: ["a", "b\u0000c"] },
+              ]
+            : [
+                { objective: prefix, search_queries: ["a"] },
+                { objective: prefix, search_queries: ["a"], session_id: "default" },
+              ];
+      const tool = transport === "paid" ? paidTool() : freeTool();
+      enqueue({ search_id: "first", results: [] });
+      enqueue({ search_id: "second", results: [] });
+
+      expect(await tool.execute(firstArgs)).toMatchObject({ searchId: "first" });
+      expect(await tool.execute(secondArgs)).toMatchObject({ searchId: "second" });
+      expect(await tool.execute(firstArgs)).toMatchObject({ searchId: "first", cached: true });
+      expect(await tool.execute(secondArgs)).toMatchObject({ searchId: "second", cached: true });
+      expect(endpointMockState.calls).toHaveLength(transport === "paid" ? 2 : 6);
+    },
+  );
+
   it("caps returned and cached results when Parallel exceeds the requested count", async () => {
     const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
     enqueue({

@@ -4,7 +4,7 @@ import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
-  workerSshOptions,
+  workerSshCommandPrefix,
   workerSshRemoteCommand,
 } from "./ssh.js";
 
@@ -29,6 +29,10 @@ export function isSuccess(result: SpawnResult): boolean {
   return result.termination === "exit" && result.code === 0;
 }
 
+export function matchesCommandFailure(result: SpawnResult, code: number, marker: string): boolean {
+  return result.code === code || result.stderr.includes(marker) || result.stdout.includes(marker);
+}
+
 export async function runSshScript(params: {
   prepared: PreparedWorkerSsh;
   runCommand: WorkerBootstrapCommandRunner;
@@ -40,13 +44,7 @@ export async function runSshScript(params: {
 }): Promise<SpawnResult> {
   return await params.runCommand(
     [
-      "ssh",
-      ...workerSshOptions(params.prepared, { forwarding: "disabled" }),
-      "-a",
-      "-x",
-      "-T",
-      "-p",
-      String(params.port ?? params.prepared.port),
+      ...workerSshCommandPrefix(params.prepared, params.port ?? params.prepared.port),
       "--",
       params.prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),

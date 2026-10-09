@@ -1,4 +1,3 @@
-// Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
 import {
   normalizeNullableString,
@@ -52,7 +51,6 @@ type PluginApprovalIosPushDelivery = NonNullable<
   handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
 };
 
-/** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
@@ -82,6 +80,8 @@ export function createPluginApprovalHandlers(
       ) {
         return;
       }
+      const reject = (message: string) =>
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       const p = params;
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
@@ -91,35 +91,17 @@ export function createPluginApprovalHandlers(
         trustedAgentRuntime &&
         context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "agent runtime approval authority is no longer active",
-          ),
-        );
+        reject("agent runtime approval authority is no longer active");
         return;
       }
 
       if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "signed plugin approval owner is unavailable"),
-        );
+        reject("signed plugin approval owner is unavailable");
         return;
       }
 
       if (p.policySubject && !trustedAgentRuntime) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "plugin approval policy subject requires agent runtime authority",
-          ),
-        );
+        reject("plugin approval policy subject requires agent runtime authority");
         return;
       }
 
@@ -157,14 +139,7 @@ export function createPluginApprovalHandlers(
         exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
         exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "approval title or description exceeds the display limit after sanitization",
-          ),
-        );
+        reject("approval title or description exceeds the display limit after sanitization");
         return;
       }
       const rawDetail = normalizeNullableString(p.detail);
@@ -192,7 +167,7 @@ export function createPluginApprovalHandlers(
           ? { policySubject: { ...p.policySubject } }
           : {}),
         ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
-        ...(Array.isArray(p.allowedDecisions)
+        ...(p.allowedDecisions
           ? {
               allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
@@ -269,7 +244,7 @@ export function createPluginApprovalHandlers(
       await handleApprovalWaitDecision({
         authority,
         manager,
-        inputId: (params as { id?: string }).id,
+        inputId: params.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,

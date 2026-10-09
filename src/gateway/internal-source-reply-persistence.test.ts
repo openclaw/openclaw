@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
   appendTranscriptMessage,
@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -126,7 +127,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       },
       () =>
         persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { default: true, workspace: state.workspaceDir } } } },
+          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
           sessionKey: options.sessionKey ?? sessionKey,
           expectedSessionId: sessionId,
           agentId: "main",
@@ -164,23 +165,18 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     },
     failSecondPromotion: () => {
       let promotions = 0;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            // Refuse the second native commit, retaining the real update and rollback.
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              request.facts.type === "managedImages.attach" &&
-              ++promotions === 2
-            ) {
-              throw new Error("second media promotion failed");
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+        // Refuse the second native commit, retaining the real update and rollback.
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          request.facts.type === "managedImages.attach" &&
+          ++promotions === 2
+        ) {
+          throw new Error("second media promotion failed");
+        }
+        admit(request, grant);
+      });
       restorePromotionAdmission = () => spy.mockRestore();
     },
     removePromotionFault,

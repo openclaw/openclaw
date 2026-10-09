@@ -265,11 +265,24 @@ async function fixture({
     "update-command-mutable-signals",
     "update-command-execution-guards",
     "update-command-result",
+    "../../infra/update-failure-result",
+    "../../infra/update-failure-public-codes",
+    "../../infra/update-run-step-key",
+    "../../infra/update-preflight-details",
+    "../../infra/update-recovery",
+    "../daemon-cli/restart-health.types",
+    "../../daemon/service-inspection-error",
+    "../../plugins/clawhub-error-codes",
+    "../../plugins/install-types",
+    "../../logging/diagnostic-support-redaction",
+    "../../logging/redact-patterns",
+    "../../logging/redact-pattern-runtime",
     "../../infra/update-run-step",
     "update-command-verification",
     "update-command-terminal",
     "update-command-terminal-publication",
     "../daemon-cli/restart-health-deadline",
+    "../../../packages/retry/src/index",
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
@@ -449,10 +462,18 @@ for (const [name, makeError] of thrownCases) {
   void test(`production finishUpdate: ${name} retains transaction backup`, async () => {
     const f = await fixture({ error: makeError() });
     await assert.rejects(f.finish(), (error) => {
-      assert.ok(error instanceof f.failureClass);
+      assert.ok(error instanceof f.failureClass, error.stack);
       assert.equal(error.result.status, "error");
       assert.equal(error.result.recovery.serviceRestartSafe, false);
       assert.equal(error.result.reason, "restart-unhealthy");
+      assert.ok(
+        error.result.steps.some((step) =>
+          step.failureFacts?.some(
+            (fact) => fact.check === "gateway-recovery" && fact.code === "gateway-probe-failed",
+          ),
+        ),
+        JSON.stringify(error.result.steps),
+      );
       return true;
     });
     assert.equal(f.counts().verifyCalls, 2);

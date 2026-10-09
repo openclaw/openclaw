@@ -20,11 +20,7 @@ import {
   listChatCommandsForConfig,
   supportsNativeProvider,
 } from "../../auto-reply/commands-registry.js";
-import type {
-  ChatCommandDefinition,
-  CommandArgChoice,
-  CommandArgDefinition,
-} from "../../auto-reply/commands-registry.types.js";
+import type { CommandArgChoice } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,144 +30,6 @@ import {
 } from "../../plugins/command-specs.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
-
-type SerializedArg = NonNullable<CommandEntry["args"]>[number];
-type CommandNameSurface = "text" | "native";
-
-function trimClampNonEmpty(value: string, maxLength: number): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return truncateUtf16Safe(trimmed, maxLength);
-}
-
-function clampDescription(value: string | undefined): string {
-  return truncateUtf16Safe(value ?? "", COMMAND_DESCRIPTION_MAX_LENGTH);
-}
-
-function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): string {
-  const baseName = cmd.nativeName ?? cmd.key;
-  if (!provider || !cmd.nativeName) {
-    return baseName;
-  }
-  return (
-    getChannelPlugin(provider)?.commands?.resolveNativeCommandName?.({
-      commandKey: cmd.key,
-      defaultName: cmd.nativeName,
-    }) ?? baseName
-  );
-}
-
-function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
-  const aliases = new Set<string>();
-  for (const alias of cmd.textAliases) {
-    const trimmed = trimClampNonEmpty(alias, COMMAND_NAME_MAX_LENGTH);
-    if (!trimmed) {
-      continue;
-    }
-    aliases.add(trimmed.startsWith("/") ? trimmed : `/${trimmed}`);
-    if (aliases.size >= COMMAND_ALIAS_MAX_ITEMS) {
-      break;
-    }
-  }
-  return aliases.size > 0
-    ? [...aliases]
-    : [`/${truncateUtf16Safe(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
-}
-
-function serializeArg(arg: CommandArgDefinition): SerializedArg {
-  const isDynamic = typeof arg.choices === "function";
-  const staticChoices = Array.isArray(arg.choices)
-    ? arg.choices.slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS).map(normalizeChoice)
-    : undefined;
-  return {
-    name: truncateUtf16Safe(arg.name, COMMAND_ARG_NAME_MAX_LENGTH),
-    description: truncateUtf16Safe(arg.description, COMMAND_ARG_DESCRIPTION_MAX_LENGTH),
-    type: arg.type,
-    ...(arg.required ? { required: true } : {}),
-    ...(staticChoices ? { choices: staticChoices } : {}),
-    ...(isDynamic ? { dynamic: true } : {}),
-  };
-}
-
-function normalizeChoice(choice: CommandArgChoice): { value: string; label: string } {
-  return {
-    value: truncateUtf16Safe(
-      typeof choice === "string" ? choice : choice.value,
-      COMMAND_CHOICE_VALUE_MAX_LENGTH,
-    ),
-    label: truncateUtf16Safe(
-      typeof choice === "string" ? choice : choice.label,
-      COMMAND_CHOICE_LABEL_MAX_LENGTH,
-    ),
-  };
-}
-
-function mapCommand(
-  cmd: ChatCommandDefinition,
-  source: "native" | "skill",
-  includeArgs: boolean,
-  nameSurface: CommandNameSurface,
-  provider?: string,
-): CommandEntry {
-  const shouldIncludeArgs = includeArgs && cmd.acceptsArgs && cmd.args?.length;
-  const nativeName = cmd.scope === "text" ? undefined : resolveNativeName(cmd, provider);
-  const textAliases = cmd.scope !== "native" ? resolveTextAliases(cmd) : undefined;
-  return {
-    name: truncateUtf16Safe(
-      nameSurface === "text" ? (textAliases?.[0]?.slice(1) ?? cmd.key) : (nativeName ?? cmd.key),
-      COMMAND_NAME_MAX_LENGTH,
-    ),
-    ...(nativeName ? { nativeName: truncateUtf16Safe(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
-    ...(textAliases ? { textAliases } : {}),
-    description: clampDescription(cmd.description),
-    // The v2026.8.1 SDK category remains accepted, but clients use the current Tools group.
-    ...(cmd.category ? { category: cmd.category === "docks" ? "tools" : cmd.category } : {}),
-    source,
-    scope: cmd.scope,
-    acceptsArgs: Boolean(cmd.acceptsArgs),
-    ...(shouldIncludeArgs
-      ? { args: cmd.args!.slice(0, COMMAND_ARGS_MAX_ITEMS).map(serializeArg) }
-      : {}),
-  };
-}
-
-function buildPluginCommandEntries(params: {
-  provider?: string;
-  nameSurface: CommandNameSurface;
-  cfg: OpenClawConfig;
-}): CommandEntry[] {
-  const gatewayRegistry = getPluginRegistryForContext();
-  const pluginSpecs = gatewayRegistry
-    ? getPluginCommandEntrySpecsFromRegistrations(gatewayRegistry.commands, params.provider, {
-        config: params.cfg,
-      })
-    : getPluginCommandEntrySpecs(params.provider, { config: params.cfg });
-  const eligibleSpecs =
-    params.nameSurface === "native" ? pluginSpecs.filter((spec) => spec.nativeName) : pluginSpecs;
-  const entries: CommandEntry[] = [];
-
-  for (const spec of eligibleSpecs) {
-    entries.push({
-      name: truncateUtf16Safe(
-        params.nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
-        COMMAND_NAME_MAX_LENGTH,
-      ),
-      ...(spec.nativeName
-        ? { nativeName: truncateUtf16Safe(spec.nativeName, COMMAND_NAME_MAX_LENGTH) }
-        : {}),
-      textAliases: [`/${truncateUtf16Safe(spec.name, COMMAND_NAME_MAX_LENGTH)}`],
-      description: clampDescription(spec.description),
-      source: "plugin",
-      scope: "both",
-      acceptsArgs: spec.acceptsArgs,
-      ...(spec.clientPresentation ? { clientPresentation: spec.clientPresentation } : {}),
-    });
-  }
-
-  return entries;
-}
 
 export async function buildCommandsListResult(params: {
   sessionEntry?: SessionEntry;
@@ -184,7 +42,7 @@ export async function buildCommandsListResult(params: {
 }): Promise<CommandsListResult> {
   const includeArgs = params.includeArgs !== false;
   const scopeFilter = params.scope ?? "both";
-  const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
+  const nameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
   const skillCommands = await prepareSkillCommandsForAgents({
@@ -211,8 +69,80 @@ export async function buildCommandsListResult(params: {
       continue;
     }
     const skill = skillsByKey.get(cmd.key);
+    const baseName = cmd.nativeName ?? cmd.key;
+    const nativeName =
+      cmd.scope === "text"
+        ? undefined
+        : provider && cmd.nativeName
+          ? (getChannelPlugin(provider)?.commands?.resolveNativeCommandName?.({
+              commandKey: cmd.key,
+              defaultName: cmd.nativeName,
+            }) ?? baseName)
+          : baseName;
+    let textAliases: string[] | undefined;
+    if (cmd.scope !== "native") {
+      const aliases = new Set<string>();
+      for (const alias of cmd.textAliases) {
+        const trimmed = alias.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const bounded = truncateUtf16Safe(trimmed, COMMAND_NAME_MAX_LENGTH);
+        aliases.add(bounded.startsWith("/") ? bounded : `/${bounded}`);
+        if (aliases.size >= COMMAND_ALIAS_MAX_ITEMS) {
+          break;
+        }
+      }
+      textAliases =
+        aliases.size > 0
+          ? [...aliases]
+          : [`/${truncateUtf16Safe(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
+    }
     commands.push({
-      ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
+      name: truncateUtf16Safe(
+        nameSurface === "text" ? (textAliases?.[0]?.slice(1) ?? cmd.key) : (nativeName ?? cmd.key),
+        COMMAND_NAME_MAX_LENGTH,
+      ),
+      ...(nativeName ? { nativeName: truncateUtf16Safe(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
+      ...(textAliases ? { textAliases } : {}),
+      description: truncateUtf16Safe(cmd.description ?? "", COMMAND_DESCRIPTION_MAX_LENGTH),
+      // The v2026.8.1 SDK category remains accepted, but clients use the current Tools group.
+      ...(cmd.category ? { category: cmd.category === "docks" ? "tools" : cmd.category } : {}),
+      source: skill ? "skill" : "native",
+      scope: cmd.scope,
+      acceptsArgs: Boolean(cmd.acceptsArgs),
+      ...(includeArgs && cmd.acceptsArgs && cmd.args?.length
+        ? {
+            args: cmd.args.slice(0, COMMAND_ARGS_MAX_ITEMS).map((arg) => {
+              const projected: NonNullable<CommandEntry["args"]>[number] = {
+                name: truncateUtf16Safe(arg.name, COMMAND_ARG_NAME_MAX_LENGTH),
+                description: truncateUtf16Safe(arg.description, COMMAND_ARG_DESCRIPTION_MAX_LENGTH),
+                type: arg.type,
+              };
+              if (arg.required) {
+                projected.required = true;
+              }
+              if (Array.isArray(arg.choices)) {
+                projected.choices = arg.choices
+                  .slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS)
+                  .map((choice: CommandArgChoice) => ({
+                    value: truncateUtf16Safe(
+                      typeof choice === "string" ? choice : choice.value,
+                      COMMAND_CHOICE_VALUE_MAX_LENGTH,
+                    ),
+                    label: truncateUtf16Safe(
+                      typeof choice === "string" ? choice : choice.label,
+                      COMMAND_CHOICE_LABEL_MAX_LENGTH,
+                    ),
+                  }));
+              }
+              if (typeof arg.choices === "function") {
+                projected.dynamic = true;
+              }
+              return projected;
+            }),
+          }
+        : {}),
       ...(skill
         ? {
             skillDisplayName: truncateUtf16Safe(
@@ -225,7 +155,32 @@ export async function buildCommandsListResult(params: {
     });
   }
 
-  commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
+  const gatewayRegistry = getPluginRegistryForContext();
+  const pluginSpecs = gatewayRegistry
+    ? getPluginCommandEntrySpecsFromRegistrations(gatewayRegistry.commands, provider, {
+        config: params.cfg,
+      })
+    : getPluginCommandEntrySpecs(provider, { config: params.cfg });
+  for (const spec of pluginSpecs) {
+    if (nameSurface === "native" && !spec.nativeName) {
+      continue;
+    }
+    commands.push({
+      name: truncateUtf16Safe(
+        nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
+        COMMAND_NAME_MAX_LENGTH,
+      ),
+      ...(spec.nativeName
+        ? { nativeName: truncateUtf16Safe(spec.nativeName, COMMAND_NAME_MAX_LENGTH) }
+        : {}),
+      textAliases: [`/${truncateUtf16Safe(spec.name, COMMAND_NAME_MAX_LENGTH)}`],
+      description: truncateUtf16Safe(spec.description ?? "", COMMAND_DESCRIPTION_MAX_LENGTH),
+      source: "plugin",
+      scope: "both",
+      acceptsArgs: spec.acceptsArgs,
+      ...(spec.clientPresentation ? { clientPresentation: spec.clientPresentation } : {}),
+    });
+  }
 
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }

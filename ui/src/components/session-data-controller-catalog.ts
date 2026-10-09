@@ -69,7 +69,6 @@ export interface SessionCatalogDataOwner {
   sessionCatalogRevision: number;
   readonly sessionCatalogPageDepths: Map<string, number>;
   readonly sessionCatalogRevisions: Map<string, number>;
-  expandedAgentId(): string;
   sessionCatalogGatewayClient(): GatewayBrowserClient | null;
   synchronizeSessionScope(): void;
   requestSessionDataUpdate(): void;
@@ -136,10 +135,7 @@ function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Pro
   );
 }
 
-export function resolveSessionCatalogAgentId(
-  owner: SessionCatalogDataOwner,
-  candidateAgentId: string | null | undefined = owner.expandedAgentId(),
-): string | null {
+export function resolveSessionCatalogAgentId(owner: SessionCatalogDataOwner): string | null {
   const context = owner.context;
   const gateway = context?.gateway.snapshot;
   // Only an authoritative connected hello can revoke catalog ownership; a
@@ -158,14 +154,11 @@ export function resolveSessionCatalogAgentId(
     agentsState.client === gateway.client
       ? agentsState.agentsList
       : null;
+  const rawSelected = context?.agentSelection.state.selectedId;
+  const selected = rawSelected?.trim() ? normalizeAgentId(rawSelected) : null;
   if (agentsList) {
-    const rawSelectedId = context ? context.agentSelection.state.selectedId : candidateAgentId;
-    const selectedId = rawSelectedId?.trim() ? normalizeAgentId(rawSelectedId) : null;
-    if (
-      selectedId &&
-      agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
-    ) {
-      return selectedId;
+    if (selected && agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selected)) {
+      return selected;
     }
     const defaultId = normalizeAgentId(agentsList.defaultId);
     return agentsList.agents.some((agent) => normalizeAgentId(agent.id) === defaultId)
@@ -176,8 +169,6 @@ export function resolveSessionCatalogAgentId(
     return null;
   }
   const helloDefault = normalizeAgentId(gateway.assistantAgentId);
-  const rawSelected = context?.agentSelection.state.selectedId;
-  const selected = rawSelected?.trim() ? normalizeAgentId(rawSelected) : null;
   // An explicit pre-roster selection may target an agent hello knows nothing about;
   // defer until the roster can validate it instead of fetching the default's catalog.
   return selected && selected !== helloDefault ? null : helloDefault;

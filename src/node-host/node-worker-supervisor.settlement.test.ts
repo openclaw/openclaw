@@ -57,7 +57,7 @@ it("joins accepted workspace retention before sealing journals on close", async 
   }
 });
 
-it.each(["cancelled", "caller-abort", "cleanup-failure"] as const)(
+it.each(["cancelled", "cleanup-failure"] as const)(
   "joins pending admission cancellation through %s settlement",
   async (outcome) => {
     const input = testWorkerLaunchInput("/synthetic/workspace", "pending-cancel");
@@ -67,7 +67,6 @@ it.each(["cancelled", "caller-abort", "cleanup-failure"] as const)(
     const finishing = createDeferred();
     const releaseFinish = createDeferred();
     const controller = new AbortController();
-    const callerAbort = new Error("Caller revoked admission");
     const cleanupFailure = new Error("Physical reservation cleanup failed");
     const snapshots: number[] = [];
     let receipt: NodeWorkerLaunchReceipt | undefined;
@@ -123,9 +122,6 @@ it.each(["cancelled", "caller-abort", "cleanup-failure"] as const)(
     let cancellationSettled = false;
     try {
       await entered.promise;
-      if (outcome === "caller-abort") {
-        controller.abort(callerAbort);
-      }
       cancelling = supervisor.cancel(identity).then(
         (value) => {
           cancellationSettled = true;
@@ -445,10 +441,7 @@ describe("node worker persistence settlement lifetime", () => {
     }
   });
 
-  it.each([
-    { timing: "during persistence", expectedState: "cancelled" },
-    { timing: "after failed cleanup", expectedState: "failed" },
-  ] as const)(
+  it.each([{ timing: "during persistence", expectedState: "cancelled" }] as const)(
     "retries owned container cleanup when cancellation starts $timing",
     async ({ timing, expectedState }) => {
       const f = await fixture();

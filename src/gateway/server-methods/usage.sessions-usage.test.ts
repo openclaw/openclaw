@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
@@ -10,11 +11,13 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => TEST_RUNTIME_CONFIG) }));
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/combined-store-gateway-read.js")
+  >("../../config/sessions/combined-store-gateway-read.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+    loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
       targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
@@ -63,6 +66,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
     loadSessionLogs: vi.fn(async () => []),
   };
 });
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
@@ -71,12 +75,15 @@ import {
   resolveUsageSessionSource,
 } from "../../infra/session-cost-usage.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
-let TEST_RUNTIME_CONFIG = {
+let TEST_RUNTIME_CONFIG: OpenClawConfig = {
   session: {},
-  agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, opus: {} },
+  },
 };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
 async function runSessionsUsageMethod(
@@ -103,7 +110,7 @@ function mockCombinedStore(
   store: Record<string, SessionEntry>,
   owners: ReadonlyArray<readonly [string, string]>,
 ) {
-  vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+  vi.mocked(loadCombinedSessionStoreForGatewayCoreAsync).mockResolvedValue({
     durableTargets: [],
     storePath: "(multiple)",
     store,

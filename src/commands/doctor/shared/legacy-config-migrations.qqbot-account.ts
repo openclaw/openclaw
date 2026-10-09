@@ -16,12 +16,7 @@ export function shouldCreateEnvironmentOnlyQQBotConfig(raw: Record<string, unkno
   );
 }
 
-export function listQQBotConfigEntries(qqbot: Record<string, unknown>): Array<{
-  entry: Record<string, unknown>;
-  path: string;
-  aliasSuffix?: string;
-  inheritedEntry?: Record<string, unknown>;
-}> {
+export function listQQBotConfigEntries(qqbot: Record<string, unknown>) {
   // The legacy default account merged channels.qqbot with accounts.default.
   // Snapshot the root before migration so account overrides are evaluated
   // against the policy users actually had before the root entry is rewritten.
@@ -144,21 +139,17 @@ function allocateFileProviderAlias(params: {
   filePath: string;
   aliasSuffix?: string;
 }): string | undefined {
-  let secrets = getRecord(params.raw.secrets);
-  if (!secrets) {
-    if (params.raw.secrets !== undefined) {
-      return undefined;
+  let providers = params.raw;
+  for (const key of ["secrets", "providers"]) {
+    let child = getRecord(providers[key]);
+    if (!child) {
+      if (providers[key] !== undefined) {
+        return undefined;
+      }
+      child = {};
+      providers[key] = child;
     }
-    secrets = {};
-    params.raw.secrets = secrets;
-  }
-  let providers = getRecord(secrets.providers);
-  if (!providers) {
-    if (secrets.providers !== undefined) {
-      return undefined;
-    }
-    providers = {};
-    secrets.providers = providers;
+    providers = child;
   }
   const suffix = params.aliasSuffix ? `-${normalizeProviderAliasSegment(params.aliasSuffix)}` : "";
   const base = `qqbot${suffix}-client-secret`.slice(0, 60).replace(/-+$/g, "");
@@ -180,13 +171,12 @@ function allocateFileProviderAlias(params: {
   return undefined;
 }
 
-export function migrateClientSecretFile(params: {
-  raw: Record<string, unknown>;
-  entry: Record<string, unknown>;
-  path: string;
-  aliasSuffix?: string;
-  changes: string[];
-}): void {
+export function migrateClientSecretFile(
+  params: ReturnType<typeof listQQBotConfigEntries>[number] & {
+    raw: Record<string, unknown>;
+    changes: string[];
+  },
+): void {
   if (!Object.hasOwn(params.entry, "clientSecretFile")) {
     return;
   }

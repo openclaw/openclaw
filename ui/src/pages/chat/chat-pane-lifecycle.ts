@@ -70,7 +70,7 @@ import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { admitInitialTurnHandoff, subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
-import { closeSlot, isSidebarSlotVisible } from "./sidebar-layout.ts";
+import { closeSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
@@ -81,6 +81,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
             renderRoot: this.renderRoot,
             state,
             linkReaders: availableLinkReaders(this.context.gateway.snapshot),
+            pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
             updateComplete: this.updateComplete,
           }
         : null;
@@ -108,7 +109,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   });
 
   private chatRouteReadyReported = false;
-  private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
+  protected stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
   private composerPresentation: ChatPaneComposerHandoff | undefined;
 
@@ -128,10 +129,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   public resumeStagedAttachments(): void {
     this.suppressStagedAttachmentHandoffOnDisconnect = false;
-  }
-
-  protected browserAnnotationOwner(): NonNullable<ChatAttachmentGatewayOwner> | undefined {
-    return this.stagedAttachmentGatewayOwner ?? undefined;
   }
 
   protected replaceStagedAttachmentGatewayOwner(nextOwner: ChatAttachmentGatewayOwner): void {
@@ -222,7 +219,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     ) {
       event.preventDefault();
       const { slot } = shortcut;
-      const visible = isSidebarSlotVisible(state.sidebarLayout, slot);
+      const visible = this.isSlotShown(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
       }
@@ -270,6 +267,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const width = entries.at(-1)?.contentRect.width;
         // Hidden panes (narrow split view) report 0; keep the last real width.
         if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+          this.transcript.syncViewportGeometry();
           this.paneWidth = width;
         }
       });
@@ -319,7 +317,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
     pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
-    pageState.chatIsManualScroll = () => this.transcript.isManualScroll;
     pageState.chatIsMaintenanceScroll = () => this.transcript.isMaintenanceScroll;
     pageState.chatScrollElement = () => this.transcript.scrollElement;
     pageState.chatScrollToEnd = (options) => this.transcript.scrollToEnd(options);
@@ -624,7 +621,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.setConversationVisible(
       Boolean(
         this.state &&
-        isSidebarSlotVisible(
+        this.isSlotShown(
           resolveSidebarLayoutForBoard({
             board,
             layout: this.state.sidebarLayout,

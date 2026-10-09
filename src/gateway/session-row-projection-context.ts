@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
 import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -15,7 +16,7 @@ import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
 } from "./session-utils-projection.js";
-import { refreshSessionRowProfiles } from "./session-utils-row.js";
+import { projectSessionRowChildLinks, refreshSessionRowProfiles } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
 export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
@@ -113,7 +114,11 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     /** True means the publication changes only these derived facts. */
     invalidate(change: SessionRowChange): boolean {
       if (!("all" in change)) {
-        if (change.scope === "runtime" && !change.facts && !change.factsInvalidated) {
+        if (
+          change.scope === "runtime" &&
+          (!change.facts || change.facts.kind === "unchanged") &&
+          !change.factsInvalidated
+        ) {
           return true;
         }
         modelFactsDirty = true;
@@ -123,19 +128,16 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         return true;
       }
       switch (change.scope) {
-        case "config-presentation":
-          return true;
         case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
           profileRevision++;
           return true;
+        case "config-presentation":
         case "subagent-runs":
-          return true;
         case "worker-environments":
         case "worker-placements":
-          return true;
         case "agent-runs":
         case "sessions":
           // Registries are presented live; stored writes publish their own exact keys.
@@ -174,7 +176,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             current,
             referenced,
           );
-          if (!records.sameParents(row.parents, parents)) {
+          if (!isDeepStrictEqual(row.parents, parents)) {
             put({ ...row, parents });
           }
         }
@@ -190,13 +192,16 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        row.materialized.source.childLinks = readChildLinks(row);
-        row.materialized.row.swarm = buildSessionSwarmSummary(
+        row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
+        const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
+        if (!isDeepStrictEqual(row.materialized.row.swarm, swarm)) {
+          row.materialized.row.swarm = swarm;
+        }
         row.subagentRevision = subagentRevision;
       }
     },

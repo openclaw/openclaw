@@ -194,7 +194,6 @@ const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/commands-session-store.ts",
   "src/auto-reply/reply/directive-handling.impl.ts",
   "src/auto-reply/reply/directive-handling.persist.ts",
-  "src/auto-reply/reply/dispatch-from-config.runtime.ts",
   "src/auto-reply/reply/followup-runner.ts",
   "src/auto-reply/reply/get-reply.ts",
   "src/auto-reply/reply/model-selection.ts",
@@ -726,7 +725,6 @@ function sortRecordByKey<Value>(record: Record<string, Value>) {
   );
 }
 
-/** Counts legacy call sites per unmigrated file for every debt concern. */
 async function collectSessionAccessorDebtCounts(repoRoot: string) {
   const counts: SessionAccessorDebtCounts = {};
   for (const [key, concern] of Object.entries(sessionAccessorDebtConcerns)) {
@@ -749,7 +747,6 @@ async function collectSessionAccessorDebtCounts(repoRoot: string) {
   return sortRecordByKey(counts);
 }
 
-/** Ratchet compare: counts above baseline are regressions, below are improvements. */
 export function compareSessionAccessorDebt(
   currentCounts: SessionAccessorDebtCounts,
   baselineCounts: SessionAccessorDebtCounts,

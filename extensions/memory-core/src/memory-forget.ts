@@ -59,13 +59,6 @@ import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-m
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
-type MemoryRewrite = {
-  absolutePath: string;
-  relativePath: string;
-  content: string;
-  remove: boolean;
-  expectedContent: string;
-};
 type MemoryForgetParams = {
   cfg: OpenClawConfig;
   agentId: string;
@@ -161,6 +154,17 @@ async function forgetWorkspaceMemory(
       throw error;
     },
   );
+  const prepareRewrite = (
+    absolutePath: string,
+    expectedContent: string,
+    content: string | null,
+  ) => ({
+    absolutePath,
+    relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
+    content,
+    expectedContent,
+  });
+  type MemoryRewrite = ReturnType<typeof prepareRewrite>;
   const corpusRewrites: MemoryRewrite[] = [];
   const corpusSnippets = new Set<string>();
   let removedCorpusLines = 0;
@@ -186,13 +190,9 @@ async function forgetWorkspaceMemory(
     if (retained.length !== lines.length) {
       removedCorpusLines += lines.length - retained.length;
       const rewritten = retained.join("\n");
-      corpusRewrites.push({
-        absolutePath,
-        relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
-        content: rewritten,
-        remove: rewritten.trim().length === 0,
-        expectedContent: content,
-      });
+      corpusRewrites.push(
+        prepareRewrite(absolutePath, content, rewritten.trim().length === 0 ? null : rewritten),
+      );
     }
   }
 
@@ -224,13 +224,7 @@ async function forgetWorkspaceMemory(
       );
     }
     if (scrubbed.content !== content) {
-      memoryRewrites.push({
-        absolutePath,
-        relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
-        content: scrubbed.content,
-        remove: false,
-        expectedContent: content,
-      });
+      memoryRewrites.push(prepareRewrite(absolutePath, content, scrubbed.content));
       removedMemoryEntries += scrubbed.removedEntries;
       removedMemoryLines += scrubbed.removedLines;
     }
@@ -359,7 +353,9 @@ async function forgetWorkspaceMemory(
       agentId: params.agentId,
       changedPaths,
       removedPaths: new Set(
-        corpusRewrites.filter((rewrite) => rewrite.remove).map((rewrite) => rewrite.relativePath),
+        corpusRewrites
+          .filter((rewrite) => rewrite.content === null)
+          .map((rewrite) => rewrite.relativePath),
       ),
       sessionIds,
       excludedSessionIds,
@@ -418,11 +414,6 @@ async function forgetWorkspaceMemory(
     }
     // Keep observed selected keys even if another workspace later removes their rows.
     context.origins = lineage.origins;
-    for (const origin of lineage.origins) {
-      if (sessionIds.has(origin.sessionId)) {
-        context.selectedEntryKeys.add(origin.entryKey);
-      }
-    }
     return false;
   };
   const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
@@ -507,7 +498,7 @@ async function forgetWorkspaceMemory(
       expectedContent: rewrite.expectedContent,
       allowInPlaceFallback: true,
       conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
-      content: rewrite.remove ? null : rewrite.content,
+      content: rewrite.content,
     });
   }
   await withMemoryForgetWorker(

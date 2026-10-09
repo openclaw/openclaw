@@ -12,7 +12,7 @@
 }
 
 .workboard-session-tile:hover,
-.workboard-session-tile:focus-visible {
+.workboard-session-tile:focus-within {
   border-color: var(--workboard-column-accent);
 }
 
@@ -21,6 +21,12 @@
 }
 
 .workboard-session-tile__title {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
   overflow-wrap: anywhere;
   font-weight: 600;
   line-height: 1.4;
@@ -54,6 +60,15 @@
 
 .workboard-session-pr {
   color: var(--muted);
+}
+
+a.workboard-session-pr {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.workboard-session-pr:hover {
+  text-decoration: underline;
 }
 
 .workboard-session-pr[data-state="merged"] {

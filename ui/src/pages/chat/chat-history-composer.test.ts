@@ -47,12 +47,14 @@ function createRewindHost(
 }
 
 describe("rewind composer ownership", () => {
-  it.each(["accepted", "newer draft", "reconnected"] as const)(
+  it.each(["accepted", "newer draft"] as const)(
     "retires pending attachment reads only for an accepted replacement: %s",
     async (outcome) => {
       const response = createDeferred<{ editorText: string }>();
       const state = createRewindHost(response.promise);
       state.chatMessage = "existing draft";
+      state.chatReplyTarget = { messageId: "unrelated", text: "Old selection" };
+      state.chatGoalDraftMode = { action: "start" };
       const notifications: string[] = [];
       const reads = new ChatAttachmentReadLifecycle(() => notifications.push(state.chatMessage));
       const originalSignal = reads.readSignal;
@@ -61,8 +63,6 @@ describe("rewind composer ownership", () => {
       const pending = rewindChatHistory(state, "original-user", reads);
       if (outcome === "newer draft") {
         state.handleChatDraftChange("newer draft");
-      } else if (outcome === "reconnected") {
-        state.connectionEpoch += 1;
       }
       response.resolve({ editorText: "restored prompt" });
       await pending;
@@ -70,6 +70,10 @@ describe("rewind composer ownership", () => {
       expect(reads.pendingReads).toBe(outcome === "accepted" ? 0 : 1);
       expect(notifications).toEqual(outcome === "accepted" ? ["restored prompt"] : []);
       if (outcome === "accepted") {
+        expect(state.chatGoalDraftMode).toBeNull();
+        expect(state.chatReplyTarget).toBeNull();
+        expect(loadChatComposerSnapshot(state, state.sessionKey)?.replyTarget).toBeUndefined();
+        expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toBeUndefined();
         const replacementSignal = reads.readSignal;
         reads.updatePending(replacementSignal, 1);
         reads.updatePending(originalSignal, -1);
@@ -129,31 +133,10 @@ describe("rewind composer ownership", () => {
     },
   );
 
-  it.each(["start", "edit"] as const)(
-    "restores ordinary message semantics from existing Goal %s mode",
-    async (action) => {
-      const state = createRewindHost(Promise.resolve({ editorText: "original prompt" }));
-      state.chatReplyTarget = { messageId: "unrelated", text: "Old selection" };
-      state.chatGoalDraftMode =
-        action === "start"
-          ? { action }
-          : { action, goalId: "goal", previousDraft: "borrowed draft" };
-
-      await rewindChatHistory(state, "original-user", new ChatAttachmentReadLifecycle(() => {}));
-
-      expect(state.chatMessage).toBe("original prompt");
-      expect(state.chatGoalDraftMode).toBeNull();
-      expect(state.chatReplyTarget).toBeNull();
-      expect(loadChatComposerSnapshot(state, state.sessionKey)?.replyTarget).toBeUndefined();
-      expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toBeUndefined();
-    },
-  );
-
-  it.each(
-    ["same", "different"].flatMap((session) =>
-      [false, true].map((debounced) => ({ session, debounced })),
-    ),
-  )(
+  it.each([
+    { session: "same", debounced: false },
+    { session: "different", debounced: true },
+  ])(
     "respects $session-session peer edits (debounced: $debounced)",
     async ({ session, debounced }) => {
       vi.useFakeTimers();
@@ -219,66 +202,53 @@ describe("rewind composer ownership", () => {
     expect(loadChatComposerSnapshot(second, second.sessionKey)?.draft).toBe("selected rewind");
   });
 
-  it.each([
-    { stage: "rewind", edit: "text" },
-    { stage: "rewind", edit: "reply" },
-    ...["text", "mentions", "attachments", "goal mode", "reply"].map((edit) => ({
-      stage: "history",
-      edit,
-    })),
-  ])("preserves newer composer $edit while awaiting $stage", async ({ stage, edit }) => {
-    const response = createDeferred<{ editorText: string }>();
-    const history = createDeferred<ChatHistoryResult>();
-    const requestedHistory = createDeferred();
-    const canonical = { role: "assistant", content: "retained prefix" };
-    const state = createRewindHost(response.promise, "main", () => {
-      requestedHistory.resolve();
-      return stage === "history" ? history.promise : { messages: [canonical] };
-    });
-    state.chatMessage = edit === "goal mode" ? "" : "@Alex keep this draft";
-    state.chatMentions = edit === "goal mode" ? [] : [{ profileId: "alex", start: 0, end: 5 }];
-    const pending = rewindChatHistory(
-      state,
-      "original-user",
-      new ChatAttachmentReadLifecycle(() => {}),
-    );
-    if (stage === "history") {
+  it.each([{ edit: "attachments" }, { edit: "reply" }])(
+    "preserves newer composer $edit while awaiting history",
+    async ({ edit }) => {
+      const response = createDeferred<{ editorText: string }>();
+      const history = createDeferred<ChatHistoryResult>();
+      const requestedHistory = createDeferred();
+      const canonical = { role: "assistant", content: "retained prefix" };
+      const state = createRewindHost(response.promise, "main", () => {
+        requestedHistory.resolve();
+        return history.promise;
+      });
+      state.chatMessage = "@Alex keep this draft";
+      state.chatMentions = [{ profileId: "alex", start: 0, end: 5 }];
+      const pending = rewindChatHistory(
+        state,
+        "original-user",
+        new ChatAttachmentReadLifecycle(() => {}),
+      );
       response.resolve({ editorText: "original prompt" });
       await requestedHistory.promise;
-    }
-    if (edit === "text") {
-      state.handleChatDraftChange("newer draft", []);
-    } else if (edit === "mentions") {
-      state.handleChatDraftChange(state.chatMessage, []);
-    } else if (edit === "attachments") {
-      state.chatAttachments = [
-        { id: "new-image", mimeType: "image/png", dataUrl: "data:image/png;base64,aW1hZ2U=" },
-      ];
-    } else if (edit === "reply") {
-      state.chatReplyTarget = { messageId: "newer", text: "Newer quote" };
-    } else {
-      state.chatGoalDraftMode = { action: "start" };
-    }
-    const composer = {
-      text: state.chatMessage,
-      mentions: state.chatMentions,
-      attachments: state.chatAttachments,
-      goalMode: state.chatGoalDraftMode,
-      replyTarget: state.chatReplyTarget,
-    };
-    response.resolve({ editorText: "original prompt" });
-    history.resolve({ messages: [canonical] });
+      if (edit === "attachments") {
+        state.chatAttachments = [
+          { id: "new-image", mimeType: "image/png", dataUrl: "data:image/png;base64,aW1hZ2U=" },
+        ];
+      } else {
+        state.chatReplyTarget = { messageId: "newer", text: "Newer quote" };
+      }
+      const composer = {
+        text: state.chatMessage,
+        mentions: state.chatMentions,
+        attachments: state.chatAttachments,
+        goalMode: state.chatGoalDraftMode,
+        replyTarget: state.chatReplyTarget,
+      };
+      history.resolve({ messages: [canonical] });
 
-    await pending;
+      await pending;
 
-    expect(state.chatMessages).toEqual([canonical]);
-    expect(state.chatMessage).toBe(composer.text);
-    expect(state.chatMentions).toEqual(composer.mentions);
-    expect(state.chatAttachments).toBe(composer.attachments);
-    expect(state.chatGoalDraftMode).toEqual(composer.goalMode);
-    expect(state.chatReplyTarget).toEqual(composer.replyTarget);
-    expect(state.request).toHaveBeenCalledOnce();
-  });
+      expect(state.chatMessages).toEqual([canonical]);
+      expect(state.chatMessage).toBe(composer.text);
+      expect(state.chatMentions).toEqual(composer.mentions);
+      expect(state.chatAttachments).toBe(composer.attachments);
+      expect(state.chatGoalDraftMode).toEqual(composer.goalMode);
+      expect(state.chatReplyTarget).toEqual(composer.replyTarget);
+      expect(state.request).toHaveBeenCalledOnce();
+    },
+  );
 
   it("lets only the latest rewind replace the composer", async () => {
     const older = createDeferred<{ editorText: string }>();

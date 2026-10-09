@@ -1,4 +1,3 @@
-// Bootstraps device identity and trust state on first run.
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -18,7 +17,7 @@ import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
 } from "./device-pairing-worker.js";
-import type { PairedDevice } from "./device-pairing.types.js";
+import type { DeviceBootstrapTokenRecord, PairedDevice } from "./device-pairing.types.js";
 import { createAsyncLock } from "./pairing-files.js";
 
 const withLock = createAsyncLock();
@@ -135,35 +134,29 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(
   },
 ): Promise<DeviceBootstrapOperations["bootstrap.consume"]["output"]> {
   const { baseDir, pairedDeviceMatches, admitsCloudWorkerSetup, ...input } = params;
-  return await withLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "bootstrap.consume", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          admit: (facts) => {
-            if (facts.kind === "bootstrap.consume") {
-              assertBootstrapTokenCurrent(facts);
-              if (pairedDeviceMatches && !pairedDeviceMatches(facts.pairedDevice)) {
-                throw new DevicePairingAuthorityRefusedError();
-              }
-            }
-            if (
-              facts.kind === "bootstrap.cloudWorkerSetup" &&
-              admitsCloudWorkerSetup?.(facts) !== true
-            ) {
+  return await withLock(() =>
+    executeDevicePairingMutation(
+      { type: "bootstrap.consume", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => null,
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.consume") {
+            assertBootstrapTokenCurrent(facts);
+            if (pairedDeviceMatches && !pairedDeviceMatches(facts.pairedDevice)) {
               throw new DevicePairingAuthorityRefusedError();
             }
-          },
+          }
+          if (
+            facts.kind === "bootstrap.cloudWorkerSetup" &&
+            admitsCloudWorkerSetup?.(facts) !== true
+          ) {
+            throw new DevicePairingAuthorityRefusedError();
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return null;
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 /** Confirm that the pairing client received the credential-bearing handoff response. */
@@ -192,10 +185,9 @@ export async function readDevicePairSetupCompletion(
   );
 }
 
-/** Remove every outstanding bootstrap token. */
 export async function clearDeviceBootstrapTokens(
-  params: BootstrapParams<"bootstrap.clear"> & { assertCurrent?: () => void } = {},
-): Promise<DeviceBootstrapOperations["bootstrap.clear"]["output"]> {
+  params: { baseDir?: string; assertCurrent?: () => void } = {},
+): Promise<{ removed: number }> {
   const { baseDir, assertCurrent, ...input } = params;
   return await withLock(() =>
     executeDevicePairingMutation(
@@ -206,9 +198,10 @@ export async function clearDeviceBootstrapTokens(
 }
 
 /** Revoke a bootstrap token unless its cloud-worker environment is already bound to the token's device. */
-export async function revokeDeviceBootstrapToken(
-  params: BootstrapParams<"bootstrap.revoke">,
-): Promise<DeviceBootstrapOperations["bootstrap.revoke"]["output"]> {
+export async function revokeDeviceBootstrapToken(params: {
+  token: string;
+  baseDir?: string;
+}): Promise<{ removed: boolean; record?: DeviceBootstrapTokenRecord }> {
   const { baseDir, ...input } = params;
   return await withLock(() =>
     executeDevicePairingMutation(
@@ -236,26 +229,20 @@ export async function redeemDeviceBootstrapTokenProfile(
   params: BootstrapParams<"bootstrap.redeem">,
 ): Promise<DeviceBootstrapOperations["bootstrap.redeem"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "bootstrap.redeem", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          admit: (facts) => {
-            if (facts.kind === "bootstrap.token") {
-              assertBootstrapTokenCurrent(facts);
-            }
-          },
+  return await withLock(() =>
+    executeDevicePairingMutation(
+      { type: "bootstrap.redeem", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => ({ recorded: false, fullyRedeemed: false }),
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.token") {
+            assertBootstrapTokenCurrent(facts);
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return { recorded: false, fullyRedeemed: false };
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 /** Verify a bootstrap token, bind its first device identity, and stage requested scopes. */
@@ -263,26 +250,20 @@ export async function verifyDeviceBootstrapToken(
   params: BootstrapParams<"bootstrap.verify">,
 ): Promise<DeviceBootstrapOperations["bootstrap.verify"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "bootstrap.verify", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          admit: (facts) => {
-            if (facts.kind === "bootstrap.token") {
-              assertBootstrapTokenCurrent(facts);
-            }
-          },
+  return await withLock(() =>
+    executeDevicePairingMutation(
+      { type: "bootstrap.verify", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.token") {
+            assertBootstrapTokenCurrent(facts);
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return { ok: false, reason: "bootstrap_token_invalid" };
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 /** Remove retained setup outcomes independently of status requests or later pairings. */
@@ -310,7 +291,6 @@ export async function getBoundDeviceBootstrapContext(params: {
   );
 }
 
-/** Read the profile from already-bound bootstrap context. */
 export async function getBoundDeviceBootstrapProfile(
   params: Parameters<typeof getBoundDeviceBootstrapContext>[0],
 ): Promise<DeviceBootstrapProfile | null> {

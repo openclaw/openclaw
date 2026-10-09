@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
 describe("ChatLog", () => {
   it("sanitizes terminal controls before rendering an initial system message", () => {
@@ -72,7 +73,7 @@ describe("ChatLog", () => {
 
   it("drops stale streaming references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
-    chatLog.startAssistant("first", "run-1");
+    chatLog.updateAssistant("first", "run-1");
     for (let i = 0; i < 25; i++) {
       chatLog.addSystem(`overflow-${i}`);
     }
@@ -87,8 +88,8 @@ describe("ChatLog", () => {
 
   it("does not append duplicate assistant components when a run is started twice", () => {
     const chatLog = new ChatLog(40);
-    chatLog.startAssistant("first", "run-dup");
-    chatLog.startAssistant("second", "run-dup");
+    chatLog.updateAssistant("first", "run-dup");
+    chatLog.updateAssistant("second", "run-dup");
 
     const rendered = chatLog.render(120).join("\n");
     expect(rendered).toContain("second");
@@ -113,12 +114,16 @@ describe("ChatLog", () => {
     expect(rendered.indexOf("a.txt")).toBeLessThan(rendered.indexOf("Second segment."));
     expect(rendered.indexOf("Second segment.")).toBeLessThan(rendered.indexOf("b.txt"));
     expect(rendered.indexOf("b.txt")).toBeLessThan(rendered.indexOf("Third segment."));
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual([
+      "assistant",
       "ToolExecutionComponent",
-      "AssistantMessageComponent",
+      "assistant",
       "ToolExecutionComponent",
-      "AssistantMessageComponent",
+      "assistant",
     ]);
   });
 
@@ -133,10 +138,11 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("Hello before the tool.");
     expect(rendered.split("Hallo before the tool.")).toHaveLength(2);
     expect(rendered.split("Revised answer.")).toHaveLength(2);
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-      "AssistantMessageComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent", "assistant"]);
     expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Revised answer."));
 
     chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.\n\nNext segment.", "run-1");
@@ -159,11 +165,11 @@ describe("ChatLog", () => {
     expect(rendered.split("Revised first segment.")).toHaveLength(2);
     expect(rendered.split("Final answer.")).toHaveLength(2);
     expect(rendered).not.toContain("Second segment.");
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-      "ToolExecutionComponent",
-      "AssistantMessageComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent", "ToolExecutionComponent", "assistant"]);
     expect(rendered.lastIndexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
   });
 
@@ -177,9 +183,11 @@ describe("ChatLog", () => {
     expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain(
       "Retracted provisional answer.",
     );
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent"]);
   });
 
   it("removes an empty post-tool component when its final snapshot is retracted", () => {
@@ -190,10 +198,11 @@ describe("ChatLog", () => {
     chatLog.updateAssistant("Before the tool.\n\nRetracted answer.", "run-1");
     chatLog.finalizeAssistant("Before the tool.", "run-1");
 
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
-      "ToolExecutionComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["assistant", "ToolExecutionComponent"]);
     expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain("Retracted answer.");
   });
 
@@ -205,7 +214,8 @@ describe("ChatLog", () => {
     chatLog.updateAssistant("I ran it:\n\n    command output", "run-1");
 
     const segment = chatLog.children.at(-1);
-    expect(segment?.constructor.name).toBe("AssistantMessageComponent");
+    expect(segment).toBeInstanceOf(MarkdownMessageComponent);
+    expect(segment).toMatchObject({ role: "assistant" });
     const rendered = normalizeTestText(segment?.render(120).join("\n") ?? "");
     expect(rendered).toContain("```");
     expect(rendered).toMatch(/\n {2}command output/);
@@ -230,10 +240,11 @@ describe("ChatLog", () => {
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
     chatLog.finalizeAssistant("Complete before the tool.", "run-1");
 
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
-      "ToolExecutionComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["assistant", "ToolExecutionComponent"]);
   });
 
   it("clears frozen assistant segments when the chat history is rebuilt", () => {
@@ -261,10 +272,11 @@ describe("ChatLog", () => {
 
     chatLog.dropAssistant("run-1");
 
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-      "ToolExecutionComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent", "ToolExecutionComponent"]);
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered).not.toContain("First segment.");
     expect(rendered).not.toContain("Second segment.");
@@ -276,7 +288,7 @@ describe("ChatLog", () => {
 
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
-    chatLog.startAssistant("partial", "run-active");
+    chatLog.updateAssistant("partial", "run-active");
     chatLog.reserveAssistantSlot("run-active");
 
     const rendered = chatLog.render(120).join("\n");
@@ -413,7 +425,7 @@ describe("ChatLog", () => {
   it("evicts an unrelated older tool instead of a newer transcript row at full scrollback", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("unrelated-old-tool", "read_file", { path: "unrelated-old.txt" });
-    chatLog.startAssistant("Current streaming reply.", "shared-run");
+    chatLog.updateAssistant("Current streaming reply.", "shared-run");
     for (let index = 0; index < 18; index += 1) {
       chatLog.addSystem(`newer-notice-${index}`);
     }
@@ -435,7 +447,7 @@ describe("ChatLog", () => {
 
   it("keeps scrollback bounded when every visible tool belongs to the delayed prompt's run", () => {
     const chatLog = new ChatLog(20);
-    chatLog.startAssistant("Reply with many tools.", "shared-run");
+    chatLog.updateAssistant("Reply with many tools.", "shared-run");
     for (let index = 0; index < 19; index += 1) {
       chatLog.startTool(
         `shared-tool-${index}`,

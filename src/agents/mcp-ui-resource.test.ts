@@ -65,6 +65,36 @@ describe("MCP App UI resources", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    { preferred: undefined, requested: undefined, available: undefined, expected: "inline" },
+    { preferred: "fullscreen", requested: undefined, available: undefined, expected: "fullscreen" },
+    {
+      preferred: "inline",
+      requested: "fullscreen",
+      available: ["inline", "fullscreen"],
+      expected: "fullscreen",
+    },
+    { preferred: "fullscreen", requested: "fullscreen", available: ["inline"], expected: "inline" },
+  ] as const)(
+    "selects an advertised initial display mode ($expected)",
+    async ({ preferred, requested, available, expected }) => {
+      const active = runtime(async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            text: "<p>app</p>",
+            _meta: {
+              "openai/ui": { preferredDisplayMode: preferred, availableDisplayModes: available },
+            },
+          },
+        ],
+      }));
+      const view = await fetchView({ runtime: active, displayMode: requested });
+      expect(getMcpAppViewLease(view!.viewId, active)?.displayMode).toBe(expected);
+    },
+  );
+
   it("leases next-turn context only for exact live session and requester identities across native facades", async () => {
     const native = runtime(async () => html());
     const first = await fetchView({

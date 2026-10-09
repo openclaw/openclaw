@@ -1,10 +1,25 @@
-/** Projects normalized wire metadata without owning transport or catalog lifetime. */
+/** Projects MCP catalog metadata without owning transport or catalog lifetime. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpToolCatalog,
+  McpToolCatalogDiagnostic,
+} from "./agent-bundle-mcp-types.js";
 import { readMcpAppToolExtensions } from "./mcp-app-extension-metadata.js";
 import { normalizeMcpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import { normalizeToolUiVisibility, sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import type { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
+
+export function projectBundleMcpCatalogFailure(
+  catalog: McpToolCatalog | undefined,
+  diagnostic: McpToolCatalogDiagnostic,
+): McpToolCatalog {
+  return {
+    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
+    generatedAt: Date.now(),
+    diagnostics: [diagnostic],
+  };
+}
 
 export function projectBundleMcpCatalogTools({
   normalizedTools,
@@ -28,7 +43,6 @@ export function projectBundleMcpCatalogTools({
       (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
     ),
   ]) {
-    const toolName = tool.name;
     const { _meta: metadata } = tool;
     const uiMeta = asOptionalRecord(metadata?.ui);
     const rawResourceUri = uiMeta?.resourceUri ?? metadata?.["ui/resourceUri"];
@@ -40,7 +54,7 @@ export function projectBundleMcpCatalogTools({
     const entry: McpCatalogTool = {
       serverName,
       safeServerName,
-      toolName,
+      toolName: tool.name,
       title: tool.title ?? tool.annotations?.title,
       appExtensions: readMcpAppToolExtensions(tool),
       description: sanitizeMcpMetadataText(tool.description),

@@ -55,18 +55,18 @@ export async function loadContextEngineMaintenanceModuleForTest() {
 
 export function createMaintenanceSessionManagerOpenFixture() {
   let current: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
-  const open = vi.fn((target: SessionTranscriptRuntimeTarget) => {
+  const openAsync = vi.fn(async (target: SessionTranscriptRuntimeTarget) => {
     current = { getSessionTarget: () => target };
     return current;
   });
   return {
-    open,
+    openAsync,
     get current() {
       return current;
     },
     reset() {
       current = undefined;
-      open.mockClear();
+      openAsync.mockClear();
     },
   };
 }

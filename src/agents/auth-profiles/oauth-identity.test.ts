@@ -5,18 +5,10 @@ import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   isSafeToCopyOAuthRoutingScope,
   isSafeToCopyOAuthIdentity,
-  normalizeAuthEmailToken,
   shouldMirrorRefreshedOAuthCredential,
 } from "./oauth-identity.js";
 import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
-
-describe("normalizeAuthEmailToken", () => {
-  it("preserves internal plus-addressing and unicode", () => {
-    expect(normalizeAuthEmailToken("User+Tag@Example.com")).toBe("user+tag@example.com");
-    expect(normalizeAuthEmailToken("  JOSÉ@Example.com ")).toBe("josé@example.com");
-  });
-});
 
 describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adopt)", () => {
   it("preserves Copilot credentials when the shipped policy artifact is missing", () => {
@@ -125,6 +117,14 @@ describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adop
   });
 
   describe("normalization", () => {
+    it.each([
+      ["User+Tag@Example.com", "user+tag@example.com", "user@example.com"],
+      ["  JOSÉ@Example.com ", "josé@example.com", "jose@example.com"],
+    ])("preserves plus-addressing and unicode in %s", (existing, incoming, different) => {
+      expect(isSafeToCopyOAuthIdentity({ email: existing }, { email: incoming })).toBe(true);
+      expect(isSafeToCopyOAuthIdentity({ email: existing }, { email: different })).toBe(false);
+    });
+
     it("ignores surrounding whitespace on accountId", () => {
       expect(isSafeToCopyOAuthIdentity({ accountId: "  acct-1  " }, { accountId: "acct-1" })).toBe(
         true,

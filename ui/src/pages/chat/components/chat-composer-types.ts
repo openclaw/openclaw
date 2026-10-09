@@ -16,6 +16,7 @@ import type {
   ChatGoalRecovery,
   ChatQueueItem,
   ChatQueueDisplayItem,
+  ChatReplyTarget,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
@@ -43,9 +44,7 @@ import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
 import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
-/** One shape for queued-row edit state and actions. */
 type ChatQueuedEditProps = {
-  /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
   editingText?: string;
   editingMentions?: readonly HumanMention[];
@@ -56,26 +55,25 @@ type ChatQueuedEditProps = {
   onCancel: () => void;
 };
 
-export type CapabilityMenuProps = ChatComposerCapabilityMenuProps;
-
-type ChatComposerDisabledBannerContent = {
+export type ChatComposerDisabledBanner = {
+  kind: "above-composer" | "composer-replacement";
+  presentation?: "compact" | "hidden";
   title?: string;
   text: string;
   tone?: "info" | "neutral";
-  icon?: "warning" | "archive";
+  icon?: "warning" | "archive" | "eye";
   actionStyle?: "primary";
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatComposerDisabledBanner = ChatComposerDisabledBannerContent &
-  ({ kind: "above-composer" } | { kind: "composer-replacement" });
-
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
+  /** Provisional/deleted previews must not mount session-scoped extension controllers. */
+  sessionAdmitted?: boolean;
   connected: boolean;
   offline?: boolean;
   queuedOutboxCount?: number;
@@ -107,6 +105,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onProgressManipulate?: () => void;
   runId?: string | null;
   onDismissProgressCard?: (card: ProgressCard) => void;
+  onClearSavedProgressCard?: (card: ProgressCard) => void;
   /** The pane scopes Gateway questions to this conversation's agent and session. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
@@ -124,19 +123,14 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: CapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
-  replyTarget?: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  } | null;
+  replyTarget?: ChatReplyTarget | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
@@ -157,6 +151,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
+  composerRecovery?: TemplateResult | typeof nothing;
   notices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;

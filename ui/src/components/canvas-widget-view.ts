@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -15,6 +16,7 @@ import { t } from "../i18n/index.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import {
   WidgetSandboxHost,
   WIDGET_LOAD_TIMEOUT_MS,
@@ -23,6 +25,7 @@ import {
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
@@ -93,6 +96,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   private sandboxHost?: WidgetSandboxHost;
   private promptPort?: MessagePort;
   private sandboxOrigin = "";
+  private scrollNonce = "";
   private releaseTheme?: () => void;
   private scriptsAllowed = true;
   private sandboxGeneration = 0;
@@ -178,6 +182,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   private clearSandbox(): void {
+    this.scrollNonce = "";
     this.sandboxHost?.dispose();
     this.sandboxHost = undefined;
     this.promptPort?.close();
@@ -342,6 +347,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       return;
     }
     this.releaseTheme = registerWidgetThemeFrame(frame, this.sandboxOrigin);
+    this.scrollNonce = generateUUID();
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin: this.sandboxOrigin,
@@ -352,7 +358,11 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = false;
         this.postHostState();
       },
-      onError: (error) => this.fail(error),
+      onRendered: () => this.postHostState(),
+      onError: (error) => {
+        this.clearSandbox();
+        this.error = formatUiError(error);
+      },
       onReadyTimeout: () => {
         this.pending = true;
       },
@@ -362,11 +372,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     });
   }
 
-  private fail(error: unknown): void {
-    this.clearSandbox();
-    this.error = formatUiError(error);
-  }
-
   private postHostState(): void {
     const frame = this.sandboxHost?.frame;
     if (!frame) {
@@ -374,6 +379,11 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
+    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    frame.contentWindow?.postMessage(
+      { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
+      this.sandboxOrigin,
+    );
   }
 
   private readonly handleMessage = (event: MessageEvent): void => {
@@ -389,6 +399,19 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     host.handleMessage(event);
     const data = asOptionalRecord(event.data);
+    if (
+      data?.type === "openclaw:widget-scroll" &&
+      this.scrollNonce &&
+      data.nonce === this.scrollNonce &&
+      typeof data.deltaY === "number" &&
+      Number.isFinite(data.deltaY)
+    ) {
+      forwardChatWheelToTranscript(
+        new WheelEvent("wheel", { deltaY: data.deltaY, cancelable: true }),
+        this.closest<HTMLElement>(".chat-thread"),
+      );
+      return;
+    }
     if (data?.type === "openclaw:widget-runtime-error") {
       if (!this.sessionKey || typeof data.message !== "string") {
         return;
@@ -406,7 +429,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         return;
       }
       const report = {
-        message: data.message.slice(0, 500),
+        message: truncateUtf16Safe(data.message, 500).toWellFormed(),
         line: typeof data.line === "number" && Number.isInteger(data.line) ? data.line : undefined,
         column:
           typeof data.column === "number" && Number.isInteger(data.column)
@@ -432,7 +455,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         report.line === undefined
           ? ""
           : `, line ${report.line}${report.column === undefined ? "" : `, column ${report.column}`}`;
-      const text = `Inline widget "${this.title.slice(0, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
+      const text = `Inline widget "${truncateUtf16Safe(this.title, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
       void binding.client
         .request("wake", { mode: "now", sessionKey: this.sessionKey, text })
         .catch((error: unknown) => console.warn("Widget runtime error wake failed", error));
@@ -470,7 +493,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
-        dispatchWidgetPrompt(
+        void dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
           `${this.sessionKey}\0${this.docId}\0${this.validated!.generation}`,

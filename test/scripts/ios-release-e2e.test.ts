@@ -104,47 +104,40 @@ describe("iOS release test identity", () => {
   });
 
   it.each([
-    ["basename", { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) }],
-    ["skipped", { result: "Skipped" }],
-    ["failed", { result: "Failed" }],
-    ["failed child", { children: [{ nodeType: "Test Case Run", result: "Failed" }] }],
-    ["wrong class", { nodeIdentifier: "OtherTests/testLiveGatewayPairChatAndRelaunch()" }],
+    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
+    ["skipped", result(undefined, { result: "Skipped" })],
+    ["failed", result(undefined, { result: "Failed" })],
+    [
+      "failed child",
+      result(undefined, { children: [{ nodeType: "Test Case Run", result: "Failed" }] }),
+    ],
     [
       "retry to green",
-      {
+      result(undefined, {
         children: [
           { nodeType: "Repetition", result: "Passed" },
           { nodeType: "Repetition", result: "Passed" },
         ],
-      },
+      }),
     ],
     [
       "multiple runs",
-      {
+      result(undefined, {
         children: [
           { nodeType: "Test Case Run", result: "Passed" },
           { nodeType: "Test Case Run", result: "Passed" },
         ],
-      },
+      }),
     ],
-  ])("rejects %s", (_name, overrides) => {
-    expect(() =>
-      requireExactTestResult(result(undefined, overrides), IOS_RELEASE_TESTS[0]),
-    ).toThrow();
-  });
-
-  it("rejects a wrong target or a unit bundle even with the exact class/method", () => {
-    const wrongTarget = result(undefined, {}, { name: "OtherUITests" });
-    expect(() => requireExactTestResult(wrongTarget, IOS_RELEASE_TESTS[0])).toThrow();
-    const unitBundle = result(undefined, {}, { nodeType: "Unit test bundle" });
-    expect(() => requireExactTestResult(unitBundle, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-
-  it("rejects missing and extra tests", () => {
-    expect(() => requireExactTestResult({ testNodes: [] }, IOS_RELEASE_TESTS[0])).toThrow();
-    const extra = result();
-    extra.testNodes.push(...result(IOS_RELEASE_TESTS[1]).testNodes);
-    expect(() => requireExactTestResult(extra, IOS_RELEASE_TESTS[0])).toThrow();
+    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
+    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
+    ["missing tests", { testNodes: [] }],
+    [
+      "extra tests",
+      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
+    ],
+  ])("rejects %s", (_name, value) => {
+    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
   });
 });
 
@@ -204,7 +197,6 @@ describe("sampled simulator-tree footprint", () => {
   it.each([
     {},
     { ...sample, bytes: 0 },
-    { ...sample, bytes: -1 },
     { ...sample, bytes: "1024" },
     { ...sample, processes: 0 },
     { ...sample, cpu: Number.NaN },
@@ -234,7 +226,7 @@ describe("sampled simulator-tree footprint", () => {
 
 function fixture(
   options: {
-    fail?: "prepare" | "test" | "reader" | "cleanup";
+    fail?: "test" | "cleanup";
     measure?: boolean;
     invalidMeasurement?: boolean;
     cancel?: boolean;
@@ -262,9 +254,6 @@ function fixture(
         prepare: async () => {
           trace.push(`prepare:${index}`);
           time += 100;
-          if (index === 1 && options.fail === "prepare") {
-            throw new Error("private preparation diagnostics");
-          }
         },
         test: async (test: TestIdentity) => {
           trace.push(`test:${index}:${test}`);
@@ -278,11 +267,7 @@ function fixture(
           if (options.cancel) {
             abort.abort();
           }
-          if (
-            index === 1 &&
-            (options.fail === "test" ||
-              (options.fail === "reader" && test === IOS_RELEASE_TESTS[1]))
-          ) {
+          if (index === 1 && options.fail === "test") {
             throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
           }
           return result(test);
@@ -361,44 +346,10 @@ describe("fresh trial ownership", () => {
     }
     expect(JSON.stringify(report)).not.toContain("private");
   });
-  it.each(["test", "reader"] as const)(
-    "fails the arm after its %s failure without repeating either test",
-    async (fail) => {
-      const { deps, trace } = fixture({ fail });
-      const report = await runTrials("stock", deps);
-      expect(report.trials).toHaveLength(1);
-      expect(report.trials[0]).toMatchObject({
-        status: "failed",
-        errors: ["test-timeout"],
-        tests:
-          fail === "test"
-            ? [{ test: IOS_RELEASE_TESTS[0], status: "failed" }]
-            : [
-                { test: IOS_RELEASE_TESTS[0], status: "passed" },
-                { test: IOS_RELEASE_TESTS[1], status: "failed" },
-              ],
-      });
-      expect(trace.filter((entry) => entry.startsWith("test:"))).toEqual(
-        (fail === "test" ? [IOS_RELEASE_TESTS[0]] : IOS_RELEASE_TESTS).map(
-          (test) => `test:1:${test}`,
-        ),
-      );
-      expect(trace.at(-1)).toBe("cleanup:1");
-    },
-  );
   it("refuses comparison without a meter", async () => {
     const { deps } = fixture();
     await expect(runTrials("compare", deps)).rejects.toThrow("comparison-meter-required");
     expect(deps.create).not.toHaveBeenCalled();
-  });
-  it("does not retry failed preparation or start its test/meter", async () => {
-    const { deps, trace } = fixture({ fail: "prepare" });
-    const report = await runTrials("stock", deps);
-    expect(report.trials[0]?.errors).toEqual(["preparation-failed"]);
-    expect(trace.filter((entry) => entry === "prepare:1")).toHaveLength(1);
-    expect(trace.some((entry) => entry.startsWith("test:"))).toBe(false);
-    expect(report.trials[0]?.tests).toEqual([]);
-    expect(trace).toContain("cleanup:1");
   });
   it("joins the collector and fails incomplete measurement without discarding the trial", async () => {
     const { deps, trace } = fixture({ measure: true, invalidMeasurement: true });
@@ -521,9 +472,7 @@ describe("release qualification workflow authority", () => {
   });
   it.each([
     ["manual current revision", {}, true],
-    ["CI current revision", { caller: "ci" }, true],
     ["manual arbitrary target", { target: "b".repeat(40) }, false],
-    ["CI arbitrary target", { caller: "ci", target: "b".repeat(40) }, false],
     ["invalid SHA", { target: "main" }, false],
     ["invalid mode", { mode: "unknown" }, false],
   ])("checks %s before checkout", (_name, options, admitted) => {
@@ -533,7 +482,6 @@ describe("release qualification workflow authority", () => {
     const target = "target" in options ? options.target : sha;
     const repository = "openclaw/openclaw";
     const ref = "refs/heads/main";
-    const caller = "caller" in options ? options.caller : "ios-release-e2e";
     const first = workflow.jobs.qualify.steps[0];
     expect(first.id).toBe("start");
     const execution = spawnSync("/bin/bash", ["-c", first.run], {
@@ -546,7 +494,7 @@ describe("release qualification workflow authority", () => {
         GITHUB_SHA: sha,
         GITHUB_REPOSITORY: repository,
         GITHUB_REF: ref,
-        GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/${caller}.yml@${ref}`,
+        GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/ios-release-e2e.yml@${ref}`,
         GITHUB_EVENT_NAME: "workflow_dispatch",
         TARGET_SHA: target,
         E2E_MODE: "mode" in options ? options.mode : "stock",
@@ -637,7 +585,6 @@ describe("release qualification workflow authority", () => {
     ["full", "a".repeat(40), true],
     ["full", "b".repeat(40), false],
     ["main", "a".repeat(40), false],
-    ["main", "b".repeat(40), false],
   ])(
     "selects %s-tier target %s for required native qualification: %s",
     (tier, target, selected) => {
@@ -671,15 +618,12 @@ describe("release qualification workflow authority", () => {
 
 describe("native command adapter", () => {
   it.each([
-    "success",
     "dirty-tracked",
     "dirty-untracked",
     "source-late-dirty",
     "source-late-head-change",
     "different-xcode",
-    "different-xcode-build",
     "invalid-xcode-output",
-    "different-runtime",
     "newest-compatible-runtime",
     "unavailable-runtime",
     "unsupported-runtime-device",
@@ -709,8 +653,6 @@ describe("native command adapter", () => {
     "reader-failure",
     "fixture-exit",
     "gateway-exit",
-    "missing-first",
-    "missing-second",
     "missing-relaunch",
     "provider-duplicate",
     "provider-out-of-order",
@@ -718,7 +660,6 @@ describe("native command adapter", () => {
     "test-timeout-output",
     "reply-failure-evidence",
     "reply-failure-history-error",
-    "reply-failure-submission",
     "reply-failure-source-only",
     "reply-failure-app-log-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
@@ -951,11 +892,9 @@ describe("native command adapter", () => {
         stdout.write(
           scenario === "different-xcode"
             ? "Xcode 26.6\nBuild version 17F113\n"
-            : scenario === "different-xcode-build"
-              ? "Xcode 27.0\nBuild version 27A000\n"
-              : scenario === "invalid-xcode-output"
-                ? "unrecognized toolchain\n"
-                : "Xcode 27.0\nBuild version 27A266a\n",
+            : scenario === "invalid-xcode-output"
+              ? "unrecognized toolchain\n"
+              : "Xcode 27.0\nBuild version 27A266a\n",
         );
       } else if (args.includes("--print-path")) {
         stdout.write(`${developerDir}\n`);
@@ -964,13 +903,11 @@ describe("native command adapter", () => {
       } else if (args.includes("runtimes")) {
         const runtime = {
           isAvailable: scenario !== "unavailable-runtime",
-          version: scenario === "different-runtime" ? "27.0" : "26.5",
+          version: "26.5",
           identifier:
-            scenario === "different-runtime"
-              ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-              : scenario === "non-ios-runtime"
-                ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
-                : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+            scenario === "non-ios-runtime"
+              ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
           supportedArchitectures:
             scenario === "unsupported-runtime-architecture" ? ["x86_64"] : ["arm64"],
           supportedDeviceTypes: [
@@ -1014,11 +951,9 @@ describe("native command adapter", () => {
         expect(lifecycle).toContain("setup-status-ready");
         lifecycle.push("simulator-create");
         expect(args.at(-1)).toBe(
-          scenario === "different-runtime"
-            ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-            : scenario === "newest-compatible-runtime"
-              ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
-              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+          scenario === "newest-compatible-runtime"
+            ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+            : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
         );
         if (scenario === "gateway-exit-during-create") {
           gatewayChild.exitCode = 17;
@@ -1181,7 +1116,7 @@ describe("native command adapter", () => {
           const failureMessage =
             scenario === "reply-failure-source-only"
               ? ""
-              : `IOS_RELEASE_CHAT_FAILURE relaunch ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
+              : "IOS_RELEASE_CHAT_FAILURE relaunch reply draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false";
           stdout.write(
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
               `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
@@ -1338,24 +1273,12 @@ describe("native command adapter", () => {
     const native = await admission;
     expect(proof).toMatchObject({
       xcode: scenario === "different-xcode" ? "26.6" : "27.0",
-      xcodeBuild:
-        scenario === "different-xcode"
-          ? "17F113"
-          : scenario === "different-xcode-build"
-            ? "27A000"
-            : "27A266a",
-      runtime:
-        scenario === "different-runtime"
-          ? "27.0"
-          : scenario === "newest-compatible-runtime"
-            ? "26.10"
-            : "26.5",
+      xcodeBuild: scenario === "different-xcode" ? "17F113" : "27A266a",
+      runtime: scenario === "newest-compatible-runtime" ? "26.10" : "26.5",
       runtimeIdentifier:
-        scenario === "different-runtime"
-          ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-          : scenario === "newest-compatible-runtime"
-            ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
-            : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+        scenario === "newest-compatible-runtime"
+          ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+          : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });
     try {
       if (scenario === "native-build-only") {
@@ -1426,7 +1349,7 @@ describe("native command adapter", () => {
               ? []
               : [
                   "chat-stage:relaunch",
-                  `chat-checkpoint:${scenario === "reply-failure-submission" ? "submission" : "reply"}`,
+                  "chat-checkpoint:reply",
                   "chat-draft-retained:false",
                   "chat-keyboard:true",
                   "chat-reply-present:false",

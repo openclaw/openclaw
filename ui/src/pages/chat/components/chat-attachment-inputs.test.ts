@@ -108,3 +108,13 @@ it.each(["agent-chat__composer-shell", "new-session-page__composer"])(
     await camera.updateComplete;
   },
 );
+
+it("leaves the general file picker unrestricted while photo and camera stay image-only", () => {
+  render(renderChatAttachmentInputs({ onAttachmentsChange: vi.fn() }), host);
+  const input = (kind: string) =>
+    host.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`);
+  // General files share chat admission; Android greys out anything outside an accept list.
+  expect(input("file")?.hasAttribute("accept")).toBe(false);
+  expect(input("photo")?.accept).toBe("image/*");
+  expect(input("camera")?.accept).toBe("image/*");
+});

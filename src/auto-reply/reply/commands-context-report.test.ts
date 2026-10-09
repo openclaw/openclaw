@@ -208,13 +208,12 @@ describe("buildContextReply", () => {
               bootstrapMaxChars: 12_000,
               bootstrapTotalMaxChars: 60_000,
             },
-            list: [
-              {
-                id: "scout",
+            entries: {
+              scout: {
                 bootstrapMaxChars: 32_000,
                 bootstrapTotalMaxChars: 96_000,
               },
-            ],
+            },
           },
         },
       }),
@@ -239,9 +238,14 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
   });
 
-  it("reports compactable real conversation messages from the active transcript", async () => {
+  it("counts conversation anchors across active transcript pages", async () => {
     await withTranscript(
       [
+        ...Array.from({ length: 127 }, (_, index) => ({
+          role: "assistant",
+          content: "NO_REPLY",
+          timestamp: index,
+        })),
         { role: "user", content: "Please inspect the repo", timestamp: 1 },
         {
           role: "assistant",
@@ -266,7 +270,7 @@ describe("buildContextReply", () => {
         );
 
         expect(result.text).toContain(
-          "Compactable transcript: 2 real conversation message(s) / 3 transcript message(s)",
+          "Compactable transcript: 2 real conversation message(s) / 130 transcript message(s)",
         );
         expect(result.text).not.toContain("Compaction note:");
       },

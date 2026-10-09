@@ -1,8 +1,10 @@
 import path from "node:path";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -25,9 +27,11 @@ import {
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
+import {
+  prepareSessionMaintenancePreservation,
+  registerSessionMaintenancePreserveKeysProvider,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -78,6 +82,8 @@ function createPlannerStore(entryCount: number, updatedAt?: number) {
 it("avoids inventory projection for sequential writes with no retention candidates", async () => {
   const { database, storePath } = createPlannerStore(32, Date.now());
   const target = { sessionKey: "agent:main:planner-0", storePath };
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
   const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
     sql.includes(
       'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
@@ -93,6 +99,7 @@ it("avoids inventory projection for sequential writes with no retention candidat
       const plan = runOpenClawAgentWriteTransaction(
         (owner) =>
           maintenance.applySessionEntryMaintenance(owner, {
+            preservation: preservation.capture,
             activeSessionKey: target.sessionKey,
             archiveDirectory: path.join(path.dirname(database.path), "archives"),
             maintenanceConfig: resolveMaintenanceConfigFromInput(),
@@ -128,15 +135,21 @@ it("resolves protection once before capping aged candidates", async () => {
     assertAllowed: () => {},
   });
   const provider = vi.fn(() => [key(2)]);
-  const unregister = registerSessionMaintenancePreserveKeysProvider(provider);
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: provider,
+    dispose() {},
+  }));
   try {
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [key(1)],
       run: async () => {
+        const preservation = await prepareSessionMaintenancePreservation(storePath);
+        onTestFinished(preservation.dispose);
         const plan = runOpenClawAgentWriteTransaction(
           (owner) =>
             maintenance.applySessionEntryMaintenance(owner, {
+              preservation: preservation.capture,
               activeSessionKey: key(3),
               archiveDirectory: path.join(path.dirname(database.path), "archives"),
               maintenanceConfig: {
@@ -165,7 +178,7 @@ it("resolves protection once before capping aged candidates", async () => {
   }
 });
 
-it("caps only the oldest eligible activity ties without decoding unrelated payloads", () => {
+it("caps only the oldest eligible activity ties without decoding unrelated payloads", async () => {
   const { database, storePath } = createPlannerStore(0);
   const now = Date.now();
   vi.spyOn(Date, "now").mockReturnValue(now);
@@ -179,7 +192,6 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     ["started", { sessionStartedAt: now }],
     ["pinned", { pinnedAt: old }],
     ["locked", { modelSelectionLocked: true }],
-    ["running", { status: "running" }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],
     ["live", {}],
@@ -197,12 +209,19 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
       },
     );
   }
-  const unregister = registerSessionMaintenancePreserveKeysProvider(() => [key("live")]);
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [key("live")],
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
   const parse = vi.spyOn(JSON, "parse");
   try {
     const plan = runOpenClawAgentWriteTransaction(
       (owner) =>
         maintenance.applySessionEntryMaintenance(owner, {
+          preservation: preservation.capture,
           archiveDirectory: path.join(path.dirname(database.path), "archives"),
           maintenanceConfig: {
             ...resolveMaintenanceConfigFromInput(),
@@ -214,7 +233,10 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
         }),
       { agentId: "main", path: database.path },
     );
-    expect(plan.archivedSessionKeys.toSorted()).toEqual(victims.toSorted());
+    expect(plan.archivedEntries).toEqual([
+      { sessionKey: key("oldest"), sessionId: "bounded-0" },
+      { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
+    ]);
     expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
     expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
       false,
@@ -239,10 +261,13 @@ it.each(["session-key", "session-id"] as const)(
     const transcript = [{ type: "session", id: target.sessionId, content: "retained history" }];
     replaceTranscriptEventsSync(target, transcript);
     const before = readSessionStateDeleteSnapshot(database.db, target.sessionId);
+    const preservation = await prepareSessionMaintenancePreservation(storePath);
+    onTestFinished(preservation.dispose);
     const maintain = (forceMaintenance = false) =>
       runOpenClawAgentWriteTransaction(
         (owner) =>
           maintenance.applySessionEntryMaintenance(owner, {
+            preservation: preservation.capture,
             forceMaintenance,
             archiveDirectory: path.join(path.dirname(database.path), "archives"),
             maintenanceConfig: resolveMaintenanceConfigFromInput(),
@@ -252,7 +277,7 @@ it.each(["session-key", "session-id"] as const)(
       );
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [identity],
       run: async () => {
@@ -464,18 +489,13 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
       .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
-  const authorize = reclamationCommit.withSqliteReclamationAuthorization;
-  const authorization = vi
-    .spyOn(reclamationCommit, "withSqliteReclamationAuthorization")
-    .mockImplementation((buffer, owner, assertCurrent, run) =>
-      authorize(buffer, owner, assertCurrent, (commit) =>
-        run(() => {
-          reachedCommit = true;
-          current = false;
-          return commit();
-        }),
-      ),
-    );
+  const authorization = probe.admission(workerAdmission, (request, grant, callback) => {
+    if (request.stage === "commit") {
+      reachedCommit = true;
+      current = false;
+    }
+    return callback(request, grant);
+  });
 
   await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
     isCurrent: () => current,

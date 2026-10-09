@@ -43,6 +43,7 @@ function isRosterQuery(value: unknown): value is SessionListOptions {
           "includeDerivedTitles",
           "includeLastMessage",
           "ownerFirst",
+          "excludeDock",
         ].includes(key) && typeof entry === "boolean"
       );
     })
@@ -79,8 +80,13 @@ function isSessionRosterRecord(value: unknown): value is SessionRosterRecord {
 
 // Incognito conversations are memory-only by contract; their titles and previews
 // must never reach IndexedDB, and a stored row from an older writer is dropped too.
-function isPersistableSessionRow(row: GatewaySessionRow): boolean {
-  return row.incognito !== true;
+function persistentRosterResult(result: SessionRosterRecord["result"]) {
+  return {
+    ...result,
+    sessions: result.sessions
+      .filter((row) => row.incognito !== true)
+      .map(stripVolatileSessionRowFields),
+  };
 }
 
 function stripVolatileSessionRowFields(row: GatewaySessionRow): GatewaySessionRow {
@@ -111,11 +117,17 @@ export function parseSessionRosterRecord(value: unknown): SessionRosterRecord | 
 }
 
 function sessionRosterQuery(options: SessionListOptions): SessionListOptions {
-  return normalizeManagedSessionListQuery({
+  const {
+    source: _source,
+    rowMode: _rowMode,
+    ...query
+  } = normalizeManagedSessionListQuery({
     ...options,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
     includeLastMessage: options.includeLastMessage ?? true,
   });
+  // Wire diagnostics and detail projection do not change persisted roster membership.
+  return query;
 }
 
 function rosterRecordMatches(record: SessionRosterRecord, expected: RosterExpectation): boolean {
@@ -137,12 +149,7 @@ export function boundSessionRosterRecord(record: SessionRosterRecord): SessionRo
     const stripped = {
       ...record,
       query: sessionRosterQuery(record.query),
-      result: {
-        ...record.result,
-        sessions: record.result.sessions
-          .filter(isPersistableSessionRow)
-          .map(stripVolatileSessionRowFields),
-      },
+      result: persistentRosterResult(record.result),
     };
     const json = JSON.stringify(stripped, (key, value: unknown) =>
       key === "avatarUrl" || key === "channelAvatarUrl" ? undefined : value,
@@ -193,12 +200,7 @@ export async function readSessionRoster(
     }
     return {
       ...record,
-      result: {
-        ...record.result,
-        sessions: record.result.sessions
-          .filter(isPersistableSessionRow)
-          .map(stripVolatileSessionRowFields),
-      },
+      result: persistentRosterResult(record.result),
     };
   } catch {
     database.close();

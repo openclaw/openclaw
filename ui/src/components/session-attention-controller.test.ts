@@ -27,16 +27,25 @@ function setup(snoozedUntil: number) {
 }
 
 describe("session snooze deadline invalidation", () => {
-  it("resurfaces a row at the deadline without polling", () => {
-    const h = setup(200);
+  it.each([
+    { deadline: 200, clamped: false },
+    { deadline: 2_147_483_847, clamped: true },
+  ])("resurfaces a row at $deadline without polling", ({ deadline, clamped }) => {
+    const h = setup(deadline);
+    if (clamped) {
+      vi.advanceTimersByTime(2_147_483_647);
+      expect(h.visible()).toBe(false);
+      expect(h.host.requestUpdate).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(1);
+    }
     vi.advanceTimersByTime(99);
     expect(h.visible()).toBe(false);
-    expect(h.host.requestUpdate).not.toHaveBeenCalled();
+    expect(h.host.requestUpdate).toHaveBeenCalledTimes(clamped ? 1 : 0);
     vi.advanceTimersByTime(1);
     expect(isSessionSnoozed(h.row, Date.now())).toBe(false);
     vi.advanceTimersByTime(1);
     expect(h.visible()).toBe(true);
-    expect(h.host.requestUpdate).toHaveBeenCalledOnce();
+    expect(h.host.requestUpdate).toHaveBeenCalledTimes(clamped ? 2 : 1);
     expect(vi.getTimerCount()).toBe(0);
     h.controller.hostDisconnected();
   });
@@ -54,17 +63,5 @@ describe("session snooze deadline invalidation", () => {
     vi.advanceTimersByTime(200);
     expect(h.host.requestUpdate).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("clamps distant deadlines and rearms them until due", () => {
-    const h = setup(2_147_483_847);
-    vi.advanceTimersByTime(2_147_483_647);
-    expect(h.visible()).toBe(false);
-    expect(h.host.requestUpdate).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(1);
-    vi.advanceTimersByTime(101);
-    expect(h.visible()).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-    h.controller.hostDisconnected();
   });
 });

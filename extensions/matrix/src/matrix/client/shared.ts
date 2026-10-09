@@ -2,6 +2,7 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { toStringifiedError as toRetirementError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { getMatrixRuntimeLifecycle, type MatrixRuntimeLifecycle } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { getMatrixMonitorTaskSignal } from "../monitor/task-runner.js";
@@ -43,7 +44,6 @@ type SharedMatrixClientLeaseState = {
 };
 
 type SharedMatrixClientState = {
-  auth: MatrixAuth;
   client: MatrixClient;
   key: string;
   started: boolean;
@@ -94,21 +94,10 @@ async function createSharedMatrixClient(params: {
 }): Promise<SharedMatrixClientState> {
   const { createMatrixClient } = await loadMatrixCreateClientDeps();
   const client = await createMatrixClient({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
-    password: params.auth.password,
-    deviceId: params.auth.deviceId,
-    encryption: params.auth.encryption,
+    ...params.auth,
     localTimeoutMs: params.timeoutMs,
-    initialSyncLimit: params.auth.initialSyncLimit,
-    accountId: params.auth.accountId,
-    allowPrivateNetwork: params.auth.allowPrivateNetwork,
-    ssrfPolicy: params.auth.ssrfPolicy,
-    dispatcherPolicy: params.auth.dispatcherPolicy,
   });
   return {
-    auth: params.auth,
     client,
     key: buildSharedClientKey(params.auth),
     started: false,
@@ -342,26 +331,18 @@ async function waitForRetirementDrain(
   if (!isPending()) {
     return;
   }
-  let deadline: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        deadline = setTimeout(() => {
-          if (!isPending()) {
-            return;
-          }
-          state.phase = "late-drain";
-          reject(new Error(timeoutMessage));
-        }, MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS);
-        deadline.unref?.();
-      }),
-    ]);
-  } finally {
-    if (deadline) {
-      clearTimeout(deadline);
-    }
-  }
+  await raceWithTimeout(
+    task,
+    MATRIX_RETIREMENT_DRAIN_TIMEOUT_MS,
+    () => {
+      if (!isPending()) {
+        return task;
+      }
+      state.phase = "late-drain";
+      throw new Error(timeoutMessage);
+    },
+    { ref: false },
+  );
 }
 
 function beginGenerationRetirement(params: {

@@ -22,14 +22,16 @@ Checking the streaming behavior and running the focused tests.
 ```
 
 The default draft shows a status headline, authored plan steps, and approval
-requests. Intermediate tool failures and nonzero command exits stay out of the
-draft. Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `🛠️ Bash: run tests`.
+requests. On Discord and Telegram, it also keeps the current operation and
+delegated task status visible without a detailed tool log or utility model.
+Intermediate tool failures and nonzero command exits stay out of the draft.
+Set `streaming.progress.toolProgress: true` to add a rolling tool log,
+including tool failures, with rows such as `Bash: run tests`.
 
 <Note>
-  Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
-  to opt in. Telegram defaults to `progress` without additional config. Set
-  `mode: "partial"` on either to stream answer text instead. See
+  Discord and Telegram default to `progress` without additional config. Set
+  `mode: "partial"` on either to stream answer text instead, or `mode: "off"`
+  to disable previews. Existing explicit modes are preserved. See
   [Streaming and chunking](/concepts/streaming#channel-mapping) for the full
   per-channel default table.
 </Note>
@@ -76,8 +78,8 @@ It sits at the top of the rolling progress-line list, so it scrolls away once
 enough concrete work lines appear. The implicit label is hidden while a status
 headline is present unless you configure one explicitly. Plain text-only
 replies never show a progress draft; a line appears only for real work updates,
-for example `🛠️ Bash: run tests`, `🔎 Web Search: for "discord edit message"`,
-or `✍️ Write: to /tmp/file`.
+for example `Bash: run tests`, `Web Search: for "discord edit message"`,
+or `Write: to /tmp/file`.
 
 Final delivery depends on the channel and transport. OpenClaw either finalizes
 the draft or sends a separate answer and cleans up or stops updating the draft
@@ -177,11 +179,14 @@ Set it to `true` for the rolling tool log. Successful background-process polls
 and internal waits do not add routine rows. Failed calls still follow the
 selected tool-progress policy; `/verbose` retains their diagnostic summaries.
 
-Native subagent spawn and activity events follow the same policy. They start
-the quiet work indicator; with the tool log enabled, lifecycle updates reuse a
-row for each worker. Messages to workers get separate entries because sending a
-message does not prove that a worker started running. Delegation prompts are not
-included in these progress rows.
+On Discord and Telegram, the quiet draft keeps one current-operation status
+and bounded delegated-task status rows. These use public operation names and
+task labels, never command text, arguments, child prose, or results. A late
+completion for an older operation cannot replace the currently displayed one.
+Other progress channels retain their existing presentation. With the tool log
+enabled, lifecycle updates reuse a row for each worker. Messages to workers get
+separate entries because sending a message does not prove that a worker started
+running. Delegation prompts are not included in these progress rows.
 
 Tools can also emit typed progress while a single call is still running. That
 is how a slow fetch or search updates the visible draft before the tool
@@ -247,10 +252,10 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
 With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
 
-| Mode      | Progress line                                                   |
-| --------- | --------------------------------------------------------------- |
-| `explain` | `🛠️ check js syntax for /tmp/app.js`                            |
-| `raw`     | `🛠️ check js syntax for /tmp/app.js · node --check /tmp/app.js` |
+| Mode      | Progress line                                                |
+| --------- | ------------------------------------------------------------ |
+| `explain` | `check js syntax for /tmp/app.js`                            |
+| `raw`     | `check js syntax for /tmp/app.js · node --check /tmp/app.js` |
 
 ### Command/exec text
 
@@ -418,14 +423,15 @@ Add the rolling tool log to the single progress draft:
 
 With the default `toolProgress: false`, OpenClaw still suppresses the older
 standalone tool-progress messages for that turn; the draft shows the headline,
-authored text, plan milestones, and approval requests only. Tool diagnostics
+authored text, plan milestones, and approval requests. Discord and Telegram also
+show safe current-operation and delegated-task status. Tool diagnostics
 remain available in the session transcript.
 
 ## Channel behavior
 
 | Channel         | Progress transport                     | Notes                                                                                                                                                     |
 | --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
+| Discord         | Send one message, then edit it.        | `progress` is the default; the status draft is deleted after the final answer lands.                                                                      |
 | Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
 | Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                          |
@@ -440,9 +446,9 @@ full runtime-behavior breakdown per channel.
 
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
-- A Discord or Telegram progress card handed off to accepted subagents stays visible across
-  parent yield. Core updates that same card while delegated work continues;
-  the eventual final answer is separate. See
+- A Telegram or Discord progress draft handed off to accepted announcing subagents stays
+  visible after the parent yields and keeps showing child status and prepared
+  operation names; the final answer is separate. See
   [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 
 - Otherwise, in `progress` mode on Discord, the final answer is sent as a fresh

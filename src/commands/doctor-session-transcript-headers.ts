@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
@@ -10,7 +10,6 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import {
   isCanonicalSessionTranscriptEntry,
@@ -18,19 +17,16 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "../infra/session-sqlite-migration-readers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
+import {
+  scanDoctorSessionTranscripts,
+  transcriptSnapshotsMatch,
+} from "./doctor-session-transcript-scan.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Session transcript headers";
@@ -57,31 +53,27 @@ function createCanonicalHeaderlessEventParser(sessionId: string) {
       } catch {
         return undefined;
       }
-      if (!event || typeof event !== "object" || Array.isArray(event)) {
-        return undefined;
-      }
-      const record = event as Record<string, unknown>;
-      if (record.type === "session") {
+      if (!isRecord(event) || event.type === "session") {
         return undefined;
       }
       // Opaque plugin rows remain uninterpreted. Known entries and leaf controls
       // must already satisfy the runtime schema before a replacement can be lossless.
-      if (isCanonicalSessionTranscriptEntry(record)) {
+      if (isCanonicalSessionTranscriptEntry(event)) {
         if (!isIndexedSessionEntry(event)) {
           return undefined;
         }
         indexedEntries += 1;
-      } else if (record.type === "leaf" && !isSessionTranscriptLeafControl(record)) {
+      } else if (event.type === "leaf" && !isSessionTranscriptLeafControl(event)) {
         return undefined;
       }
-      if (typeof record.id === "string") {
-        const eventId = record.id.trim();
+      if (typeof event.id === "string") {
+        const eventId = event.id.trim();
         if (!eventId || eventIds.has(eventId)) {
           return undefined;
         }
         eventIds.add(eventId);
       }
-      return record;
+      return event;
     },
   };
 }
@@ -100,21 +92,6 @@ function parseCanonicalHeaderlessEvents(
     events.push(event);
   }
   return parser.hasIndexedEntries() ? events : undefined;
-}
-
-function snapshotsMatch(
-  expected: readonly SqliteTranscriptStorageRow[],
-  current: readonly SqliteTranscriptStorageRow[],
-): boolean {
-  return (
-    expected.length === current.length &&
-    expected.every(
-      (row, index) =>
-        row.seq === current[index]?.seq &&
-        row.createdAt === current[index]?.createdAt &&
-        row.eventJson === current[index]?.eventJson,
-    )
-  );
 }
 
 function readHeaderRepairContext(
@@ -199,19 +176,15 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   let found = 0;
   let repaired = 0;
 
-  for (const target of projectExistingAgentDatabaseTargets(
-    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
-    env,
-    params.cfg,
-  )) {
-    const databaseOptions = resolveTargetSqliteOptions(target, env);
-    const sqlitePath = target.sqlitePath;
-    let readDatabase: DatabaseSync | undefined;
-    try {
-      // Each snapshot exhausts or closes its iterators before repair, so this read-only
-      // connection holds no read transaction across a guarded writer transaction.
-      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
+  scanDoctorSessionTranscripts(
+    {
+      cfg: params.cfg,
+      env,
+      title: NOTE_TITLE,
+      failureLabel: "Failed to inspect transcript headers",
+    },
+    ({ reader, target, databaseOptions, reportError }) => {
+      const sqlitePath = target.sqlitePath;
       for (const sessionId of reader.sessionIds()) {
         const parser = createCanonicalHeaderlessEventParser(sessionId);
         const snapshot = reader.headerlessSnapshot(
@@ -219,10 +192,9 @@ export async function noteSessionTranscriptHeaderHealth(params: {
           (row) => parser.parse(row) !== undefined,
         );
         if (!snapshot.ok) {
-          const detail = formatErrorMessage(snapshot.error).replace(/\s+/g, " ").trim();
-          note(
-            `- Failed to read transcript ${sessionId} (${target.agentId}): ${detail}`,
-            NOTE_TITLE,
+          reportError(
+            `- Failed to read transcript ${sessionId} (${target.agentId})`,
+            snapshot.error,
           );
           continue;
         }
@@ -248,7 +220,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
           runOpenClawAgentWriteTransaction(
             (database) => {
               const currentRows = readTranscriptStorageRows(database, sessionId);
-              if (!snapshotsMatch(snapshot.rows, currentRows)) {
+              if (!transcriptSnapshotsMatch(snapshot.rows, currentRows, true)) {
                 throw new Error(
                   `transcript changed while preparing header repair for ${sessionId}`,
                 );
@@ -297,23 +269,11 @@ export async function noteSessionTranscriptHeaderHealth(params: {
           );
           repaired += 1;
         } catch (error) {
-          const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-          note(
-            `- Failed to repair transcript ${sessionId} (${target.agentId}): ${detail}`,
-            NOTE_TITLE,
-          );
+          reportError(`- Failed to repair transcript ${sessionId} (${target.agentId})`, error);
         }
       }
-    } catch (error) {
-      const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-      note(
-        `- Failed to inspect transcript headers for ${target.agentId} (${sqlitePath}): ${detail}`,
-        NOTE_TITLE,
-      );
-    } finally {
-      readDatabase?.close();
-    }
-  }
+    },
+  );
 
   if (params.shouldRepair && repaired > 0) {
     note(

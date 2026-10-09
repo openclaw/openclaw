@@ -20,7 +20,8 @@ import {
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
 import {
-  assertConversationDeliveryAttemptAuthorized,
+  withAuthorizedConversationDelivery,
+  assertConversationDeliveryRouteAuthorized,
   assertConversationRouteEligibleForAgent,
 } from "./conversation-route-ownership.js";
 
@@ -61,6 +62,10 @@ export async function runGatewayConversationSend(params: {
       conversation,
     });
     const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+    const authority = {
+      conversationRef: conversation.conversationRef,
+      expectedRouteFingerprint: routeFingerprint,
+    };
     // Completed retries retain persisted metadata and bypass current delivery-store resolution.
     const completed = operation ? resultFromExistingOperation(operation) : undefined;
     const sent =
@@ -78,16 +83,30 @@ export async function runGatewayConversationSend(params: {
         operationId: params.operationId,
         operationKind: "send",
         routeFingerprint,
+        authority,
         assertCurrent: () => {
           params.signal?.throwIfAborted();
-          assertConversationDeliveryAttemptAuthorized({
+          assertConversationDeliveryRouteAuthorized({
+            ...authority,
             config: params.readCurrentConfig?.() ?? currentConfig,
             agentId: params.agentId,
-            conversationRef: conversation.conversationRef,
-            expectedRouteFingerprint: routeFingerprint,
-            scope,
+            conversation,
           });
         },
+        withDirectAdapterHandoff: (initiate) =>
+          withAuthorizedConversationDelivery(
+            {
+              ...authority,
+              config: currentConfig,
+              readCurrentConfig: params.readCurrentConfig,
+              agentId: params.agentId,
+              scope,
+            },
+            () => {
+              params.signal?.throwIfAborted();
+              return initiate();
+            },
+          ),
         ...(operation ? { operation } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
       }));

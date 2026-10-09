@@ -14,7 +14,6 @@ const MAX_ADVERTISED_ATTACHMENT_BYTES = resolveChatAttachmentFrameBudgetBytes(MA
 /** Default decoded-size ceiling when `agents.defaults.mediaMaxMb` is unset or invalid. */
 export const DEFAULT_CHAT_ATTACHMENT_MAX_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * 1024 * 1024;
 
-/** Resolve the maximum decoded attachment size accepted for chat inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb = asPositiveFiniteNumber(configured) ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB;
@@ -24,21 +23,11 @@ export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   return Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, Math.floor(mb * 1024 * 1024)));
 }
 
-/** Unconditional decoded-size ceilings advertised on `hello-ok.policy.attachments`. */
-type ChatAttachmentPolicy = {
-  maxBytes: number;
-  maxImageBytes: number;
-};
-
 /**
- * Resolve the decoded-size ceilings every chat attachment faces regardless of
- * entrypoint or model. Images are checked against the configured ceiling first
- * and the agent-hydration cap second, so their effective limit is the smaller of
- * the two. MIME acceptance and per-message counts are deliberately absent: they
- * depend on the entrypoint, the resolved model, and payload sniffing, so they
- * cannot be stated once per connection.
+ * Connection-wide decoded-size ceilings; MIME and count limits depend on the
+ * entrypoint and model. Images must also fit the agent-hydration cap.
  */
-export function resolveChatAttachmentPolicy(cfg: OpenClawConfig): ChatAttachmentPolicy {
+export function resolveChatAttachmentPolicy(cfg: OpenClawConfig) {
   const maxBytes = Math.min(resolveChatAttachmentMaxBytes(cfg), MAX_ADVERTISED_ATTACHMENT_BYTES);
   return { maxBytes, maxImageBytes: Math.min(maxBytes, MAX_IMAGE_BYTES) };
 }

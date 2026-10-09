@@ -11,16 +11,12 @@ import {
   addSessionMember,
   listSessionMembers,
 } from "../../config/sessions/session-sharing-store.js";
-import {
-  addSessionSuggestion,
-  listSessionSuggestions,
-} from "../../config/sessions/session-suggestion-store.js";
+import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -166,9 +162,6 @@ describe("session metadata writer admission", () => {
         const reservation = runOpenClawAgentWorkerWrite(options, async () => {
           entered.resolve();
           await release.promise;
-          cfg = { session: { store: replacement.storePath } };
-          expect(disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(true);
-          renameSync(options.path, retired.storePath);
         });
         await entered.promise;
         const params =
@@ -181,6 +174,12 @@ describe("session metadata writer admission", () => {
         try {
           await setImmediate();
           expect(request.respond).not.toHaveBeenCalled();
+          // External retirement must not inherit the writer whose waiting mutation it revokes.
+          cfg = { session: { store: replacement.storePath } };
+          expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
+            true,
+          );
+          renameSync(options.path, retired.storePath);
           release.resolve();
           await Promise.all([reservation, request.done]);
           expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
@@ -191,7 +190,7 @@ describe("session metadata writer admission", () => {
           for (const target of [retired, replacement]) {
             expect(loadSessionEntry(target)).toEqual(originalEntry);
             expect(listSessionMembers(target)).toEqual([]);
-            expect(listSessionSuggestions(target)).toEqual([]);
+            expect(await listSessionSuggestions(target)).toEqual([]);
           }
         } finally {
           release.resolve();
@@ -223,12 +222,12 @@ describe("session metadata writer admission", () => {
             : method === "session.suggestions.add"
               ? { sessionKey: scope.sessionKey, text: "synthetic suggestion" }
               : { sessionKey: scope.sessionKey, identityId: other.id };
-      const read = () => ({
+      const read = async () => ({
         owner: loadSessionEntry(scope)?.owner,
         members: listSessionMembers(scope),
-        suggestions: listSessionSuggestions(scope),
+        suggestions: await listSessionSuggestions(scope),
       });
-      const before = structuredClone(read());
+      const before = structuredClone(await read());
       const context = sessionSharingTestContext(vi.fn());
       await initializeSessionReadContext(context);
       const entered = createDeferredCore();
@@ -242,7 +241,7 @@ describe("session metadata writer admission", () => {
       try {
         await setImmediate();
         expect(request.respond).not.toHaveBeenCalled();
-        expect(read()).toEqual(before);
+        expect(await read()).toEqual(before);
         release.resolve();
         await Promise.all([reservation, request.done]);
         expect(request.errors).toEqual([]);
@@ -254,7 +253,7 @@ describe("session metadata writer admission", () => {
             method === "session.members.add" ? [other.id] : [],
           );
         } else {
-          expect(listSessionSuggestions(scope)).toEqual([
+          expect(await listSessionSuggestions(scope)).toEqual([
             expect.objectContaining({
               state: method === "session.suggestions.add" ? "pending" : "dismissed",
             }),
@@ -327,7 +326,7 @@ describe("session metadata writer admission", () => {
             true,
           );
           expect(listSessionMembers(scope)).toEqual([]);
-          expect(listSessionSuggestions(scope)).toEqual([]);
+          expect(await listSessionSuggestions(scope)).toEqual([]);
           if (kind === "owner") {
             expect(loadSessionEntry(scope)?.owner).toBeUndefined();
           }

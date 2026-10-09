@@ -126,6 +126,11 @@ model compat metadata. Some LM Studio builds advertise a binary UI option (`allo
 binary shape to the six-level scale before sending requests, including for older saved config that
 still has `off`/`on` reasoning maps.
 
+For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
+advertised canonical effort, regardless of option order. For example, `off`, `low`, `medium`
+maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
+configuration; rerun LM Studio setup to regenerate them from current server metadata.
+
 ### Explicit configuration
 
 ```json5

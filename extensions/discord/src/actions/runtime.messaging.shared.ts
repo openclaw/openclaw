@@ -24,6 +24,13 @@ import * as discordMessagingActionRuntime from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import type { DiscordReactOpts } from "../send.types.js";
 import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
+import {
+  filterDiscordActiveThreadList,
+  readDiscordChannelStringField,
+  readDiscordChannelType,
+  type DiscordReadAncestor,
+  type DiscordReadTargetContext,
+} from "./runtime.messaging.thread-list.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 type ConversationReadInvocationOrigin = NonNullable<
@@ -55,12 +62,21 @@ export type DiscordMessagingActionContext = {
   options?: DiscordMessagingActionOptions;
   accountId?: string;
   resolveChannelId: () => string;
-  assertReadTargetAllowed: (params: { guildId?: string; channelId: string }) => Promise<void>;
+  assertReadTargetAllowed: (params: {
+    guildId?: string;
+    channelId: string;
+    requireGuildMetadata?: boolean;
+  }) => Promise<void>;
   assertGuildReadTargetAllowed: (params: {
     guildId: string;
     channelTargetRequiredMessage?: string;
     filteredResults?: boolean;
   }) => Promise<void>;
+  filterActiveThreadList: (params: {
+    guildId: string;
+    channelId: string;
+    value: unknown;
+  }) => Promise<{ threads: unknown[]; members: unknown[] }>;
   filterGuildChannelList: <T>(params: { guildId: string; channels: T[] }) => Promise<T[]>;
   resolveReactionChannelId: () => Promise<string>;
   withOpts: (extra?: Record<string, unknown>) => { cfg: OpenClawConfig; accountId?: string };
@@ -90,13 +106,11 @@ function resolveDiscordActionGuildEntry(params: {
   if (!params.guilds) {
     return null;
   }
-  if (guildId && params.guilds[guildId]) {
-    return { ...params.guilds[guildId], id: guildId };
-  }
   if (guildId) {
-    const byConfiguredId = Object.values(params.guilds).find((guild) => guild?.id === guildId);
-    if (byConfiguredId) {
-      return { ...byConfiguredId, id: guildId };
+    const guild =
+      params.guilds[guildId] || Object.values(params.guilds).find((entry) => entry?.id === guildId);
+    if (guild) {
+      return { ...guild, id: guildId };
     }
   }
   const guildSlug = params.guildName ? normalizeDiscordSlug(params.guildName) : "";
@@ -114,27 +128,6 @@ function resolveDiscordActionGuildEntry(params: {
   const wildcard = params.guilds["*"];
   return wildcard ? { ...wildcard, id: guildId } : null;
 }
-
-type DiscordReadTargetContext = {
-  channelId: string;
-  metadataKnown: boolean;
-  ancestryComplete: boolean;
-  channelType?: number;
-  guildId?: string;
-  channelName?: string;
-  channelSlug: string;
-  ancestors: DiscordReadAncestor[];
-  parentId?: string;
-  parentName?: string;
-  parentSlug?: string;
-  scope?: "channel" | "thread";
-};
-
-type DiscordReadAncestor = {
-  channelId: string;
-  channelName?: string;
-  channelSlug: string;
-};
 
 async function resolveDiscordReadAncestry(params: {
   channelId: string;
@@ -188,7 +181,7 @@ async function buildDiscordReadTarget(params: {
     ...(params.guildId ? { guildId: params.guildId } : {}),
     ...(channelName ? { channelName } : {}),
     ...(channelType !== undefined ? { channelType } : {}),
-    ...(isDiscordThreadChannel(params.channelInfo) ? { scope: "thread" as const } : {}),
+    ...(isDiscordThreadChannelType(channelType) ? { scope: "thread" as const } : {}),
   };
   const ancestry = await resolveDiscordReadAncestry({
     channelId: params.channelId,
@@ -206,32 +199,6 @@ async function buildDiscordReadTarget(params: {
     target.parentSlug = immediateParent.channelSlug;
   }
   return target;
-}
-
-function readDiscordChannelStringField(value: unknown, ...keys: string[]): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return undefined;
-}
-
-function readDiscordChannelType(value: unknown): number | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const type = (value as Record<string, unknown>).type;
-  return typeof type === "number" ? type : undefined;
-}
-
-function isDiscordThreadChannel(value: unknown): boolean {
-  return isDiscordThreadChannelType(readDiscordChannelType(value));
 }
 
 function isDiscordReadAncestryAllowed(params: {
@@ -264,49 +231,29 @@ function isDiscordReadTargetAllowedInGuild(params: {
     if (hasExplicitlyDisabledDiscordChannels(params.guildInfo?.channels)) {
       return false;
     }
-    return isDiscordReadTargetExplicitlyAllowedById(params);
-  }
-  if (!isDiscordReadAncestryAllowed(params)) {
-    return false;
-  }
-  const channelConfig = resolveDiscordChannelConfigWithFallback({
-    ...params.target,
-    guildInfo: params.guildInfo,
-  });
-  if (channelConfig?.allowed === false) {
-    return false;
-  }
-  return isDiscordGroupAllowedByPolicy({
-    groupPolicy: params.groupPolicy,
-    guildAllowlisted: Boolean(params.guildInfo),
-    channelAllowlistConfigured: hasConfiguredDiscordChannels(params.guildInfo?.channels),
-    channelAllowed: true,
-  });
-}
-
-function isDiscordReadTargetExplicitlyAllowedById(params: {
-  groupPolicy: "open" | "disabled" | "allowlist";
-  guildInfo: DiscordGuildEntryResolved | null;
-  target: DiscordReadTargetContext;
-}): boolean {
-  const channelEntry = params.guildInfo?.channels?.[params.target.channelId];
-  if (!channelEntry || channelEntry.enabled === false) {
-    return false;
+    const channelEntry = params.guildInfo?.channels?.[params.target.channelId];
+    if (!channelEntry || channelEntry.enabled === false) {
+      return false;
+    }
+  } else {
+    if (!isDiscordReadAncestryAllowed(params)) {
+      return false;
+    }
+    const channelConfig = resolveDiscordChannelConfigWithFallback({
+      ...params.target,
+      guildInfo: params.guildInfo,
+    });
+    if (channelConfig?.allowed === false) {
+      return false;
+    }
   }
   return isDiscordGroupAllowedByPolicy({
     groupPolicy: params.groupPolicy,
     guildAllowlisted: Boolean(params.guildInfo),
-    channelAllowlistConfigured: true,
+    channelAllowlistConfigured:
+      !params.target.metadataKnown || hasConfiguredDiscordChannels(params.guildInfo?.channels),
     channelAllowed: true,
   });
-}
-
-function hasExplicitlyDisabledDiscordChannelConfig(
-  guilds: Record<string, DiscordGuildEntryResolved | undefined> | undefined,
-): boolean {
-  return Object.values(guilds ?? {}).some((guild) =>
-    hasExplicitlyDisabledDiscordChannels(guild?.channels),
-  );
 }
 
 function hasExplicitlyDisabledDiscordChannels(
@@ -400,10 +347,7 @@ export function createDiscordMessagingActionContext(params: {
       guildName: guildName ?? undefined,
       includeWildcard: false,
     });
-    if (named) {
-      return named;
-    }
-    return resolveDiscordActionGuildEntry({ guilds, guildId });
+    return named ?? resolveDiscordActionGuildEntry({ guilds, guildId });
   };
   const resolveReadTargetContext = async (channelId: string): Promise<DiscordReadTargetContext> => {
     const fallback: DiscordReadTargetContext = {
@@ -457,7 +401,9 @@ export function createDiscordMessagingActionContext(params: {
         groupPolicy !== "disabled" &&
         directDmEnabled &&
         groupDmEnabled &&
-        !hasExplicitlyDisabledDiscordChannelConfig(guilds)
+        !Object.values(guilds ?? {}).some((guild) =>
+          hasExplicitlyDisabledDiscordChannels(guild?.channels),
+        )
       );
     }
     if (!target.guildId) {
@@ -492,51 +438,43 @@ export function createDiscordMessagingActionContext(params: {
           required: true,
         }),
       ),
-    assertReadTargetAllowed: async ({ guildId, channelId }) => {
+    assertReadTargetAllowed: async ({ guildId, channelId, requireGuildMetadata }) => {
       const targetChannelId = resolveDiscordChannelId(channelId);
       const target = await resolveReadTargetContext(targetChannelId);
+      if (
+        requireGuildMetadata &&
+        (!guildId || !target.metadataKnown || target.guildId !== guildId)
+      ) {
+        throw new Error("Discord active thread parent metadata is unavailable.");
+      }
       const currentConversation = isCurrentReadTarget(targetChannelId);
       if (guildId && target.metadataKnown && target.guildId !== guildId) {
         throw new Error("Discord read target channel is not allowed.");
       }
       const targetGuildId = guildId || target.guildId;
-      if (targetGuildId) {
-        const guildInfo = await resolveReadGuildEntry(targetGuildId);
-        if (
-          (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
-          (currentConversation && isExpandedReadTargetEnabled(guildInfo, target, true))
-        ) {
-          return;
-        }
-        if (
-          !isDiscordReadTargetAllowedInGuild({
-            groupPolicy,
-            guildInfo,
-            target,
-          })
-        ) {
-          throw new Error("Discord read target channel is not allowed.");
-        }
-        return;
-      }
+      const guildInfo = targetGuildId ? await resolveReadGuildEntry(targetGuildId) : null;
       // Known non-guild targets must never borrow a guild wildcard or channel
       // allowlist. Unknown metadata may use only the helper's fail-closed,
       // stable-ID path while every plausible non-guild scope remains enabled.
-      const allowed =
+      const allowedWithoutGuild =
+        !targetGuildId &&
         !target.metadataKnown &&
-        Object.values(guilds ?? {}).some((guildInfo) =>
+        Object.values(guilds ?? {}).some((candidateGuildInfo) =>
           isDiscordReadTargetAllowedInGuild({
             groupPolicy,
-            guildInfo: guildInfo ?? null,
+            guildInfo: candidateGuildInfo ?? null,
             target,
           }),
         );
       if (
-        (directOperator && isExpandedReadTargetEnabled(null, target, false)) ||
-        (currentConversation && isExpandedReadTargetEnabled(null, target, true))
+        (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
+        (currentConversation && isExpandedReadTargetEnabled(guildInfo, target, true))
       ) {
         return;
       }
+      const allowed = targetGuildId
+        ? isDiscordReadTargetAllowedInGuild({ groupPolicy, guildInfo, target })
+        : allowedWithoutGuild;
       if (!allowed) {
         throw new Error("Discord read target channel is not allowed.");
       }
@@ -573,6 +511,24 @@ export function createDiscordMessagingActionContext(params: {
             "Discord message search requires channelId or channelIds so each read target can be authorized.",
         );
       }
+    },
+    filterActiveThreadList: async ({ guildId, channelId, value }) => {
+      const parent = await resolveReadTargetContext(channelId);
+      if (!parent.metadataKnown || parent.guildId !== guildId) {
+        throw new Error("Discord active thread parent metadata is unavailable.");
+      }
+      const guildInfo = await resolveReadGuildEntry(guildId);
+      return filterDiscordActiveThreadList({
+        value,
+        guildId,
+        channelId,
+        parent,
+        isAllowed: (target) =>
+          (directOperator && isExpandedReadTargetEnabled(guildInfo, target, false)) ||
+          (isCurrentReadTarget(target.channelId) &&
+            isExpandedReadTargetEnabled(guildInfo, target, true)) ||
+          isDiscordReadTargetAllowedInGuild({ groupPolicy, guildInfo, target }),
+      });
     },
     filterGuildChannelList: async ({ guildId, channels }) => {
       if (!directOperator) {

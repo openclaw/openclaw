@@ -44,6 +44,7 @@ import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-ow
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   preserveGatewayAuthTokenForService,
@@ -69,6 +70,7 @@ import {
   formatServiceConfigIssues,
   hasRepairableServiceDefinitionDrift,
   isOperatorOwnedEnvironmentIssue,
+  isPreservedLaunchdTimeoutWarning,
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
   reportServiceDefinitionDrift,
@@ -109,9 +111,7 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
     if (delayMs <= 0) {
       break;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
+    await sleep(delayMs);
   }
   return false;
 }
@@ -393,15 +393,11 @@ export async function maybeRepairGatewayServiceConfig(
     : null;
   const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
-    const warning = renderSystemNodeWarning(systemNodeInfo);
-    if (warning) {
-      note(warning, "Gateway runtime");
-    } else {
-      note(
+    note(
+      renderSystemNodeWarning(systemNodeInfo) ||
         `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
-        "Gateway runtime",
-      );
-    }
+      "Gateway runtime",
+    );
   }
 
   const expectedRuntimePlan =
@@ -476,6 +472,10 @@ export async function maybeRepairGatewayServiceConfig(
   }
   consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
   note(consolidatedLines.join("\n"), "Gateway service config");
+  // A short custom timeout is diagnostic, not permission to overwrite native policy.
+  if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
+    return cfg;
+  }
   if (
     audit.issues.length > 0 &&
     audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)
@@ -640,7 +640,14 @@ export async function maybeRepairGatewayServiceConfig(
         ? { kind: "installation", root: expectedRoot }
         : definitionRepair && expectedRoot
           ? { kind: "definition", root: expectedRoot }
-          : { kind: "config" },
+          : {
+              kind: "config",
+              ...(expectedRoot &&
+              !expectedLayout?.entrypointSourceCheckout &&
+              audit.definitionDrift?.some((finding) => finding.kind === "preserved")
+                ? { root: expectedRoot }
+                : {}),
+            },
     args: {
       ...updatedPlan,
       runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
@@ -699,16 +706,15 @@ export async function maybeScanExtraGatewayServices(
       const { darwinUserServices, linuxUserServices, failed } =
         classifyLegacyServices(legacyServices);
 
-      if (darwinUserServices.length > 0) {
-        const result = await cleanupLegacyDarwinServices(darwinUserServices);
-        removed.push(...result.removed);
-        failed.push(...result.failed);
-      }
-
-      if (linuxUserServices.length > 0) {
-        const result = await cleanupLegacyLinuxUserServices(linuxUserServices, runtime);
-        removed.push(...result.removed);
-        failed.push(...result.failed);
+      for (const [services, cleanup] of [
+        [darwinUserServices, () => cleanupLegacyDarwinServices(darwinUserServices)],
+        [linuxUserServices, () => cleanupLegacyLinuxUserServices(linuxUserServices, runtime)],
+      ] as const) {
+        if (services.length > 0) {
+          const result = await cleanup();
+          removed.push(...result.removed);
+          failed.push(...result.failed);
+        }
       }
 
       if (removed.length > 0) {

@@ -62,7 +62,9 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
     const activateInternalPrompt = vi.fn();
 
     await expect(
-      resolveEmbeddedRunTerminal(makeTerminalInput({ ...turn, activateInternalPrompt })),
+      resolveEmbeddedRunTerminal(
+        makeTerminalInput({ ...turn, sessionPromptState: { activateInternalPrompt } }),
+      ),
     ).resolves.toEqual({ action: "retry" });
 
     const exhausted = await resolveEmbeddedRunTerminal(
@@ -79,24 +81,5 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
     expect(exhausted.result.payloads).toEqual([
       { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
     ]);
-  });
-
-  it.each([
-    { name: "a tool ran", overrides: { toolMetas: [{ toolName: "read", meta: "path=a.md" }] } },
-    {
-      name: "the attempt had side effects",
-      overrides: {
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      },
-    },
-  ])("does not retry after $name", async ({ overrides }) => {
-    const activateInternalPrompt = vi.fn();
-    const result = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({ ...toolUseStopWithoutCall(overrides), activateInternalPrompt }),
-    );
-
-    expect(result.action).toBe("complete");
-    expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 });

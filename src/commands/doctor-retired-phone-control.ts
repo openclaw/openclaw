@@ -36,14 +36,6 @@ type RetiredArmState = {
   removedFromDeny?: unknown;
 };
 
-type RetiredPhoneControlCleanupPlan = {
-  config: OpenClawConfig;
-  configChanges: string[];
-  cleanupPending: boolean;
-  cleanupSafe: boolean;
-  warnings: string[];
-};
-
 function resolveLegacyArmStatePath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "plugins", PHONE_CONTROL_PLUGIN_ID, "armed.json");
 }
@@ -113,10 +105,10 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
 }
 
 function readStringArrayField(value: unknown, field: keyof RetiredArmState): string[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return [];
   }
-  const entries = (value as RetiredArmState)[field];
+  const entries = value[field];
   return Array.isArray(entries)
     ? entries.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     : [];
@@ -131,27 +123,17 @@ function openRetiredArmStateStore(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function readRetiredArmStates(env: NodeJS.ProcessEnv): Promise<{
-  states: unknown[];
-  cleanupPending: boolean;
-  cleanupSafe: boolean;
-  warnings: string[];
-}> {
+async function readRetiredArmStates(env: NodeJS.ProcessEnv) {
   const legacyPath = resolveLegacyArmStatePath(env);
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const [legacyInspection, databaseInspection] = await Promise.all([
     inspectStatePath(legacyPath, "retired Phone Control lease state"),
     inspectStatePath(databasePath, "OpenClaw state database"),
   ]);
-  const warnings: string[] = [];
-  const inspectionUnsafe =
-    legacyInspection.status === "unsafe" || databaseInspection.status === "unsafe";
-  if (legacyInspection.status === "unsafe") {
-    warnings.push(legacyInspection.warning);
-  }
-  if (databaseInspection.status === "unsafe") {
-    warnings.push(databaseInspection.warning);
-  }
+  const warnings = [legacyInspection, databaseInspection].flatMap((inspection) =>
+    inspection.status === "unsafe" ? [inspection.warning] : [],
+  );
+  const inspectionUnsafe = warnings.length > 0;
 
   let legacyState: unknown;
   let legacyStateValid = false;
@@ -251,12 +233,13 @@ function withCommandLists(
 export async function prepareRetiredPhoneControlCleanup(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): Promise<RetiredPhoneControlCleanupPlan> {
+}) {
   const env = params.env ?? process.env;
   const residue = await readRetiredArmStates(env);
-  const unchanged: RetiredPhoneControlCleanupPlan = {
+  const configChanges: string[] = [];
+  const unchanged = {
     config: params.cfg,
-    configChanges: [],
+    configChanges,
     cleanupPending: residue.cleanupPending,
     cleanupSafe: residue.cleanupSafe,
     warnings: residue.warnings,
@@ -296,7 +279,6 @@ export async function prepareRetiredPhoneControlCleanup(params: {
     return unchanged;
   }
 
-  const configChanges: string[] = [];
   if (allowChanged) {
     configChanges.push("Removed stale Phone Control lease-only command allow entries.");
   }
@@ -312,7 +294,6 @@ export async function prepareRetiredPhoneControlCleanup(params: {
       allow: nextAllow,
       deny: nextDeny,
     }),
-    configChanges,
   };
 }
 

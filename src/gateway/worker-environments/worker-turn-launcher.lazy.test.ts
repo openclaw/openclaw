@@ -29,6 +29,8 @@ describe("worker turn execution loading", () => {
     { mode: "remote-exec", scenario: "claim-replaced" },
     { mode: "worker-turn", scenario: "placement-drained" },
     { mode: "remote-exec", scenario: "loader-failed" },
+    { mode: "worker-turn", scenario: "cancelled" },
+    { mode: "remote-exec", scenario: "cancelled" },
   ] as const)(
     "retains admission and the exact claim across $mode loading: $scenario",
     async ({ mode, scenario }) => {
@@ -37,6 +39,9 @@ describe("worker turn execution loading", () => {
       const loadStarted = createDeferredCore();
       const releaseLoad = createDeferredCore();
       const failure = new Error(`execution load ${scenario}`);
+      const cancellation = new AbortController();
+      const { createAgentRunRestartAbortError } = await import("../../agents/run-termination.js");
+      const restart = createAgentRunRestartAbortError();
       let revoked = false;
       const execute = vi.fn(
         async (params: {
@@ -87,7 +92,7 @@ describe("worker turn execution loading", () => {
       };
       const run = provider.executeTurn(
         request,
-        fixture.turn(request.runId),
+        { ...fixture.turn(request.runId), abortSignal: cancellation.signal },
         runLocal,
         onAdmitted,
         assertCurrent,
@@ -105,8 +110,8 @@ describe("worker turn execution loading", () => {
         ).toBe("loading");
         expect(load).toHaveBeenCalledOnce();
         expect(unselected).not.toHaveBeenCalled();
-        expect(createOwner).not.toHaveBeenCalled();
-        expect(onAdmitted).not.toHaveBeenCalled();
+        expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
+        expect(onAdmitted).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
         expect(execute).not.toHaveBeenCalled();
         const placement = fixture.placements.get(fixture.SESSION_ID);
         if (placement?.state !== "active") {
@@ -132,7 +137,7 @@ describe("worker turn execution loading", () => {
             owner: retained.owner,
           });
         } else if (scenario === "placement-drained") {
-          fixture.placements.startDrain({
+          await fixture.placements.startDrain({
             sessionId: placement.sessionId,
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,
@@ -140,6 +145,11 @@ describe("worker turn execution loading", () => {
           });
         }
         revoked = scenario === "revoked";
+        if (scenario === "cancelled") {
+          cancellation.abort(restart);
+          await expect(run).rejects.toBe(restart);
+          expect(fixture.placements.get(fixture.SESSION_ID)?.turnClaim).toBeNull();
+        }
         releaseLoad.resolve();
         if (scenario === "current") {
           await expect(run).resolves.toEqual({ meta: { durationMs: 1 } });
@@ -148,15 +158,17 @@ describe("worker turn execution loading", () => {
           expect(execute.mock.calls[0]?.[0].turnClaim).toEqual(retained);
           expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
         } else {
-          if (scenario === "revoked") {
+          if (scenario === "cancelled") {
+            await expect(run).rejects.toBe(restart);
+          } else if (scenario === "revoked") {
             await expect(run).rejects.toBe(failure);
           } else if (scenario === "loader-failed") {
             await expect(run).rejects.toMatchObject({ cause: failure });
           } else {
             await expect(run).rejects.toThrow("placement changed while loading turn execution");
           }
-          expect(createOwner).not.toHaveBeenCalled();
-          expect(onAdmitted).not.toHaveBeenCalled();
+          expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
+          expect(onAdmitted).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
           expect(execute).not.toHaveBeenCalled();
         }
         expect(runLocal).not.toHaveBeenCalled();
@@ -234,7 +246,7 @@ describe("worker turn execution loading", () => {
         environments: { ...fixture.unusedEnvironments(), get: vi.fn(() => environment) },
         placements: fixture.placements,
       });
-      const sandbox = provider.resolveSandbox({
+      const sandbox = provider.prepareSandbox({
         sessionId: fixture.SESSION_ID,
         sessionKey: fixture.SESSION_KEY,
         agentId: "main",
@@ -257,7 +269,7 @@ describe("worker turn execution loading", () => {
           if (placement?.state !== "active") {
             throw new Error("expected active sandbox placement");
           }
-          fixture.placements.startDrain({
+          await fixture.placements.startDrain({
             sessionId: placement.sessionId,
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,
@@ -266,13 +278,14 @@ describe("worker turn execution loading", () => {
         }
         releaseLoad.resolve();
         if (scenario === "current") {
-          await expect(sandbox).resolves.toMatchObject({
+          using prepared = await sandbox;
+          expect(prepared.sandbox).toMatchObject({
             backendId: "node",
             placementNodeId: "fixture-node",
           });
           expect(sandboxCalls).toBe(1);
         } else {
-          await expect(sandbox).rejects.toThrow("changed while preparing its sandbox");
+          await expect(sandbox).rejects.toThrow("placement authority changed");
           expect(sandboxCalls).toBe(0);
         }
       } finally {
@@ -299,9 +312,10 @@ describe("worker turn execution loading", () => {
       agentId: "main",
       workspaceDir: fixture.root,
     };
-    await expect(provider.resolveSandbox({ ...request, agentId: "other" })).resolves.toBeNull();
+    using prepared = await provider.prepareSandbox({ ...request, agentId: "other" });
+    expect(prepared.sandbox).toBeNull();
     expect(load).not.toHaveBeenCalled();
-    await expect(provider.resolveSandbox(request)).rejects.toMatchObject({ cause: failure });
+    await expect(provider.prepareSandbox(request)).rejects.toMatchObject({ cause: failure });
     expect(load).toHaveBeenCalledOnce();
   });
 });

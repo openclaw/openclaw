@@ -142,7 +142,7 @@ describe("Claude bundle plugin inspect integration", () => {
         bundleFormat: "claude",
       }),
     ).toMatchObject({
-      hasSupportedStdioServer: true,
+      stdioServerNames: ["test-stdio-server"],
       supportedServerNames: ["test-stdio-server", "test-sse-server"],
       unsupportedServerNames: [],
       diagnostics: [],
@@ -157,7 +157,6 @@ describe("Claude bundle plugin inspect integration", () => {
         bundleFormat: "claude",
       }),
     ).toMatchObject({
-      hasStdioServer: true,
       supportedServerNames: ["typescript-lsp"],
       unsupportedServerNames: [],
       diagnostics: [],

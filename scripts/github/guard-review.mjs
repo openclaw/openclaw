@@ -202,6 +202,14 @@ function assertPullRequestUnchanged(
   const expected = {
     ...pullRequest,
     ...(allowFileCountChange ? { changed_files: current.changed_files } : {}),
+    // GitHub can disable maintainer edits when a PR closes. Preserve the state
+    // transition below: cleanup and admission must still reject the closed PR.
+    ...(pullRequest.state === "open" &&
+    current.state === "closed" &&
+    pullRequest.maintainer_can_modify === true &&
+    current.maintainer_can_modify === false
+      ? { maintainer_can_modify: false }
+      : {}),
     // A force-merge must not discard the running review's operational evidence.
     // Only execution reviews opt in; merge admission and cleanup stay strict.
     ...(allowMerged &&

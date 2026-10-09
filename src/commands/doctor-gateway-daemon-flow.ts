@@ -240,6 +240,13 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (params.healthOk) {
+    if (process.platform === "linux" && (await shouldManageGatewayService())) {
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: process.env });
+      const refusal = state.runtime?.systemd?.startRefusal;
+      if (refusal) {
+        note(refusal.message, "Gateway");
+      }
+    }
     await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
@@ -282,6 +289,11 @@ export async function maybeRepairGatewayDaemon(params: {
   if (serviceOwner) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(formatInstallOwnerMessage(serviceOwner), "Gateway");
+    return;
+  }
+  const startRefusal = serviceState.runtime?.systemd?.startRefusal;
+  if (startRefusal) {
+    note(startRefusal.message, "Gateway");
     return;
   }
   if (serviceState.loadState.status === "unknown") {
@@ -396,59 +408,58 @@ export async function maybeRepairGatewayDaemon(params: {
         `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
         "Gateway",
       );
+      return;
     }
-    if (install) {
-      const selection = await resolveGatewaySetupRuntime({
-        env: process.env,
-        existingCommand: serviceState.command,
-        selectRuntime: (suggested) =>
-          params.prompter.select<GatewayDaemonRuntime>(
-            {
-              message: "Gateway service runtime",
-              options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-              initialValue: suggested,
-            },
-            suggested,
-          ),
-      });
-      const tokenResolution = await resolveGatewayInstallToken({
-        config: params.cfg,
-        env: process.env,
-      });
-      for (const warning of tokenResolution.warnings) {
-        note(warning, "Gateway");
-      }
-      if (tokenResolution.unavailableReason) {
-        note(
-          [
-            "Gateway service install aborted.",
-            tokenResolution.unavailableReason,
-            "Fix gateway auth config/token input and rerun doctor.",
-          ].join("\n"),
-          "Gateway",
-        );
-        return;
-      }
-      const port = resolveGatewayPort(params.cfg, process.env);
-      const installation = await prepareGatewayServiceInstall({
-        service,
-        selection,
-        port,
-        existingCommand: serviceState.command,
-        warn: (message, title) => note(message, title),
-        config: params.cfg,
-      });
-      try {
-        await installation.install();
-      } catch (err) {
-        note(`Gateway service install failed: ${String(err)}`, "Gateway");
-        note(gatewayInstallErrorHint(), "Gateway");
-      }
+    const selection = await resolveGatewaySetupRuntime({
+      env: process.env,
+      existingCommand: serviceState.command,
+      selectRuntime: (suggested) =>
+        params.prompter.select<GatewayDaemonRuntime>(
+          {
+            message: "Gateway service runtime",
+            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+            initialValue: suggested,
+          },
+          suggested,
+        ),
+    });
+    const tokenResolution = await resolveGatewayInstallToken({
+      config: params.cfg,
+      env: process.env,
+    });
+    for (const warning of tokenResolution.warnings) {
+      note(warning, "Gateway");
+    }
+    if (tokenResolution.unavailableReason) {
+      note(
+        [
+          "Gateway service install aborted.",
+          tokenResolution.unavailableReason,
+          "Fix gateway auth config/token input and rerun doctor.",
+        ].join("\n"),
+        "Gateway",
+      );
+      return;
+    }
+    const port = resolveGatewayPort(params.cfg, process.env);
+    const installation = await prepareGatewayServiceInstall({
+      service,
+      selection,
+      port,
+      existingCommand: serviceState.command,
+      warn: (message, title) => note(message, title),
+      config: params.cfg,
+    });
+    try {
+      await installation.install();
+    } catch (err) {
+      note(`Gateway service install failed: ${String(err)}`, "Gateway");
+      note(gatewayInstallErrorHint(), "Gateway");
     }
     return;
   }
 
-  noteGatewayRuntime(serviceRuntime, process.env);
+  noteGatewayRuntime(serviceRuntime, serviceEnv);
 
   if (serviceRuntime?.status !== "running") {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
@@ -467,6 +478,15 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (start) {
+      if (process.platform === "win32" && serviceRuntime?.state === "Disabled") {
+        try {
+          await service.start({ env: serviceEnv, stdout: process.stdout });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          note(`Gateway service start failed: ${detail}`, "Gateway");
+        }
+        return;
+      }
       const restartResult = await restartGatewayService();
       if (!restartResult) {
         return;
@@ -488,66 +508,64 @@ export async function maybeRepairGatewayDaemon(params: {
     );
   }
 
-  if (serviceRuntime?.status === "running") {
-    if (params.healthSkipped) {
-      return;
-    }
-    if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Gateway");
-      return;
-    }
+  if (serviceRuntime?.status !== "running" || params.healthSkipped) {
+    return;
+  }
+  if (serviceRepairDeferred) {
+    note(formatServiceRepairDeferredNote(), "Gateway");
+    return;
+  }
 
-    // Check if the gateway was recently restarted (e.g., via SIGUSR2 after an update).
-    // If a restart handoff exists and the gateway reports healthy, skip the restart prompt
-    // to avoid racing with the system supervisor and causing a restart loop.
-    const recentRestart = readGatewayRestartHandoffSync(serviceEnv);
-    if (recentRestart) {
-      try {
-        await healthCommandNonExiting({ json: false, config: params.cfg }, params.runtime);
-        note("Preserving the recent Gateway restart; skipping restart prompt.", "Gateway");
-        return;
-      } catch {
-        // Health probe failed — fall through to the restart prompt below.
-      }
+  // Check if the gateway was recently restarted (e.g., via SIGUSR2 after an update).
+  // If a restart handoff exists and the gateway reports healthy, skip the restart prompt
+  // to avoid racing with the system supervisor and causing a restart loop.
+  const recentRestart = readGatewayRestartHandoffSync(serviceEnv);
+  if (recentRestart) {
+    try {
+      await healthCommandNonExiting({ json: false, config: params.cfg }, params.runtime);
+      note("Preserving the recent Gateway restart; skipping restart prompt.", "Gateway");
+      return;
+    } catch {
+      // Health probe failed — fall through to the restart prompt below.
     }
-    if (params.options.nonInteractive === true) {
-      // --fix auto-approves runtime repairs; do not let a headless doctor kill its live gateway.
+  }
+  if (params.options.nonInteractive === true) {
+    // --fix auto-approves runtime repairs; do not let a headless doctor kill its live gateway.
+    return;
+  }
+
+  const restart = await confirmDoctorServiceRepair(
+    params.prompter,
+    {
+      message: "Restart gateway service now?",
+      initialValue: false,
+    },
+    serviceRepairPolicy,
+  );
+  if (restart) {
+    const restartResult = await restartGatewayService();
+    if (!restartResult) {
       return;
     }
-
-    const restart = await confirmDoctorServiceRepair(
-      params.prompter,
-      {
-        message: "Restart gateway service now?",
-        initialValue: false,
-      },
-      serviceRepairPolicy,
-    );
-    if (restart) {
-      const restartResult = await restartGatewayService();
-      if (!restartResult) {
+    const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
+    if (restartStatus.scheduled) {
+      note(restartStatus.message, "Gateway");
+      return;
+    }
+    try {
+      await healthCommandNonExiting({ json: false, config: params.cfg }, params.runtime);
+    } catch (err) {
+      // A trapped ExitError means healthCommand already printed its own
+      // reachable-gateway diagnostic; re-formatting it would only add noise.
+      if (err instanceof ExitError) {
         return;
       }
-      const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
-      if (restartStatus.scheduled) {
-        note(restartStatus.message, "Gateway");
-        return;
-      }
-      try {
-        await healthCommandNonExiting({ json: false, config: params.cfg }, params.runtime);
-      } catch (err) {
-        // A trapped ExitError means healthCommand already printed its own
-        // reachable-gateway diagnostic; re-formatting it would only add noise.
-        if (err instanceof ExitError) {
-          return;
-        }
-        const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-        if (closedDiagnostic) {
-          note(closedDiagnostic, "Gateway");
-          note(params.gatewayDetailsMessage, "Gateway connection");
-        } else {
-          params.runtime.error(formatHealthCheckFailure(err));
-        }
+      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+      if (closedDiagnostic) {
+        note(closedDiagnostic, "Gateway");
+        note(params.gatewayDetailsMessage, "Gateway connection");
+      } else {
+        params.runtime.error(formatHealthCheckFailure(err));
       }
     }
   }

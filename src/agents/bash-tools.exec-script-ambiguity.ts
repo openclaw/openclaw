@@ -13,13 +13,12 @@ import {
 
 function extractUnquotedShellText(raw: string): string | null {
   let out = "";
-  let inSingle = false;
-  let inDouble = false;
+  let quote: "'" | '"' | undefined;
   let escaped = false;
 
   for (const ch of raw) {
     if (escaped) {
-      if (!inSingle && !inDouble) {
+      if (!quote) {
         // Preserve escapes outside quotes so downstream heuristics can distinguish
         // escaped literals (e.g. `\|`) from executable shell operators.
         out += `\\${ch}`;
@@ -27,34 +26,24 @@ function extractUnquotedShellText(raw: string): string | null {
       escaped = false;
       continue;
     }
-    if (!inSingle && ch === "\\") {
+    if (quote !== "'" && ch === "\\") {
       escaped = true;
       continue;
     }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
+    if (quote) {
+      if (ch === quote) {
+        quote = undefined;
       }
       continue;
     }
-    if (inDouble) {
-      if (ch === '"') {
-        inDouble = false;
-      }
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
+    if (ch === "'" || ch === '"') {
+      quote = ch;
       continue;
     }
     out += ch;
   }
 
-  if (escaped || inSingle || inDouble) {
+  if (escaped || quote) {
     return null;
   }
   return out;
@@ -66,8 +55,7 @@ function splitShellSegmentsOutsideQuotes(
 ): string[] {
   const segments: string[] = [];
   let buf = "";
-  let inSingle = false;
-  let inDouble = false;
+  let quote: "'" | '"' | undefined;
   let escaped = false;
 
   const pushSegment = () => {
@@ -87,54 +75,31 @@ function splitShellSegmentsOutsideQuotes(
       continue;
     }
 
-    if (!inSingle && ch === "\\") {
+    if (quote !== "'" && ch === "\\") {
       buf += ch;
       escaped = true;
       continue;
     }
 
-    if (inSingle) {
+    if (quote) {
       buf += ch;
-      if (ch === "'") {
-        inSingle = false;
+      if (ch === quote) {
+        quote = undefined;
       }
       continue;
     }
 
-    if (inDouble) {
-      buf += ch;
-      if (ch === '"') {
-        inDouble = false;
-      }
-      continue;
-    }
-
-    if (ch === "'") {
-      inSingle = true;
+    if (ch === "'" || ch === '"') {
+      quote = ch;
       buf += ch;
       continue;
     }
 
-    if (ch === '"') {
-      inDouble = true;
-      buf += ch;
-      continue;
-    }
-
-    if (ch === "\n" || ch === "\r") {
+    if (ch === "\n" || ch === "\r" || ch === ";") {
       pushSegment();
       continue;
     }
-    if (ch === ";") {
-      pushSegment();
-      continue;
-    }
-    if (ch === "&" && next === "&") {
-      pushSegment();
-      i += 1;
-      continue;
-    }
-    if (ch === "|" && next === "|") {
+    if ((ch === "&" || ch === "|") && next === ch) {
       pushSegment();
       i += 1;
       continue;
@@ -158,9 +123,6 @@ function isInterpreterExecutable(executable: string | undefined): boolean {
 }
 
 function hasUnescapedSequence(raw: string, sequence: string): boolean {
-  if (sequence.length === 0) {
-    return false;
-  }
   let escaped = false;
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i];
@@ -180,8 +142,7 @@ function hasUnescapedSequence(raw: string, sequence: string): boolean {
 }
 
 function hasUnquotedScriptHint(raw: string): boolean {
-  let inSingle = false;
-  let inDouble = false;
+  let quote: "'" | '"' | undefined;
   let escaped = false;
   let token = "";
 
@@ -196,40 +157,27 @@ function hasUnquotedScriptHint(raw: string): boolean {
 
   for (const ch of raw) {
     if (escaped) {
-      if (!inSingle && !inDouble) {
+      if (!quote) {
         token += ch;
       }
       escaped = false;
       continue;
     }
-    if (!inSingle && ch === "\\") {
+    if (quote !== "'" && ch === "\\") {
       escaped = true;
       continue;
     }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
+    if (quote) {
+      if (ch === quote) {
+        quote = undefined;
       }
       continue;
     }
-    if (inDouble) {
-      if (ch === '"') {
-        inDouble = false;
-      }
-      continue;
-    }
-    if (ch === "'") {
+    if (ch === "'" || ch === '"') {
       if (flushToken()) {
         return true;
       }
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      if (flushToken()) {
-        return true;
-      }
-      inDouble = true;
+      quote = ch;
       continue;
     }
     if (/\s/u.test(ch) || "|&;()<>".includes(ch)) {
@@ -371,44 +319,27 @@ export function shouldFailClosedInterpreterPreflight(command: string): {
 
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
-      if (argsLocal.some((arg) => pythonInfoOnlyFlags.has(arg))) {
-        return false;
-      }
-      if (
-        argsLocal.some(
-          (arg) =>
-            arg === "-c" ||
-            arg === "-m" ||
-            arg.startsWith("-c") ||
-            arg.startsWith("-m") ||
-            arg === "--check-hash-based-pycs",
-        )
-      ) {
-        return false;
-      }
-      return true;
+      return !argsLocal.some(
+        (arg) =>
+          pythonInfoOnlyFlags.has(arg) ||
+          arg.startsWith("-c") ||
+          arg.startsWith("-m") ||
+          arg === "--check-hash-based-pycs",
+      );
     }
 
     if (executable === "node") {
       const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
-      if (argsLocal.some((arg) => nodeInfoOnlyFlags.has(arg))) {
-        return false;
-      }
-      if (
-        argsLocal.some(
-          (arg) =>
-            arg === "-e" ||
-            arg === "-p" ||
-            arg === "--eval" ||
-            arg === "--print" ||
-            arg.startsWith("--eval=") ||
-            arg.startsWith("--print=") ||
-            ((arg.startsWith("-e") || arg.startsWith("-p")) && arg.length > 2),
-        )
-      ) {
-        return false;
-      }
-      return true;
+      return !argsLocal.some(
+        (arg) =>
+          nodeInfoOnlyFlags.has(arg) ||
+          arg.startsWith("-e") ||
+          arg.startsWith("-p") ||
+          arg === "--eval" ||
+          arg === "--print" ||
+          arg.startsWith("--eval=") ||
+          arg.startsWith("--print="),
+      );
     }
 
     return false;

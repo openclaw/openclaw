@@ -1,16 +1,41 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import {
-  writeSubagentRunValuesInDatabase,
-  type BoundSubagentRunRecord,
-} from "./subagent-registry.store.kernel.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
+import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
+
+/** Inspect fixture storage independently of resident projections and worker transport. */
+export function loadSubagentRegistryFromSqlite(
+  database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
+): Map<string, SubagentRunRecord> {
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(database.db)
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  const runs = new Map<string, SubagentRunRecord>();
+  for (const row of rows) {
+    const entry = rowToSubagentRunRecord(row);
+    if (entry) {
+      runs.set(entry.runId, entry);
+    }
+  }
+  return runs;
+}
 
 function writeSubagentRunValues(
-  values: readonly BoundSubagentRunRecord[],
+  values: readonly SubagentRunSqliteRow[],
   deleteRunIds?: readonly string[],
   retainedRunIds?: readonly string[],
 ): void {
@@ -52,7 +77,7 @@ export function saveSubagentRegistryChangesToSqlite(
   changedRunIds: readonly string[],
 ): void {
   const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
-  const values: BoundSubagentRunRecord[] = [];
+  const values: SubagentRunSqliteRow[] = [];
   const deleteRunIds: string[] = [];
   for (const runId of runIds) {
     const entry = runs.get(runId);
@@ -75,7 +100,13 @@ export function persistRegistryFixture(
   } else {
     saveSubagentRegistryToSqlite(runs);
   }
-  const events: Array<() => void> = [];
-  publishSubagentRunsAfterAtomicStore(runs, runIds, events);
-  events.forEach((publish) => publish());
+
+  const published = new Map(runs);
+  for (const id of runIds ?? runs.keys()) {
+    const entry = runs.get(id);
+    if (entry) {
+      published.set(id, copySubagentRunRuntimeOwner(entry, structuredClone(entry)));
+    }
+  }
+  publishSubagentRunsAfterAtomicStore(published, runIds)();
 }

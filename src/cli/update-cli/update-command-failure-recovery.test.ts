@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,12 +176,14 @@ describe("post-update failure recovery observation", () => {
   });
 
   it.each([
-    { activated: false, json: true },
-    { activated: true, json: false },
-    { activated: true, json: true },
+    { activated: false, json: true, deferred: false },
+    { activated: true, json: false, deferred: false },
+    { activated: true, json: true, deferred: false },
+    { activated: true, json: false, deferred: true },
+    { activated: true, json: true, deferred: true },
   ])(
-    "observes failed recovery once without waiting for startup (activated=$activated, json=$json)",
-    async ({ activated, json }) => {
+    "defers only recorded state contention (activated=$activated, json=$json, deferred=$deferred)",
+    async ({ activated, json, deferred }) => {
       const env = { ...process.env };
       const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       const readRuntime = vi.fn(async () => ({ status: "unknown" }));
@@ -229,6 +232,21 @@ describe("post-update failure recovery observation", () => {
               reason: "doctor-failed",
               recovery: { serviceRestartSafe: true, version: "2026.9.5" },
               steps: [
+                ...(deferred
+                  ? [
+                      {
+                        name: "post-install-verify",
+                        command: "verify installed package",
+                        cwd: root,
+                        durationMs: 0,
+                        exitCode: null,
+                        advisory: {
+                          kind: "recoverable-maintenance" as const,
+                          message: "State verification deferred to the operator restart.",
+                        },
+                      },
+                    ]
+                  : []),
                 {
                   name: "candidate-doctor-lint",
                   command: "doctor",
@@ -250,8 +268,8 @@ describe("post-update failure recovery observation", () => {
       if (!(failure instanceof ReportedUpdateCommandFailure)) {
         throw failure;
       }
-      expect(readRuntime).toHaveBeenCalledOnce();
-      expect(inspect).toHaveBeenCalledExactlyOnceWith(19431, expect.anything());
+      expect(readRuntime).toHaveBeenCalledTimes(deferred ? 0 : 1);
+      expect(inspect).toHaveBeenCalledTimes(deferred ? 0 : 1);
       expect(sleep).not.toHaveBeenCalled();
       expect(waitForStartup).not.toHaveBeenCalled();
       expect(elapsedMs).toBe(0);
@@ -271,19 +289,34 @@ describe("post-update failure recovery observation", () => {
         );
       }
       expect(recorded?.verification.serviceRunning).toBeUndefined();
-      expect(recorded?.verification.readyz).toBe(false);
+      expect(recorded?.verification.readyz).toBe(deferred ? undefined : false);
       expect(recorded?.steps).toContainEqual(
         expect.objectContaining({ step: "candidate-doctor-lint", exitCode: 2 }),
       );
       const recoveryStep = recorded?.steps.find(
         (step) => step.step === "gateway recovery verification",
       );
-      expect(recoveryStep).toMatchObject({ status: "failed", exitCode: 1 });
+      expect(recoveryStep).toMatchObject({
+        status: deferred ? "completed" : "failed",
+        exitCode: deferred ? null : 1,
+      });
+      if (deferred) {
+        expect(recoveryStep?.detail).toContain("deferred");
+        expect(recoveryStep?.detail).toContain("service owner");
+        expect(recoveryStep?.detail).toContain(
+          "Resolve the recorded update failure before restarting",
+        );
+        expect(recoveryStep?.failureFacts).toBeUndefined();
+        assert(recorded);
+        expect(renderUpdateRunReport(recorded).markdown).toContain("openclaw update status");
+      }
       expect(
         failure.result.steps.find((step) => step.name === "gateway recovery verification")
           ?.termination,
       ).toBeUndefined();
-      expect(recoveryStep?.failureFacts?.some((fact) => fact.code === "timeout")).toBe(false);
+      expect(recoveryStep?.failureFacts?.some((fact) => fact.code === "timeout") ?? false).toBe(
+        false,
+      );
       expect(mocks.converge).not.toHaveBeenCalled();
       expect(mocks.printResult).toHaveBeenCalledOnce();
     },
@@ -474,13 +507,22 @@ describe("post-update failure recovery observation", () => {
     },
   );
 
-  it.each(["foreground", "managed"] as const)(
-    "probes the %s Gateway's effective port instead of a different configured endpoint",
-    async (kind) => {
-      vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19430");
-      if (kind === "foreground") {
+  it.each([
+    { endpoint: "foreground", failure: "returned", unsafe: false },
+    { endpoint: "managed", failure: "returned", unsafe: false },
+    { endpoint: "configured", failure: "returned", unsafe: false },
+    { endpoint: "configured", failure: "thrown", unsafe: false },
+    { endpoint: "configured", failure: "returned", unsafe: true },
+  ] as const)(
+    "observes $endpoint recovery after $failure failure (unsafe=$unsafe)",
+    async ({ endpoint, failure, unsafe }) => {
+      const effectivePort = endpoint !== "configured";
+      if (effectivePort) {
+        vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19430");
+      }
+      if (endpoint === "foreground") {
         mocks.activePort.mockResolvedValueOnce(19431);
-      } else {
+      } else if (endpoint === "managed") {
         mocks.managedService.mockResolvedValueOnce({
           installed: true,
           loadState: { status: "loaded" },
@@ -498,83 +540,54 @@ describe("post-update failure recovery observation", () => {
           verdict: { kind: "owned", root, fingerprint: "fixture", refreshDefinition: false },
         });
       }
-      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(async ({ gatewayPort }) => ({
-        ok: gatewayPort === 19431,
-        score: gatewayPort === 19431 ? 7 : 0,
-        summary: gatewayPort === 19431 ? "healthy" : "wrong Gateway endpoint",
-      }));
-      mocks.converge.mockImplementationOnce(async ({ result }) => ({
-        resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
-      }));
-      await expect(
-        finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
-      ).rejects.toMatchObject({
-        result: { recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" } },
+      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(async ({ gatewayPort }) => {
+        const ok = !effectivePort || gatewayPort === 19431;
+        return {
+          ok,
+          score: ok ? 7 : 0,
+          summary: ok ? "Gateway version and readiness verified." : "wrong Gateway endpoint",
+        };
       });
-      expect(verifyUpdatedGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ gatewayPort: 19431, expectedVersion: "2026.9.5" }),
-      );
-    },
-  );
-
-  it("preserves an unsafe restart verdict even when the Gateway is healthy", async () => {
-    const reason = "state-migration-started";
-    vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
-      ok: true,
-      score: 7,
-      summary: "Gateway version and readiness verified.",
-    });
-    mocks.converge.mockImplementationOnce(async ({ result }) => ({
-      resultWithPostUpdate: {
-        ...result,
-        status: "error",
-        reason: "post-update-plugins",
-        recovery: { serviceRestartSafe: false, reason },
-      },
-    }));
-    await expect(
-      finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
-    ).rejects.toMatchObject({
-      result: { recovery: { serviceRestartSafe: false, reason } },
-    });
-    expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
-  });
-
-  it.each(["returned", "thrown"] as const)(
-    "records a serving Gateway after a %s post-update failure",
-    async (failure) => {
-      vi.mocked(verifyUpdatedGateway).mockResolvedValueOnce({
-        ok: true,
-        score: 7,
-        summary: "Gateway version and readiness verified.",
-      });
+      const unsafeReason = "state-migration-started";
       if (failure === "thrown") {
         mocks.converge.mockRejectedValueOnce(new Error("plugin finalization failed"));
       } else {
         mocks.converge.mockImplementationOnce(async ({ result }) => ({
-          resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
+          resultWithPostUpdate: {
+            ...result,
+            status: "error",
+            reason: "post-update-plugins",
+            ...(unsafe ? { recovery: { serviceRestartSafe: false, reason: unsafeReason } } : {}),
+          },
         }));
       }
+      const recovery = unsafe
+        ? { serviceRestartSafe: false, reason: unsafeReason }
+        : { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" };
       await expect(
         finishSuccessfulPackageSwitch({ packageRoot: root, json: true }),
       ).rejects.toMatchObject({
         result: {
           status: "error",
           reason: failure === "thrown" ? "post-update-failed" : "post-update-plugins",
-          recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
+          recovery,
         },
       });
       expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
-      expect(verifyUpdatedGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ purpose: "recovery", expectedVersion: "2026.9.5" }),
-      );
-      expect(mocks.printResult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
+      if (effectivePort) {
+        expect(verifyUpdatedGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ gatewayPort: 19431, expectedVersion: "2026.9.5" }),
+        );
+      } else if (!unsafe) {
+        expect(verifyUpdatedGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ purpose: "recovery", expectedVersion: "2026.9.5" }),
+        );
+        expect(mocks.printResult).toHaveBeenCalledWith(
+          expect.objectContaining({ recovery }),
+          expect.anything(),
+          expect.anything(),
+        );
+      }
     },
   );
 });

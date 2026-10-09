@@ -5,7 +5,9 @@ import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 import {
   createSqliteAuthTransferReceiver,
   createSqliteOperationTransferReceiver,
@@ -74,6 +76,7 @@ export function createSqliteReadOnlyWorkerSession(
 ): SqliteReadOnlyWorkerSession {
   const env = { ...host.env };
   const cwd = host.cwd;
+  const executable = process.execPath;
   const transport: SqliteReadOnlyWorkerLaunch["transport"] =
     host.transport.kind === "broker"
       ? { kind: "broker", owner: host.transport.owner }
@@ -82,14 +85,15 @@ export function createSqliteReadOnlyWorkerSession(
   const argv = [...host.argv];
   const spawnOptions: SpawnOptions = {
     env,
-    cwd,
+    // Inheriting the current directory avoids a redundant chdir that can fail under sudo -u.
+    ...(transport.kind === "native" && cwd === tryProcessCwd() ? {} : { cwd }),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   };
   const child: ChildProcess =
     transport.kind === "broker"
-      ? transport.owner.spawn(process.execPath, argv, spawnOptions)
-      : spawn(process.execPath, argv, spawnOptions);
-  recordChildProcessSpawn(process.execPath, child);
+      ? transport.owner.spawn(executable, argv, spawnOptions)
+      : spawn(executable, argv, spawnOptions);
+  recordChildProcessSpawn(executable, child);
   let retired = false;
   let sequence = 0;
   let pendingOperation: Promise<SqliteReadOnlyWorkerValue> | undefined;
@@ -129,6 +133,18 @@ export function createSqliteReadOnlyWorkerSession(
     }
     child.kill("SIGKILL");
   };
+  const sendMessage = (message: Parameters<ChildProcess["send"]>[0]) =>
+    child.send(message, (error) => {
+      if (error) {
+        retire(error);
+      }
+    });
+  const releasePending = (request: NonNullable<typeof pending>) => {
+    pending = undefined;
+    pendingOperation = undefined;
+    request.cleanup();
+    return request;
+  };
   if (host.retainLifetime !== false) {
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
@@ -143,7 +159,12 @@ export function createSqliteReadOnlyWorkerSession(
         ? error
         : Object.assign(
             new Error(
-              `SQLite read-only worker failed to start (executable ${process.execPath}, cwd ${cwd}): ${error.message}`,
+              [
+                ["EACCES", "ENOENT", "EPERM"].includes(error.code ?? "")
+                  ? `SQLite read-only worker runtime binary not executable: ${executable} (${error.code}, cwd ${cwd}). Check runtime execute permissions and access to the working directory`
+                  : `SQLite read-only worker failed to start (executable ${executable}, cwd ${cwd})`,
+                error.message,
+              ].join(": "),
               { cause: error },
             ),
             { code: error.code },
@@ -154,9 +175,7 @@ export function createSqliteReadOnlyWorkerSession(
     nativeClosed = true;
     retired = true;
     if (pending) {
-      const request = pending;
-      pending = undefined;
-      request.cleanup();
+      const request = releasePending(pending);
       request.reject(
         request.failure ??
           createSqliteReadOnlyWorkerError(
@@ -215,24 +234,17 @@ export function createSqliteReadOnlyWorkerSession(
       ) {
         const reply = pending.transfer.accept(message.result);
         if ("request" in reply) {
-          child.send({ id: pending.id, transfer: reply.request }, (error) => {
-            if (error) {
-              retire(error);
-            }
-          });
+          sendMessage({ id: pending.id, transfer: reply.request });
           return;
         }
         value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
-          { stdout: JSON.stringify(message.result), stderr },
+          { kind: "launched", stdout: JSON.stringify(message.result), stderr, status: 0 },
           pending.mode,
         );
       }
-      const request = pending;
-      pending = undefined;
-      request.cleanup();
-      request.resolve(value);
+      releasePending(pending).resolve(value);
     } catch (error) {
       if (
         pending &&
@@ -241,10 +253,7 @@ export function createSqliteReadOnlyWorkerSession(
         isSqliteReadOnlyWorkerResult(message.result) &&
         !message.result.ok
       ) {
-        const request = pending;
-        pending = undefined;
-        request.cleanup();
-        request.reject(error);
+        releasePending(pending).reject(error);
         return;
       }
       // A failed native close can retain a source lease. Do not reject the
@@ -261,13 +270,15 @@ export function createSqliteReadOnlyWorkerSession(
       return child instanceof BrokerChild ? child.notStarted : nativeClosed && !spawned;
     },
     createNativeReplacement() {
-      return createSqliteReadOnlyWorkerSession({
-        ...host,
-        env,
-        cwd,
-        argv,
-        transport: { kind: "native" },
-      });
+      return runInDetachedAsyncContext(() =>
+        createSqliteReadOnlyWorkerSession({
+          ...host,
+          env,
+          cwd,
+          argv,
+          transport: { kind: "native" },
+        }),
+      );
     },
     compatible(launch: SqliteReadOnlyWorkerLaunch) {
       return !retired && isSameSqliteReadOnlyWorkerLaunch(capturedLaunch, launch);
@@ -313,20 +324,17 @@ export function createSqliteReadOnlyWorkerSession(
             const request = {
               id,
               args: host.requestArgs(pathname, options),
-              ...(options.mode === "auth-profile-rows"
+              ...(options.mode === "auth-profile-rows" || options.mode === "operation"
                 ? {
-                    auth: {
+                    [options.mode === "operation" ? "operation" : "auth"]: {
                       expectedIdentity: options.expectedIdentity,
+                      artifactPreserving: options.artifactPreserving,
+                      ...(options.mode === "operation"
+                        ? { command: serialize(options.command).toString("base64") }
+                        : {}),
                     },
                   }
-                : options.mode === "operation"
-                  ? {
-                      operation: {
-                        expectedIdentity: options.expectedIdentity,
-                        command: serialize(options.command).toString("base64"),
-                      },
-                    }
-                  : {}),
+                : {}),
             };
             if (
               options.mode === "operation" &&
@@ -334,11 +342,7 @@ export function createSqliteReadOnlyWorkerSession(
             ) {
               throw new Error("SQLite read-only operation exceeded its request buffer");
             }
-            child.send(request, (error) => {
-              if (error) {
-                retire(error);
-              }
-            });
+            sendMessage(request);
           } catch (error) {
             retire(error);
           }
@@ -361,11 +365,7 @@ export function createSqliteReadOnlyWorkerSession(
       const timer = setTimeout(() => retire(), host.closeTimeoutMs);
       try {
         // Child-owned disconnect preserves Node's process-and-pipes close event.
-        child.send("close", (error) => {
-          if (error) {
-            retire(error);
-          }
-        });
+        sendMessage("close");
       } catch (error) {
         retire(error);
       }

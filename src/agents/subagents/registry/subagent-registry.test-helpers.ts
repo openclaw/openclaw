@@ -4,12 +4,10 @@ export {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   isSubagentSessionRunActive,
-  listSubagentRunsForController,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
   resolveSubagentSessionStatus,
@@ -17,15 +15,27 @@ export {
 } from "./subagent-registry-read.js";
 
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
-import { collectSessionMaintenancePreserveKeys } from "../../../config/sessions/store-maintenance-preserve.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { immutableSubagentRun } from "./subagent-registry-persistence.js";
+import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForChildSession } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export async function getSubagentRunByChildSessionKey(
+  childSessionKey: string,
+  childAgentId?: string,
+): Promise<SubagentRunRecord | null> {
+  const runs = await getSubagentRunsSnapshotForChildSession(
+    subagentRuns,
+    childSessionKey,
+    childAgentId,
+  );
+  return getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey, childAgentId);
+}
 
 type RegistryTestApi = {
   addSubagentRunForTests(entry: SubagentRunRecord): Promise<void>;
@@ -39,7 +49,6 @@ type RegistryTestApi = {
   releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
   testing: {
-    failQueuedSubagentRun(runId: string, error: string): Promise<boolean>;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
   };
@@ -100,12 +109,6 @@ export async function finalizeInterruptedSubagentRun(params: {
 }
 
 export const testing = {
-  failQueuedSubagentRun: (runId: string, error: string) =>
-    getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
 };
-
-export function listSessionMaintenanceProtectedSubagentSessionKeys() {
-  return [...(collectSessionMaintenancePreserveKeys() ?? [])];
-}

@@ -168,13 +168,13 @@ describe("resolveAgentHarnessPolicy", () => {
     },
     {
       name: "agent params",
-      agents: { list: [{ id: "writer", params: { temperature: 0.2 } }] },
+      agents: { entries: { writer: { params: { temperature: 0.2 } } } },
       agentId: "writer",
       sessionKey: undefined,
     },
     {
       name: "session agent params",
-      agents: { list: [{ id: "writer", params: { temperature: 0.2 } }] },
+      agents: { entries: { writer: { params: { temperature: 0.2 } } } },
       agentId: undefined,
       sessionKey: "agent:writer:main",
     },

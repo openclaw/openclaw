@@ -22,6 +22,7 @@ const planningPool = new WorkerTaskPool<
   CompactionPlanningWorkerInput,
   CompactionPlanningWorkerValue
 >({
+  workerClass: "compute",
   sharedCompute: true,
   workerUrl: resolveRuntimeWorkerUrl({
     currentModuleUrl: import.meta.url,
@@ -38,6 +39,7 @@ export async function runCompactionPlanningWorker(params: {
 }): Promise<CompactionPlanningWorkerValue> {
   const pool = params.workerUrl
     ? new WorkerTaskPool<CompactionPlanningWorkerInput, CompactionPlanningWorkerValue>({
+        workerClass: "compute",
         workerUrl: params.workerUrl,
       })
     : planningPool;

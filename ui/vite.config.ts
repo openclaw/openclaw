@@ -103,7 +103,7 @@ export function createControlUiPrecompressedAssetVariants(
       fileName: `${fileName}.gz`,
       // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
       // Smaller deflate blocks reduce startup JavaScript size and encoder memory.
-      source: Buffer.from(gzip(body, { level: 9, legacyHash: true, memLevel: 7 })),
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true, memLevel: 6 })),
     },
   ];
 }
@@ -379,6 +379,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "grapheme"),
+    sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),

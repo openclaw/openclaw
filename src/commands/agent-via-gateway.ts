@@ -14,10 +14,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
 import {
-  buildAgentRunTerminalOutcome,
-  classifyAgentRunTerminalOutcome,
-} from "../agents/agent-run-terminal-outcome.js";
-import {
   AgentSelectionRequiredError,
   listAgentIds,
   tryResolveAgentOperationAgentId,
@@ -69,7 +65,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 
@@ -87,6 +82,8 @@ type GatewayAgentResponse = {
   runId?: string;
   status?: string;
   summary?: string;
+  reason?: string;
+  pendingInputId?: string;
   result?: AgentGatewayResult;
   deliveryStatus?: unknown;
 };
@@ -176,52 +173,9 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 };
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-const embeddedAgentCommandLoader = createLazyPromiseLoader(
-  () => import("./agent.js").then((module) => module.agentCommand),
-  { cacheRejections: true },
-);
-const agentSessionModuleCache = createLazyPromiseLoader(
-  () => import("./agent/session.runtime.js"),
-  { cacheRejections: true },
-);
-const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
-  cacheRejections: true,
-});
-const embeddedStateLockModuleLoader = createLazyPromiseLoader(
-  () => import("../infra/embedded-state-lock.js"),
-  { cacheRejections: true },
-);
-const replyPayloadModuleLoader = createLazyPromiseLoader(
-  () => import("openclaw/plugin-sdk/reply-payload"),
-  { cacheRejections: true },
-);
 let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
 
-const loadAgentSessionModule = agentSessionModuleCache.load;
-
-type EmbeddedAgentCommandOpts = Parameters<
-  Awaited<ReturnType<typeof embeddedAgentCommandLoader.load>>
->[0];
-type EmbeddedRunDiagnosticsOptions = {
-  suppressStdoutDiagnosticLogs: boolean;
-};
-
-async function startEmbeddedRunDiagnosticsExporters(
-  runtime: RuntimeEnv,
-  options: EmbeddedRunDiagnosticsOptions,
-  config: OpenClawConfig,
-): Promise<OneShotDiagnosticsHandle | null> {
-  try {
-    return await startOneShotDiagnosticsExporters({
-      config,
-      suppressStdoutDiagnosticLogs: options.suppressStdoutDiagnosticLogs,
-    });
-  } catch (err) {
-    // Exporter startup must never break the agent run itself.
-    runtime.error?.(`diagnostics exporter startup failed for embedded run: ${String(err)}`);
-    return null;
-  }
-}
+type EmbeddedAgentCommandOpts = Parameters<typeof import("./agent.js").agentCommand>[0];
 
 /**
  * Run the embedded agent command with OTel diagnostics export for this
@@ -233,17 +187,19 @@ async function runEmbeddedAgentCommand(
   opts: EmbeddedAgentCommandOpts,
   runtime: RuntimeEnv,
   deps: AgentCliDeps | undefined,
-  diagnosticsOptions: EmbeddedRunDiagnosticsOptions,
 ) {
-  const agentCommand = await measureAgentStartup("command-import", () =>
-    embeddedAgentCommandLoader.load(),
-  );
+  const { agentCommand } = await measureAgentStartup("command-import", () => import("./agent.js"));
   const config = await loadRuntimeConfig();
-  const diagnostics = await startEmbeddedRunDiagnosticsExporters(
-    runtime,
-    diagnosticsOptions,
-    config,
-  );
+  let diagnostics: OneShotDiagnosticsHandle | null = null;
+  try {
+    diagnostics = await startOneShotDiagnosticsExporters({
+      config,
+      suppressStdoutDiagnosticLogs: opts.json === true,
+    });
+  } catch (err) {
+    // Exporter startup must never break the agent run itself.
+    runtime.error?.(`diagnostics exporter startup failed for embedded run: ${String(err)}`);
+  }
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   if (isExecutionIdentityCollectionEnabled(config)) {
     try {
@@ -261,7 +217,7 @@ async function runEmbeddedAgentCommand(
 }
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
+  const { getRuntimeConfig } = await import("../config/io.js");
   return getRuntimeConfig();
 }
 
@@ -318,7 +274,7 @@ async function acquireEmbeddedAgentStateLock(
   options: GatewayLockOptions | undefined,
   signal: AbortSignal,
 ) {
-  const { acquireEmbeddedStateLock } = await embeddedStateLockModuleLoader.load();
+  const { acquireEmbeddedStateLock } = await import("../infra/embedded-state-lock.js");
   return await acquireEmbeddedStateLock({
     options,
     signal,
@@ -326,17 +282,8 @@ async function acquireEmbeddedAgentStateLock(
   });
 }
 
-const loadReplyPayloadModule = replyPayloadModuleLoader.load;
-
-/** Test-only hooks for resetting lazy imports and shortening retry timing. */
+/** Test-only hook for shortening retry timing. */
 export const agentViaGatewayTesting = {
-  resetLazyImportsForTests(): void {
-    embeddedAgentCommandLoader.clear();
-    agentSessionModuleCache.clear();
-    runtimeConfigModuleLoader.clear();
-    embeddedStateLockModuleLoader.clear();
-    replyPayloadModuleLoader.clear();
-  },
   setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
     gatewayAbortRetryDelaysMsForTests = delays;
   },
@@ -455,7 +402,7 @@ async function formatPayloadForLog(payload: {
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
-  const { resolveSendableOutboundReplyParts } = await loadReplyPayloadModule();
+  const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
   const parts = resolveSendableOutboundReplyParts({
     text: payload.text,
     mediaUrls: payload.mediaUrls,
@@ -487,22 +434,13 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
   );
 }
 
-function resolveGatewayAgentFailureHint(
-  err: unknown,
-): "timed out" | "connection closed" | undefined {
+function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
   if (!isGatewayTransportError(err)) {
     return undefined;
   }
   // callGateway's wrapper timer gives this CLI path typed transport errors.
   // Legacy request-timeout strings belong to lower-level and in-process callers.
-  return err.kind === "timeout" ? "timed out" : "connection closed";
-}
-
-function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
-  const failureHint = resolveGatewayAgentFailureHint(err);
-  if (!failureHint) {
-    return undefined;
-  }
+  const failureHint = err.kind === "timeout" ? "timed out" : "connection closed";
   // Transport loss is ambiguous: the Gateway may have accepted and may still
   // finish this turn. Recommending a blind retry or --local here could
   // double-execute the message, so point at verification first.
@@ -874,24 +812,11 @@ function markAgentRunExitCode(
   status: unknown,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ): void {
-  // Gateway responses carry an open `status` string, so an unrecognized value must
-  // not read as success: only the known success words map to exit 0, and any other
-  // reported status fails closed. An absent status stays unmapped because callers
-  // that never observed a terminal state have nothing to report.
-  const waitStatus =
-    status === "ok" || status === "completed"
-      ? "ok"
-      : status === "timeout"
-        ? "timeout"
-        : status === undefined || status === null || status === ""
-          ? undefined
-          : "error";
-  if (!waitStatus) {
+  if (status === undefined || status === null || status === "") {
     return;
   }
-  const outcome = buildAgentRunTerminalOutcome({ status: waitStatus });
-  // Let Node drain structured or text stdout before the process exits.
-  signalBridge.setExitCode(classifyAgentRunTerminalOutcome(outcome) === "success" ? 0 : 1);
+  // Unknown reported statuses fail closed; let Node drain stdout before exiting.
+  signalBridge.setExitCode(status === "ok" || status === "completed" ? 0 : 1);
 }
 
 function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
@@ -982,7 +907,7 @@ async function agentViaGatewayCommand(
         ? undefined
         : classifySessionKeyShape(explicitSessionKey) === "agent"
           ? explicitSessionKey
-          : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+          : (await import("./agent/session.runtime.js")).resolveSessionKeyForRequest({
               cfg,
               agentId,
               to: opts.to,
@@ -992,7 +917,8 @@ async function agentViaGatewayCommand(
   const abortSessionKey = deferRemoteSessionId
     ? undefined
     : deferExplicitRecipientSession
-      ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
+      ? (await import("./agent/session.runtime.js")).resolveSessionKeyForRequest({ cfg, agentId })
+          .sessionKey
       : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
@@ -1097,6 +1023,13 @@ async function agentViaGatewayCommand(
         err instanceof GatewayProtocolRequestError
           ? asOptionalRecord(err.responsePayload)
           : undefined;
+      if (
+        payload?.reason === "input_withdrawn_before_turn" &&
+        typeof payload.pendingInputId === "string"
+      ) {
+        response = { ...payload, status: "cancelled" };
+        break;
+      }
       // Only Gateway responses establish provenance; the idempotency fallback is cancellation-only.
       recordCliGatewayRunFailure(
         err,
@@ -1116,6 +1049,11 @@ async function agentViaGatewayCommand(
   }
 
   const payloads = response.result?.payloads ?? [];
+
+  if (response.reason === "input_withdrawn_before_turn") {
+    runtime.error?.(response.summary);
+    return response;
+  }
 
   if (response.status === "in_flight") {
     runtime.error?.(formatInFlightGatewayAgentMessage(response));
@@ -1228,7 +1166,6 @@ export async function agentCliCommand(
           },
           runtime,
           deps,
-          { suppressStdoutDiagnosticLogs: dispatchOpts.json === true },
         );
       } finally {
         await stateLock?.release();

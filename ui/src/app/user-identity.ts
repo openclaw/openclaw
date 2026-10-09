@@ -35,11 +35,8 @@ export function normalizeLocalUserIdentity(
   };
 }
 
-export function resolveLocalUserName(
-  input?: Partial<LocalUserIdentity> | null,
-  fallback = "You",
-): string {
-  return normalizeLocalUserIdentity(input).name ?? fallback;
+export function resolveLocalUserName(input?: Partial<LocalUserIdentity> | null): string {
+  return normalizeLocalUserIdentity(input).name ?? "You";
 }
 
 export function resolveLocalUserAvatarUrl(

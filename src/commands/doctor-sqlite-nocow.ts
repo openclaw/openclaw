@@ -34,10 +34,7 @@ function hasNoCow(pathname: string): boolean {
   return flags.includes("C");
 }
 
-export function inspectDoctorSqliteNoCow(paths: readonly string[]): {
-  paths: string[];
-  notes: string[];
-} {
+export function inspectDoctorSqliteNoCow(paths: readonly string[]) {
   const result: { paths: string[]; notes: string[] } = { paths: [], notes: [] };
   for (const pathname of new Set(paths)) {
     try {
@@ -94,6 +91,10 @@ function runAclTool(command: "getfacl" | "setfacl", args: string[], input?: stri
 
 function readAcl(pathname: string): string {
   return runAclTool("getfacl", ["-cEpn", "--", pathname]);
+}
+
+function sameDirectoryMetadata(left: fs.BigIntStats, right: fs.BigIntStats): boolean {
+  return (["dev", "ino", "mode", "uid", "gid"] as const).every((key) => left[key] === right[key]);
 }
 
 function preserveMetadata(target: string, original: fs.BigIntStats, acl: string) {
@@ -421,11 +422,7 @@ export async function repairDoctorSqliteNoCow(params: {
           return true;
         });
       if (
-        currentIdentity.dev !== sourceIdentity.dev ||
-        currentIdentity.ino !== sourceIdentity.ino ||
-        currentIdentity.mode !== sourceIdentity.mode ||
-        currentIdentity.uid !== sourceIdentity.uid ||
-        currentIdentity.gid !== sourceIdentity.gid ||
+        !sameDirectoryMetadata(currentIdentity, sourceIdentity) ||
         readAcl(directory) !== sourceAcls.get(directory) ||
         currentFiles.length !== sourceFiles.size ||
         currentFiles.some((pathname) => {
@@ -435,11 +432,7 @@ export async function repairDoctorSqliteNoCow(params: {
             !expected ||
             (expected.isDirectory()
               ? !current.isDirectory() ||
-                expected.dev !== current.dev ||
-                expected.ino !== current.ino ||
-                expected.mode !== current.mode ||
-                expected.uid !== current.uid ||
-                expected.gid !== current.gid ||
+                !sameDirectoryMetadata(expected, current) ||
                 readAcl(pathname) !== sourceAcls.get(pathname)
               : !sameFileMutationFingerprint(expected, current) ||
                 (expected.isSymbolicLink() &&

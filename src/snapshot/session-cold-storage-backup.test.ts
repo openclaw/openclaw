@@ -97,7 +97,7 @@ async function createColdFixture() {
   expect(
     await runSessionColdStorageMaintenance({
       config: {
-        agents: { list: [{ id: "main", agentDir: path.dirname(sourcePath) }] },
+        agents: { entries: { main: { agentDir: path.dirname(sourcePath) } } },
         session: {
           store: sourcePath,
           maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -202,12 +202,15 @@ describe("cold transcript backup portability", () => {
     }
   });
 
-  it.each(backupKinds)("%s refuses a corrupt authoritative archive", async (kind) => {
-    const fixture = await createColdFixture();
-    await fs.writeFile(fixture.archivePath, "corrupt archive");
-    await expect(captureFixture(kind, fixture)).rejects.toThrow(/failed verification/);
-    await expect(fs.access(path.join(fixture.root, "restored.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+  it.each(["full archive capture", "SQLite snapshot"] as const)(
+    "%s refuses a corrupt authoritative archive",
+    async (kind) => {
+      const fixture = await createColdFixture();
+      await fs.writeFile(fixture.archivePath, "corrupt archive");
+      await expect(captureFixture(kind, fixture)).rejects.toThrow(/failed verification/);
+      await expect(fs.access(path.join(fixture.root, "restored.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 });

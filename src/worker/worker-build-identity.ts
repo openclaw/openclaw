@@ -1,10 +1,24 @@
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  type WorkerAdmissionHandshake,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export type ExpectedWorkerBuild = {
   bundleHash: WorkerAdmissionHandshake["bundleHash"];
   openclawVersion: WorkerAdmissionHandshake["openclawVersion"];
   protocolFeatures: readonly string[];
 };
+
+/** Fence persisted builds that cannot parse the exact current launch descriptor. */
+export function supportsCurrentWorkerLaunch(
+  handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
+): boolean {
+  return (
+    handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true &&
+    handshake.protocolFeatures.includes(WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)
+  );
+}
 
 export function sameWorkerProtocolFeatures(
   left: readonly string[],

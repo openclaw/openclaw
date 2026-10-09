@@ -166,9 +166,6 @@ export function createChannelSetupMocks() {
     }),
   );
   const collectChannelStatus = vi.fn<CollectChannelStatus>(async (_params) => ({
-    installedPlugins: [],
-    catalogEntries: [],
-    installedCatalogEntries: [],
     statusByChannel: new Map(),
     statusLines: [],
   }));
@@ -233,7 +230,7 @@ export function createChannelSetupMocks() {
       noteChannelPrimer: vi.fn(),
       resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
       resolveChannelSelectionNoteLines: vi.fn(() => []),
-      resolveChannelSetupSelectionContributions: vi.fn(() => []),
+      resolveChannelSetupSelectionOptions: vi.fn(() => []),
       resolveChannelSetupWorkspaceDir: (cfg?: unknown) => resolveChannelSetupWorkspaceDir(cfg),
       resolveQuickstartDefault: vi.fn(() => undefined),
     }),

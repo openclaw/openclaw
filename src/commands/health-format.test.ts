@@ -144,6 +144,11 @@ describe("formatHealthChannelLines", () => {
 
   it.each([
     [
+      "collection timeout remains a warning",
+      { probe: { timedOut: true, error: "health collection timed out after 7000ms" } },
+      "warning - health collection timed out after 7000ms",
+    ],
+    [
       "fresh probe failure over passive healthy state",
       { healthState: "healthy", probe: { ok: false, error: "sync rejected" } },
       "failed (unknown) - sync rejected",

@@ -5,9 +5,9 @@ import {
   normalizeSessionColorValue,
   normalizeSessionIconValue,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { normalizeSessionConversationLink } from "./conversation-link.js";
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
+import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
 function normalizeSessionEntryArchiveReason(
@@ -26,8 +26,9 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 
-/** Removes retired runtime locator fields before a session entry is persisted or returned. */
+/** Removes retired and projected fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+  assertSupportedSessionStoreEntry(value);
   if (hasLegacySessionEntryState(value)) {
     throw new SessionStoreMigrationRequiredError(
       "Legacy session entry state requires migration; stop the Gateway and run openclaw doctor --fix.",
@@ -36,6 +37,7 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   const {
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
+    conversationLink: _retiredConversationLink,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
@@ -48,10 +50,6 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
       delete canonicalValue[key];
     }
   };
-  setOptionalField(
-    "conversationLink",
-    normalizeSessionConversationLink(canonicalValue.conversationLink),
-  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);

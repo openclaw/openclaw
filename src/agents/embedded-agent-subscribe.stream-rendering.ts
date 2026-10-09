@@ -6,7 +6,11 @@ import {
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  addReplyPayloadMediaFailures,
+  appendReplyMediaFailures,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -233,16 +237,13 @@ export function createStreamRendering({
           continue;
         }
         processed += scanText.slice(lastIndex, idx);
+      }
+      if (!inThinking || isClose) {
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
       }
       inThinking = !isClose;
-      if (!inThinking) {
-        hiddenInlineState = createInlineCodeState();
-        hiddenFenceState = undefined;
-        hiddenPendingFenceFragment = undefined;
-      }
       lastIndex = idx + match[0].length;
     }
     if (inThinking) {
@@ -280,24 +281,16 @@ export function createStreamRendering({
       const isClose = match.isClose;
       const isSelfClosing = match.isSelfClosing;
 
-      if (isSelfClosing) {
-        if (inFinal) {
-          result += processed.slice(lastFinalIndex, idx);
-          inFinal = false;
-        } else {
-          inFinal = true;
-          everInFinal = true;
-        }
-        lastFinalIndex = idx + match.text.length;
-      } else if (!inFinal && !isClose) {
-        inFinal = true;
-        everInFinal = true;
-        lastFinalIndex = idx + match.text.length;
-      } else if (inFinal && isClose) {
+      if (inFinal && (isSelfClosing || isClose)) {
         result += processed.slice(lastFinalIndex, idx);
         inFinal = false;
-        lastFinalIndex = idx + match.text.length;
+      } else if (!inFinal && (isSelfClosing || !isClose)) {
+        inFinal = true;
+        everInFinal = true;
+      } else {
+        continue;
       }
+      lastFinalIndex = idx + match.text.length;
     }
 
     if (inFinal) {
@@ -495,6 +488,7 @@ export function createStreamRendering({
     const {
       text: cleanedText,
       mediaUrls,
+      mediaFailures,
       audioAsVoice,
       replyToId,
       replyToTag,
@@ -505,6 +499,7 @@ export function createStreamRendering({
     );
     if (
       !cleanedText &&
+      !mediaFailures?.length &&
       (!mediaUrls || mediaUrls.length === 0) &&
       !audioAsVoice &&
       !hasPendingAudioDirective &&
@@ -517,13 +512,14 @@ export function createStreamRendering({
     }
     pushAssistantText(chunk, normalizedChunk);
     const payload = {
-      text: cleanedText,
+      text: cleanedText || appendReplyMediaFailures(cleanedText, mediaFailures ?? []),
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
     };
+    addReplyPayloadMediaFailures(payload, mediaFailures);
     if (splitResult.isSilent) {
       setReplyPayloadMetadata(payload, { silentReply: true });
     }

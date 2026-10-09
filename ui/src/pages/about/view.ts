@@ -17,9 +17,9 @@ import {
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatDateMs, formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/about.css";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 
@@ -38,47 +38,30 @@ const SHORT_COMMIT_LENGTH = 12;
 
 // Docs-first where a docs page exists; GitHub/Discord match the native
 // macOS/iOS About screens (AboutSettings.swift, SettingsProTabSections.swift).
-const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> = [
-  { href: "https://openclaw.ai", icon: icons.globe, label: () => t("aboutPage.linkWebsite") },
-  { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("aboutPage.linkDocs") },
+const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> = [
+  { href: "https://openclaw.ai", icon: icons.globe, labelKey: "aboutPage.linkWebsite" },
+  { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "aboutPage.linkDocs" },
   {
     href: "https://github.com/openclaw/openclaw",
     icon: brandIcons.github,
-    label: () => t("aboutPage.linkGitHub"),
+    labelKey: "aboutPage.linkGitHub",
   },
   {
     href: COMMUNITY_DISCORD_URL,
     icon: brandIcons.discord,
-    label: () => t("aboutPage.linkDiscord"),
+    labelKey: "aboutPage.linkDiscord",
   },
   {
     href: "https://x.com/openclaw",
     icon: brandIcons.x,
-    label: () => t("aboutPage.linkX"),
+    labelKey: "aboutPage.linkX",
   },
   {
     href: "https://docs.openclaw.ai/releases",
     icon: icons.scrollText,
-    label: () => t("aboutPage.linkChangelog"),
+    labelKey: "aboutPage.linkChangelog",
   },
 ];
-
-function formatControlUiBuildDate(
-  value: string | null,
-  locales?: Intl.LocalesArgument,
-): string | null {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return new Intl.DateTimeFormat(locales, {
-    dateStyle: "medium",
-    timeZone: "UTC",
-  }).format(date);
-}
 
 function renderUnavailable() {
   return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
@@ -94,10 +77,7 @@ function renderCommitAge(commitAt: string | null) {
   if (!Number.isFinite(timestamp)) {
     return nothing;
   }
-  const exact = new Intl.DateTimeFormat(i18n.getLocale(), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp));
+  const exact = formatDateTimeMs(timestamp, { dateStyle: "medium", timeStyle: "short" });
   return html`
     <time class="about-commit__age" dir="auto" datetime=${commitAt} title=${exact}
       >${formatRelativeTimestamp(timestamp, { fallback: "" })}</time
@@ -180,7 +160,7 @@ function renderHero(props: AboutProps) {
               rel=${buildExternalLinkRel()}
             >
               <span class="about-hero__link-icon" aria-hidden="true">${link.icon}</span>
-              <span>${link.label()}</span>
+              <span>${t(link.labelKey)}</span>
             </a>
           `,
         )}
@@ -190,7 +170,11 @@ function renderHero(props: AboutProps) {
 }
 
 export function renderAbout(props: AboutProps) {
-  const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
+  const buildDate = formatDateMs(
+    Date.parse(props.buildInfo.builtAt ?? ""),
+    { dateStyle: "medium", timeZone: "UTC" },
+    "",
+  );
   const buildFacts = html`
     <dl class="settings-kv about-build-grid" aria-label=${t("aboutPage.artifactDetails")}>
       <dt>${t("aboutPage.version")}</dt>

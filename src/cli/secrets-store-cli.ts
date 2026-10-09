@@ -207,9 +207,9 @@ export function registerSecretStoreCli(secrets: Command): void {
         const scope = teamScope(options.scope);
         const storeModule = await import("../secrets/store/secret-store.js");
         const requestedHosts = options.allowHost ?? [];
-        const existingEntry = storeModule
-          .listSecretStoreEntries({ scope })
-          .find((entry) => entry.name === name);
+        const existingEntry = (await storeModule.listSecretStoreEntries({ scope })).find(
+          (entry) => entry.name === name,
+        );
         const kind = options.kind
           ? storeKind(options.kind, name)
           : (existingEntry?.kind ?? storeKind(undefined, name));
@@ -266,11 +266,9 @@ export function registerSecretStoreCli(secrets: Command): void {
             ? options.value
             : await (
                 await import("./secrets-store-input.js")
-              ).readSecretStoreInput({
-                valueFile: options.valueFile,
-              });
+              ).readSecretStoreInput(options.valueFile);
         if (isRedactedSecretValue(value)) {
-          const current = storeModule.readSecretStoreValue({ scope, name });
+          const current = await storeModule.readSecretStoreValue({ scope, name });
           if (current.ok && !isRedactedSecretValue(current.value)) {
             defaultRuntime.log(`Skipped redacted value for ${name}; existing entry unchanged.`);
             return;
@@ -281,7 +279,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
           return;
         }
-        const storedKind = storeModule.writeSecretStoreEntry({
+        const storedKind = await storeModule.writeSecretStoreEntry({
           scope,
           name,
           value,
@@ -311,7 +309,9 @@ export function registerSecretStoreCli(secrets: Command): void {
           const scope = teamScope(options.scope);
           const { listSecretStoreEntries, readSecretStoreValue } =
             await import("../secrets/store/secret-store.js");
-          const metadata = listSecretStoreEntries({ scope }).find((entry) => entry.name === name);
+          const metadata = (await listSecretStoreEntries({ scope })).find(
+            (entry) => entry.name === name,
+          );
           if (!metadata) {
             throw new SecretStoreCliFailure(3, `Secret store entry "${name}" was not found.`);
           }
@@ -321,7 +321,7 @@ export function registerSecretStoreCli(secrets: Command): void {
               `Secret store entry "${name}" is write-only by design. Reference it from config with a store SecretRef.`,
             );
           }
-          const result = readSecretStoreValue({ scope, name });
+          const result = await readSecretStoreValue({ scope, name });
           if (!result.ok) {
             throw new SecretStoreCliFailure(
               result.error.code === "SECRET_STORE_NOT_FOUND" ? 3 : 1,
@@ -366,7 +366,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         const { deleteSecretStoreEntry, purgeExpiredSecretStoreEntries } =
           await import("../secrets/store/secret-store.js");
         for (const name of names) {
-          deleteSecretStoreEntry({ scope, name });
+          await deleteSecretStoreEntry({ scope, name });
         }
         await purgeExpiredSecretStoreEntries();
         defaultRuntime.log(
@@ -399,9 +399,9 @@ export function registerSecretStoreCli(secrets: Command): void {
         }
         const storeModule = await import("../secrets/store/secret-store.js");
         const existingKinds = new Map(
-          storeModule
-            .listSecretStoreEntries({ scope })
-            .map((entry) => [entry.name, entry.kind] as const),
+          (await storeModule.listSecretStoreEntries({ scope })).map(
+            (entry) => [entry.name, entry.kind] as const,
+          ),
         );
         const normalized = entries.map(([name, value]) => {
           assertStoreName(name);
@@ -413,19 +413,20 @@ export function registerSecretStoreCli(secrets: Command): void {
               : (existingKinds.get(name) ?? storeKind(undefined, name)),
           };
         });
-        const writable = normalized.filter((entry) => {
+        const writable: typeof normalized = [];
+        for (const entry of normalized) {
           if (isRedactedSecretValue(entry.value)) {
-            const current = storeModule.readSecretStoreValue({ scope, name: entry.name });
+            const current = await storeModule.readSecretStoreValue({ scope, name: entry.name });
             if (current.ok && !isRedactedSecretValue(current.value)) {
               defaultRuntime.log(
                 `Skipped redacted value for ${entry.name}; existing entry unchanged.`,
               );
-              return false;
+              continue;
             }
           }
           storeModule.assertSecretStoreValue(entry.value, entry.kind, entry.name);
-          return true;
-        });
+          writable.push(entry);
+        }
         if (options.dryRun) {
           defaultRuntime.log(`Would import ${writable.length} team store entries.`);
           return;
@@ -434,7 +435,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           return;
         }
         await confirmMutation(`Import ${writable.length} team store entries?`, options.yes);
-        storeModule.writeSecretStoreEntries({
+        await storeModule.writeSecretStoreEntries({
           scope,
           entries: writable,
           inheritExistingKind: options.kind === undefined,

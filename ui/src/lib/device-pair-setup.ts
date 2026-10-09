@@ -1,4 +1,3 @@
-// Shared mobile pairing setup state for app-level entry points.
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {

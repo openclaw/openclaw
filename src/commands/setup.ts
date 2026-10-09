@@ -1,9 +1,3 @@
-/**
- * Minimal setup command.
- *
- * Ensures config, default workspace, and session directories exist without
- * running the full onboarding wizard.
- */
 import fs from "node:fs/promises";
 import {
   listAgentEntries,
@@ -22,15 +16,8 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { isRecord, shortenHomePath } from "../utils.js";
 
-// Keep setup's cold path small; load each owner only when the command needs it.
-const loadAgentWorkspaceModule = createLazyPromise(() => import("../agents/workspace.js"));
-const loadConfigIOModule = createLazyPromise(() => import("../config/config.js"));
-const loadConfigLoggingModule = createLazyPromise(() => import("../config/logging.js"));
-
-/** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
   opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
@@ -40,7 +27,7 @@ export async function setupCommand(
       ? opts.workspace.trim()
       : undefined;
 
-  const { createConfigIO, replaceConfigFile } = await loadConfigIOModule();
+  const { createConfigIO, replaceConfigFile } = await import("../config/config.js");
   const io = createConfigIO();
   const configPath = io.configPath;
   const prepared = await io.readConfigFileSnapshotForWrite();
@@ -57,7 +44,7 @@ export async function setupCommand(
       });
     }
     runtime.error(
-      `Config invalid at ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
+      `Config invalid at ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     runtime.exit(1);
     return;
@@ -112,7 +99,7 @@ export async function setupCommand(
   const workspace =
     desiredWorkspace ??
     configuredWorkspace ??
-    (await loadAgentWorkspaceModule()).DEFAULT_AGENT_WORKSPACE_DIR;
+    (await import("../agents/workspace.js")).DEFAULT_AGENT_WORKSPACE_DIR;
   // Bare setup is observational for an established roster. Only a caller
   // override or fresh bootstrap owns a persisted workspace change.
   const shouldWriteWorkspace =
@@ -130,10 +117,9 @@ export async function setupCommand(
   // diff against snapshot.parsed, never resolved include/env values wholesale.
   let next: OpenClawConfig = snapshot.exists ? resolvedConfig : cfg;
   if (shouldPersistRoster) {
-    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
-      agents: { ...agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
+      agents: { ...next.agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
     };
   }
   if (shouldWriteWorkspace && !writeInheritedWorkspaceOverride) {
@@ -148,12 +134,11 @@ export async function setupCommand(
       }
     }
     const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
-    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
       agents: {
-        ...agents,
-        defaults: { ...agents.defaults, workspace },
+        ...next.agents,
+        defaults: { ...next.agents?.defaults, workspace },
         ...(entries ? { entries } : {}),
       },
     };
@@ -230,7 +215,9 @@ export async function setupCommand(
     });
     configStatus = snapshot.exists ? "updated" : "created";
     if (!opts?.json && !snapshot.exists) {
-      runtime.log(`Wrote ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}`);
+      runtime.log(
+        `Wrote ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
+      );
     } else if (!opts?.json) {
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
@@ -243,7 +230,7 @@ export async function setupCommand(
         updates.push("set agents.defaults.skipBootstrap");
       }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
-      (await loadConfigLoggingModule()).logConfigUpdated(runtime, {
+      (await import("../config/logging.js")).logConfigUpdated(runtime, {
         path: configPath,
         suffix,
       });
@@ -252,13 +239,13 @@ export async function setupCommand(
     configStatus = "unchanged";
     if (!opts?.json) {
       runtime.log(
-        `Config OK: ${(await loadConfigLoggingModule()).formatConfigFilePath(configPath)}`,
+        `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
       );
     }
   }
 
   const ws = await (
-    await loadAgentWorkspaceModule()
+    await import("../agents/workspace.js")
   ).ensureAgentWorkspace({
     dir: workspace,
     ensureBootstrapFiles: !skipBootstrap,

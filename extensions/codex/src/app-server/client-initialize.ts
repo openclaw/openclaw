@@ -123,10 +123,8 @@ export function buildCodexAppServerRuntimeIdentity(
   };
 }
 
-export class CodexAppServerVersionError extends Error {
-  readonly detectedVersion?: string;
-
-  constructor(detectedVersion: string | undefined) {
+class CodexAppServerVersionError extends Error {
+  constructor(readonly detectedVersion?: string) {
     const detected = detectedVersion
       ? `detected ${detectedVersion}`
       : "OpenClaw could not determine the running Codex version";
@@ -134,7 +132,6 @@ export class CodexAppServerVersionError extends Error {
       `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
     this.name = "CodexAppServerVersionError";
-    this.detectedVersion = detectedVersion;
   }
 }
 
@@ -167,4 +164,8 @@ function readCodexVersionFromUserAgent(userAgent: string | undefined): string | 
     /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
   );
   return match?.[1];
+}
+
+export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
+  return error instanceof CodexAppServerVersionError;
 }

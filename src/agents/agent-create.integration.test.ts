@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,14 +8,15 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import {
   mutateConfigFileWithRetry,
-  readConfigFileSnapshotForWrite,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -30,21 +30,17 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   persistProviderAuthProfileBatch,
   stageProviderAuthProfileBatch,
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { AGENT_DELETION_RECOVERY_SOURCE_KEY } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
-  readAgentDeletionRecoveryHolds,
-  reconstructAgentDeletionJournal,
-} from "../state/agent-deletion-journal-recovery.js";
-import {
-  beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -62,62 +58,19 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { nodeFilePath } from "../test-utils/node-file-path.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  installWorkspacePreparationPause,
+  prepareRecoveryHolds,
+} from "./agent-create.integration.test-support.js";
 import { createAgent } from "./agent-create.js";
 import { isAgentDeletionBlocked } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
-import {
-  DEFAULT_IDENTITY_FILENAME,
-  ensureAgentWorkspace,
-  isWorkspaceBootstrapPending,
-} from "./workspace.js";
-
-async function prepareRecoveryHolds(
-  state: OpenClawTestState,
-  agentId: string,
-  held = [
-    { agentId, path: path.join(state.agentDir(agentId), "openclaw-agent.sqlite") },
-    { agentId, path: state.path("parked", "openclaw-agent.sqlite") },
-    { agentId: "kept", path: path.join(state.agentDir("kept"), "openclaw-agent.sqlite") },
-  ],
-) {
-  for (const target of held) {
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(
-          database,
-          `agent:${target.agentId}:main`,
-          {
-            sessionId: `preserved-${target.agentId}`,
-            updatedAt: 1,
-          },
-          { previousEntry: null },
-        ),
-      { ...target, env: state.env },
-    );
-  }
-  closeOpenClawAgentDatabasesForTest();
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      database.db.exec("DROP TABLE agent_deletion_journal");
-      reconstructAgentDeletionJournal(database, held);
-    },
-    { env: state.env },
-  );
-  return {
-    held,
-    bytes: await Promise.all(held.map((target) => fs.readFile(target.path))),
-    readHolds: () => readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env })),
-  };
-}
 
 it("restores only the configured held store after explicit creation, never through bootstrap or retargeting", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-agent-restore" });
@@ -134,12 +87,18 @@ it("restores only the configured held store after explicit creation, never throu
       openOpenClawAgentDatabase({ agentId: "alias", path: aliasPath, env: state.env }),
     ).toThrow("belongs to agent main; requested agent alias");
     const params = { name: "main", workspace: state.workspaceDir };
-    expect(
-      await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
-    ).toMatchObject({
-      status: "error",
-      reason: "already-exists",
-    });
+    const observation = observeHostDataSql();
+    try {
+      expect(
+        await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
+      ).toMatchObject({
+        status: "error",
+        reason: "already-exists",
+      });
+      expect(observation.queries.filter((sql) => /\bmigration_sources\b/i.test(sql))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     expect(recovery.readHolds()).toEqual(recovery.held);
     expect(await createAgent({ ...params, bootstrapMain: true })).toMatchObject({
       status: "existing",
@@ -186,6 +145,81 @@ it("restores only the configured held store after explicit creation, never throu
     await state.cleanup();
   }
 });
+
+it.each(["added", "removed"] as const)(
+  "observes a foreign hold %s between bootstrap probes without host hold SQL",
+  async (change) => {
+    const state = await createOpenClawTestState({ scenario: "minimal", label: "bootstrap-probes" });
+    try {
+      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+      await transformConfigFileWithRetry({
+        transform: (current) => ({ nextConfig: current, result: undefined }),
+      });
+      const target = { agentId: "main", path: state.path("custom", "history.sqlite") };
+      await prepareRecoveryHolds(state, target.agentId, [target]);
+      beginAgentDeletionJournal({
+        agentId: target.agentId,
+        operationId: randomUUID(),
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        sessionsDir: state.sessionsDir(),
+        deleteFiles: false,
+      });
+      const originalConfig = await fs.readFile(state.configPath, "utf8");
+      const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env));
+      try {
+        const update = foreign.prepare(
+          "UPDATE migration_sources SET report_json = ? WHERE source_key = ?",
+        );
+        const setHeld = (held: boolean) =>
+          update.run(
+            JSON.stringify({ description: "Synthetic recovery hold", held: held ? [target] : [] }),
+            AGENT_DELETION_RECOVERY_SOURCE_KEY,
+          );
+        setHeld(change === "removed");
+        await withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            const observation = observeHostDataSql();
+            let changed = false;
+            try {
+              const result = await createAgent({
+                name: "main",
+                bootstrapMain: true,
+                beforePersistentApply: () => {
+                  if (!changed) {
+                    changed = true;
+                    setHeld(change === "added");
+                  }
+                },
+              });
+              expect(result).toMatchObject(
+                change === "added"
+                  ? { status: "existing" }
+                  : { status: "error", reason: "deletion-pending" },
+              );
+              expect(changed).toBe(true);
+              expect(
+                observation.queries.filter(
+                  (sql) => /^\s*select\b/i.test(sql) && /\bmigration_sources\b/i.test(sql),
+                ),
+              ).toEqual([]);
+            } finally {
+              observation.restore();
+            }
+          },
+          { env: state.env },
+        );
+      } finally {
+        foreign.close();
+      }
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
+  },
+);
 
 it("restores a held custom filename only after its session store configuration selects it", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-custom-store" });
@@ -515,43 +549,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
-    const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
-    if (phase === "workspace-write") {
-      setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
-    }
-    const realAccess = fs.access.bind(fs);
-    const access = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      if (phase === "workspace" && file === path.join(workspace, "AGENTS.md")) {
-        await pause("workspace");
-      }
-      return await realAccess(file, mode);
-    });
-    const realOpen = fs.open.bind(fs);
-    const restoreWrites: Array<() => void> = [];
-    let writePaused = false;
-    const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
-      const filePath = nodeFilePath(file);
-      if (
-        phase === "workspace-write" &&
-        filePath &&
-        path.dirname(filePath) === workspace &&
-        typeof flags === "number" &&
-        (flags & fsConstants.O_EXCL) !== 0
-      ) {
-        const realWrite = handle.write.bind(handle);
-        const write = vi.spyOn(handle, "write").mockImplementation(async (...args) => {
-          const result = await realWrite(...args);
-          if (!writePaused) {
-            writePaused = true;
-            await pause("workspace-write");
-          }
-          return result;
-        });
-        restoreWrites.push(() => write.mockRestore());
-      }
-      return handle;
-    });
+    const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
     const prepareConfigCommit = vi.fn(async () => {
@@ -607,12 +605,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
     } finally {
       resume.resolve();
       await outcome;
-      open.mockRestore();
-      for (const restore of restoreWrites) {
-        restore();
-      }
-      access.mockRestore();
-      nativeModeEnv.restore();
+      restoreWorkspacePreparation();
       releaseAgentRunDelegatedAuthority(authority);
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();
@@ -821,110 +814,6 @@ it.each(["commit", "rollback", "close-failure"] as const)(
   },
 );
 
-it("preserves env references from guided staging when preparation changes the environment", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "minimal",
-    label: "guided-stage-env",
-  });
-  const oldToken = process.env.GUIDED_STAGE_TOKEN;
-  try {
-    process.env.GUIDED_STAGE_TOKEN = "synthetic-read-value";
-    const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-    await state.writeConfig({
-      ...config,
-      gateway: { ...config.gateway, auth: { mode: "token", token: "${GUIDED_STAGE_TOKEN}" } },
-    });
-    const writeSnapshot = await readConfigFileSnapshotForWrite();
-    const staged = writeSnapshot.snapshot.sourceConfig;
-    expect(staged.gateway?.auth?.token).toBe("synthetic-read-value");
-    await Promise.resolve();
-    process.env.GUIDED_STAGE_TOKEN = "synthetic-after-guided-await";
-    const created = await createAgent({
-      name: "guided",
-      workspace: state.path("guided-workspace"),
-      stagedConfig: { config: staged, writeSnapshot },
-      prepareConfigCommit: async () => {
-        await Promise.resolve();
-        process.env.GUIDED_STAGE_TOKEN = "synthetic-after-preparation";
-      },
-    });
-    expect(created).toMatchObject({ status: "created", agentId: "guided" });
-    const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-    expect(saved.gateway?.auth?.token).toBe("${GUIDED_STAGE_TOKEN}");
-    expect(saved.agents?.entries?.guided).toBeDefined();
-  } finally {
-    if (oldToken === undefined) {
-      delete process.env.GUIDED_STAGE_TOKEN;
-    } else {
-      process.env.GUIDED_STAGE_TOKEN = oldToken;
-    }
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
-it("keeps a fresh named workspace pending through the first run setup", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "minimal",
-    label: "named-agent-hatch",
-  });
-  const workspace = state.path("named-workspace");
-
-  try {
-    const created = await createAgent({ name: "Researcher", workspace });
-
-    expect(created).toMatchObject({ status: "created", bootstrapPending: true });
-    expect(await isWorkspaceBootstrapPending(workspace)).toBe(true);
-
-    const firstRunWorkspace = await ensureAgentWorkspace({
-      dir: workspace,
-      ensureBootstrapFiles: true,
-    });
-    expect(firstRunWorkspace.bootstrapPending).toBe(true);
-    expect(await isWorkspaceBootstrapPending(workspace)).toBe(true);
-    expect(
-      await fs.readFile(path.join(workspace, DEFAULT_IDENTITY_FILENAME), "utf8"),
-    ).not.toContain("Researcher");
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
-it("records operator and agent creation provenance after roster commits", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "empty",
-    label: "agent-creation-provenance",
-  });
-  try {
-    await createAgent({ name: "Operator Child", workspace: state.path("operator-child") });
-    await createAgent({
-      name: "Agent Child",
-      workspace: state.path("agent-child"),
-      provenance: { createdVia: "agent", creatorAgentId: "main" },
-    });
-
-    expect(readAgentProvenance("operator-child", { env: state.env })).toMatchObject({
-      agentId: "operator-child",
-      createdVia: "operator",
-      creatorAgentId: null,
-      createdAtMs: expect.any(Number),
-    });
-    expect(readAgentProvenance("agent-child", { env: state.env })).toMatchObject({
-      agentId: "agent-child",
-      createdVia: "agent",
-      creatorAgentId: "main",
-      createdAtMs: expect.any(Number),
-    });
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
 describe("agent roster persistence", () => {
   async function addWorkerToConfig(config: unknown): Promise<OpenClawConfig> {
     const state = await createOpenClawTestState({
@@ -958,7 +847,7 @@ describe("agent roster persistence", () => {
   });
 
   it("extends the complete keyed roster after Doctor migrates a legacy list", async () => {
-    const legacy = {
+    const legacy: OpenClawConfigWithLegacyRoster = {
       agents: {
         list: [
           { id: "main", default: true },
@@ -991,8 +880,12 @@ describe("agent roster persistence", () => {
       { id: "main", default: true },
       { id: "ops", workspace: "/srv/ops" },
     ];
+    const legacy: OpenClawConfigWithLegacyRoster = {
+      agents: { list },
+      gateway: { port: 18789 },
+    };
     try {
-      await state.writeConfig({ agents: { list }, gateway: { port: 18789 } });
+      await state.writeConfig(legacy);
       const original = await fs.readFile(state.configPath, "utf8");
       await expect(
         mutateConfigFileWithRetry({
@@ -1003,10 +896,12 @@ describe("agent roster persistence", () => {
       ).rejects.toThrow("doctor --fix");
 
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
+      const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(
+        await fs.readFile(state.configPath, "utf8"),
+      );
+      expect(persisted.agents).toEqual({ list });
       expect(persisted.agents).not.toHaveProperty("entries");
-      expect(persisted.gateway?.port).toBe(18789);
+      expect(persisted.gateway).toEqual({ port: 18789 });
     } finally {
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

@@ -6,7 +6,6 @@ import {
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -23,6 +22,7 @@ import {
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
+import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
 
 /**

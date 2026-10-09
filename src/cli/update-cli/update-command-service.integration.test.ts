@@ -37,6 +37,7 @@ import {
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { registerPackageRootRollbackTests } from "./update-command-service-rollback.test-support.js";
 import {
   preservedActivationCases,
@@ -46,7 +47,6 @@ import {
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -443,6 +443,7 @@ describe("preserved update activation with real version guards", () => {
         retried ||= stale;
         if (stale) {
           return {
+            outcome: "failed",
             healthy: false,
             staleGatewayPids: [4242],
             runtime: { status: "running" },
@@ -808,10 +809,6 @@ describe("preserved update activation with real version guards", () => {
     if (loaded) {
       await servingOwner.publish("launchd");
     }
-    mocks.handoff.mockImplementation(() => ({
-      ok: true,
-      value: servingOwner.restart().then(() => true),
-    }));
     mocks.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
         if (scenario === "bootstrap denied" || scenario === "parent recovery refusal") {
@@ -837,6 +834,7 @@ describe("preserved update activation with real version guards", () => {
     });
     if (demandOnly) {
       mocks.health.mockImplementation(async ({ port }) => ({
+        outcome: nativeRunning ? "ready" : "failed",
         healthy: nativeRunning,
         staleGatewayPids: [],
         runtime: { status: nativeRunning ? "running" : "stopped" },
@@ -845,6 +843,7 @@ describe("preserved update activation with real version guards", () => {
     }
     if (scenario === "stale retry") {
       mocks.health.mockResolvedValueOnce({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids: [4242],
         runtime: { status: "stopped" },
@@ -880,6 +879,7 @@ describe("preserved update activation with real version guards", () => {
         );
       }
       mocks.health.mockImplementation(async ({ port }) => ({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids: [],
         runtime: { status: "stopped" },
@@ -948,6 +948,8 @@ describe("preserved update activation with real version guards", () => {
       expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
     } else if (scenario === "handoff") {
       expect(mocks.handoff).toHaveBeenCalledWith(expect.objectContaining({ mode: "kickstart" }));
+      // The detached restart follows command completion; join it before fixture cleanup.
+      await servingOwner.restart();
     } else {
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "kickstart")).toBe(true);
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(

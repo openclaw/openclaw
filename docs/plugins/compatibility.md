@@ -127,6 +127,12 @@ cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
 
+The deprecated `sourceVisibleReplies` harness field remains supported because
+July 2026 releases of `@openclaw/codex` still produce it. Use
+[`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults)
+in new plugins. Terminal-result aliases also remain supported for published
+producers, including `openclaw-deepseek-harness@0.2.0`.
+
 ### Session-store bridge retirement
 
 The SDK owner approved retiring `deprecated-session-store-beta5-api` on

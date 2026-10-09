@@ -74,7 +74,7 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
       }
       return result.lease;
     });
-    const retained = createManagedCommandProcessCustody({
+    const retained = await createManagedCommandProcessCustody({
       roots: delegated.map((parent) => parent.key),
       parents: delegated,
       runId: "command",
@@ -121,9 +121,12 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
     expect(f.store.releaseAll(parents)).toBe(true);
   });
 
-  it("pins before effects and permits only the original helper to release a confirmed non-start", () => {
+  it("pins before effects and permits only the original helper to release a confirmed non-start", async () => {
     const f = fixture();
-    const retained = createManagedCommandProcessCustody({ roots: f.roots, runId: randomUUID() });
+    const retained = await createManagedCommandProcessCustody({
+      roots: f.roots,
+      runId: randomUUID(),
+    });
     expect(retained.databasePath).toBe(f.databasePath);
     expect(f.rows()).toEqual([]);
     const reservation = retained.custody.reserve([process.execPath, "--version"]);
@@ -154,6 +157,38 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
       }
     }
   });
+
+  it.each(["current", "legacy"])(
+    "refuses unknown reservations and foreign receipts for %s updaters",
+    async (driver) => {
+      const f = fixture();
+      const owner = await createManagedCommandProcessCustody({
+        roots: f.roots,
+        runId: driver === "legacy" ? "" : "owner",
+        anchorOwner: "doctor:owner",
+      });
+      const other = await createManagedCommandProcessCustody({
+        roots: f.roots,
+        runId: driver === "legacy" ? "" : "other",
+        anchorOwner: "doctor:other",
+      });
+      const reservation = owner.custody.reserve([process.execPath]);
+      const claims = f.store.readCommandChildren(f.roots);
+      try {
+        expect(() => owner.prepareSettlement(process.pid, [])).toThrow(
+          "Unmatched native command reservation",
+        );
+        expect(() => other.prepareSettlement(process.pid, [])).toThrow("belongs to another Doctor");
+        expect(() =>
+          other.prepareSettlement(process.pid + 1, [{ pid: process.pid, startedAt: null }]),
+        ).toThrow("belongs to another Doctor");
+        expect(f.store.readCommandChildren(f.roots)).toEqual(claims);
+      } finally {
+        reservation.settled();
+        owner.releaseAnchors();
+      }
+    },
+  );
 
   it("retains every installation after helper death until the tracked group exits, including orphan rows", async () => {
     const f = fixture();
@@ -196,14 +231,14 @@ for (const root of ${JSON.stringify(f.roots.slice(0, -1))}) {
   if (child.kind !== "acquired") throw new Error("Delegated fixture failed");
   delegated.push(child.lease);
 }
-const command = createManagedCommandProcessCustody({ roots: ${JSON.stringify(namespaces)}, parents: delegated, runId: "tracked-owner", assertCurrent() {
+const command = await createManagedCommandProcessCustody({ roots: ${JSON.stringify(namespaces)}, parents: delegated, runId: "tracked-owner", assertCurrent() {
   if (parents.some((lease) => !store.owns(lease, "executor"))) throw new Error("Fixture authority changed");
 } });
 command.custody.reserve([process.execPath, "-e", "process.stdin.resume()"]).spawned({pid: ${holder.pid}, startedAt: null});
 // Reopen an orphan produced before canonical anchors existed, without using the new producer.
 const orphan = store.acquire(${JSON.stringify(`${f.roots.at(-1)!}/.openclaw-update-child-historical-command`)}, "tracked-owner", {kind:"update", custody:"reserved"});
 if (orphan.kind !== "acquired" || !store.bindUpdateChildren([orphan.lease], ${holder.pid})) throw new Error("Historical orphan fixture failed");
-createManagedCommandProcessCustody({ roots: [${JSON.stringify(pendingRoot)}], runId: "pending-owner", databaseIdentity: command.databaseIdentity }).custody.reserve([process.execPath]);
+(await createManagedCommandProcessCustody({ roots: [${JSON.stringify(pendingRoot)}], runId: "pending-owner", databaseIdentity: command.databaseIdentity })).custody.reserve([process.execPath]);
 process.kill(process.pid, "SIGKILL");
 `,
       );

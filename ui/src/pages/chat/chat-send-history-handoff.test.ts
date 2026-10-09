@@ -59,8 +59,10 @@ it("retains foreground attachment custody when history settles during the input 
     expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
     history.resolve(result);
     await loading;
-    const draining = resumeStoredChatOutboxes(host);
-    await draining;
+    await Promise.all([
+      resumeStoredChatOutboxes(host),
+      resumeStoredChatOutboxes({ ...host, chatQueue: [] }),
+    ]);
     // Main now retains this admission in the shared outbox owner. Neither
     // history settlement nor a passive drain may deliver before input resumes.
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);

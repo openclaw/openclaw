@@ -69,23 +69,13 @@ function parseExecApprovalResultWithMetadata(
   }
 
   const remainder = raw.slice(metadataEnd + 1);
-  if (bodySeparator === ":") {
-    if (!remainder.startsWith(":")) {
-      return null;
-    }
-    return {
-      metadata,
-      body: remainder.slice(1).trim(),
-    };
-  }
-
-  if (remainder && !remainder.startsWith("\n")) {
+  if (!remainder.startsWith(bodySeparator) && (bodySeparator === ":" || remainder)) {
     return null;
   }
 
   return {
     metadata,
-    body: remainder.startsWith("\n") ? remainder.slice(1).trim() : "",
+    body: remainder.slice(1).trim(),
   };
 }
 

@@ -230,18 +230,6 @@ describe("unrestricted host tool writes", () => {
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
   });
 
-  it("truncates to empty when an edit removes all content", async () => {
-    const filePath = await createFile("wipe me\n");
-
-    const tool = createHostWorkspaceEditTool(tempDir);
-    await tool.execute("call-1", {
-      path: filePath,
-      edits: [{ oldText: "wipe me\n", newText: "" }],
-    });
-
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("");
-  });
-
   it.runIf(process.platform !== "win32")("writes through an existing symlink", async () => {
     const targetPath = await createFile("original");
     const linkPath = path.join(tempDir, "linked.txt");

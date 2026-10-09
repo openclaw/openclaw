@@ -221,22 +221,24 @@ function resolvedSessionRouteData(params: {
   preferenceDerived: boolean;
   isResolutionSourceCurrent: () => boolean;
   shortId?: string;
+  mainTarget?: Extract<SessionPathTarget, { kind: "main" }>;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   // The loader owns face resolution: a preference-derived open adopts the row's stored
   // face, so the page renders that board directly and replaces the URL with the matching
   // namespace instead of re-deriving a face from the path it was handed.
   const face = params.preferenceDerived ? resolveSessionPreferredFace(params.row) : params.face;
+  const mainTarget = isUiGlobalSessionKey(params.row.key) ? params.mainTarget : undefined;
   const canonicalLocation = canonicalSessionLocation({
     context: params.context,
     location: params.location,
     face,
-    row: params.row,
+    row: mainTarget ? { key: mainSessionKey(params.context, mainTarget) } : params.row,
     ...(params.shortId ? { shortIdLength: params.shortId.length } : {}),
   });
   if (canonicalLocation === undefined) {
     return null;
   }
-  if (canonicalLocation && params.isResolutionSourceCurrent()) {
+  if (!mainTarget && canonicalLocation && params.isResolutionSourceCurrent()) {
     // A delayed response cannot transfer its key into a replacement connection.
     prepareSessionNavigationHandoff(
       params.context.gateway,
@@ -247,48 +249,14 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
-    ...(params.row.agentId ? { agentId: params.row.agentId } : {}),
+    ...(mainTarget
+      ? { agentId: mainTarget.agentId }
+      : params.row.agentId
+        ? { agentId: params.row.agentId }
+        : {}),
     ...sessionRouteHints(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
-    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
-  };
-}
-
-function resolvedMainSessionRouteData(params: {
-  context: ApplicationContext;
-  location: RouteLocation;
-  face: BoardFace;
-  row: SessionRoutePresentation;
-  target: Extract<SessionPathTarget, { kind: "main" }>;
-  preferenceDerived: boolean;
-  isResolutionSourceCurrent: () => boolean;
-}): Extract<ChatRouteData, { kind: "session" }> | null {
-  if (!isUiGlobalSessionKey(params.row.key)) {
-    return resolvedSessionRouteData(params);
-  }
-  const face = params.preferenceDerived ? resolveSessionPreferredFace(params.row) : params.face;
-  const pathname = pathForSession(
-    face,
-    params.target.agentId,
-    mainSessionKey(params.context, params.target),
-    params.context.basePath,
-    { mainKey: configuredMainKey(params.context) },
-  );
-  if (!pathname) {
-    return null;
-  }
-  const location = locationWithoutNavigationHints(params.location);
-  const canonicalLocation =
-    pathname !== params.location.pathname || location.search !== params.location.search
-      ? { ...location, pathname }
-      : undefined;
-  return {
-    kind: "session",
-    sessionKey: params.row.key,
-    agentId: params.target.agentId,
-    ...sessionRouteHints(params.location),
-    face,
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
@@ -317,14 +285,23 @@ export async function loadChatRoute(
   const { target } = resolvedTarget;
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const presentation = {
+    context,
+    isResolutionSourceCurrent,
+    location: routeLocation,
+    face,
+    preferenceDerived,
+  };
+  const resolveReference = (key: string, slug?: string) =>
+    querySessionReference(
+      context,
+      { key, agentId: target.agentId, ...(slug ? { slug } : {}) },
+      signal,
+    );
   const revalidatedResolution =
     revalidation?.sessionKey &&
     (target.kind === "short" || (target.kind === "literal" && target.slugCandidate))
-      ? await querySessionReference(
-          context,
-          { key: revalidation.sessionKey, agentId: target.agentId },
-          signal,
-        )
+      ? await resolveReference(revalidation.sessionKey)
       : undefined;
   if (revalidatedResolution === null) {
     // A retired connection is retryable discovery, not authoritative absence.
@@ -341,11 +318,7 @@ export async function loadChatRoute(
       : null;
     let resolvedFace = face;
     if (preferenceDerived) {
-      const resolution = await querySessionReference(
-        context,
-        { key: sessionKey, agentId: target.agentId },
-        signal,
-      );
+      const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {
         resolvedFace = resolveSessionPreferredFace(resolution.session);
         const pathname = pathForSession(
@@ -377,20 +350,12 @@ export async function loadChatRoute(
     }
     const sessionKey = mainSessionKey(context, target);
     if (preferenceDerived) {
-      const resolution = await querySessionReference(
-        context,
-        { key: sessionKey, agentId: target.agentId },
-        signal,
-      );
+      const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {
-        const resolved = resolvedMainSessionRouteData({
-          context,
-          isResolutionSourceCurrent,
-          location: routeLocation,
-          face,
+        const resolved = resolvedSessionRouteData({
+          ...presentation,
           row: resolution.session,
-          target,
-          preferenceDerived,
+          mainTarget: target,
         });
         return resolved ?? notFound({ routeId: face });
       }
@@ -433,23 +398,11 @@ export async function loadChatRoute(
         revalidatedResolution ??
         (cachedRow
           ? ({ kind: "unique", session: cachedRow } as const)
-          : await querySessionReference(
-              context,
-              {
-                key: target.sessionKey,
-                agentId: target.agentId,
-                ...(target.slugCandidate ? { slug: target.slugCandidate } : {}),
-              },
-              signal,
-            ));
+          : await resolveReference(target.sessionKey, target.slugCandidate));
       if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
-          context,
-          isResolutionSourceCurrent,
-          location: routeLocation,
-          face,
+          ...presentation,
           row: resolution.session,
-          preferenceDerived,
         });
         return resolved
           ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
@@ -553,10 +506,8 @@ export async function loadChatRoute(
           return null;
         }
         const canonical = resolvedSessionRouteData({
-          context,
+          ...presentation,
           isResolutionSourceCurrent: resolution.isCurrent,
-          location: routeLocation,
-          face,
           row: resolved.session,
           preferenceDerived: false,
           shortId: target.shortId,
@@ -581,19 +532,11 @@ export async function loadChatRoute(
     }
     // A mechanically composed literal, notably a full UUID, can match the short grammar.
     // Only after the authoritative short lookup misses may its exact decoded key win.
-    const literalResolution = await querySessionReference(
-      context,
-      { key: target.literalSessionKey, agentId: target.agentId },
-      signal,
-    );
+    const literalResolution = await resolveReference(target.literalSessionKey);
     if (literalResolution?.kind === "unique") {
       const literal = resolvedSessionRouteData({
-        context,
-        isResolutionSourceCurrent,
-        location: routeLocation,
-        face,
+        ...presentation,
         row: literalResolution.session,
-        preferenceDerived,
       });
       return literal ?? notFound({ routeId: face });
     }
@@ -612,13 +555,10 @@ export async function loadChatRoute(
     );
   }
   const resolved = resolvedSessionRouteData({
-    context,
+    ...presentation,
     // RPC resolution owns the connection acquired after a cold route waited for hello.
     isResolutionSourceCurrent: resolution.isCurrent,
-    location: routeLocation,
-    face,
     row: resolution.session,
-    preferenceDerived,
     shortId: target.shortId,
   });
   return resolved

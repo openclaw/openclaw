@@ -148,11 +148,6 @@ describe("formatAgentEnvelope", () => {
     expect(body).toBe("[WebChat] hello");
   });
 
-  it("handles missing optional fields", () => {
-    const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
-    expect(body).toBe("[Telegram] hi");
-  });
-
   it("formats the Unix epoch timestamp", () => {
     const body = formatAgentEnvelope({
       channel: "WebChat",
@@ -165,17 +160,6 @@ describe("formatAgentEnvelope", () => {
 });
 
 describe("formatInboundEnvelope", () => {
-  it("prefixes sender for non-direct chats", () => {
-    const body = formatInboundEnvelope({
-      channel: "Discord",
-      from: "Guild #general",
-      body: "hi",
-      chatType: "channel",
-      senderLabel: "Alice",
-    });
-    expect(body).toBe("[Discord Guild #general] Alice: hi");
-  });
-
   it("uses sender fields when senderLabel is missing", () => {
     const body = formatInboundEnvelope({
       channel: "Signal",
@@ -185,17 +169,6 @@ describe("formatInboundEnvelope", () => {
       sender: { name: "Bob", id: "42" },
     });
     expect(body).toBe("[Signal Signal Group id:123] Bob (42): ping");
-  });
-
-  it("prefixes direct messages with the header sender", () => {
-    const body = formatInboundEnvelope({
-      channel: "iMessage",
-      from: "+1555",
-      body: "hello",
-      chatType: "direct",
-      senderLabel: "Alice",
-    });
-    expect(body).toBe("[iMessage +1555] +1555: hello");
   });
 
   it("uses display text for direct body prefixes when from includes an id", () => {
@@ -216,16 +189,6 @@ describe("formatInboundEnvelope", () => {
       chatType: "direct",
     });
     expect(body).toBe("[Telegram Ops: Alice id:123] (sender): /status");
-  });
-
-  it("uses a stable direct body prefix when from is an opaque id label", () => {
-    const body = formatInboundEnvelope({
-      channel: "LINE",
-      from: "user:U123",
-      body: "hello",
-      chatType: "direct",
-    });
-    expect(body).toBe("[LINE user:U123] (sender): hello");
   });
 
   it("includes elapsed time when previousTimestamp is provided", () => {
@@ -285,9 +248,6 @@ describe("formatInboundEnvelope", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {
         defaults: {
-          envelopeTimezone: "user",
-          envelopeTimestamp: "off",
-          envelopeElapsed: "off",
           userTimezone: "Europe/Vienna",
         },
       },

@@ -226,12 +226,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   retainAttachmentsOnKeep?: boolean;
   /** Spawner plus ancestor sessions authorized to wait, frozen when the collector is registered. */
   swarmWaitOwnerSessionKeys?: string[];
-  /** Stable scheduler slot identity across gateway-assigned run id replacements. */
-  schedulerSlotId?: string;
   /** Exact host-reserved Gateway request identity for the current collector turn. */
   swarmLaunchIdempotencyKey?: string;
-  /** Replay-safe host bridge identity used to recover a collector after restart. */
-  swarmLaunchReplayKey?: string;
   /** Canonical collector request hash paired with a host-reserved launch identity. */
   swarmLaunchRequestFingerprint?: string;
   /** True only between host reservation and accepted Gateway dispatch. */
@@ -269,6 +265,7 @@ export type SubagentRegistrationScope = {
   readonly canLaunch: () => boolean;
   readonly canCleanupSession: () => boolean;
   readonly canAcceptLaunch: () => boolean;
+  readonly canAbortAcceptedRun: () => boolean;
   readonly canRetireReservation: () => boolean;
   readonly settleFailedLaunch: (error: string) => Promise<void>;
 };

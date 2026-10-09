@@ -158,6 +158,17 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When Memory Core owns the memory slot, its Gateway service opens each configured
+agent's memory manager at startup and after plugin replacement. Watched file
+changes can then update the index without a search or agent turn. Retiring an
+instance closes its managers, including file watchers, timers, and session
+listeners. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+before reporting the previous runtime restored. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
+
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
@@ -170,8 +181,10 @@ unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
 
 When native file watching is unavailable, Memory Core uses background polling
-with a 30-second minimum interval, including when polling is explicitly enabled
-with `CHOKIDAR_USEPOLLING`. A larger `CHOKIDAR_INTERVAL` is honored. Native events
+with a 30-second default interval, including when polling is explicitly enabled
+with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
+with a 20 ms minimum. Shorter intervals increase background scanning cost,
+especially for large memory trees. Native events
 still trigger prompt, debounced updates. Automatic fallback logs one warning per
 watcher lifetime. A running memory manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;

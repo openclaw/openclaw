@@ -1,4 +1,3 @@
-/** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
 import {
   resolveAgentRunLifecycleTerminalFacts,
   resolveAgentRunTerminalFacts,
@@ -138,17 +137,17 @@ function getAgentRunAttemptFailure(
       : terminal.failure;
 }
 
-function withAgentRunAttemptFailure<T extends AgentRunAttemptTerminal>(
-  terminal: T,
+function withAgentRunAttemptFailure(
+  terminal: AgentRunAttemptTerminal,
   failure: AgentRunAttemptFailure | undefined,
-): T {
+): AgentRunAttemptTerminal {
   if (!failure || terminal.kind === "ok") {
     return terminal;
   }
   if (terminal.kind === "failed") {
-    return { ...terminal, ...failure } as T;
+    return { ...terminal, ...failure };
   }
-  return { ...terminal, failure } as T;
+  return { ...terminal, failure };
 }
 
 function withAgentRunAttemptTimeoutObservation(
@@ -387,7 +386,6 @@ export {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 export { mergeAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
 
-/** Raw terminal input collected from run wait/liveness/timeout paths. */
 type AgentRunTerminalInput = AgentRunTerminalFactInput & {
   error?: unknown;
   startedAt?: unknown;
@@ -423,6 +421,8 @@ function formatAgentRunTerminalOutcome(
   input: Pick<AgentRunTerminalInput, "error" | "startedAt" | "endedAt">,
 ): AgentRunTerminalOutcome {
   const { reason, status, ...metadata } = facts;
+  const startedAt = asFiniteTimestamp(input.startedAt);
+  const endedAt = asFiniteTimestamp(input.endedAt);
   const rawError =
     input.error == null ? undefined : asNonEmptyString(formatErrorMessage(input.error));
   const error =
@@ -442,23 +442,17 @@ function formatAgentRunTerminalOutcome(
     status,
     ...(error ? { error } : {}),
     ...metadata,
-    ...(asFiniteTimestamp(input.startedAt) !== undefined
-      ? { startedAt: asFiniteTimestamp(input.startedAt) }
-      : {}),
-    ...(asFiniteTimestamp(input.endedAt) !== undefined
-      ? { endedAt: asFiniteTimestamp(input.endedAt) }
-      : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(endedAt !== undefined ? { endedAt } : {}),
   };
 }
 
-/** Builds the normalized terminal outcome from raw run status metadata. */
 export function buildAgentRunTerminalOutcome(
   input: AgentRunTerminalInput,
 ): AgentRunTerminalOutcome {
   return formatAgentRunTerminalOutcome(resolveAgentRunTerminalFacts(input), input);
 }
 
-/** Builds the canonical outcome directly from a terminal lifecycle event. */
 export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   phase: "end" | "error";
   data?: AgentRunLifecycleTerminalData;
@@ -500,7 +494,6 @@ function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => b
   return false;
 }
 
-/** Maps the closed embedded-attempt terminal into the canonical run outcome. */
 export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   terminal: AgentRunAttemptTerminal;
   promptTimeoutOutcome?: {

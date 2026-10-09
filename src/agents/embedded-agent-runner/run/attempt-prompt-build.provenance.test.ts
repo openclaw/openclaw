@@ -12,14 +12,16 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  markPendingFinalDelivery,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
 import {
   createLifecycleControllerFixture,
   installLifecycleWorkerAckFixture,
 } from "../../subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
-import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "../../subagents/registry/subagent-registry-public-api.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
@@ -181,60 +183,38 @@ describe("prompt-build hook context input provenance", () => {
     expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
   });
 
-  it("lets ordinary prompt-build output reach the semantic prefilter admission", async () => {
-    const { prompt } = await assembleWithCapturedHookCtx(
-      "ordinary-hook-decision-context",
-      { supportsTurnScopedToolRestrictions: true },
-      { hookResult: { appendContext: "Answer warmly without tools." } },
-    );
+  it.each([
+    { requiresToolAuthority: undefined, reason: "ineligible" },
+    { requiresToolAuthority: true, reason: "pending-action-context" },
+  ] as const)(
+    "gates semantic prefilter admission for authority=$requiresToolAuthority",
+    async ({ requiresToolAuthority, reason }) => {
+      const { prompt } = await assembleWithCapturedHookCtx(
+        "hook-prefilter-admission",
+        { supportsTurnScopedToolRestrictions: true },
+        { requiresToolAuthority, hookResult: { appendContext: "Answer warmly without tools." } },
+      );
+      expect(prompt.decisionPrefilter).toMatchObject({
+        shouldPruneTools: false,
+        status: "skipped",
+        reason,
+      });
+    },
+  );
 
-    expect(prompt.decisionPrefilter).toMatchObject({
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: "ineligible",
+  it.each([
+    undefined,
+    {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:session-a",
+      sourceTool: "sessions_send",
+    },
+  ] as const)("carries typed provenance into the prompt hook: %j", async (inputProvenance) => {
+    const { captured } = await assembleWithCapturedHookCtx("provenance-hook-turn", {
+      inputProvenance,
     });
-  });
-
-  it("continues to block prefiltering for authority-dependent prompt hooks", async () => {
-    const { prompt } = await assembleWithCapturedHookCtx(
-      "authorized-hook-prefilter-guard",
-      { supportsTurnScopedToolRestrictions: true },
-      { requiresToolAuthority: true },
-    );
-
-    expect(prompt.decisionPrefilter).toMatchObject({
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: "pending-action-context",
-    });
-  });
-
-  it("exposes inter-session provenance on the before_prompt_build context", async () => {
-    const { captured } = await assembleWithCapturedHookCtx("provenance-hook-inter-session", {
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:session-a",
-        sourceTool: "sessions_send",
-      },
-    });
-
     expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({
-      trigger: "user",
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:session-a",
-        sourceTool: "sessions_send",
-      },
-    });
-  });
-
-  it("leaves provenance undefined for ordinary human turns", async () => {
-    const { captured } = await assembleWithCapturedHookCtx("provenance-hook-human-turn");
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({ trigger: "user" });
-    expect(captured[0]?.inputProvenance).toBeUndefined();
+    expect(captured[0]).toMatchObject({ trigger: "user", inputProvenance });
   });
 });
 

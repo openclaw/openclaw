@@ -2,9 +2,15 @@ import type {
   QuestionAnswers,
   QuestionRequestQuestion,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import type { PreparedSessionEntryWorkerRead } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { isEmbeddedMode } from "../../infra/embedded-mode.js";
 import type { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
 import type { GatewayQuestionCall } from "../tools/gateway-question-lifecycle.js";
+import {
+  readQuestionDispatchCapability,
+  prepareQuestionInputAuthority,
+  type QuestionInputAuthority,
+} from "./host-private-capabilities.js";
 import type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputQuestion,
@@ -19,10 +25,32 @@ export type AgentHarnessQuestionGatewayCall = (
 
 type QuestionDispatchAuthority =
   | { kind: "unscoped" }
-  | { kind: "source-bound"; assertCurrent: () => void };
+  | {
+      kind: "source-bound";
+      /** @deprecated Await assertCurrentAsync before the final synchronous assertion. */
+      assertCurrent: () => void;
+      assertCurrentAsync?: () => Promise<void>;
+    };
 
 export class QuestionDispatchRefusedError extends Error {
   override name = "QuestionDispatchRefusedError";
+}
+
+export function refuseQuestionDispatch(error: unknown): never {
+  throw new QuestionDispatchRefusedError(
+    error instanceof Error ? error.message : "question dispatch authority refused",
+    { cause: error },
+  );
+}
+
+export async function prepareQuestionDispatchAuthority(authority: QuestionInputAuthority) {
+  try {
+    const prepared = await prepareQuestionInputAuthority(authority);
+    await prepared.prepareCurrent?.();
+    return prepared;
+  } catch (error) {
+    return refuseQuestionDispatch(error);
+  }
 }
 
 /** No input was submitted; the inherited name preserves legacy runtime refusal propagation. */
@@ -82,6 +110,30 @@ export type AgentQuestionDispatcher = {
   }) => Promise<unknown>;
 };
 
+/** The effect starts inside the reader's synchronous consumer, before its authority expires. */
+export async function withQuestionDispatchAuthority<T>(
+  authority: { assertCurrent: () => void } | undefined,
+  consume: () => T,
+): Promise<T> {
+  const capability = readQuestionDispatchCapability(authority?.assertCurrent);
+  const callerRead = capability?.callerRead;
+  if (!callerRead) {
+    (capability?.assertCompatibilityCurrent ?? authority?.assertCurrent)?.();
+    return consume();
+  }
+  const { withSessionEntriesFromStoresInWorker } =
+    await import("../../config/sessions/session-entry-read-runtime.js");
+  const consumePrepared = (reads: readonly PreparedSessionEntryWorkerRead[]) => {
+    callerRead.assertPrepared(reads);
+    authority?.assertCurrent();
+    return { value: consume() };
+  };
+  const result = await withSessionEntriesFromStoresInWorker(callerRead.reads, consumePrepared, {
+    ordered: true,
+  });
+  return result.value;
+}
+
 export function resolveAgentQuestionGatewayCall(
   dispatcher?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher,
 ): GatewayQuestionCall {
@@ -91,6 +143,13 @@ export function resolveAgentQuestionGatewayCall(
   let embeddedBroker: EmbeddedQuestionBroker | null = null;
   return async (...args) => {
     const [method, options, params, extra] = args;
+    if (dispatcher && extra?.dispatchAuthority?.kind === "run") {
+      const authority = extra.dispatchAuthority;
+      (
+        readQuestionDispatchCapability(authority.assertCurrent)?.assertCompatibilityCurrent ??
+        authority.assertCurrent
+      )();
+    }
     if (typeof dispatcher === "function") {
       if (extra?.dispatchAuthority?.kind === "source-bound") {
         extra.dispatchAuthority.assertCurrent();
@@ -98,7 +157,7 @@ export function resolveAgentQuestionGatewayCall(
           "source-bound question input requires the default or a version 2 dispatcher",
         );
       }
-      return args.length === 4
+      return args.length === 4 && (!extra?.dispatchAuthority || extra.signal)
         ? dispatcher(method, options, params, extra?.signal ? { signal: extra.signal } : undefined)
         : dispatcher(method, options, params);
     }
@@ -110,7 +169,13 @@ export function resolveAgentQuestionGatewayCall(
         signal: extra?.signal,
         authority:
           extra?.dispatchAuthority?.kind === "source-bound"
-            ? { kind: "source-bound", assertCurrent: extra.dispatchAuthority.assertCurrent }
+            ? {
+                kind: "source-bound",
+                assertCurrent:
+                  readQuestionDispatchCapability(extra.dispatchAuthority.assertCurrent)
+                    ?.assertCompatibilityCurrent ?? extra.dispatchAuthority.assertCurrent,
+                assertCurrentAsync: extra.dispatchAuthority.prepareCurrent,
+              }
             : { kind: "unscoped" },
       });
     }
@@ -120,9 +185,11 @@ export function resolveAgentQuestionGatewayCall(
     }
     if (embeddedBroker) {
       // Cancellation/readback stay with the original owner during backend shutdown.
+      await extra?.dispatchAuthority?.prepareCurrent?.();
       extra?.signal?.throwIfAborted();
-      extra?.dispatchAuthority?.assertCurrent();
-      return embeddedBroker.call(method, params, extra);
+      return withQuestionDispatchAuthority(extra?.dispatchAuthority, () =>
+        embeddedBroker!.call(method, params, extra),
+      );
     }
     // Keep tool/runtime dependencies out of question registration and SDK imports.
     const { callGatewayTool } = await import("./gateway-question-dispatch.runtime.js");
