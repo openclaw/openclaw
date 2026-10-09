@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -71,6 +71,43 @@ import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.t
 import { registerWindowsTaskAdmissionTests } from "./update-cli/update-command-windows-preflight.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
+
+let resetNativeLoader: (() => void) | undefined;
+beforeAll(async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  // Match fs-safe's Windows simulation: retain native publication, add host identity facts.
+  const nativeUrl = new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href;
+  const {
+    __loadBundledNativeForTest: loadBundledNative,
+    __setNativeLoaderForTest: setNativeLoader,
+    __resetNativeLoaderForTest: resetLoader,
+  } = await vi.importActual<{
+    __loadBundledNativeForTest: () => Record<string, unknown>;
+    __setNativeLoaderForTest: (loader: () => Record<string, unknown>) => void;
+    __resetNativeLoaderForTest: () => void;
+  }>(nativeUrl);
+  const binding = loadBundledNative();
+  setNativeLoader(() => ({
+    ...binding,
+    fstatIdentity(fd: number) {
+      const stat = fsSync.fstatSync(fd);
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        mode: stat.mode,
+        nlink: stat.nlink,
+        size: stat.size,
+        isFile: stat.isFile(),
+        isDirectory: stat.isDirectory(),
+        isSymbolicLink: stat.isSymbolicLink(),
+      };
+    },
+  }));
+  resetNativeLoader = resetLoader;
+});
+afterAll(() => resetNativeLoader?.());
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
