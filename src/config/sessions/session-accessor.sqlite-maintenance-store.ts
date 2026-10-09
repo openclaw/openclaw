@@ -5,12 +5,12 @@ import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   collectProjectedReferencedSessionIds,
   collectSessionStateIdsForEntry,
-  planSessionStateDeleteIfUnreferenced,
   readSessionGenerationIdsForKeys,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {

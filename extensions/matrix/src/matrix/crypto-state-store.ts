@@ -10,7 +10,7 @@ import {
   writeMatrixStateChunks,
 } from "./chunked-state.js";
 import type { MatrixStoredRecoveryKey } from "./sdk/types.js";
-import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
+import { resolveMatrixSqliteStateEnv, updateMatrixKeyedState } from "./sqlite-state.js";
 
 const STATE_KEY = "current";
 const RECOVERY_KEY_NAMESPACE = "recovery-key";
@@ -90,55 +90,26 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
   if (!payload) {
     throw new Error("Invalid Matrix recovery key state");
   }
-  if (params.preserveEncodedPrivateKey) {
-    await updateMatrixRecoveryKeyState(
-      params,
-      (current) =>
-        normalizeMatrixStoredRecoveryKey({
-          ...payload,
-          encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
-        }) ?? undefined,
-    );
-    return;
-  }
-  await params.stateRuntime
-    .openKeyedStore<MatrixStoredRecoveryKey>(
-      openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
-    )
-    .register(resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath), payload);
-}
-
-async function updateMatrixRecoveryKeyState(
-  params: { recoveryKeyPath: string; stateRuntime: MatrixSnapshotStateRuntime },
-  update: (current: MatrixStoredRecoveryKey | undefined) => MatrixStoredRecoveryKey | undefined,
-): Promise<void> {
   const store = params.stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
   );
   const key = resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath);
-  if (!store.observe || !store.compareAndApply) {
-    // The published >=2026.9.4 host floor supplies callback updates, before data-only CAS.
-    if (!store.update) {
-      throw new Error("Matrix recovery key store does not support atomic updates");
-    }
-    await store.update(key, update);
+  if (params.preserveEncodedPrivateKey) {
+    const update = (current: MatrixStoredRecoveryKey | undefined) =>
+      normalizeMatrixStoredRecoveryKey({
+        ...payload,
+        encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
+      }) ?? undefined;
+    await updateMatrixKeyedState(store, key, update, async () => {
+      // The published >=2026.9.4 host floor supplies callback updates, before data-only CAS.
+      if (!store.update) {
+        throw new Error("Matrix recovery key store does not support atomic updates");
+      }
+      return await store.update(key, update);
+    });
     return;
   }
-  let observation = await store.observe(key);
-  for (;;) {
-    const value = update(observation.value);
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      value === undefined
-        ? { operation: "update", action: "keep" }
-        : { operation: "update", action: "set", value },
-    );
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
+  await store.register(key, payload);
 }
 
 export async function readMatrixIdbSnapshotJson(

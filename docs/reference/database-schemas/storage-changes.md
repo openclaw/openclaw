@@ -1924,6 +1924,21 @@ at most one reusable archive worker; competing scopes retire the previous idle w
 Cold preparation and mutations retain their separate one-shot workers; cold mutations
 join their existing page maintenance and native exit.
 
+History eviction prepares its deletion snapshot in that archive worker's existing
+materialization request. The final reclamation transaction rereads durable references,
+recency, and the complete snapshot; host grants recheck live session admissions and
+the captured physical database. Archive publication keeps that same source fence.
+A foreign update after materialization is resolved by that final transaction,
+and a refusal still joins worker cleanup. Retention policy, archive selection,
+schemas, and update behavior are unchanged.
+
+Deletion snapshots select the window, rewrite generation, transcript and trajectory
+tails, and parent-stream count in one statement. Missing windows still retain their
+orphan-child comparisons. Atomic reset also reuses progress-card metadata already
+read inside its write transaction, preserving revision tombstones and numeric
+validation. Neither change retains facts across operations or weakens foreign-commit
+freshness.
+
 Single-candidate reference checks narrow which node metadata reaches JavaScript.
 Rows with optional historical references still use the canonical entry parser, and
 ambiguous SQLite text or JSON retains the full read path. Each check reads current rows

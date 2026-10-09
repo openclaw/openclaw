@@ -1929,6 +1929,7 @@ src/config/sessions/session-pin-policy.ts
 src/config/sessions/session-sharing-store.kernel.ts
 src/config/sessions/session-transcript-anchor-read.kernel.ts
 src/config/sessions/store-maintenance.ts
+src/config/sessions/store-maintenance-activity.ts
 src/utils/chunk-items.ts
 src/utils/message-channel-normalize.ts
 src/utils/message-channel.ts

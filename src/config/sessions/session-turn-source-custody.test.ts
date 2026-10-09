@@ -6,31 +6,14 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-function fixture() {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const scope = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey: "agent:main:turn-source-custody",
-    sessionId: "original",
-  };
-  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  return {
-    scope,
-    read: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-    events: () =>
-      readTranscriptEventRows(database, scope.sessionId).map((row) => JSON.parse(row.eventJson)),
-  };
-}
 
 it.each(["fresh", "replay"])(
   "fences unstaged original input at COMMIT while retaining %s semantics",

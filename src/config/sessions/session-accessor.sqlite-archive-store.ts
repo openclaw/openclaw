@@ -47,15 +47,22 @@ export async function publishSessionStateArchives(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
   storage?: SessionArchivePublicationStorage,
+  assertSourceCurrent?: () => void,
 ): Promise<SessionLifecycleArchivedTranscript[]> {
+  assertSourceCurrent?.();
   if (storage) {
     return publishPreparedSessionStateArchives(requested, storage);
   }
   const databaseOptions = resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope));
   const forceInProcess =
     hasPreparedNativeSessionDeletion() || !supportsOpenClawAgentDatabaseExecution(databaseOptions);
-  return withSqliteMutationWorkerLifetime(databaseOptions, ({ assertCurrent, signal }) =>
-    withSqliteTranscriptArchiveSession(databaseOptions, async () => {
+  return withSqliteMutationWorkerLifetime(databaseOptions, (lifetime) => {
+    const { signal } = lifetime;
+    const assertCurrent = () => {
+      lifetime.assertCurrent();
+      assertSourceCurrent?.();
+    };
+    return withSqliteTranscriptArchiveSession(databaseOptions, async () => {
       if (!forceInProcess && requested.length === 0) {
         try {
           const pending = await readPendingSqliteTranscriptArchivesInWorker(
@@ -175,8 +182,8 @@ export async function publishSessionStateArchives(
       }
       claim.release();
       return result;
-    }),
-  );
+    });
+  });
 }
 
 async function publishPreparedSessionStateArchives(

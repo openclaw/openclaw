@@ -1,5 +1,6 @@
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -62,27 +63,23 @@ function shouldHandleSlackModalLifecycleBody(body: unknown): boolean {
 function resolveSlackPluginSystemEventPayload(
   result: unknown,
 ): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
+  const systemEvent = asOptionalObjectRecord(asOptionalObjectRecord(result)?.systemEvent);
+  if (!systemEvent) {
     return undefined;
   }
-  const systemEvent = (result as { systemEvent?: unknown }).systemEvent;
-  if (!systemEvent || typeof systemEvent !== "object") {
-    return undefined;
-  }
-  const typed = systemEvent as {
-    summary?: unknown;
-    reference?: unknown;
-    data?: unknown;
-  };
   const output: Record<string, unknown> = {};
-  if (typeof typed.summary === "string" && typed.summary.trim()) {
-    output.summary = typed.summary;
+  if (typeof systemEvent.summary === "string" && systemEvent.summary.trim()) {
+    output.summary = systemEvent.summary;
   }
-  if (typeof typed.reference === "string" && typed.reference.trim()) {
-    output.reference = typed.reference;
+  if (typeof systemEvent.reference === "string" && systemEvent.reference.trim()) {
+    output.reference = systemEvent.reference;
   }
-  if (typed.data && typeof typed.data === "object" && !Array.isArray(typed.data)) {
-    output.data = typed.data;
+  if (
+    systemEvent.data &&
+    typeof systemEvent.data === "object" &&
+    !Array.isArray(systemEvent.data)
+  ) {
+    output.data = systemEvent.data;
   }
   return Object.keys(output).length > 0 ? output : undefined;
 }
