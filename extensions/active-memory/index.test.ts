@@ -22,6 +22,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import {
   afterAll,
   afterEach,
@@ -1710,48 +1711,42 @@ describe("active-memory plugin", () => {
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { stage: "recall", gateRead: 2 },
-    { stage: "channel", gateRead: 3 },
-  ])(
-    "rechecks the audience after asynchronous $stage metadata preparation",
-    async ({ gateRead }) => {
-      registerPluginConfig({ mode: "always" });
-      const prepared = createDeferred<void>();
-      const resume = createDeferred<Record<string, unknown>>();
-      let audienceCurrent = true;
-      let readIndex = 0;
-      api.runtime.agent.session.getSessionEntryAsync.mockImplementation(
-        (params: { sessionKey: string }) => {
-          if (++readIndex === gateRead) {
-            prepared.resolve();
-            return resume.promise;
+  it("rechecks the audience after asynchronous parent metadata preparation", async () => {
+    registerPluginConfig({ mode: "always" });
+    const prepared = createDeferred<void>();
+    const resume = createDeferred<Record<string, unknown>>();
+    let audienceCurrent = true;
+    api.runtime.agent.session.getSessionEntryAsync.mockImplementationOnce(() => {
+      prepared.resolve();
+      return resume.promise;
+    });
+    const pending = runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey: "agent:main:main",
+        assertMemoryAudienceCurrent: () => {
+          if (!audienceCurrent) {
+            throw new Error("memory audience ended");
           }
-          return Promise.resolve(hoisted.sessionStore[params.sessionKey]);
         },
+      },
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        prepared.promise,
+        pending,
+        "Parent metadata preparation did not start",
       );
-      const pending = runPromptBuild(
-        { prompt: "what did we decide?" },
-        {
-          sessionKey: "agent:main:main",
-          assertMemoryAudienceCurrent: () => {
-            if (!audienceCurrent) {
-              throw new Error("memory audience ended");
-            }
-          },
-        },
-      );
-      await prepared.promise;
       audienceCurrent = false;
       resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
-
       expect(await pending).toBeUndefined();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      if (gateRead === 2) {
-        expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
-      }
-    },
-  );
+      expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve(expectDefined(hoisted.sessionStore["agent:main:main"], "main session"));
+      await Promise.allSettled([pending]);
+    }
+  });
 
   it.each(
     // prettier-ignore
@@ -2245,7 +2240,59 @@ describe("active-memory plugin", () => {
         };
         expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode = false;
       }
-      await runPromptBuild({ prompt: "What is my favorite food? initial mode" });
+      const parent = expectDefined(hoisted.sessionStore["agent:main:main"], "parent session");
+      parent.delivery = {
+        kind: "external",
+        route: { channel: "telegram" },
+        context: { channel: "telegram" },
+        origin: { provider: "telegram" },
+      };
+      const prepared = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const patch = expectDefined(
+        hoisted.patchSessionEntry.getMockImplementation(),
+        "recall creation",
+      );
+      hoisted.patchSessionEntry.mockImplementationOnce(async (...args) => {
+        const result = await patch(...args);
+        prepared.resolve();
+        await resume.promise;
+        return result;
+      });
+      const pending = runPromptBuild(
+        { prompt: "What is my favorite food? initial mode" },
+        sessionDefault ? { sessionId: "s-main" } : { sessionKey: "agent:main:main" },
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          pending,
+          "Recall preparation did not start",
+        );
+        hoisted.sessionStore["agent:main:main"] = {
+          ...parent,
+          fastMode: true,
+          delivery: {
+            kind: "external",
+            route: { channel: "slack" },
+            context: { channel: "slack" },
+            origin: { provider: "slack" },
+          },
+        };
+        resume.resolve();
+        await pending;
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending]);
+      }
+      expectEmbeddedChannel("telegram");
+      if (sessionDefault) {
+        expect(api.runtime.agent.session.getSessionEntryByIdAsync).toHaveBeenCalledOnce();
+        expect(api.runtime.agent.session.getSessionEntryAsync).not.toHaveBeenCalled();
+      } else {
+        expect(api.runtime.agent.session.getSessionEntryAsync).toHaveBeenCalledOnce();
+        expect(api.runtime.agent.session.getSessionEntryByIdAsync).not.toHaveBeenCalled();
+      }
       expect(lastEmbeddedRunParams().fastMode).toBe(initialFast);
       if (sessionDefault) {
         expectLinesToContain(getInfoLines(), "fast=off start");
@@ -2259,6 +2306,7 @@ describe("active-memory plugin", () => {
         registerPluginConfig({ thinking, fastMode: true, logging: true });
       }
       await runPromptBuild({ prompt: "What is my favorite food? changed mode" });
+      expectEmbeddedChannel("slack");
       expect(lastEmbeddedRunParams().fastMode).toBe(true);
       if (sessionDefault) {
         expectLinesToContain(getInfoLines(), "fast=on start");

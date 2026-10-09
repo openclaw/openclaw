@@ -111,6 +111,7 @@ export async function runRecallSubagent(params: {
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   parentSessionKey?: string;
+  parentSessionEntry?: SessionEntry;
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
@@ -254,11 +255,8 @@ export async function runRecallSubagent(params: {
       query: params.query,
       searchQuery: params.searchQuery,
     });
-    const { messageChannel, messageProvider } = await resolveRecallRunChannelContext({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: parentSessionKey,
-      sessionId: params.sessionId,
+    const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
+      sessionEntry: params.parentSessionEntry,
       messageProvider: params.messageProvider,
       channelId: params.channelId,
     });

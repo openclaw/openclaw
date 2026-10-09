@@ -8,7 +8,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCanonicalSessionKeyFromSessionId } from "./session.js";
+import { prepareActiveMemorySession, type ActiveMemorySessionSnapshot } from "./session.js";
 import {
   DEFAULT_AGENT_ID,
   type ActiveMemoryChatType,
@@ -79,7 +79,7 @@ export async function resolveCommandSessionKey(params: {
   const configuredAgents =
     params.config.agents.length > 0 ? params.config.agents : [DEFAULT_AGENT_ID];
   for (const agentId of configuredAgents) {
-    const sessionKey = await resolveCanonicalSessionKeyFromSessionId({
+    const { sessionKey } = await prepareActiveMemorySession({
       api: params.api,
       agentId,
       sessionId: params.sessionId,
@@ -176,33 +176,20 @@ function isAgentHarnessSessionKey(sessionKey: string): boolean {
   return rest.startsWith("harness:");
 }
 
-export async function shouldSkipActiveMemoryForHarnessSession(params: {
-  api: OpenClawPluginApi;
-  agentId?: string;
-  sessionKey?: string;
-}): Promise<boolean> {
+export function shouldSkipActiveMemoryForHarnessSession(
+  params: ActiveMemorySessionSnapshot,
+): boolean {
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return false;
   }
-  try {
-    const entry = await params.api.runtime.agent.session.getSessionEntryAsync({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionKey,
-      readConsistency: "latest",
-    });
-    // A missing reserved key must not synthesize work, while unlocked rows are
-    // grandfathered user sessions from before the namespace was introduced.
-    return (
-      entry?.modelSelectionLocked === true ||
-      (entry === undefined && isAgentHarnessSessionKey(sessionKey))
-    );
-  } catch (error) {
-    rethrowIncognitoSessionError(error);
-    // Recall is optional. If durable ownership cannot be checked, do not risk
-    // crossing a harness/model boundary with an independently selected model.
-    return true;
-  }
+  // A failed read or missing reserved key must not synthesize work. Unlocked
+  // rows are grandfathered user sessions from before the namespace existed.
+  return (
+    params.readFailed ||
+    params.entry?.modelSelectionLocked === true ||
+    (params.entry === undefined && isAgentHarnessSessionKey(sessionKey))
+  );
 }
 
 export function isEligibleInteractiveSession(ctx: {

@@ -3,6 +3,7 @@ import {
   deliveryContextFromSession,
   rethrowIncognitoSessionError,
   sessionDeliveryOrigin,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -13,38 +14,58 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-export async function resolveCanonicalSessionKeyFromSessionId(params: {
-  api: OpenClawPluginApi;
-  agentId: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  const sessionId = params.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
-  }
-  try {
-    const match = await params.api.runtime.agent.session.getSessionEntryByIdAsync({
-      agentId: params.agentId,
-      sessionId,
-    });
-    return match?.sessionKey.trim() || undefined;
-  } catch (error) {
-    rethrowIncognitoSessionError(error);
-    return undefined;
-  }
-}
+export type ActiveMemorySessionSnapshot = {
+  sessionKey?: string;
+  entry: SessionEntry | undefined;
+  readFailed: boolean;
+};
 
-export async function resolveRecallRunChannelContext(params: {
+/** Request-owned preparation only; the host audience still guards recall and publication. */
+export async function prepareActiveMemorySession(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
+  storePath?: string;
+}): Promise<ActiveMemorySessionSnapshot> {
+  const sessionKey = params.sessionKey?.trim() || undefined;
+  const sessionId = params.sessionId?.trim();
+  try {
+    if (sessionKey) {
+      const entry = await params.api.runtime.agent.session.getSessionEntryAsync({
+        agentId: params.agentId,
+        sessionKey,
+        storePath: params.storePath,
+        readConsistency: "latest",
+      });
+      return { sessionKey, entry, readFailed: false };
+    }
+    const match = sessionId
+      ? await params.api.runtime.agent.session.getSessionEntryByIdAsync({
+          agentId: params.agentId,
+          sessionId,
+          storePath: params.storePath,
+        })
+      : undefined;
+    return {
+      sessionKey: match?.sessionKey.trim() || undefined,
+      entry: match?.entry,
+      readFailed: false,
+    };
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    return { sessionKey, entry: undefined, readFailed: true };
+  }
+}
+
+export function resolveRecallRunChannelContext(params: {
+  sessionEntry?: SessionEntry;
   messageProvider?: string;
   channelId?: string;
-}): Promise<{
+}): {
   messageChannel?: string;
   messageProvider?: string;
-}> {
+} {
   const isRunnableChannelName = (channel: string) =>
     !channel.includes(":") && !channel.includes("/");
   const explicitChannel = normalizeOptionalString(params.channelId);
@@ -61,29 +82,14 @@ export async function resolveRecallRunChannelContext(params: {
     (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
-  const resolvedSessionKey =
-    normalizeOptionalString(params.sessionKey) ??
-    (await resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    }));
-  let strongEntryChannel: string | undefined;
-  let weakEntryChannel: string | undefined;
-  if (resolvedSessionKey) {
-    try {
-      const sessionEntry = await params.api.runtime.agent.session.getSessionEntryAsync({
-        agentId: params.agentId,
-        sessionKey: resolvedSessionKey,
-      });
-      const channel = normalizeOptionalString(deliveryContextFromSession(sessionEntry)?.channel);
-      strongEntryChannel = channel && isRunnableChannelName(channel) ? channel : undefined;
-      weakEntryChannel = normalizeOptionalString(sessionDeliveryOrigin(sessionEntry)?.provider);
-    } catch (error) {
-      rethrowIncognitoSessionError(error);
-      // Explicit hints still identify the channel if session lookup is unavailable.
-    }
-  }
+  const entryChannel = normalizeOptionalString(
+    deliveryContextFromSession(params.sessionEntry)?.channel,
+  );
+  const strongEntryChannel =
+    entryChannel && isRunnableChannelName(entryChannel) ? entryChannel : undefined;
+  const weakEntryChannel = normalizeOptionalString(
+    sessionDeliveryOrigin(params.sessionEntry)?.provider,
+  );
   const channel =
     trustedExplicitChannel ??
     strongEntryChannel ??

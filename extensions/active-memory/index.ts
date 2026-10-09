@@ -37,8 +37,9 @@ import {
 } from "./session-policy.js";
 import {
   persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
+  prepareActiveMemorySession,
   resolveStatusUpdateAgentId,
+  type ActiveMemorySessionSnapshot,
 } from "./session.js";
 import { createActiveMemoryHookDeadline } from "./transcript.js";
 import {
@@ -269,15 +270,23 @@ export default definePluginEntry({
         const handlerPromise = (async () => {
           try {
             const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-            const resolvedSessionKey =
-              ctx.sessionKey?.trim() ||
-              (resolvedAgentId
-                ? await resolveCanonicalSessionKeyFromSessionId({
-                    api,
-                    agentId: resolvedAgentId,
-                    sessionId: ctx.sessionId,
-                  })
-                : undefined);
+            const storePath = api.runtime.agent.session.resolveStorePath(
+              liveConfig.session?.store,
+              {
+                agentId: resolvedAgentId || undefined,
+              },
+            );
+            let preparedSession: ActiveMemorySessionSnapshot | undefined;
+            let resolvedSessionKey = ctx.sessionKey?.trim() || undefined;
+            if (!resolvedSessionKey && resolvedAgentId) {
+              preparedSession = await prepareActiveMemorySession({
+                api,
+                agentId: resolvedAgentId,
+                sessionId: ctx.sessionId,
+                storePath,
+              });
+              resolvedSessionKey = preparedSession.sessionKey;
+            }
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
             // Publication is the final boundary: recall that settled after its deadline,
@@ -312,13 +321,15 @@ export default definePluginEntry({
               toolAuthority.assertActive();
               return undefined;
             }
-            if (
-              await shouldSkipActiveMemoryForHarnessSession({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              })
-            ) {
+            preparedSession ??= resolvedSessionKey
+              ? await prepareActiveMemorySession({
+                  api,
+                  agentId: effectiveAgentId,
+                  sessionKey: resolvedSessionKey,
+                  storePath,
+                })
+              : { entry: undefined, readFailed: false };
+            if (shouldSkipActiveMemoryForHarnessSession(preparedSession)) {
               logRecallSkipped("harness-session");
               return undefined;
             }
@@ -536,6 +547,8 @@ export default definePluginEntry({
               agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
               sessionId: ctx.sessionId,
+              sessionEntry: preparedSession.entry,
+              storePath,
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,
