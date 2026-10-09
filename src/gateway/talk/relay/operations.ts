@@ -116,6 +116,8 @@ export function closeRelaySession(
     completion: completion.promise,
   };
   session.closing = closing;
+  // Accepted consults retain their own source; closing audio stops new admission.
+  session.releaseConsultAuthority?.();
   const close = async (admissionFailure?: { error: unknown }) => {
     let borrowed: ReturnType<typeof borrowClientVoiceSessionSource>;
     try {

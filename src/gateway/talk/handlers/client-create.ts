@@ -37,6 +37,7 @@ import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-r
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../server-plugin-in-process-dispatch.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
@@ -78,6 +79,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
   }
   const rejectRequest = (code: Parameters<typeof errorShape>[0], message: string): void =>
     respond(false, undefined, errorShape(code, message));
+  let releaseUnadoptedAuthority: (() => void) | undefined;
   try {
     sessionMutationAuthorization?.assertCurrent();
     if (params.voiceChangeId && params.voiceSessionId) {
@@ -252,12 +254,19 @@ export const createTalkClient: GatewayRequestHandler = async ({
           );
         }
       };
+      const executionContext = ownsProvider
+        ? await captureOperatorToolGatewayContinuationContext()
+        : undefined;
+      releaseUnadoptedAuthority = executionContext?.release;
       const consultRunner = createTalkClientAgentConsultRunner({
         config: runtimeConfig,
         context,
         sessionTarget: target,
         ...(ownerConnId ? { ownerConnId } : {}),
-        authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+        authority: {
+          ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+          executionContext,
+        },
         getVoiceSessionId: () => activeVoiceSessionId,
         initialItems,
       });
@@ -307,6 +316,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
                 voiceSessionId: activeVoiceSessionId!,
               }),
             closeLogicalSession,
+            releaseConsultAuthority: executionContext?.release,
             withCloseSettlement: (run) => {
               const close = async (admissionFailure?: { error: unknown }) => {
                 closingFailure = admissionFailure;
@@ -340,6 +350,9 @@ export const createTalkClient: GatewayRequestHandler = async ({
             },
           })
         : undefined;
+      if (gatewayControlOwner) {
+        releaseUnadoptedAuthority = undefined;
+      }
       const gatewayControl = gatewayControlOwner
         ? {
             ...gatewayControlOwner.control,
@@ -556,5 +569,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
     );
   } catch (err) {
     respond(false, undefined, talkRequestError(err));
+  } finally {
+    releaseUnadoptedAuthority?.();
   }
 };
