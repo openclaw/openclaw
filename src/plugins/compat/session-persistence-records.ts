@@ -383,7 +383,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     introduced: "2026-10-06",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Keep the execution input shape shipped in v2026.9.9 and the prepare(source, signal?) Promise<void> contract retained in v2026.10.1-beta.1 by openOpenClawAgentSqliteWorkerStore. Private host preparation and native-adoption capabilities are not plugin requirements. Host schema readmission uses an optional third argument; existing callers and two-argument implementations remain supported without migration or deprecation.",
+      "Keep the execution input shapes shipped in v2026.9.9 and v2026.10.1-beta.1 by openOpenClawAgentSqliteWorkerStore, including the beta capturePreparedGenerationClaim method for parameter-derived types. Private native-adoption capabilities are not plugin requirements. Host schema readmission uses an optional third argument; existing callers and two-argument prepare implementations remain supported without migration or deprecation.",
     docsPath:
       "/plugins/sdk-migration/compatibility-policy#agent-execution-preparation-compatibility",
     surfaces: [

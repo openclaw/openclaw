@@ -122,15 +122,33 @@ type AgentWorkerPublicationExecution = Pick<
   | "release"
 >;
 
+type AgentWorkerPublicationOptions = {
+  moduleUrl: URL;
+  input: unknown;
+  assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
+};
+
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
+// Keep the latest released shape last for consumers deriving parameters from this function.
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource:
+    | DatabaseSync
+    | {
+        execution: AgentWorkerPublicationExecution &
+          Pick<OpenClawAgentDatabaseExecution, "capturePreparedGenerationClaim">;
+      },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 /** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
-  worker: {
-    moduleUrl: URL;
-    input: unknown;
-    assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
-  },
+  worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);

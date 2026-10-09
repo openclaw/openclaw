@@ -17,9 +17,9 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import * as sessionSourcePredicates from "../../../config/sessions/session-source-predicate.worker.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target-paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import * as sqliteReadScope from "../../../infra/sqlite-schema-facts.js";
 import * as sqliteSnapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -41,6 +41,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db
 import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
+import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -256,20 +257,12 @@ describe("voice creation authority", () => {
       let checkedAfterWrite = false;
       let sdkSawCommittedVoice = false;
       let sdkMutation: Promise<void> | undefined;
-      const observeForeignRead = () => {
+      const observeSourceRead = () => {
         if (localReader.database.db.isTransaction) {
           const written = readVoiceSessionRecordInTransaction(localReader.database, voiceSessionId);
           checkedBeforeWrite ||= !written;
           checkedAfterWrite ||= Boolean(written);
-          if (revoked && written && !revokedSource) {
-            revokedSource = true;
-            const database = revoked === "local" ? localReader.database : foreignDatabase;
-            database.db
-              .prepare(
-                "UPDATE session_nodes SET current_session_id = 'revoked-source', entry_json = json_set(entry_json, '$.sessionId', 'revoked-source') WHERE session_key = ?",
-              )
-              .run(revoked === "local" ? local.sessionKey : foreign.sessionKey);
-          } else if (!revoked && !sdkMutation) {
+          if (!revoked && !sdkMutation) {
             sdkMutation = Promise.resolve().then(() => {
               sdkSawCommittedVoice =
                 !localReader.database.db.isTransaction &&
@@ -281,18 +274,34 @@ describe("voice creation authority", () => {
           }
         }
       };
-      const freshRead = sqliteReadScope.runSqliteReadOperationSync;
+      const validateSource = sessionSourcePredicates.readSessionSourceValidation;
       const foreignReads = vi
-        .spyOn(sqliteReadScope, "runSqliteReadOperationSync")
-        .mockImplementation((database, operation, mode) => {
+        .spyOn(sessionSourcePredicates, "readSessionSourceValidation")
+        .mockImplementation((database, ...args) => {
           if (
-            mode === "fresh" &&
-            findOpenClawAgentDatabaseIdentity({ db: database })?.identity ===
-              foreignIdentity.identity
+            database.db === localReader.database.db ||
+            findOpenClawAgentDatabaseIdentity(database)?.identity === foreignIdentity.identity
           ) {
-            observeForeignRead();
+            observeSourceRead();
           }
-          return freshRead(database, operation, mode);
+          return validateSource(database, ...args);
+        });
+      const mutateVoice = voiceKernel.mutateVoiceSessionInDatabase;
+      const mutationSpy = vi
+        .spyOn(voiceKernel, "mutateVoiceSessionInDatabase")
+        .mockImplementation((database, mutation) => {
+          const result = mutateVoice(database, mutation);
+          if (revoked && mutation.voiceSessionId === voiceSessionId && !revokedSource) {
+            // Revoke before final validation without depending on source-check order.
+            revokedSource = true;
+            const source = revoked === "local" ? database : foreignDatabase;
+            source.db
+              .prepare(
+                "UPDATE session_nodes SET current_session_id = 'revoked-source', entry_json = json_set(entry_json, '$.sessionId', 'revoked-source') WHERE session_key = ?",
+              )
+              .run(revoked === "local" ? local.sessionKey : foreign.sessionKey);
+          }
+          return result;
         });
       const open = readonlyOpen.openOpenClawAgentDatabaseReadOnly;
       const openSpy = vi
@@ -359,6 +368,7 @@ describe("voice creation authority", () => {
         observeAdmission = undefined;
         await sdkMutation;
         foreignReads.mockRestore();
+        mutationSpy.mockRestore();
         openSpy.mockRestore();
         localReads.restore();
         localReader.claim.release();

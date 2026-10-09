@@ -353,8 +353,10 @@ The execution object accepted by
 `prepare(source, signal?) => Promise<void>` contract published in
 `v2026.10.1-beta.1`. Existing callers and two-argument implementations remain
 supported. The publication source also accepts the execution object shape shipped
-in `v2026.9.9`; internal native-adoption and prepared-generation capabilities are
-not required from plugins. Ordinary preparation reuses a completed native generation; host
+in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
+`capturePreparedGenerationClaim` method in parameter-derived types; internal
+native-adoption capabilities are not required from plugins. Ordinary preparation
+reuses a completed native generation; host
 admission can request current schema proof through an optional third argument.
 
 The `agent-execution-preparation-released-signature` compatibility record is
