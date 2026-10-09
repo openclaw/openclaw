@@ -266,14 +266,13 @@ it("preserves a recoverable native row-conversion failure without losing the nex
 it("settles a reset cursor when a callback propagates a nested native refusal", () => {
   const db = open();
   let reenter = false;
-  let statement: ReturnType<typeof db.prepare>;
   db.function("callback", () => {
     if (reenter) {
       statement.get();
     }
     return 1;
   });
-  statement = db.prepare("SELECT callback() AS value UNION ALL SELECT 2");
+  const statement = db.prepare("SELECT callback() AS value UNION ALL SELECT 2");
   const rows = statement.iterate();
   rows.next();
   expect(hasPendingSqliteNativeExecution(db)).toBe(true);
