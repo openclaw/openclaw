@@ -528,16 +528,30 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           }
         };
         assertCurrent();
-        const result = await steerTalkRealtimeRelayAgentRun({
-          relaySessionId: session.relaySessionId,
-          connId,
-          authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
-          sessionKey: normalizeOptionalString(params.sessionKey),
-          text: params.text,
-          mode: params.mode,
-          assertCurrent,
-        });
-        respondOk(respond, result);
+        const executionContext = await captureOperatorToolGatewayContinuationContext();
+        try {
+          const assertSourceCurrent = () => {
+            executionContext?.assertCurrent();
+            assertCurrent();
+          };
+          assertSourceCurrent();
+          const result = await steerTalkRealtimeRelayAgentRun({
+            relaySessionId: session.relaySessionId,
+            connId,
+            authority: {
+              ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+              executionContext,
+            },
+            sessionKey: normalizeOptionalString(params.sessionKey),
+            text: params.text,
+            mode: params.mode,
+            assertCurrent: assertSourceCurrent,
+          });
+          assertSourceCurrent();
+          respondOk(respond, result);
+        } finally {
+          executionContext?.release();
+        }
         return;
       }
       if (session.kind === "transcription-relay") {

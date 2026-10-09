@@ -1,4 +1,6 @@
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -11,14 +13,22 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { prepareTalkClientControlAuthority } from "./client-agent-consult.js";
-import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
+import {
+  createTalkClientAgentConsultRunner,
+  prepareTalkClientControlAuthority,
+} from "./client-agent-consult.js";
+import {
+  resolveTalkAgentConsultAuthority,
+  type TalkAgentConsultAuthority,
+} from "./client-gateway-control.js";
 import { resolveOwnedActiveTalkRunTarget } from "./run-ownership.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
 
@@ -32,6 +42,28 @@ afterEach(() => {
   testing.resetActiveEmbeddedRuns();
   vi.restoreAllMocks();
 });
+
+function createOperatorContinuation(scopes = ["operator.admin"], source: object = {}) {
+  const lifetime = new AbortController();
+  const assertCurrent = () => lifetime.signal.throwIfAborted();
+  const operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "talk-operator",
+    scopes,
+    source,
+    signal: lifetime.signal,
+    assertCurrent,
+  });
+  return {
+    operatorAuthority,
+    signal: lifetime.signal,
+    assertCurrent,
+    release: () => lifetime.abort(new Error("Talk caller revoked")),
+    run<T>(run: () => T): T {
+      assertCurrent();
+      return run();
+    },
+  } satisfies NonNullable<TalkAgentConsultAuthority["executionContext"]>;
+}
 
 // Normal reply preparation, not a fabricated FollowupRun/hash, supplies this baseline.
 it.each([true, false])(
@@ -53,7 +85,11 @@ it.each([true, false])(
       const client = sharingPolicyClient({ deviceId: "caller-device", scopes: ["operator.admin"] });
       client.connect.caps = ["tool-events", "task-suggestions"];
       const sessionTarget = prepareTalkSessionTarget(config, "agent:main:main");
-      const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
+      const continuation = createOperatorContinuation();
+      const authority = {
+        ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+        executionContext: beforePublication ? undefined : continuation,
+      } satisfies TalkAgentConsultAuthority;
       const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
       const runId = "talk-authority-run";
       const registration = registerChatAbortController({
@@ -127,7 +163,10 @@ it.each([true, false])(
               operation.setPhase("running");
               setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
               const runTarget = beforePublication ? queuedTarget : captureTarget();
-              const overlay = (source: "reply" | "attempt" | undefined, current = authority) =>
+              const overlay = (
+                source: "reply" | "attempt" | undefined,
+                current: TalkAgentConsultAuthority = authority,
+              ) =>
                 prepareTalkClientControlAuthority({
                   config,
                   sessionTarget,
@@ -153,18 +192,38 @@ it.each([true, false])(
                     queued: true,
                   },
                 );
+                if (!beforePublication) {
+                  await expect(
+                    steer(overlay("reply", { ...authority, executionContext: undefined })),
+                  ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+                }
                 const weaker = sharingPolicyClient({
                   deviceId: "caller-device",
                   scopes: ["operator.read"],
                 });
+                const weakerContinuation = createOperatorContinuation(
+                  ["operator.read"],
+                  continuation.operatorAuthority.source,
+                );
                 await expect(
                   steer(
-                    overlay(
-                      runTarget?.toolAuthoritySource,
-                      resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
-                    ),
+                    overlay(runTarget?.toolAuthoritySource, {
+                      ...resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
+                      executionContext: beforePublication ? undefined : weakerContinuation,
+                    }),
                   ),
                 ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+                weakerContinuation.release();
+                if (!beforePublication) {
+                  const revoked = createOperatorContinuation(
+                    ["operator.admin"],
+                    continuation.operatorAuthority.source,
+                  );
+                  revoked.release();
+                  await expect(
+                    steer(overlay("reply", { ...authority, executionContext: revoked })),
+                  ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+                }
                 expect(queueMessage).toHaveBeenCalledOnce();
               } finally {
                 clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
@@ -180,6 +239,12 @@ it.each([true, false])(
           throw error;
         }
       });
+      const replyOptions = {
+        toolsAllow: authority.toolsAllow,
+        runId,
+        abortSignal: registration.controller.signal,
+        operatorAuthority: authority.executionContext?.operatorAuthority,
+      } satisfies InternalGetReplyOptions;
       const result = await getReplyFromConfig(
         finalizeInboundContext({
           ...authority.replyCaller,
@@ -191,9 +256,12 @@ it.each([true, false])(
           CommandInterpretationSuppressed: true,
           InputProvenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
         }),
-        { toolsAllow: authority.toolsAllow, runId, abortSignal: registration.controller.signal },
+        replyOptions,
         config,
-      ).finally(registration.cleanup);
+      ).finally(() => {
+        registration.cleanup();
+        continuation.release();
+      });
       if (executionError) {
         throw new Error("GA reply test execution failed", { cause: executionError });
       }
@@ -204,3 +272,131 @@ it.each([true, false])(
     });
   },
 );
+
+it("steers an admitted native-delegation Talk consult with its current operator authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = withFullRuntimeReplyConfig({
+      agents: {
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: {
+          skipBootstrap: true,
+          model: { primary: "mock-openai/gpt-5.6-luna" },
+        },
+      },
+      plugins: { enabled: false },
+    });
+    await state.writeConfig(config);
+    const continuation = createOperatorContinuation();
+    const authority: TalkAgentConsultAuthority = {
+      ...resolveTalkAgentConsultAuthority(["operator.admin"]),
+      executionContext: continuation,
+    };
+    const sessionTarget = prepareTalkSessionTarget(config, "agent:main:main");
+    const runner = createTalkClientAgentConsultRunner({
+      config,
+      context: {
+        chatAbortControllers: new Map(),
+        logGateway: createSubsystemLogger("test/talk-authority"),
+      },
+      sessionTarget,
+      ownerConnId: "native-talk-client",
+      authority,
+      getVoiceSessionId: () => "native-talk-voice-session",
+      initialItems: [],
+      registerRun: vi.fn(),
+    });
+    runner.runPrompt.adoptCompletionClaims();
+    const queueMessage = vi.fn(async () => undefined);
+    vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
+      if (!params.preparedRunAdmission) {
+        throw new Error("Missing native Talk admission");
+      }
+      const admittedRunContext = await params.preparedRunAdmission.admit(
+        "embedded",
+        "talk-native-test",
+      );
+      const sessionFile = path.join(state.workspaceDir, "native-talk.jsonl");
+      return await withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext },
+        {
+          ...params,
+          provider: "mock-openai",
+          modelId: "gpt-5.6-luna",
+          sessionFile,
+        },
+        undefined,
+        async (prepared) => {
+          const handle = {
+            ...createEmbeddedRunHandle({
+              runId: params.runId,
+              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+              queueMessage,
+            }),
+            messageInjectionV2: {
+              version: 2,
+              isAvailable: () => true,
+              queueMessage: async (_text, _options, assertCurrent) => {
+                assertCurrent();
+                await queueMessage();
+              },
+            },
+          } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+          setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, sessionFile);
+          try {
+            const steer = runner.runPrompt.steer;
+            if (!steer) {
+              throw new Error("Missing native Talk steering entry point");
+            }
+            await expect(steer({ prompt: "Use the release branch" })).resolves.toEqual({
+              text: "",
+            });
+            for (const executionContext of [
+              undefined,
+              createOperatorContinuation(["operator.read"], continuation.operatorAuthority.source),
+            ]) {
+              const incoming = { ...authority, executionContext };
+              await expect(
+                controlRealtimeVoiceAgentRun({
+                  sessionKey: sessionTarget.canonicalKey,
+                  text: "Use another branch",
+                  getToolAuthorityOverlay: () =>
+                    runner.getToolAuthorityOverlay(incoming, "attempt"),
+                }),
+              ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+              executionContext?.release();
+            }
+            const revoked = createOperatorContinuation(
+              ["operator.admin"],
+              continuation.operatorAuthority.source,
+            );
+            revoked.release();
+            await expect(
+              controlRealtimeVoiceAgentRun({
+                sessionKey: sessionTarget.canonicalKey,
+                text: "Use another branch",
+                getToolAuthorityOverlay: () =>
+                  runner.getToolAuthorityOverlay(
+                    { ...authority, executionContext: revoked },
+                    "attempt",
+                  ),
+              }),
+            ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+            expect(queueMessage).toHaveBeenCalledOnce();
+          } finally {
+            clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+          }
+          return { payloads: [{ text: "Native task completed." }], meta: { durationMs: 1 } };
+        },
+      );
+    });
+    try {
+      await expect(runner.runPrompt({ prompt: "Check the repository" })).resolves.toEqual({
+        text: "Native task completed.",
+      });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    } finally {
+      runner.runPrompt.claimFailureAppend?.();
+      continuation.release();
+    }
+  });
+});

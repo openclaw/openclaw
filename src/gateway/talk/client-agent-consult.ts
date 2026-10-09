@@ -57,6 +57,7 @@ export function prepareTalkClientControlAuthority(params: {
   source?: "reply" | "attempt";
   agentRuntime: ReturnType<typeof createPluginRuntime>["agent"];
 }) {
+  const operatorAuthority = params.authority.executionContext?.operatorAuthority;
   const prepared = prepareRealtimeVoiceAgentExecutionContext({
     cfg: params.config,
     agentRuntime: params.agentRuntime,
@@ -67,7 +68,7 @@ export function prepareTalkClientControlAuthority(params: {
     ...params.authority,
   });
   if (params.source !== "reply") {
-    return prepared.toolAuthorityOverlay;
+    return { ...prepared.toolAuthorityOverlay, operatorAuthority };
   }
   if (!params.authority.replyCaller) {
     throw new Error("Talk chat caller authority is unavailable");
@@ -85,6 +86,7 @@ export function prepareTalkClientControlAuthority(params: {
     }).senderIsOwner,
     toolsAllow: params.authority.toolsAllow,
     disableTools: false,
+    operatorAuthority,
   });
 }
 

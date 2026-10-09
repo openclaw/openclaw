@@ -32,6 +32,7 @@ import {
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../server-plugin-in-process-dispatch.js";
 import { formatForLog } from "../../ws-log.js";
 import { startTalkRealtimeAgentConsult } from "../agent-consult.js";
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
@@ -295,21 +296,35 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const result = await controlRealtimeVoiceAgentRun({
-          sessionKey: target.canonicalKey,
-          runTarget,
-          getToolAuthorityOverlay: () =>
-            prepareTalkClientControlAuthority({
-              config: context.getRuntimeConfig(),
-              agentRuntime: createPluginRuntime().agent,
-              sessionTarget: target,
-              source: runTarget.toolAuthoritySource,
-              authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
-            }),
-          text: params.text,
-          mode: params.mode,
-        });
-        respond(true, result, undefined);
+        const executionContext = await captureOperatorToolGatewayContinuationContext();
+        try {
+          executionContext?.assertCurrent();
+          sessionMutationAuthorization?.assertCurrent();
+          const result = await controlRealtimeVoiceAgentRun({
+            sessionKey: target.canonicalKey,
+            runTarget,
+            getToolAuthorityOverlay: () => {
+              executionContext?.assertCurrent();
+              return prepareTalkClientControlAuthority({
+                config: context.getRuntimeConfig(),
+                agentRuntime: createPluginRuntime().agent,
+                sessionTarget: target,
+                source: runTarget.toolAuthoritySource,
+                authority: {
+                  ...resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+                  executionContext,
+                },
+              });
+            },
+            text: params.text,
+            mode: params.mode,
+          });
+          executionContext?.assertCurrent();
+          sessionMutationAuthorization?.assertCurrent();
+          respond(true, result, undefined);
+        } finally {
+          executionContext?.release();
+        }
       } catch (err) {
         respond(false, undefined, talkRequestError(err));
       }
