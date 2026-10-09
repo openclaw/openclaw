@@ -15,13 +15,11 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
-  const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+  const { createMemoryRuntime } = await vi.importActual<{
     createMemoryRuntime: (host: {
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
       runInBackgroundContext: <T>(run: () => T) => T;
     }) => MemoryPluginRuntime;
-    configureMemoryCoreDreamingState: (
-      open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-    ) => void;
   }>(
     resolveRelativeBundledPluginPublicModuleId({
       fromModuleUrl: import.meta.url,
@@ -30,9 +28,8 @@ export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawCo
     }),
   );
   const env = { ...process.env };
-  configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", { ...options, env }),
-  );
+  const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<T>("memory-core", { ...options, env });
   const registry = (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
     const builder = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -50,11 +47,16 @@ export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawCo
     memory.memorySlotSelected = true;
     builder.registry.plugins.push(memory);
     const api = builder.createApi(memory, { config });
-    assert(api.lifecycle.runInBackgroundContext);
-    api.registerMemoryCapability({
-      runtime: createMemoryRuntime({
-        runInBackgroundContext: api.lifecycle.runInBackgroundContext,
-      }),
+    const instance = getPluginInstance(memory);
+    assert(instance);
+    instance.run(() => {
+      assert(api.lifecycle.runInBackgroundContext);
+      api.registerMemoryCapability({
+        runtime: createMemoryRuntime({
+          openKeyedStore,
+          runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+        }),
+      });
     });
     const embedding = createPluginRecord({
       id: "fixture-embedding",
@@ -83,7 +85,7 @@ export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawCo
     });
     const runtime = builder.registry.memoryCapabilities[0]?.capability.runtime;
     assert(runtime);
-    return { ...builder, runtime, instance: getPluginInstance(memory)! };
+    return { ...builder, runtime, instance };
   };
   return registry;
 }
