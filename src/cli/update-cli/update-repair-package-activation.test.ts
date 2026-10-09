@@ -490,21 +490,38 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it("verifies the published candidate under a replaced lease database", async () => {
-    const f = await interruptedPublication();
-    const databasePath = f.record.descriptor.authority.databasePath;
-    fs.renameSync(databasePath, `${databasePath}.previous`);
-    fs.copyFileSync(`${databasePath}.previous`, databasePath);
-    fs.chmodSync(databasePath, 0o600);
-    await repair();
-    expect(readArchivedSettlement(f.anchor, f.record.descriptor.operationId).intent).toMatchObject({
-      kind: "publication-settled-external-change",
-      settled: true,
-    });
-    expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-    await prepareNextPackage(f);
-    expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
-  });
+  it.each([
+    { phase: "publishing", lease: "replaced" },
+    { phase: "publication-complete", lease: "missing" },
+    { phase: "publication-complete", lease: "recreated parent" },
+    { phase: "publication-complete", lease: "replaced" },
+  ] as const)(
+    "verifies the $phase candidate under a $lease lease database",
+    async ({ phase, lease }) => {
+      const f = await interruptedPublication(phase);
+      const databasePath = f.record.descriptor.authority.databasePath;
+      if (lease === "recreated parent") {
+        fs.renameSync(path.dirname(databasePath), `${path.dirname(databasePath)}.previous`);
+        fs.mkdirSync(path.dirname(databasePath), { mode: 0o700 });
+      } else {
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        if (lease === "replaced") {
+          fs.copyFileSync(`${databasePath}.previous`, databasePath);
+          fs.chmodSync(databasePath, 0o600);
+        }
+      }
+      await repair();
+      expect(
+        readArchivedSettlement(f.anchor, f.record.descriptor.operationId).intent,
+      ).toMatchObject({
+        kind: "publication-settled-external-change",
+        settled: true,
+      });
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      await prepareNextPackage(f);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+    },
+  );
 
   it.each(["helper changed", "helper missing", "anchor replaced"] as const)(
     "preserves historical evidence and admits the next update with %s",
