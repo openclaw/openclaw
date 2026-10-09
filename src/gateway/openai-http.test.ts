@@ -24,6 +24,7 @@ import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -1687,6 +1688,37 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(json.error?.code).toBe("decimal_above_max_value");
     expect(json.error?.message).toContain("Invalid 'temperature'");
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "a Gateway-cancelled run",
+      error: () => AbortSignal.abort().reason,
+      status: 500,
+      message: "agent run was cancelled",
+    },
+    {
+      name: "a provider transport timeout",
+      error: () => new FailoverError("This operation was aborted", { reason: "timeout" }),
+      status: 504,
+      message: "upstream provider timeout",
+    },
+    {
+      name: "an abort caused by a timeout",
+      error: () =>
+        createAbortError("This operation was aborted", {
+          cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        }),
+      status: 504,
+      message: "upstream provider timeout",
+    },
+  ])("reports $name as $status", async ({ error, status, message }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockRejectedValueOnce(error() as never);
+
+    const res = await postChatCompletions(enabledPort);
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: { message, type: "api_error" } });
   });
 
   it("rejects resolved terminal agent failures without exposing provider details", async () => {
