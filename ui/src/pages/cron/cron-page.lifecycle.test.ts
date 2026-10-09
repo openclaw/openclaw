@@ -22,10 +22,50 @@ import "./cron-page.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("CronPage lifecycle", () => {
+  it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
+    "pauses background reads during %j and catches up without replacing the draft",
+    async (unavailable) => {
+      vi.useFakeTimers();
+      const request = createRequest();
+      const gateway = createGateway(createTestGatewayClient(request), true);
+      gateway.emitSnapshot(unavailable);
+      const context = createContext(gateway);
+      const page = createPage(context);
+      await page.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).not.toHaveBeenCalled();
+
+      gateway.emitSnapshot({ restartPending: false, suspensionPhase: "accepting" });
+      await vi.advanceTimersByTimeAsync(0);
+      for (const method of refreshMethods) {
+        expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+      }
+      const current = page.cron;
+      current.cronCreateOpen = true;
+      current.cronForm.name = "Unsaved automation";
+      request.mockClear();
+      gateway.emitSnapshot(unavailable);
+      gateway.emitRetiredEvent({ type: "event", event: "cron", payload: {} });
+      gateway.emitRetiredEvent({ type: "event", event: "config.changed", payload: {} });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(request).not.toHaveBeenCalled();
+
+      gateway.emitSnapshot({ restartPending: false, suspensionPhase: "accepting" });
+      await vi.advanceTimersByTimeAsync(0);
+      for (const method of [...refreshMethods, "models.list"]) {
+        expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+      }
+      expect(page.cron).toBe(current);
+      expect(current.cronCreateOpen).toBe(true);
+      expect(current.cronForm.name).toBe("Unsaved automation");
+    },
+  );
+
   it.each(["catalog-needed", "configured-alternative"])(
     "preserves catalog provider identity through model selection and save (%s)",
     async (source) => {

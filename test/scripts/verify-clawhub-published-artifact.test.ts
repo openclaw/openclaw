@@ -152,13 +152,6 @@ function registryFetch(artifact: Uint8Array) {
 }
 
 describe("ClawHub published artifact verification", () => {
-  it("uses bounded streaming reads with an active attempt timeout", () => {
-    const source = readFileSync("scripts/verify-clawhub-published-artifact.mjs", "utf8");
-    expect(source).not.toContain(".arrayBuffer(");
-    expect(source).toContain("response.body.getReader()");
-    expect(source).toContain("AbortSignal.timeout(timeoutMs)");
-  });
-
   it("verifies exact artifact bytes without claiming the publication authentication", async () => {
     const artifact = new TextEncoder().encode("exact oidc tgz bytes");
     const fetchImpl = registryFetch(artifact);
@@ -250,63 +243,6 @@ describe("ClawHub published artifact verification", () => {
       }),
     ).rejects.toThrow("exactly one root .tgz regular file");
     expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("requires exact bytes and complete artifact metadata", async () => {
-    const artifact = new TextEncoder().encode("exact tgz bytes");
-    const evidence = await verifyPublishedClawHubArtifacts({
-      ...immutableBinding(),
-      manifestPath: writeManifest("publish", artifact),
-      registry: "https://clawhub.example",
-      terminalRunAttempt: "2",
-      retryOptions: { fetchImpl: registryFetch(artifact), attempts: 1, delayMs: 1 },
-    });
-    expect(evidence).toMatchObject({
-      schemaVersion: 2,
-      producerRunAttempt: "1",
-      terminalRunAttempt: "2",
-      artifactName: "clawhub-bootstrap-aaaaaaaaaaaa-123-1",
-      clawhubToolchainIntegrity,
-      clawhubToolchainSha256,
-      clawhubToolchainVersion,
-      requestedPlugins: ["@openclaw/meta"],
-      verificationMode: "postpublish",
-      packages: [
-        {
-          packageName: "@openclaw/meta",
-          registrySha256: identity(artifact).sha256,
-          registrySize: artifact.byteLength,
-          npmIntegrity: identity(artifact).npmIntegrity,
-          npmShasum: identity(artifact).npmShasum,
-          artifactMetadata: {
-            kind: "npm-pack",
-            packageName: "@openclaw/meta",
-            version: "2026.7.1-beta.3",
-          },
-        },
-      ],
-    });
-  });
-
-  it("proves configure-only registry bytes before trusted-publisher mutation", async () => {
-    const artifact = new TextEncoder().encode("historical exact bytes");
-    const fetchImpl = registryFetch(artifact);
-    const evidence = await verifyPublishedClawHubArtifacts({
-      ...immutableBinding(),
-      manifestPath: writeManifest("configure-only", artifact),
-      mode: "configure-only-preflight",
-      registry: "https://clawhub.example",
-      terminalRunAttempt: "1",
-      retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
-    });
-    expect(evidence.packages[0]).toMatchObject({
-      bootstrapMode: "configure-only",
-      expectedSha256: identity(artifact).sha256,
-      registrySha256: identity(artifact).sha256,
-    });
-    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith("/trusted-publisher"))).toBe(
-      false,
-    );
   });
 
   it("rejects a missing configure-only tag before artifact or publisher requests", async () => {

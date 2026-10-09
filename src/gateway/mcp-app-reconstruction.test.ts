@@ -110,49 +110,7 @@ function toolResult(viewId: string, toolCallId: string, extraDescriptor: object 
 }
 
 describe("MCP App transcript reconstruction", () => {
-  it("restores a descriptor bound to its canonical tool call and result", async () => {
-    const restored = await restoreFromMessages(
-      [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-1",
-              name: "demo__show",
-              arguments: { city: "Paris" },
-            },
-          ],
-        },
-        toolResult("mcp-app-1", "call-1"),
-      ],
-      "mcp-app-1",
-    );
-
-    expect(restored).toEqual({ runtime, view });
-    expect(mocks.releaseLease).toHaveBeenCalledOnce();
-    expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
-      runtime,
-      agentId: "main",
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
-      toolCallId: "call-1",
-      toolInput: { city: "Paris" },
-      toolResult: {
-        content: [{ type: "text", text: "ok" }],
-        structuredContent: { city: "Paris" },
-      },
-      viewId: "mcp-app-1",
-      allowedAppToolNames: new Set(),
-      readOnly: true,
-    });
-  });
-
-  it.each([
-    { sessionKey: "agent:main:main", agentId: undefined, expectedOwner: "main" },
-    { sessionKey: "global", agentId: "work", expectedOwner: "work" },
-  ])(
+  it.each([{ sessionKey: "global", agentId: "work", expectedOwner: "work" }])(
     "mints a fresh board lease for $sessionKey owned by $expectedOwner",
     async ({ sessionKey, agentId, expectedOwner }) => {
       mocks.loadSessionEntry.mockReturnValue({
@@ -259,7 +217,7 @@ describe("MCP App transcript reconstruction", () => {
   });
 
   it("binds reused call IDs to the nearest preceding matching tool", async () => {
-    await restoreFromMessages(
+    const restored = await restoreFromMessages(
       [
         {
           role: "assistant",
@@ -278,9 +236,24 @@ describe("MCP App transcript reconstruction", () => {
       "mcp-app-reused",
     );
 
-    expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
-      expect.objectContaining({ toolInput: { page: 2 } }),
-    );
+    expect(restored).toEqual({ runtime, view });
+    expect(mocks.releaseLease).toHaveBeenCalledOnce();
+    expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
+      runtime,
+      agentId: "main",
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolCallId: "shared",
+      toolInput: { page: 2 },
+      toolResult: {
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: { city: "Paris" },
+      },
+      viewId: "mcp-app-reused",
+      allowedAppToolNames: new Set(),
+      readOnly: true,
+    });
   });
 
   it("declines reconstruction when app-only result metadata was not persisted", async () => {

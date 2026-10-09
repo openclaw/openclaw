@@ -200,6 +200,7 @@ async function storedSecretResult(
     "Report current hosts, not proposed hosts. Do not infer why they differ or prescribe Gateway config changes from the difference.",
     "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
     "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
+    "Protected exec use is HTTPS proxy substitution only, not SSH/sudo passwords or stdin. `${secret:NAME}` is not shell substitution.",
   ];
   return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details)}`, details);
 }
