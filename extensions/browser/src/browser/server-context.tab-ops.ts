@@ -46,9 +46,9 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
 import { readColdNativeActivity, volatileTabsBySession } from "./session-tab-process-state.js";
 import {
-  browserSessionTabNativeIdentity,
   dispatchBrowserTabClose,
   findRetainedBrowserDashboardTab,
   readBrowserDashboardTabs,

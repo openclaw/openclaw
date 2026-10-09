@@ -63,13 +63,13 @@ function readNonEmptyString(value) {
   return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
-function stringifyToolResult(value) {
+function extractTranscriptText(value, stringifyUnknown = false) {
   if (typeof value === "string") {
     return value;
   }
   if (Array.isArray(value)) {
     return value
-      .map((entry) => stringifyToolResult(entry))
+      .map((entry) => extractTranscriptText(entry, stringifyUnknown))
       .filter(Boolean)
       .join("\n");
   }
@@ -77,23 +77,9 @@ function stringifyToolResult(value) {
     return value == null ? "" : String(value);
   }
   const nested = value.text ?? value.content ?? value.result ?? value.output;
-  return nested === undefined ? JSON.stringify(value) : stringifyToolResult(nested);
-}
-
-function extractTranscriptText(value) {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((entry) => extractTranscriptText(entry))
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (!isRecord(value)) {
-    return value == null ? "" : String(value);
-  }
-  return extractTranscriptText(value.text ?? value.content ?? value.result ?? value.output ?? "");
+  return nested === undefined && stringifyUnknown
+    ? JSON.stringify(value)
+    : extractTranscriptText(nested, stringifyUnknown);
 }
 
 function extractTranscriptToolCalls(message) {
@@ -198,8 +184,9 @@ function extractTranscriptToolResults(message) {
     if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
       continue;
     }
-    const text = stringifyToolResult(
+    const text = extractTranscriptText(
       block.content ?? block.text ?? block.result ?? block.output ?? block.error ?? block.message,
+      true,
     );
     const blockTool =
       readNonEmptyString(block.toolName) ??

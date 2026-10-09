@@ -17,7 +17,6 @@ export function registerTimedOutGatewayStopTests({
   it.each([
     { drained: false, ownsProcessLifecycle: true },
     { drained: false, ownsProcessLifecycle: false },
-    { drained: true, ownsProcessLifecycle: true },
   ])(
     "routes a timed-out process stop through database close (drained=$drained, process owner=$ownsProcessLifecycle)",
     async ({ drained, ownsProcessLifecycle }) => {

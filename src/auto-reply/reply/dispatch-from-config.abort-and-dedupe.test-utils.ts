@@ -217,6 +217,7 @@ describe("dispatchReplyFromConfig", () => {
       );
       expect(preparedLookup).toHaveBeenCalledWith({
         agentId: "main",
+        demand: "interactive",
         abortSignal: abort.signal,
       });
     } finally {
@@ -1129,7 +1130,7 @@ describe("dispatchReplyFromConfig", () => {
     }
 
     expect(result.queuedFinal).toBe(true);
-    expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
+    expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main", demand: "interactive" });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
       channel: "discord",
       accountId: "default",

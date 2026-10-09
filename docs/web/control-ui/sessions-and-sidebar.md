@@ -12,6 +12,11 @@ sidebarTitle: "Sessions and sidebar"
 
 The sidebar organizes every session, and the New session page starts new ones.
 
+New session previews the first prompt immediately while the Gateway accepts it.
+The submitted browser draft is retired before the confirmed conversation URL is
+committed, so closing the tab does not restore a sent prompt. Saved worktree-name
+preferences can finish clearing alongside navigation.
+
 ## New session names
 
 In **New session**, pausing typing for one second prepares a session name in the

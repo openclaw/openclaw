@@ -563,11 +563,13 @@ export async function activateImmutableUpdate(
         "Prepared immutable generation changed before activation; the serving generation was not stopped. Retry the requested update.",
       );
     }
-    const service = await inspectImmutableActivationService({
-      descriptor: record.descriptor,
-      generationPath: record.descriptor.current.path,
-      assertCurrent,
-    });
+    const inspectService = () =>
+      inspectImmutableActivationService({
+        descriptor: record.descriptor,
+        generationPath: record.descriptor.current.path,
+        assertCurrent,
+      });
+    const service = await inspectService();
     await verifyGeneration(record.descriptor.current, assertCurrent);
     await verifyGeneration(candidate, assertCurrent);
     const versions = await Promise.all(
@@ -590,11 +592,7 @@ export async function activateImmutableUpdate(
     }
     options.onReceipt?.("immutable:canary");
     await rehearse(record, candidate.path, service, options, assertCurrent);
-    const current = await inspectImmutableActivationService({
-      descriptor: record.descriptor,
-      generationPath: record.descriptor.current.path,
-      assertCurrent,
-    });
+    const current = await inspectService();
     if (
       current.pid !== service.pid ||
       current.processStartTicks !== service.processStartTicks ||

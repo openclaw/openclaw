@@ -17,6 +17,7 @@ import {
   type WebSocket,
 } from "openclaw/plugin-sdk/websocket-runtime";
 import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
+import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "../constants.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import {
   authenticateExtensionWebSocket,
@@ -53,7 +54,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 const INTERNAL_CDP_USERNAME = "openclaw-internal";
 const MAX_AUTH_BODY_BYTES = 8 * 1024;
 
-export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+export { EXTENSION_RELAY_MAX_PAYLOAD_BYTES };
 
 type HttpAuthGrant =
   | { stage: "challenged" | "authenticated"; flow: "cdp" | "json-list" }

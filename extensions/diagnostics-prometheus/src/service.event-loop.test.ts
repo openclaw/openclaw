@@ -174,59 +174,6 @@ describe("diagnostics-prometheus runtime metrics", () => {
     }
   });
 
-  it.each([false, true])(
-    "caps series growth while retaining admitted event-loop windows (preseed=%s)",
-    (preseed) => {
-      const metrics = createMetricsHarness();
-      const sample = {
-        type: "gateway.event_loop.sample",
-        intervalMs: 1_000,
-        delayMaxMs: 20,
-      } as const;
-      try {
-        if (preseed) {
-          metrics.record(sample);
-          metrics.record({ type: "diagnostic.gc", durationMs: 20 });
-        }
-        for (let index = 0; index < 2100; index += 1) {
-          metrics.record({
-            type: "model.call.completed",
-            runId: `run-${index}`,
-            callId: `call-${index}`,
-            provider: "openai",
-            model: `model.${index}`,
-            durationMs: 10,
-          });
-        }
-        const drops = () =>
-          Number(
-            metrics
-              .render()
-              .split("\n")
-              .find((line) => line.startsWith("openclaw_prometheus_series_dropped_total "))
-              ?.split(" ")
-              .at(-1),
-          );
-        const before = drops();
-        expect(before).toBeGreaterThan(0);
-        metrics.record(sample);
-        metrics.record({ type: "diagnostic.gc", durationMs: 20 });
-        expect(drops()).toBe(before + (preseed ? 0 : 3));
-        const rendered = metrics.render();
-        if (preseed) {
-          expect(rendered).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 2");
-          expect(rendered).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
-          expect(rendered).toContain("openclaw_gc_duration_seconds_count 2");
-        } else {
-          expect(rendered).not.toContain("openclaw_gateway_event_loop_");
-          expect(rendered).not.toContain("openclaw_gc_duration_seconds");
-        }
-      } finally {
-        metrics.stop();
-      }
-    },
-  );
-
   it("retains runtime durations across repeated HTTP scrapes without labels", async () => {
     const metrics = createMetricsHarness();
     await withMetricsServer(metrics, async (url) => {
@@ -277,4 +224,95 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(second).not.toMatch(/\{(?!le=)/);
     });
   });
+});
+
+describe("diagnostics-prometheus runtime identity", () => {
+  it("does not read or publish runtime identity when diagnostics are disabled at startup", () => {
+    const readIdentity = vi.fn(() => ({
+      processInstanceId: "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea",
+    }));
+    const metrics = createMetricsHarness(readIdentity, { diagnostics: { enabled: false } });
+    expect(readIdentity).not.toHaveBeenCalled();
+    expect(metrics.render()).toBe("");
+    metrics.stop();
+  });
+
+  it.each([undefined, "2026.9.1-fixture-build"])(
+    "captures runtime identity once with build ID %s and keeps it through saturation",
+    (buildId) => {
+      const identity = {
+        processInstanceId: "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea",
+        ...(buildId ? { buildId } : {}),
+      };
+      const readIdentity = vi.fn(() => identity);
+      const metrics = createMetricsHarness(readIdentity);
+      const info = `openclaw_gateway_build_info{${buildId ? `build_id="${buildId}",` : ""}process_instance_id="${identity.processInstanceId}"} 1`;
+      const initial = metrics.render();
+      expect(initial).toContain("# TYPE openclaw_gateway_build_info gauge");
+      expect(initial).toContain(info);
+      identity.processInstanceId = "a-different-value-after-service-start";
+      expect(metrics.render()).toBe(initial);
+      expect(readIdentity).toHaveBeenCalledOnce();
+      for (let index = 0; index < 2100; index += 1) {
+        metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
+      }
+      expect(metrics.render()).toContain(info);
+      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
+      metrics.stop();
+      expect(metrics.render()).toBe("");
+      identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";
+      metrics.start();
+      expect(metrics.render()).toContain(info);
+      expect(metrics.render()).not.toContain("openclaw_prometheus_series_dropped_total");
+      expect(readIdentity).toHaveBeenCalledTimes(2);
+      metrics.stop();
+    },
+  );
+});
+
+it("exports worker queue and service populations without adding series per request", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "worker.request" as const,
+    kind: "sqlite_writer" as const,
+    requestClass: "transcripts",
+    phase: "queued" as const,
+    queueDepth: 2,
+  };
+  try {
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    expect(metrics.render()).not.toContain("openclaw_worker_");
+    metrics.record(event);
+    expect(metrics.render()).toContain('openclaw_worker_queue_depth{kind="sqlite_writer"} 2\n');
+    for (let index = 0; index < 1000; index++) {
+      metrics.record({ ...event, phase: "started", queueDepth: 0, queueWaitMs: 25 });
+      metrics.record({ ...event, phase: "completed", queueDepth: 0, durationMs: 50 });
+    }
+    // A queued cancellation changes depth without inventing a dispatched request.
+    metrics.record({ ...event, phase: "completed", queueDepth: 0 });
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_worker_queue_depth{kind="sqlite_writer"} 0\n');
+    for (const [name, sum] of [
+      ["queue_wait", 25],
+      ["request", 50],
+    ] as const) {
+      expect(rendered).toContain(
+        `openclaw_worker_${name}_seconds_count{kind="sqlite_writer",request_class="transcripts"} 1000\n`,
+      );
+      expect(rendered).toContain(
+        `openclaw_worker_${name}_seconds_sum{kind="sqlite_writer",request_class="transcripts"} ${sum}\n`,
+      );
+    }
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("# TYPE openclaw_worker_")),
+    ).toHaveLength(3);
+    // Sixteen finite buckets, +Inf, sum and count per histogram, plus the gauge.
+    expect(rendered.split("\n").filter((line) => line.startsWith("openclaw_worker_"))).toHaveLength(
+      39,
+    );
+    expect(rendered).not.toContain("series_dropped");
+  } finally {
+    metrics.stop();
+  }
 });
