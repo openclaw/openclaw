@@ -16,6 +16,7 @@ import {
   assertMatrixSupportedStateFile,
   assertMatrixSupportedStateRoot,
 } from "../retired-state.js";
+import { updateMatrixKeyedState } from "../sqlite-state.js";
 import {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
@@ -373,37 +374,27 @@ async function mutateStorageMeta(rootDir: string, mutation: StorageMetaMutation)
   try {
     const store = openStorageMetaStore(rootDir);
     const decode = (value: unknown) => normalizeMatrixStorageMetadata(value) ?? {};
-    if (!store.observe || !store.compareAndApply) {
-      // The published >=2026.9.4 host floor predates data-only comparisons.
-      const legacyStore = getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(
-        openMatrixStorageMetaStoreOptions(rootDir),
-      );
-      const next = prepareStorageMetaMutation(
-        decode(legacyStore.lookup(STORAGE_META_STATE_KEY)),
-        mutation,
-      );
-      if (!next) {
-        return false;
-      }
-      legacyStore.register(STORAGE_META_STATE_KEY, next);
-      return true;
-    }
-    let observation = await store.observe(STORAGE_META_STATE_KEY);
-    for (;;) {
-      const next = prepareStorageMetaMutation(decode(observation.value), mutation);
-      if (!next) {
-        return false;
-      }
-      const result = await store.compareAndApply(STORAGE_META_STATE_KEY, observation.comparison, {
-        operation: "update",
-        action: "set",
-        value: next,
-      });
-      if (result.status !== "conflict") {
+    return await updateMatrixKeyedState(
+      store,
+      STORAGE_META_STATE_KEY,
+      (current) => prepareStorageMetaMutation(decode(current), mutation) ?? undefined,
+      () => {
+        // The published >=2026.9.4 host floor predates data-only comparisons.
+        const legacyStore = getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(
+          openMatrixStorageMetaStoreOptions(rootDir),
+        );
+        const next = prepareStorageMetaMutation(
+          decode(legacyStore.lookup(STORAGE_META_STATE_KEY)),
+          mutation,
+        );
+        if (!next) {
+          return false;
+        }
+        legacyStore.register(STORAGE_META_STATE_KEY, next);
         return true;
-      }
-      observation = result.current;
-    }
+      },
+      "skip",
+    );
   } catch {
     return false;
   }

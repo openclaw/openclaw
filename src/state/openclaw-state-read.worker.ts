@@ -118,21 +118,9 @@ import type {
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
-import {
-  listUserChannelIdentitiesInDatabase,
-  resolveUserChannelIdentityInDatabase,
-} from "./user-channel-identities.js";
-import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
-import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
-import {
-  readUserProfileAuthorityCommand,
-  readCurrentUserProfileAliasesInDatabase,
-  readUserProfileSnapshotCommand,
-  readUserProfileIdForEmail,
-} from "./user-profile-identity.read.js";
-import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
+import { readUserProfileCommand } from "./user-profile-read.worker.js";
 
 serveOwnedWorkerTasks(
   async function read(input, channel, control): Promise<OpenClawStateReadReply> {
@@ -514,46 +502,21 @@ serveOwnedWorkerTasks(
                       ),
               };
             }
-            if (command.type === "userProfiles.authority.resolve") {
-              return readUserProfileAuthorityCommand(db, command);
-            }
-            if (command.type === "userProfiles.aliases.resolve") {
-              return {
-                type: command.type,
-                ...readCurrentUserProfileAliasesInDatabase(db, command.profileId),
-              };
-            }
             if (
+              command.type === "userProfiles.authority.resolve" ||
+              command.type === "userProfiles.aliases.resolve" ||
+              command.type === "userProfiles.catalogIdentity" ||
               command.type === "userProfiles.githubIdentity.cached" ||
-              command.type === "userProfiles.githubAttribution.resolve"
-            ) {
-              return readUserProfileGitHubCommand(db, command);
-            }
-            if (command.type === "userProfiles.channelIdentity.list") {
-              return {
-                type: command.type,
-                result: readUserChannelIdentityResult(() =>
-                  listUserChannelIdentitiesInDatabase(db, command.profileId),
-                ),
-              };
-            }
-            if (command.type === "userProfiles.channelIdentity.resolve") {
-              return {
-                type: command.type,
-                linked: resolveUserChannelIdentityInDatabase(db, command.identity),
-              };
-            }
-            if (
+              command.type === "userProfiles.githubAttribution.resolve" ||
+              command.type === "userProfiles.channelIdentity.list" ||
+              command.type === "userProfiles.channelIdentity.resolve" ||
               command.type === "userProfiles.reconcile" ||
-              command.type === "userProfiles.catalog"
-            ) {
-              return readUserProfileSnapshotCommand(db, command);
-            }
-            if (
+              command.type === "userProfiles.catalog" ||
               command.type === "userProfiles.avatar.inspect" ||
-              command.type === "userProfiles.avatar.read"
+              command.type === "userProfiles.avatar.read" ||
+              command.type === "userProfiles.email.resolve"
             ) {
-              return readUserProfileAvatarCommand(db, command);
+              return readUserProfileCommand(db, command);
             }
             if (command.type === "userPreferences.values") {
               return {
@@ -564,17 +527,10 @@ serveOwnedWorkerTasks(
             if (
               command.type === "userModelAccounts.links" ||
               command.type === "userModelAccounts.summary" ||
+              command.type === "userModelAccounts.selection" ||
               command.type === "userModelAccounts.catalog"
             ) {
               return readUserModelAccountCommand(db, command);
-            }
-            if (command.type === "userProfiles.email.resolve") {
-              return {
-                type: command.type,
-                profileId: runSqliteDeferredTransactionSync(db, () =>
-                  readUserProfileIdForEmail(db, command.email),
-                ),
-              };
             }
             if (command.type === "sessionRepositoryWorkspaces.find") {
               return {

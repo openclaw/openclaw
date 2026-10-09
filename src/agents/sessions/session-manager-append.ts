@@ -31,6 +31,7 @@ import {
 } from "./session-manager-current-turn.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
+import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import {
   canonicalizeSessionEntry,
   type PersistRecordResult,
@@ -47,6 +48,25 @@ import type { PreparedSessionTranscriptReload } from "./session-manager-view-typ
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
+  #lastMessageAppend:
+    | {
+        anchor: TranscriptEntryAnchor;
+        target: ReturnType<SessionManagerAppend["getSessionTarget"]>;
+      }
+    | undefined;
+
+  [sessionManagerReadMessageAnchor](entryId: string | null | undefined) {
+    this.assertTranscriptViewAvailable();
+    const receipt = this.#lastMessageAppend;
+    return receipt &&
+      receipt.anchor.entryId === entryId &&
+      receipt.anchor.generation === this.transcriptVersion?.generation &&
+      this.byId.has(receipt.anchor.entryId) &&
+      sameSessionTranscriptTargetBinding(receipt.target, this.persistenceTarget)
+      ? receipt.anchor
+      : undefined;
+  }
+
   protected appendEntryAsync<T extends SessionEntry>(
     entry: T,
     options?: AppendPersistenceOptions,
@@ -444,6 +464,15 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     }
     this.pendingDeliberateAppend = false;
     freezeJsonSnapshot(canonicalEntry);
+    if (canonicalEntry.type === "message") {
+      // Publish with the adopted view, before later native writes or worker replies can run.
+      this.#lastMessageAppend = persistenceResult?.anchor
+        ? {
+            anchor: Object.freeze({ ...persistenceResult.anchor }),
+            target: this.getSessionTarget(),
+          }
+        : undefined;
+    }
     return {
       entry: canonicalEntry,
       anchor: persistenceResult?.anchor,

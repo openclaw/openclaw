@@ -408,6 +408,24 @@ Tool-authority caller preparation retains its original source-selection plan;
 the consuming phase rereads current policy through that plan instead of repeating
 discovery. These changes preserve foreign-commit freshness and final effect checks.
 
+Initial manager hydration, persisted-user replay, and bootstrap message presence
+share one fresh history cohort. After hooks or compaction, replay acquires its
+next cohort at synchronous prompt admission. Bounded model context retains its separate
+payload projection and byte limits, with synchronous acceptance under the same
+FIFO and native mutation witness. That operation's snapshot is its serialization
+point; a foreign commit overlapping its reply is observed on the next unpinned
+read. Source replacement, live authority, and local native mutations are still
+checked before synchronous acceptance. Delivery reads candidate payloads and their
+current anchors in one history snapshot before deciding receipt coverage.
+Unbounded model-context reads prepare outside the writer FIFO and retain their
+subsequent fresh validation phase.
+Terminal consumers carry immutable append anchors as historical evidence;
+the context outbox and skill-review owners still validate those anchors before
+consuming history. Activity summaries consume the patch transaction's acknowledged
+watermark while retaining dirty notifications and fresh subsequent reads.
+Cold metadata joins initialization and turn preparation; restoration stays with
+the cold-storage owner, outside the writer FIFO and before message hooks run.
+
 ## Keep one store owner
 
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
@@ -572,6 +590,19 @@ agent, shared-state database, or incognito owner still refuses admission. Schema
 stored bytes, and update behavior are unchanged.
 Queued session admission and writable reads validate through that same owner,
 so its first creation does not invalidate their earlier absence observation.
+Session creation retains this original-absence witness when a sibling finishes
+admission while caller authority is being prepared, including shared stores.
+It still refuses replacement files and changed aliases or shared-state owners.
+
+Cold session readers join the same physical writer queue before dispatch, so they
+cannot observe the database file before its first schema admission completes.
+They use the existing target-discovery lane while holding that queue, so a history
+search waiting for writer-backed index status cannot block their worker dispatch.
+Already admitted readers retain their independent read path. The queue reservation
+ends before consumer callbacks run, and the existing request deadline, cancellation,
+and database revocation cover admission waiting. Read-only access never creates a
+missing store; idle agents still have no durable database until their first write.
+No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
 dispatch. Each read retains its physical owner and writer FIFO through synchronous
@@ -3728,6 +3759,29 @@ recording, transcript presentation, and standalone bootstrap SDK contracts. Hist
 workers use the same native selectors on their own thread. These retained paths
 remain migration debt until their SDK callers can use prepared facts; they do not
 justify a native catalog hydration fallback in the Gateway.
+
+Chat account labels prepare their owner display and personal-account summary through
+the shared-state reader, independently of queued writes. Result projection never initializes profile schema or reads
+SQLite; a viewer of someone else's established selection receives only its public
+owner label. The profile owner fences changed identities, display publications,
+pending mutations, and physical replacement before disclosure. New reads retain
+the worker's foreign-commit freshness check. Profile creation and first-use schema
+admission remain with the existing profile writer.
+
+Bundled session-share callers prepare portable profile and GitHub identity cohorts
+through the shared-state read worker. One admitted read scope serves the cohort;
+bounded connection-owned results reuse its current revision, invalidating on local
+mutations, foreign commits, schema changes, and disposal. Synchronous projection
+preserves actor order, missing profiles, merge aliases, and secondary GitHub logins.
+Released synchronous SDK projectors remain available through the next SDK major.
+Final source-session disclosure guards still read selected session keys on the host:
+raw synchronous SDK and foreign writers do not publish complete revocation facts.
+Retained agent readers share admission and synchronous consumption in one fresh
+read scope. Each new use still observes foreign commits, with no scope carried
+across an await and no added transaction around the final guard.
+These guards retire when the next SDK major removes those writers and session-owner
+publications cover all revocations. Schemas, stored bytes, permissions, retention,
+durability, and update behavior are unchanged.
 
 Secret-store expiry runs in that worker for scheduled Gateway cleanup and
 post-mutation cleanup. The caller captures the database and expiry cutoffs before

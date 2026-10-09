@@ -952,6 +952,7 @@ describe("startGatewayEventSubscriptions", () => {
 
   registerTranscriptPublicationTests({
     createParams,
+    installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
     start: (params) => {
       unsubs = startGatewayEventSubscriptions(params);
       return unsubs;

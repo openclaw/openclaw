@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -13,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/session-transcript-reconcile.js";
+import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -125,6 +127,61 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await testState.cleanup();
+  });
+
+  it("uses the patch watermark for concurrent messages and rereads a foreign rewrite on the next request", async ({
+    signal,
+  }) => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const read = () => loadSessionEntryReadOnly(transcript);
+    const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
+    complete.mockImplementationOnce(async () => {
+      await appendWork(target);
+      return { ...result, text: "Only the first message was summarized." };
+    });
+    const firstPublication = createDeferred();
+    changed.mockImplementation(() => {
+      if (read()?.activitySummary) {
+        firstPublication.resolve();
+      }
+    });
+    service.ensure(target);
+    await withinTest(firstPublication.promise, signal);
+    expect(view(target)?.state).toBe("updating");
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
+    expect(readWatermark).not.toHaveBeenCalled();
+
+    const awaitCurrent = () => {
+      const publication = createDeferred();
+      changed.mockImplementation(() => {
+        if (view(target)?.state === "current") {
+          publication.resolve();
+        }
+      });
+      service.ensure(target);
+      return withinTest(publication.promise, signal);
+    };
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+    const database = openOpenClawAgentDatabase({ agentId: target.agentId, env: testState.env });
+    const foreign = new DatabaseSync(database.path);
+    try {
+      foreign
+        .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+        .run("foreign-recap-generation", transcript.sessionId);
+    } finally {
+      foreign.close();
+    }
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(read()?.activitySummary).toMatchObject({ generation: "foreign-recap-generation" });
+    expect(JSON.parse(complete.mock.calls[2]![0].prompt).messages).toEqual([
+      "user: Request 1",
+      "assistant: Verified additional work.",
+    ]);
+    expect(readWatermark).not.toHaveBeenCalled();
   });
 
   it("rebuilds a dirty imported projection before retrying the recap", async () => {

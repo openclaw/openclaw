@@ -188,6 +188,23 @@ export async function readUserModelAccountSummaryAsync(
   return reply?.account;
 }
 
+export async function readUserModelAccountSelectionAsync(
+  params: { profileId?: string; authProfileId: string },
+  options: AccountOptions = {},
+) {
+  const context = options.context ?? captureOpenClawStateReadWorkerContext(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userModelAccounts.selection", ...params },
+    { context, current: true, preferIndependentWarmRead: true },
+  );
+  context.admission.assertCurrent();
+  if (reply && (!reply.ok || reply.type !== "userModelAccounts.selection")) {
+    throw new Error(reply.ok ? "Unexpected personal account selection reply" : reply.message);
+  }
+  return reply?.selection;
+}
+
 /** Account pins retain the identity writer's authority, independently of default links. */
 export async function prepareUserModelAccountAuthority(
   params: { profileId: string; authProfileId: string },
