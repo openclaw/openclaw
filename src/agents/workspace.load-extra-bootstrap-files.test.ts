@@ -361,6 +361,22 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(files.map((file) => file.content)).toStrictEqual(["pkg agents"]);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "passes a leading ./ through to native fs.glob",
+    async () => {
+      // fs.glob follows a directory symlink under `**` only for a `.`-led pattern,
+      // so `./**/AGENTS.md` and `**/AGENTS.md` differ when a link is present.
+      const workspaceDir = await fs.realpath(await createWorkspaceDir("dot-prefix"));
+      await fs.mkdir(path.join(workspaceDir, ".hidden"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, ".hidden", "AGENTS.md"), "hidden", "utf-8");
+      await fs.symlink(".hidden", path.join(workspaceDir, "linked"));
+
+      expect(await loaderRelative(workspaceDir, "./**/AGENTS.md")).toStrictEqual([
+        "linked/AGENTS.md",
+      ]);
+    },
+  );
+
   it("resolves a missing workspace cwd to no matches without a diagnostic (ENOENT)", async () => {
     // F1 boundary: a missing cwd makes fs.glob throw ENOENT, which legitimately
     // means "no matches" rather than an error to surface — no files, no diagnostic.

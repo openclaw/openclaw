@@ -342,9 +342,11 @@ export async function resolveExtraBootstrapPatternPaths(
   // Capability branch: fs.glob is the matcher wherever it exists; the local walk
   // keeps configured patterns resolving where it is absent. Narrow by design — it
   // switches on the missing API only and never swallows a real fs.glob error.
+  // fs.glob gets the configured pattern unchanged: its matcher already folds
+  // backslashes, and a leading `./` changes how it treats symlinks under `**`.
   const matchSource =
     typeof fs.glob === "function"
-      ? fs.glob(normalizedPattern, { cwd: workspaceDir })
+      ? fs.glob(pattern, { cwd: workspaceDir })
       : walkFallbackMatches(workspaceDir, normalizedPattern);
   try {
     // Single async pass. fs.glob resolves `..` (a globstar parent steps above
