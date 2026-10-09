@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
+  createMemorySearchDeadlineControl,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   runWithConcurrency,
   type MemorySearchDeadlineControl,
@@ -50,7 +51,7 @@ import type {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
-import { createPausedDeadline } from "./paused-deadline.js";
+import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -93,51 +94,6 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
       .map(([source, count]) => `${source}=${count}`)
       .join(",") || "none"
   );
-}
-
-async function runEmbeddingOperationWithTimeout<T>(params: {
-  timeoutMs: number;
-  message: string;
-  /** Caller-owned cancellation, merged with the per-call watchdog abort. */
-  signal?: AbortSignal;
-  /** Managed readiness pauses this watchdog, while caller cancellation stays active. */
-  deadlineControl?: MemorySearchDeadlineControl;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
-  if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(signal);
-  }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const timeoutError = new Error(params.message);
-  const timeout = createDeferred<never>();
-  const deadline = createPausedDeadline({
-    kind: "embedding",
-    timeoutMs,
-    signal,
-    control: params.deadlineControl,
-    expire: () => {
-      timeout.reject(timeoutError);
-      controller.abort(timeoutError);
-    },
-  });
-  deadline.start();
-  try {
-    const operation = params.run(signal);
-    const result = await Promise.race([operation, timeout.promise]);
-    params.signal?.throwIfAborted();
-    // An overdue watchdog can run after provider success following an event-loop stall.
-    if (deadline.isExpired()) {
-      controller.abort(timeoutError);
-      throw timeoutError;
-    }
-    return result;
-  } finally {
-    deadline.close();
-  }
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCacheOps {
@@ -453,6 +409,34 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0
       ? resolveTimerTimeoutMs(runtimeTimeoutMs, defaults.remote)
       : defaults[provider?.id === "local" ? "local" : "remote"];
+  }
+
+  protected async probeEmbeddingProvider(
+    provider: EmbeddingProvider,
+    providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
+  ): Promise<void> {
+    const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
+    const deadlineControl = createMemorySearchDeadlineControl();
+    try {
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs,
+        message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
+        deadlineControl,
+        run: (signal) =>
+          this.withProviderUse(provider, () =>
+            provider.embed("ping", {
+              signal,
+              inputType: "query",
+              [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
+            }),
+          ),
+      });
+    } catch (error) {
+      if (provider === this.provider) {
+        this.markLocalEmbeddingProviderDegraded(error);
+      }
+      throw error;
+    }
   }
 
   protected async embedQueryWithRetry(
