@@ -359,9 +359,12 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
     };
     const provider = normalizeProviderId(entry.provider);
+    // The wildcard narrows only what native Claude CLI credentials supplied. A selected or
+    // pinned API account answers for its own models, so a saved account choice keeps them.
     const listed =
       !requestedRuntimeId &&
       resolved.availability === true &&
+      resolved.evidence === "runtime" &&
       isUnlistedWildcardCliModel(provider, identity?.id ?? entry.id)
         ? { ...resolved, availability: false }
         : resolved;
