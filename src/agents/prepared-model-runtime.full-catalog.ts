@@ -1,19 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "../llm/types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
-import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { discoverModels } from "./agent-model-discovery.js";
-import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
 import {
   buildInlineProviderModels,
   completeInlineProviderModel,
 } from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
-import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
@@ -22,6 +20,7 @@ import {
 } from "./model-catalog-entry.js";
 import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -30,10 +29,8 @@ import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js"
 import {
   copyPreparedModelFullCatalogAuth,
   getPreparedModelFullCatalogAuth,
-  bindPreparedModelRuntimeAuth,
-  type PreparedModelRuntimeAuth,
-  type PreparedAccountCatalogAccess,
-  type PreparedModelRuntimeAuthScope,
+  hasSamePreparedModelCatalogAuth,
+  setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
@@ -41,22 +38,13 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  completeConfiguredRuntimeModels,
-  prepareConfiguredModelAliases,
-} from "./prepared-model-runtime.configured-completion.js";
-import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtime.plugin-generation.js";
+import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
-  PreparedModelCatalogRefreshOptions,
-  PreparedNativeModelSelection,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
-  PreparedModelRuntimeSnapshot,
-  PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
@@ -366,6 +354,206 @@ export function mergePreparedModelCatalogInventory(
   };
 }
 
+export function prepareModelCatalogPublication(
+  discovered: ModelCatalogSnapshot,
+  runtimeModels: ReadonlyMap<string, readonly Model[]>,
+  inventory:
+    | Pick<
+        PreparedModelCatalogInventory,
+        "catalog" | "discoveryOrigins" | "runtimeModels" | "providers"
+      >
+    | undefined,
+  auth: PreparedModelCatalogAuth,
+  normalizeProvider: (provider: string) => string,
+  hookRows: ReadonlyMap<string, ReadonlySet<string>>,
+): Pick<PreparedModelCatalogInventory, "catalog" | "discoveryOrigins" | "runtimeModels"> & {
+  legacyRows: ReadonlyMap<string, ReadonlySet<string>>;
+} {
+  // Provider discovery publishes provider rows; the inventory owner merges native observations.
+  const catalog: ModelCatalogSnapshot = {
+    ...discovered,
+    entries: dedupeByKey(
+      [...discovered.entries, ...discovered.routeVariants].filter((entry) => !entry.nativeRuntime),
+      createModelCatalogIdentityKeyResolver(),
+    ),
+    routeVariants: discovered.routeVariants.filter((entry) => !entry.nativeRuntime),
+  };
+  setPreparedModelFullCatalogAuth(catalog, auth);
+  const failed = catalog.providerOutcomes?.filter((outcome) => outcome.status !== "ready") ?? [];
+  const discoveryOrigins = (catalog.providerOutcomes ?? [])
+    .filter((outcome) => outcome.status === "ready")
+    .map(({ provider, profileId }) => ({ provider: normalizeProvider(provider), profileId }));
+  const identityKey = createModelCatalogIdentityKeyResolver();
+  const rowKey = (entry: ModelCatalogSnapshot["entries"][number]) =>
+    modelCatalogRouteVariantKey(
+      entry,
+      identityKey({ provider: normalizeProvider(entry.provider), id: entry.id }),
+    );
+  const acceptedRows = new Map<string, Set<string>>();
+  for (const [owner, keys] of hookRows) {
+    const provider = normalizeProvider(owner);
+    const accepted = acceptedRows.get(provider) ?? new Set<string>();
+    for (const key of keys) {
+      accepted.add(key);
+    }
+    acceptedRows.set(provider, accepted);
+  }
+  const outcomeProviders = new Set(
+    catalog.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
+  );
+  const legacyRows = new Map<string, Set<string>>();
+  for (const entry of [...catalog.entries, ...catalog.routeVariants]) {
+    const provider = normalizeProvider(entry.provider);
+    const key = rowKey(entry);
+    if (outcomeProviders.has(provider) || !acceptedRows.get(provider)?.has(key)) {
+      continue;
+    }
+    const keys = legacyRows.get(provider) ?? new Set<string>();
+    keys.add(key);
+    legacyRows.set(provider, keys);
+  }
+  if (failed.length === 0) {
+    catalog.acceptedDiscoveryOrigins = discoveryOrigins;
+    return { catalog, discoveryOrigins, runtimeModels, legacyRows };
+  }
+  const previous = inventory?.catalog;
+  const previousAuth = previous && getPreparedModelFullCatalogAuth(previous);
+  const previousLegacyRows = new Map<string, Set<string>>();
+  for (const entry of [...(previous?.entries ?? []), ...(previous?.routeVariants ?? [])]) {
+    const provider = normalizeProvider(entry.provider);
+    const key = rowKey(entry);
+    if (!entry.nativeRuntime && inventory?.providers.get(provider)?.legacyRows?.has(key)) {
+      const keys = previousLegacyRows.get(provider) ?? new Set<string>();
+      keys.add(key);
+      previousLegacyRows.set(provider, keys);
+    }
+  }
+  const starterProviders = new Set(
+    failed
+      .map(({ provider }) => normalizeProvider(provider))
+      .filter((provider) => !discoveryOrigins.some((origin) => origin.provider === provider)),
+  );
+  const starters = (catalog.staticEntries ?? []).filter(
+    (entry) => !entry.nativeRuntime && starterProviders.has(normalizeProvider(entry.provider)),
+  );
+  const retainedProviders = new Set(
+    failed.flatMap((outcome) => {
+      const provider = normalizeProvider(outcome.provider);
+      const previousOrigins = inventory?.discoveryOrigins.filter(
+        (candidate) => normalizeProvider(candidate.provider) === provider,
+      );
+      const hasLegacyInventory = Boolean(previousLegacyRows.get(provider)?.size);
+      if (
+        discoveryOrigins.some((origin) => origin.provider === provider) ||
+        // A completed legacy acquisition can retain rows without claiming live discovery.
+        (!previousOrigins?.length && !hasLegacyInventory) ||
+        !previousAuth ||
+        !previousAuth.credentials ||
+        !auth.credentials ||
+        (outcome.profileId !== undefined &&
+          !previousOrigins?.some((candidate) => candidate.profileId === outcome.profileId)) ||
+        previousAuth.authModes[provider] !== auth.authModes[provider]
+      ) {
+        return [];
+      }
+      return hasSamePreparedModelCatalogAuth(
+        previousAuth,
+        auth,
+        (candidate) => normalizeProvider(candidate) === provider,
+      )
+        ? [provider]
+        : [];
+    }),
+  );
+  const discoveredRetainedProviders = new Set(
+    [...retainedProviders].filter((provider) =>
+      inventory?.discoveryOrigins.some((origin) => normalizeProvider(origin.provider) === provider),
+    ),
+  );
+  for (const [provider, keys] of previousLegacyRows) {
+    if (retainedProviders.has(provider) && !discoveredRetainedProviders.has(provider)) {
+      legacyRows.set(provider, keys);
+    }
+  }
+  const retain = (
+    current: ModelCatalogSnapshot["entries"],
+    retained: ModelCatalogSnapshot["entries"],
+    key: (
+      entry: ModelCatalogSnapshot["entries"][number],
+    ) => string = createModelCatalogIdentityKeyResolver(),
+  ) =>
+    dedupeByKey(
+      [
+        ...current.filter(
+          (entry) =>
+            !discoveredRetainedProviders.has(normalizeProvider(entry.provider)) &&
+            !(
+              retainedProviders.has(normalizeProvider(entry.provider)) &&
+              legacyRows.get(normalizeProvider(entry.provider))?.has(rowKey(entry))
+            ),
+        ),
+        ...starters.filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider))),
+        ...retained.filter(
+          (entry) =>
+            !entry.nativeRuntime &&
+            retainedProviders.has(normalizeProvider(entry.provider)) &&
+            (discoveredRetainedProviders.has(normalizeProvider(entry.provider)) ||
+              legacyRows.get(normalizeProvider(entry.provider))?.has(rowKey(entry))),
+        ),
+      ],
+      key,
+    ).toSorted(compareModelCatalogEntries);
+  // Route dedupe follows another round of normalization callbacks; acquire its policy afresh.
+  const routeKeyOf = createModelCatalogIdentityKeyResolver();
+  const published: ModelCatalogSnapshot = {
+    ...catalog,
+    entries: retain(catalog.entries, previous?.entries ?? []),
+    routeVariants: retain(catalog.routeVariants, previous?.routeVariants ?? [], (entry) =>
+      JSON.stringify([routeKeyOf(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),
+    ),
+    authoritative: false,
+  };
+  setPreparedModelFullCatalogAuth(published, auth);
+  const publishedRuntimeModels = new Map(
+    [...runtimeModels].filter(
+      ([provider]) => !discoveredRetainedProviders.has(normalizeProvider(provider)),
+    ),
+  );
+  for (const [provider, models] of inventory?.runtimeModels ?? []) {
+    const normalized = normalizeProvider(provider);
+    if (discoveredRetainedProviders.has(normalized)) {
+      publishedRuntimeModels.set(provider, models);
+    } else if (retainedProviders.has(normalized)) {
+      publishedRuntimeModels.set(
+        provider,
+        dedupeByKey(
+          [
+            ...(publishedRuntimeModels.get(provider) ?? []).filter(
+              (model) => !legacyRows.get(normalized)?.has(rowKey(modelCatalogRowToEntry(model))),
+            ),
+            ...models.filter((model) =>
+              legacyRows.get(normalized)?.has(rowKey(modelCatalogRowToEntry(model))),
+            ),
+          ],
+          (model) => rowKey(modelCatalogRowToEntry(model)),
+        ),
+      );
+    }
+  }
+  published.acceptedDiscoveryOrigins = [
+    ...discoveryOrigins,
+    ...(inventory?.discoveryOrigins ?? []).filter((origin) =>
+      retainedProviders.has(normalizeProvider(origin.provider)),
+    ),
+  ];
+  return {
+    catalog: published,
+    runtimeModels: publishedRuntimeModels,
+    legacyRows,
+    discoveryOrigins: published.acceptedDiscoveryOrigins,
+  };
+}
+
 /** Reprojects retained inventory without carrying capabilities from a retired runtime. */
 export function materializePreparedModelCatalog(
   snapshot: ModelCatalogSnapshot,
@@ -452,17 +640,23 @@ export function materializePreparedModelCatalog(
           if (!accepted) {
             return [entry];
           }
-          return entry.contextWindows?.length
-            ? [
-                overlayCatalogMetadata(accepted, {
-                  provider: entry.provider,
-                  id: entry.id,
-                  name: entry.name,
-                  contextWindows: entry.contextWindows,
-                  contextWindowDefault: entry.contextWindowDefault,
-                }),
-              ]
-            : [];
+          const promptCap = asPositiveFiniteNumber(entry.contextTokens);
+          if (!entry.contextWindows?.length && promptCap === undefined) {
+            return [];
+          }
+          const reportedPrompt = asPositiveFiniteNumber(accepted.contextTokens);
+          return [
+            overlayCatalogMetadata(accepted, {
+              provider: entry.provider,
+              id: entry.id,
+              name: entry.name,
+              contextWindows: entry.contextWindows,
+              contextWindowDefault: entry.contextWindowDefault,
+              ...(promptCap !== undefined
+                ? { contextTokens: Math.min(promptCap, reportedPrompt ?? promptCap) }
+                : {}),
+            }),
+          ];
         }),
         identityKey,
       ),
@@ -482,115 +676,5 @@ export const isPreparedModelCatalogFull = (snapshot: ModelCatalogSnapshot): bool
 /** Restores process-local provenance after a complete catalog crosses a worker boundary. */
 export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
   fullModelCatalogSnapshots.add(snapshot);
-  return snapshot;
-}
-
-export type PreparedModelRuntimeCatalogAccess = Readonly<{
-  initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: PreparedAccountCatalogAccess;
-  isCurrent: () => boolean;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
-  refreshExpiredModelCatalog: () => void;
-  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: (
-    options?: PreparedModelCatalogRefreshOptions,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadNativeModelCatalog: (
-    selection: PreparedNativeModelSelection,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-}>;
-export function createPreparedModelRuntimeSnapshot(
-  catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
-  agentFacts: PreparedModelRuntimeAgentFacts,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
-  catalogFacts: PreparedModelRuntimeCatalogFacts,
-  catalogAccess: PreparedModelRuntimeCatalogAccess,
-  publishedConfig = agentFacts.input.config,
-): PreparedModelRuntimeSnapshot {
-  const { credentials, input } = agentFacts;
-  const {
-    mediaCapabilityProviders,
-    mediaCapabilityProviderSource,
-    messageToolCatalog,
-    pluginMetadataSnapshot,
-    pluginRegistry,
-  } = pluginGeneration;
-  const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
-  const modelCatalog = materializePreparedModelCatalog(
-    catalogFacts.modelCatalog,
-    agentFacts.runtimeCapabilityModels,
-    input.config.models?.mode === "replace"
-      ? []
-      : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
-  );
-  prepareModelCatalogThinkingPolicies({
-    catalog: modelCatalog,
-    metadataSnapshot: pluginMetadataSnapshot,
-    pluginRegistry,
-  });
-  const createStores = (): PreparedModelRuntimeStores => {
-    // Runtime API keys and session extensions mutate these objects. Fork them per run while the
-    // credential map and parsed catalog remain owned by the lifecycle snapshot.
-    const authStorage = AuthStorage.inMemory(credentials);
-    return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
-  };
-  const snapshot: PreparedModelRuntimeSnapshot = Object.freeze({
-    catalogOwner,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    agentDir: input.agentDir,
-    activeProjectKeys: [],
-    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    config: publishedConfig,
-    observationConfig: input.config,
-    isCurrent: catalogAccess.isCurrent,
-    accountCatalog: catalogAccess.accountCatalog,
-    authModes: catalogAccess.initialAuth.authModes,
-    metadataSnapshot: pluginMetadataSnapshot,
-    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    ...(pluginRegistry ? { pluginRegistry } : {}),
-    ...(messageToolCatalog ? { messageToolCatalog } : {}),
-    ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
-    ...(mediaCapabilityProviderSource && mediaCapabilityProviders
-      ? {
-          acquireMediaCapabilityProviders: () =>
-            acquirePreparedMediaCapabilityProviders(
-              mediaCapabilityProviderSource,
-              mediaCapabilityProviders,
-              pluginRegistry ?? mediaCapabilityProviderSource.registry,
-            ),
-        }
-      : {}),
-    modelCatalog: catalogAccess.withRefreshStatus(modelCatalog),
-    readFullModelCatalog: catalogAccess.readFullModelCatalog,
-    recheckNativeLogin: catalogAccess.recheckNativeLogin,
-    refreshExpiredModelCatalog: catalogAccess.refreshExpiredModelCatalog,
-    readPublishedModels: catalogAccess.readPublishedModels,
-    loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
-    loadNativeModelCatalog: catalogAccess.loadNativeModelCatalog,
-    configuredRuntimeModels,
-    configuredModelAliases: prepareConfiguredModelAliases(
-      agentFacts,
-      pluginGeneration,
-      templateModelRegistry,
-      configuredRuntimeModels,
-    ),
-    findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
-      configuredRuntimeModels,
-      pluginMetadataSnapshot,
-    ),
-    inlineProviderModels,
-    createStores,
-    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
-  });
-  bindPreparedModelRuntimeAuth(snapshot, {
-    labels: catalogAccess.initialAuth.providerAuthLabels,
-    store: catalogAccess.initialAuth.authStore,
-    load: catalogAccess.loadAuth,
-    materializations: Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
-  });
   return snapshot;
 }

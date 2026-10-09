@@ -30,9 +30,14 @@ import {
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
+import {
+  assertLegacyTranscriptPreparation,
+  normalizeTranscriptMessagePreparation,
+} from "./session-transcript-preparation.js";
 import {
   prepareSessionTurnPredicates,
   prepareSessionTurnRouting,
@@ -52,9 +57,18 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
 export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
-  options: SqliteSessionTurnOptions,
+  requestedOptions: SqliteSessionTurnOptions,
   nativeReservation?: true,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  const options = nativeReservation
+    ? requestedOptions
+    : {
+        ...requestedOptions,
+        messages: requestedOptions.messages.map((message) => {
+          assertLegacyTranscriptPreparation(scope, message);
+          return normalizeTranscriptMessagePreparation(message);
+        }),
+      };
   if (
     options.messages.some(
       (message) => message.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
@@ -91,11 +105,12 @@ export async function appendExpectedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
+  const incognito = captureIncognitoSessionOperation({ ...scope, storePath: resolved.path });
   if (
     !nativeReservation &&
     independentPreparation &&
     isMainThread &&
-    supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)) &&
+    (incognito || supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) &&
     options.messages.every((message) => {
       const guard: SessionSourceAssertion | undefined =
         message.workerPreparation?.beforeFreshMessageCommit;
@@ -114,6 +129,9 @@ export async function appendExpectedSessionTranscriptTurn(
         true,
       ),
     );
+  }
+  if (incognito) {
+    throw new Error("Actor transcript turns require preparation outside the transaction");
   }
   if (options.acceptedResultGuard || options.sessionTurnMutation?.routingPredicate) {
     await prepareSessionTurnPredicates();

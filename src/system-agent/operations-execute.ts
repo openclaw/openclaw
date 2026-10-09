@@ -362,24 +362,17 @@ export async function executeSystemAgentOperation(
         },
       });
     case "config-set":
-      return await applyPersistentOperation({
-        auditOperation: "config.set",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          await runConfigSetOperation({ operation, ctx });
-          return { summary: `Set config ${operation.path}`, details: { path: operation.path } };
-        },
-      });
     case "config-set-ref":
       return await applyPersistentOperation({
-        auditOperation: "config.setRef",
+        auditOperation: operation.kind === "config-set" ? "config.set" : "config.setRef",
         operation,
         runtime,
         opts,
         run: async (ctx) => {
           const { storeEntry, storeProvider } = await runConfigSetOperation({ operation, ctx });
+          if (operation.kind === "config-set") {
+            return { summary: `Set config ${operation.path}`, details: { path: operation.path } };
+          }
           return {
             summary: storeEntry
               ? `Saved the secret as ${storeEntry} and set config ${operation.path} SecretRef`

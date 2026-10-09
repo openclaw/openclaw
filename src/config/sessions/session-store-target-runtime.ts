@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   AgentDatabaseRegistryChangedError,
   AgentDatabaseRegistryPendingError,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-  type AgentDatabaseRegistryChange,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import {
@@ -16,10 +16,8 @@ import {
   type SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import {
-  projectionLane,
   targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
-  type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 
 type PreparedStoreTarget = Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>;
@@ -161,7 +159,7 @@ export function prepareSessionStoreTargetInventoryRead(
           }
           return operation(inventory, assertCurrent);
         },
-        projectionLane,
+        targetDiscoveryLane,
       );
     },
   };
@@ -172,7 +170,6 @@ export async function withSessionStoreTarget<T>(
   operation: (target: PreparedStoreTarget, owner: StoreTargetReadOwner) => Promise<T>,
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
-  { lane = targetDiscoveryLane }: { lane?: SessionHistoryWorkerLane } = {},
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = request;
@@ -310,6 +307,6 @@ export async function withSessionStoreTarget<T>(
       }
       return result;
     },
-    lane,
+    targetDiscoveryLane,
   );
 }

@@ -215,7 +215,7 @@ async function handleTtsLatestAction(
   ) {
     return sessionEntryPersistenceConflictReply();
   }
-  return { shouldContinue: false, reply: audio.reply };
+  return stopWithText(audio.reply);
 }
 
 function handleTtsStatusAction(
@@ -328,7 +328,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         prefsPath,
         agentId: params.agentId,
       });
-      return "error" in audio ? audio.error : { shouldContinue: false, reply: audio.reply };
+      return "error" in audio ? audio.error : stopWithText(audio.reply);
     }
 
     if (action === "provider") {

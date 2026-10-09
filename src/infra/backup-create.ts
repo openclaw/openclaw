@@ -304,24 +304,20 @@ async function createConsistentStateSnapshotPlan(params: {
   tempDir: string;
   onlyConfig: boolean;
 }): Promise<ConsistentStateSnapshotPlan> {
-  if (params.onlyConfig) {
+  if (params.onlyConfig || !params.stateDir) {
     return {
       legacyAuditSnapshots: [],
-      stateSqliteBackup: {
-        inventory: sealBackupResourceInventory(params.resources, []),
-        snapshots: [],
-        discoveredSourcePaths: new Set<string>(),
-      },
-    };
-  }
-  if (!params.stateDir) {
-    return {
-      legacyAuditSnapshots: [],
-      stateSqliteBackup: await createBackupSqliteSnapshotPlan({
-        resources: params.resources,
-        tempDir: params.tempDir,
-        legacyAuditSnapshots: [],
-      }),
+      stateSqliteBackup: params.onlyConfig
+        ? {
+            inventory: sealBackupResourceInventory(params.resources, []),
+            snapshots: [],
+            discoveredSourcePaths: new Set<string>(),
+          }
+        : await createBackupSqliteSnapshotPlan({
+            resources: params.resources,
+            tempDir: params.tempDir,
+            legacyAuditSnapshots: [],
+          }),
     };
   }
 

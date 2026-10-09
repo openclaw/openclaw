@@ -1,11 +1,20 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { Model } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import type {
+  PreparedAccountCatalogAccess,
+  PreparedModelRuntimeAuth,
+  PreparedModelRuntimeAuthScope,
+  PreparedModelCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
+import type {
   PreparedConfiguredRuntimeModel,
+  PreparedModelCatalogRefreshOptions,
+  PreparedNativeModelSelection,
   PreparedRuntimeCapabilityModel,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -44,6 +53,23 @@ export type PreparedModelRuntimeCatalogSource = Readonly<{
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 }>;
 
+export type PreparedModelRuntimeCatalogAccess = Readonly<{
+  initialAuth: PreparedModelCatalogAuth;
+  accountCatalog?: PreparedAccountCatalogAccess;
+  isCurrent: () => boolean;
+  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
+  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
+  recheckNativeLogin: () => void;
+  refreshExpiredModelCatalog: () => void;
+  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
+  loadFullModelCatalog: (
+    options?: PreparedModelCatalogRefreshOptions,
+  ) => Promise<ModelCatalogSnapshot>;
+  loadNativeModelCatalog: (
+    selection: PreparedNativeModelSelection,
+  ) => Promise<ModelCatalogSnapshot>;
+  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
+}>;
 export type PreparedModelRuntimeCatalogAccessParams = {
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
   agentFacts: PreparedModelRuntimeAgentFacts;

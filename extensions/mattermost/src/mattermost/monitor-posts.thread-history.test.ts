@@ -33,6 +33,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
   let posts: MattermostPost[];
   let beforeResponse: ((url: string) => Promise<void>) | undefined;
   let responseStatus: number;
+  let responseError: string | undefined;
 
   function holdResponse() {
     const entered = createDeferred<void>();
@@ -52,6 +53,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     requests = [];
     beforeResponse = undefined;
     responseStatus = 200;
+    responseError = undefined;
     posts = [
       {
         id: "root",
@@ -83,6 +85,10 @@ describe("Mattermost server thread recovery through the post handler", () => {
         await beforeResponse?.(request.url ?? "");
         response.statusCode = responseStatus;
         response.setHeader("content-type", "application/json");
+        if (responseError) {
+          response.end(JSON.stringify({ message: responseError }));
+          return;
+        }
         if (request.url?.startsWith("/api/v4/posts/root/thread")) {
           response.end(
             JSON.stringify({
@@ -472,8 +478,11 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("does not retry permanent provider failure on an absent history key", async () => {
     const f = await setup("channel");
+    vi.useFakeTimers({ toFake: ["Date"] });
     responseStatus = 403;
+    responseError = "Permission denied despite upstream too many requests (Mattermost API 503)";
     await f.recover(f.turn);
+    vi.setSystemTime(Date.now() + 60_001);
     await f.recover(f.turn);
     expect(requests).toHaveLength(1);
     expect(f.histories.size).toBe(0);

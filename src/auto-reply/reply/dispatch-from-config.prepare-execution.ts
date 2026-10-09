@@ -342,7 +342,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       : runtimeReplyConfig,
   );
   state.recordAgentDispatchStarted();
-  const nextState = Object.assign(state, {
+  return Object.assign(state, {
     sendPlanUpdate,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
@@ -364,9 +364,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     replyConfig,
     progressState,
   });
-  return { status: "ready" as const, state: nextState };
 }
 
 export type PrepareDispatchExecutionReadyState = Awaited<
   ReturnType<typeof prepareDispatchExecution>
->["state"];
+>;

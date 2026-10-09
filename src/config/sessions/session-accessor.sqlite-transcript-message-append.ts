@@ -36,12 +36,18 @@ import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
 } from "./session-accessor.sqlite-transcript-parent.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
@@ -256,6 +262,18 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     return undefined;
   }
 
+  if (!pending && options.expectedTranscript) {
+    const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+    const expected = options.expectedTranscript;
+    if (
+      current.generation !== expected.generation ||
+      current.rawSeq !== expected.rawSeq ||
+      current.updatedAt !== expected.updatedAt
+    ) {
+      throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+    }
+  }
+
   const messageId =
     pending && !pending.alreadyPromoted ? pending.inputId : (options.eventId ?? randomUUID());
   const now = options.now ?? Date.now();
@@ -332,18 +350,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       consumeSessionPendingInput(database, pending);
     }
   }
-  return {
-    result: {
-      appended: true,
-      ...(anchor ? { anchor } : {}),
-      effectiveParentId: parentId ?? null,
-      message: persistedMessage,
-      messageId,
+  return retainTranscriptAppendPostimage(
+    {
+      result: {
+        appended: true,
+        ...(anchor ? { anchor } : {}),
+        effectiveParentId: parentId ?? null,
+        message: persistedMessage,
+        messageId,
+      },
+      ...(metadata.visibleTailEntryId !== undefined &&
+      revision !== undefined &&
+      readSqliteNativeMutationRevision(database.db) === revision
+        ? { visibleTailEntryId: metadata.visibleTailEntryId }
+        : {}),
     },
-    ...(metadata.visibleTailEntryId !== undefined &&
-    revision !== undefined &&
-    readSqliteNativeMutationRevision(database.db) === revision
-      ? { visibleTailEntryId: metadata.visibleTailEntryId }
-      : {}),
-  };
+    readTranscriptAppendPostimage(metadata),
+  );
 }

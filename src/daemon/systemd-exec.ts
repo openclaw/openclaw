@@ -10,7 +10,12 @@ import {
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
-import { readSystemdBusOwner, type SystemdBusQuery } from "./systemd-bus-query.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdBusOwner,
+  type SystemdBusQuery,
+} from "./systemd-bus-query.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -364,30 +369,17 @@ export async function bindSystemdManagerOwner(
 ): Promise<{ destination: string; verify: () => Promise<void> }> {
   const readOwner = () => readSystemdBusOwner(query, unavailable);
   const destination = await readOwner();
-  const [uid] =
-    (await query(
-      [
-        "call",
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-        "GetConnectionUnixUser",
-        "s",
-        destination,
-      ],
-      ["u"],
-    )) ?? [];
-  if (
-    !Number.isInteger(managerUid) ||
-    managerUid < 0 ||
-    managerUid >= 0xffffffff ||
-    !Array.isArray(uid) ||
-    uid.length !== 1 ||
-    !Number.isInteger(uid[0])
-  ) {
+  const uid = await readSystemdBusCall(
+    query,
+    "GetConnectionUnixUser",
+    ["s", destination],
+    "u",
+    unavailable,
+  );
+  if (!isSystemdManagerUid(managerUid) || !Number.isInteger(uid)) {
     throw unavailable();
   }
-  if (uid[0] !== managerUid) {
+  if (uid !== managerUid) {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {

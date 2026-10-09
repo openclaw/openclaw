@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -194,16 +195,12 @@ it.each(["worker", "native-compatibility"] as const)(
     let refuse = true;
     let current = true;
     if (family === "worker") {
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && refuse) {
-              current = false;
-            }
-            return admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit" && refuse) {
+          current = false;
+        }
+        return admit(request, grant);
+      });
     }
     const input = {
       id: "receipt-rollback",

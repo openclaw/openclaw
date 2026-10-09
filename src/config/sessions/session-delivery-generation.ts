@@ -1,5 +1,10 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readSqliteNativeMutationRevision,
+  registerSqliteSchemaMutationListener,
+} from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
@@ -18,6 +23,7 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryCreatedEntry } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -29,11 +35,17 @@ import type {
   SessionEntryCreationOperation,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
+import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
+import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import {
   captureSessionStoreReadCandidates,
@@ -96,7 +108,7 @@ async function prepareSessionGenerationLease(
   input: SessionGenerationFacts,
   onRevoked?: (reason: unknown) => void,
 ): Promise<{
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
   readSessionSettings: () => Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">;
   prepareRead: () => Promise<void> | undefined;
@@ -150,7 +162,7 @@ async function prepareSessionGenerationLease(
       throw new SessionDeliveryGenerationUnavailableError();
     }
   };
-  const checkEntry = (entry: SessionGenerationEntry | null | undefined) => {
+  const checkEntry = (entry: SessionGenerationEntry | null | undefined, committed = true) => {
     if (entry === undefined) {
       throw new SessionDeliveryGenerationUnavailableError();
     }
@@ -158,6 +170,9 @@ async function prepareSessionGenerationLease(
       (entry?.sessionId ?? null) !== generation.sessionId ||
       (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
     ) {
+      if (!committed) {
+        throw new SessionDeliveryGenerationUnavailableError();
+      }
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
     }
@@ -261,6 +276,7 @@ async function prepareSessionGenerationLease(
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => SessionGenerationEntry | null;
+    let workerSource: SessionSourceAssertion | undefined;
     let prepareRead: () => Promise<void> | undefined = () => {
       assertActive();
       return undefined;
@@ -380,6 +396,7 @@ async function prepareSessionGenerationLease(
         }
       }
       let source: { path: string; identity: string } | undefined;
+      let assertNativeCurrent: (entry: SessionGenerationEntry | null) => void = () => {};
       while (!retained) {
         assertActive();
         const before = publications;
@@ -443,6 +460,60 @@ async function prepareSessionGenerationLease(
               entry: entry ? projectSessionSharingEntry(entry) : undefined,
             });
             releases.push(prepared.release);
+            const nativeOptions = { ...read!.database, path: source.path };
+            let native = getOpenClawAgentDatabaseIfOpen(nativeOptions);
+            let nativeRevision = native && readSqliteNativeMutationRevision(native.db);
+            const schemaChanged = () => {
+              invalidated = true;
+            };
+            if (native) {
+              releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+            }
+            assertNativeCurrent = (current) => {
+              const opened = getOpenClawAgentDatabaseIfOpen(nativeOptions);
+              if (!native && opened) {
+                native = opened;
+                nativeRevision = undefined;
+                releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              } else if (opened !== native) {
+                invalidated = true;
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              if (!native) {
+                return;
+              }
+              const revision = readSqliteNativeMutationRevision(native.db);
+              if (revision === undefined) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              if (revision === nativeRevision) {
+                return;
+              }
+              const committed = !native.db.isTransaction;
+              // Raw same-handle commits do not advance data_version or publish entry facts.
+              // Keep their final native guard until managed raw settlement is complete.
+              try {
+                const observed = checkEntry(
+                  readSessionEntryGenerationInDatabase(native, generation.sessionKey) ?? null,
+                  committed,
+                );
+                if (
+                  observed?.permissionMode !== current?.permissionMode ||
+                  !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides) ||
+                  readSqliteNativeMutationRevision(native.db) !== revision
+                ) {
+                  throw new SessionDeliveryGenerationUnavailableError();
+                }
+                assertActive();
+                nativeRevision = revision;
+              } catch (error) {
+                // Tentative native changes may roll back; committed revocation stays permanent.
+                if (committed) {
+                  invalidated = true;
+                }
+                throw error;
+              }
+            };
             return prepared;
           },
         );
@@ -457,12 +528,30 @@ async function prepareSessionGenerationLease(
       };
       readCurrent = () => {
         assertSourceCurrent();
-        return checkEntry(retained?.readCurrent());
+        const entry = checkEntry(retained?.readCurrent());
+        assertNativeCurrent(entry);
+        return entry;
       };
       prepareRead = () => {
         assertSourceCurrent();
         return retained?.prepareRead()?.then(assertSourceCurrent);
       };
+      if (generation.sessionId !== null && source) {
+        workerSource = captureSessionEntrySourceAssertion({
+          scope: { ...generation, storePath: source.path },
+          expected: {
+            sessionId: generation.sessionId,
+            lifecycleRevision: generation.lifecycleRevision ?? undefined,
+          },
+          fields: ["sessionId", "lifecycleRevision"],
+          assertCurrent: () => readCurrent(),
+          assertHostCurrent: assertSourceCurrent,
+          refuse: () => {
+            revoked = true;
+            throw new SessionDeliveryGenerationRevokedError();
+          },
+        });
+      }
     }
     const assertCurrent = (delivery = false) => {
       try {
@@ -513,7 +602,22 @@ async function prepareSessionGenerationLease(
       );
     }
     return {
-      assertCurrent,
+      assertCurrent: workerSource
+        ? composeSessionSourceAssertion([workerSource], (assertSource) => {
+            try {
+              assertActive();
+              assertSource();
+            } catch (error) {
+              const failure =
+                isSessionDeliveryGenerationRevokedError(error) ||
+                isSessionDeliveryGenerationUnavailableError(error)
+                  ? error
+                  : new SessionDeliveryGenerationUnavailableError({ cause: error });
+              onRevoked?.(failure);
+              throw failure;
+            }
+          })
+        : assertCurrent,
       assertDeliveryCurrent: () => assertCurrent(true),
       readSessionSettings: () => {
         const current = assertCurrent();

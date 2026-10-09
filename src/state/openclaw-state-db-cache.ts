@@ -425,16 +425,15 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 /** Validate the canonical terminal fact before acquiring a domain-operation lease. */
 export async function getOpenClawStateDatabaseTerminalFailureAsync(
   context: OpenClawStateWorkerContext,
+  signal?: AbortSignal,
 ): Promise<Error | undefined> {
   context.admission.assertCurrent();
   const failure = await terminalOpenLatch.getAsync(
     context.admission.databasePath,
     async (_path, generation) => {
-      const { inspectOpenClawStateDatabase } = await import("./openclaw-state-worker-store.js");
-      const matches = await inspectOpenClawStateDatabase(context, {
-        type: "database.generationMatches",
-        input: { generation },
-      });
+      const { inspectOpenClawStateDatabaseGeneration } =
+        await import("./openclaw-state-worker-store.js");
+      const matches = await inspectOpenClawStateDatabaseGeneration(context, generation, signal);
       if (matches === undefined) {
         throw new Error("Recorded shared-state database generation is unavailable");
       }

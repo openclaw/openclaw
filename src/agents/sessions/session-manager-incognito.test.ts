@@ -5,18 +5,25 @@ import { inspect } from "node:util";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import { useIncognitoActorProbe } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
@@ -35,6 +42,7 @@ import {
 } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
@@ -80,17 +88,12 @@ async function captureCommitRevocation(
   operation: (assertCurrent: () => void) => Promise<unknown>,
 ): Promise<unknown> {
   let current = true;
-  const original = workerAdmission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      original((request, grant) => {
-        admit(request, grant);
-        if (request.stage === "commit") {
-          current = false;
-        }
-      }, attachment),
-    );
+  const spy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (request.stage === "commit") {
+      current = false;
+    }
+  });
   try {
     await operation(() => {
       if (!current) {
@@ -131,12 +134,12 @@ it("keeps manager reads and writes on the original actor outside its opening sco
       },
       admission.signal,
     );
-    expect(
-      await bounded[sessionManagerPrepareCurrentTurnReplay](
-        () => false,
-        (entry) => entry?.id === first,
-      ),
-    ).toMatchObject({ anchor: { entryId: first } });
+    const replay = await bounded[sessionManagerPrepareCurrentTurnReplay](
+      () => false,
+      (entry) => entry?.id === first,
+    );
+    expect(replay).toMatchObject({ entryId: first });
+    replay?.assertCurrent();
     const rewrite = await manager.prepareTranscriptRewriteAsync();
     await rewrite.sessionManager.resetLeafAsync();
     const replacement = await rewrite.sessionManager.appendMessageAsync(
@@ -200,14 +203,19 @@ it("retargets another session on its retained actor outside the opening scope", 
   expect(manager.buildSessionContext().messages).toMatchObject([
     { role: "user", content: "destination history" },
   ]);
+  const otherEnv = { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") };
   await expect(
     manager.setSessionTargetAsync(
       captureSessionTranscriptTargetBinding({
         ...destination,
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") },
+        env: otherEnv,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: actor.agentId,
+          env: otherEnv,
+        }),
       }),
     ),
-  ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
+  ).rejects.toThrow("another incognito actor");
   expect(manager.getSessionTarget()).toMatchObject(destination);
   await manager.appendMessageAsync(makeUserMessage("retained destination write", 2));
   await manager.reloadPersistedTranscriptAsync();
@@ -215,12 +223,7 @@ it("retargets another session on its retained actor outside the opening scope", 
     { role: "user", content: "destination history" },
     { role: "user", content: "retained destination write" },
   ]);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = actor.run(authority, async () => {
-    entered.resolve();
-    await release.promise;
-  });
+  const { entered, release, held } = probe.hold(actor, authority);
   let reloading: Promise<void> | undefined;
   try {
     await entered.promise;
@@ -440,7 +443,7 @@ it("publishes model context before following work enters its actor", async () =>
     const forward: typeof history = async (grant, command, signal, onRead) => {
       const result = await history(grant, command, signal, onRead);
       if (onRead) {
-        await actor.run(authority, async () => {
+        await probe.read(actor, authority, () => {
           order.push("following actor work");
         });
       }
@@ -536,6 +539,80 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
   }
 });
 
+it("advances the captured CLI writer boundary through actor metadata commits", async () => {
+  const target = await create("cli-metadata");
+  const historyTarget = {
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    lifecycleRevision: "initial",
+  };
+  await withIncognitoSessionActor(actor, async () => {
+    const manager = await SessionManager.openAsync(target);
+    const { watermark } = await actor.sessions.history(authority, {
+      type: "session.history.watermark",
+      input: historyTarget,
+    });
+    const runId = "synthetic-cli-run";
+    const authFingerprint = "a".repeat(64);
+    await patchSessionEntryCore(target, () => ({
+      activeWriterRunId: runId,
+      cliHistoryBoundary: {
+        version: 1,
+        sessionId: target.sessionId,
+        state: "known",
+        ...watermark,
+        authFingerprint,
+        writerRunId: runId,
+      },
+    }));
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("CLI writer revoked");
+      }
+    };
+    await runWithCliHistoryWriter(
+      {
+        target,
+        runId,
+        authFingerprint,
+        lifecycleRevision: "initial",
+        assertCurrent,
+        assertReadable: assertCurrent,
+      },
+      async () => {
+        await manager.appendCustomEntryAsync("cli-metadata", { synthetic: true });
+        const after = await actor.sessions.history(authority, {
+          type: "session.history.watermark",
+          input: historyTarget,
+        });
+        const entry = (await actor.sessions.read(authority, { sessionKey: target.sessionKey }))
+          .entry;
+        expect(entry).toMatchObject({
+          cliHistoryBoundary: {
+            ...after.watermark,
+            writerRunId: runId,
+            authFingerprint,
+          },
+        });
+        expect(after.watermark.maxSeq).toBe((watermark.maxSeq ?? -1) + 1);
+        current = false;
+        await expect(manager.appendCustomEntryAsync("refused", {})).rejects.toThrow(
+          "CLI writer revoked",
+        );
+        expect(
+          (
+            await actor.sessions.history(authority, {
+              type: "session.history.watermark",
+              input: historyTarget,
+            })
+          ).watermark,
+        ).toEqual(after.watermark);
+      },
+    );
+  });
+});
+
 it("rolls back fresh-message refusal and fences queued authority before mutation", async () => {
   const target = await create("authority");
   await withIncognitoSessionActor(actor, async () => {
@@ -548,12 +625,7 @@ it("rolls back fresh-message refusal and fences queued authority before mutation
       }),
     ).rejects.toThrow("fresh grant revoked");
     expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     let current = true;
     const refused = withSessionManagerWriteAssertion(
@@ -630,22 +702,17 @@ it.each(["registry", "pattern"] as const)(
     applyLoggingConfig({ redactPatterns: patterns });
     resetSecretRedactionRegistryForTest();
     let changed = false;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    const spy = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        original((request, grant) => {
-          if (request.stage === "commit" && !changed) {
-            changed = true;
-            if (policy === "registry") {
-              registerSecretValueForRedaction(marker);
-            } else {
-              patterns.push(marker);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const spy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit" && !changed) {
+        changed = true;
+        if (policy === "registry") {
+          registerSecretValueForRedaction(marker);
+        } else {
+          patterns.push(marker);
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await withIncognitoSessionActor(actor, async () => {
         await expect(appendSessionTranscriptNote(target, note)).rejects.toThrow(

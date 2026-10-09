@@ -131,10 +131,7 @@ export function hasRecordedUsageCost(value: unknown): boolean {
     total >= 0 &&
     (total > 0 ||
       cost?.totalOrigin === "provider-billed" ||
-      (asFiniteNumber(cost?.input) ?? 0) !== 0 ||
-      (asFiniteNumber(cost?.output) ?? 0) !== 0 ||
-      (asFiniteNumber(cost?.cacheRead) ?? 0) !== 0 ||
-      (asFiniteNumber(cost?.cacheWrite) ?? 0) !== 0)
+      USAGE_COST_COMPONENTS.some((key) => (asFiniteNumber(cost?.[key]) ?? 0) !== 0))
   );
 }
 
@@ -274,14 +271,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   }
 
   if (
-    input === undefined &&
-    output === undefined &&
-    cacheRead === undefined &&
-    cacheWrite === undefined &&
-    contextUsage === undefined &&
-    reasoningTokens === undefined &&
-    total === undefined &&
-    cost === undefined
+    [input, output, cacheRead, cacheWrite, contextUsage, reasoningTokens, total, cost].every(
+      (value) => value === undefined,
+    )
   ) {
     return undefined;
   }
@@ -415,24 +407,21 @@ export function deriveContextPromptTokens(params: {
     return promptOverride;
   }
 
-  if (params.lastCallUsage?.contextUsage?.state === "unavailable") {
-    return undefined;
+  for (const [index, usage] of [params.lastCallUsage, params.usage].entries()) {
+    if (usage?.contextUsage?.state === "unavailable") {
+      return undefined;
+    }
+    if (usage?.contextUsage?.state === "available") {
+      return usage.contextUsage.promptTokens;
+    }
+    // Only the last call's total can recover its prompt; accumulated totals span turns.
+    const promptTokens =
+      derivePromptTokens(usage) ?? (index === 0 ? derivePromptTokensFromTotal(usage) : undefined);
+    if (promptTokens !== undefined) {
+      return promptTokens;
+    }
   }
-  if (params.lastCallUsage?.contextUsage?.state === "available") {
-    return params.lastCallUsage.contextUsage.promptTokens;
-  }
-  const lastCallPromptTokens =
-    derivePromptTokens(params.lastCallUsage) ?? derivePromptTokensFromTotal(params.lastCallUsage);
-  if (lastCallPromptTokens !== undefined) {
-    return lastCallPromptTokens;
-  }
-  if (params.usage?.contextUsage?.state === "unavailable") {
-    return undefined;
-  }
-  if (params.usage?.contextUsage?.state === "available") {
-    return params.usage.contextUsage.promptTokens;
-  }
-  return derivePromptTokens(params.usage);
+  return undefined;
 }
 
 export function deriveSessionTotalTokens(params: {

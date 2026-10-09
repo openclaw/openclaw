@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import type {
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
@@ -10,7 +11,7 @@ export class SqliteWorkerInputAdmission {
   private bytes = 0;
   private inputPreparationGeneration = {};
   private readonly inputPreparations = new Set<Promise<void>>();
-  private openTail: Promise<void> = Promise.resolve();
+  private readonly openQueue = new Map<string, StoreWriterQueue>();
 
   constructor(
     private readonly owner: {
@@ -37,7 +38,7 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(bytes: number, dispatch: () => Promise<T>): Promise<T> {
+  open<T>(bytes: number, dispatch: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
@@ -46,19 +47,19 @@ export class SqliteWorkerInputAdmission {
         new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
       );
     }
-    const previous = this.openTail;
-    const settled = createDeferredCore();
-    this.openTail = settled.promise;
     const release = this.retain(bytes);
     // Physical-file identity must be published before admitting another open alias.
-    return previous.then(dispatch).finally(() => {
-      release();
-      settled.resolve();
-    });
+    return runQueuedStoreWrite({
+      queues: this.openQueue,
+      storePath: "sqlite-open",
+      label: "SQLite worker open",
+      fn: dispatch,
+      signal,
+    }).finally(release);
   }
 
   joinOpens(): Promise<void> {
-    return this.openTail;
+    return this.openQueue.get("sqlite-open")?.drainPromise ?? Promise.resolve();
   }
 
   invalidatePreparations(): void {

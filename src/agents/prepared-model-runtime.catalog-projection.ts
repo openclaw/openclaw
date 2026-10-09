@@ -1,6 +1,5 @@
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -19,7 +18,6 @@ export function createPreparedModelCatalogProjection(params: {
   normalizeProvider: (provider: string) => string;
   catalogFacts: PreparedModelRuntimeCatalogFacts;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
 }) {
   return (
     inventory: Pick<PreparedModelCatalogInventory, "catalog"> &
@@ -65,6 +63,6 @@ export function createPreparedModelCatalogProjection(params: {
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
     });
-    return params.withRefreshStatus(projected);
+    return projected;
   };
 }

@@ -207,49 +207,6 @@ function finish(collector: PatchCollector): PatchViewData | null {
   return { paths, fileOperations, lines, stat, ...(move ? { move } : {}) };
 }
 
-function parseCodexPatch(text: string): PatchViewData | null {
-  const collector: PatchCollector = { sections: [], storedRows: 0, truncated: false };
-  let current: PatchSection | null = null;
-  let hunk: HunkState | null = null;
-  for (const raw of splitDiffLines(text)) {
-    const structural = current?.operation === "update" ? raw.trimEnd() : raw.trim();
-    const fileMatch = structural.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
-    if (fileMatch) {
-      const operation = fileMatch[1]!.toLowerCase() as PatchOperation;
-      current = startSection(collector, operation, fileMatch[2]!);
-      hunk = null;
-      continue;
-    }
-    const moveMatch =
-      current?.operation === "update" ? structural.match(/^\*\*\* Move to: (.+)$/) : null;
-    if (moveMatch && current) {
-      current.path = moveMatch[1]?.trim() ?? current.path;
-      continue;
-    }
-    if (
-      structural === "*** Begin Patch" ||
-      structural === "*** End Patch" ||
-      structural === "*** End of File" ||
-      structural.startsWith("*** Environment ID:")
-    ) {
-      continue;
-    }
-    if (!current) {
-      continue;
-    }
-    if (current.operation === "add" && raw.startsWith("+")) {
-      pushLine(collector, current, {
-        kind: "add",
-        lineNo: current.stat.added + 1,
-        text: raw.slice(1),
-      });
-    } else if (current.operation === "update") {
-      hunk = appendHunk(collector, current, raw, hunk, true);
-    }
-  }
-  return finish(collector);
-}
-
 function normalizeUnifiedPath(raw: string): string {
   const path = raw.split("\t", 1)[0]?.trim() ?? "";
   return path.replace(/^[ab]\//, "");
@@ -275,7 +232,7 @@ function applyHeaderPair(
   return section;
 }
 
-function parseUnifiedPatch(text: string): PatchViewData | null {
+function parseTextPatch(text: string, codex: boolean): PatchViewData | null {
   const collector: PatchCollector = { sections: [], storedRows: 0, truncated: false };
   const rawLines = splitDiffLines(text);
   let current: PatchSection | null = null;
@@ -283,28 +240,67 @@ function parseUnifiedPatch(text: string): PatchViewData | null {
   let awaitingGitHeaders = false;
   for (let index = 0; index < rawLines.length; index++) {
     const raw = rawLines[index]!;
-    const gitHeader = raw.match(/^diff --git a\/(.+) b\/(.+)$/);
-    if (gitHeader) {
-      current = startSection(collector, "update", gitHeader[2]!);
-      current.sourcePath = gitHeader[1]!;
-      hunk = null;
-      awaitingGitHeaders = true;
-      continue;
+    if (codex) {
+      const structural = current?.operation === "update" ? raw.trimEnd() : raw.trim();
+      const fileMatch = structural.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
+      if (fileMatch) {
+        current = startSection(
+          collector,
+          fileMatch[1]!.toLowerCase() as PatchOperation,
+          fileMatch[2]!,
+        );
+        hunk = null;
+        continue;
+      }
+      const moveMatch =
+        current?.operation === "update" ? structural.match(/^\*\*\* Move to: (.+)$/) : null;
+      if (moveMatch && current) {
+        current.path = moveMatch[1]?.trim() ?? current.path;
+        continue;
+      }
+      if (
+        structural === "*** Begin Patch" ||
+        structural === "*** End Patch" ||
+        structural === "*** End of File" ||
+        structural.startsWith("*** Environment ID:") ||
+        !current
+      ) {
+        continue;
+      }
+      if (current.operation === "add" && raw.startsWith("+")) {
+        pushLine(collector, current, {
+          kind: "add",
+          lineNo: current.stat.added + 1,
+          text: raw.slice(1),
+        });
+      }
+      if (current.operation !== "update") {
+        continue;
+      }
+    } else {
+      const gitHeader = raw.match(/^diff --git a\/(.+) b\/(.+)$/);
+      if (gitHeader) {
+        current = startSection(collector, "update", gitHeader[2]!);
+        current.sourcePath = gitHeader[1]!;
+        hunk = null;
+        awaitingGitHeaders = true;
+        continue;
+      }
+      const next = rawLines[index + 1];
+      if (!hunk && raw.startsWith("--- ") && next?.startsWith("+++ ")) {
+        current = applyHeaderPair(collector, current, raw, next, awaitingGitHeaders);
+        awaitingGitHeaders = false;
+        index += 1;
+        continue;
+      }
+      if (raw.startsWith("@@")) {
+        awaitingGitHeaders = false;
+      }
+      if (/^index |^new file mode |^deleted file mode |^similarity index /.test(raw)) {
+        continue;
+      }
     }
-    const next = rawLines[index + 1];
-    if (!hunk && raw.startsWith("--- ") && next?.startsWith("+++ ")) {
-      current = applyHeaderPair(collector, current, raw, next, awaitingGitHeaders);
-      awaitingGitHeaders = false;
-      index += 1;
-      continue;
-    }
-    if (raw.startsWith("@@")) {
-      awaitingGitHeaders = false;
-    }
-    if (/^index |^new file mode |^deleted file mode |^similarity index /.test(raw)) {
-      continue;
-    }
-    hunk = appendHunk(collector, current, raw, hunk);
+    hunk = appendHunk(collector, current, raw, hunk, codex);
   }
   return finish(collector);
 }
@@ -382,5 +378,5 @@ export function parsePatchView(args: unknown): PatchViewData | null {
   const isCodex = /(?:^|\n)\s*\*\*\* (?:Begin Patch|Update File:|Add File:|Delete File:)/.test(
     text,
   );
-  return isCodex ? parseCodexPatch(text) : parseUnifiedPatch(text);
+  return parseTextPatch(text, isCodex);
 }

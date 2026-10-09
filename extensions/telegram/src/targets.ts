@@ -14,18 +14,11 @@ const TELEGRAM_TOPIC_SUFFIX_REGEX = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/;
 export const TELEGRAM_INVALID_TOPIC_ID_MESSAGE =
   "Telegram topic ID must be a positive safe integer.";
 
+const TELEGRAM_INTERNAL_PREFIXES_RE = /^(?:telegram|tg):(?:\s*(?:telegram|tg|group):)*/i;
+
 export function stripTelegramInternalPrefixes(to: string): string {
-  let trimmed = to.trim();
-  let strippedTelegramPrefix = false;
-  while (true) {
-    const prefix = /^(telegram|tg|group):/i.exec(trimmed)?.[0];
-    // Legacy group prefixes are internal only after a Telegram prefix.
-    if (!prefix || (!strippedTelegramPrefix && prefix.toLowerCase() === "group:")) {
-      return trimmed;
-    }
-    strippedTelegramPrefix = true;
-    trimmed = trimmed.slice(prefix.length).trim();
-  }
+  // A Telegram prefix admits the following legacy group and repeated Telegram prefixes.
+  return to.trim().replace(TELEGRAM_INTERNAL_PREFIXES_RE, "").trim();
 }
 
 export function normalizeTelegramChatId(raw: string): string | undefined {

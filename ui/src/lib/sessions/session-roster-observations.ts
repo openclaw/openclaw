@@ -176,12 +176,9 @@ export function createSessionRosterObservations(
     const epoch = host.connection.capture()?.epoch;
     const observedRows = new Map<string, GatewaySessionRow[]>();
     const append = (key: string, row: GatewaySessionRow) => {
-      const rows = observedRows.get(key);
-      if (rows) {
-        rows.push(row);
-      } else {
-        observedRows.set(key, [row]);
-      }
+      const rows = observedRows.get(key) ?? [];
+      rows.push(row);
+      observedRows.set(key, rows);
     };
     for (const entry of lists.values()) {
       if (entry.connectionEpoch === epoch) {

@@ -16,6 +16,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -273,37 +274,41 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   "feishuChannelRuntime",
 );
 
-async function resolveFeishuMessageSender<TSender>(params: {
-  resolve: (
-    runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>,
-  ) => TSender | null | undefined;
-  unavailableMessage: string;
-}): Promise<TSender> {
+async function resolveFeishuMessageSender(kind: "text" | "media") {
+  const unavailableMessage = `Feishu ${kind} sending is not available.`;
   try {
-    const sender = params.resolve(await loadFeishuChannelRuntime());
+    const runtime = await loadFeishuChannelRuntime();
+    const sender = runtime.feishuOutbound[kind === "text" ? "sendText" : "sendMedia"];
     if (sender) {
       return sender;
     }
-    throw new Error(params.unavailableMessage);
+    throw new Error(unavailableMessage);
   } catch (error) {
     if (error instanceof PlatformMessageNotDispatchedError) {
       throw error;
     }
-    throw new PlatformMessageNotDispatchedError(params.unavailableMessage, { cause: error });
+    throw new PlatformMessageNotDispatchedError(unavailableMessage, { cause: error });
   }
 }
 
-const resolveFeishuTextSender = () =>
-  resolveFeishuMessageSender({
-    resolve: (runtime) => runtime.feishuOutbound.sendText,
-    unavailableMessage: "Feishu text sending is not available.",
+async function sendFeishuAdapterMessage(
+  kind: "text" | "media",
+  ctx: ChannelMessageSendTextContext,
+) {
+  const send = await resolveFeishuMessageSender(kind);
+  const { onDeliveryResult, ...outboundCtx } = ctx;
+  const result = await send({
+    ...outboundCtx,
+    ...(onDeliveryResult
+      ? {
+          onDeliveryResult: async (progress) => {
+            await onDeliveryResult(toFeishuMessageSendResult(progress, kind));
+          },
+        }
+      : {}),
   });
-
-const resolveFeishuMediaSender = () =>
-  resolveFeishuMessageSender({
-    resolve: (runtime) => runtime.feishuOutbound.sendMedia,
-    unavailableMessage: "Feishu media sending is not available.",
-  });
+  return toFeishuMessageSendResult(result, kind);
+}
 
 const feishuMessageAdapter = defineChannelMessageAdapter({
   id: "feishu",
@@ -318,43 +323,13 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       // Resolve process-stable runtime methods before core records platform-send start.
       // Provider invocation stays below so a lost provider result remains ambiguous.
       beforeSendAttempt: async (ctx) => {
-        if (ctx.kind === "text") {
-          await resolveFeishuTextSender();
-        } else if (ctx.kind === "media") {
-          await resolveFeishuMediaSender();
+        if (ctx.kind === "text" || ctx.kind === "media") {
+          await resolveFeishuMessageSender(ctx.kind);
         }
       },
     },
-    text: async (ctx) => {
-      const sendText = await resolveFeishuTextSender();
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await sendText({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toFeishuMessageSendResult(progress, "text"));
-              },
-            }
-          : {}),
-      });
-      return toFeishuMessageSendResult(result, "text");
-    },
-    media: async (ctx) => {
-      const sendMedia = await resolveFeishuMediaSender();
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await sendMedia({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toFeishuMessageSendResult(progress, "media"));
-              },
-            }
-          : {}),
-      });
-      return toFeishuMessageSendResult(result, "media");
-    },
+    text: (ctx) => sendFeishuAdapterMessage("text", ctx),
+    media: (ctx) => sendFeishuAdapterMessage("media", ctx),
   },
 });
 
@@ -1290,7 +1265,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 });
               } else {
                 const { target, ...delivery } = await (
-                  await resolveFeishuTextSender()
+                  await resolveFeishuMessageSender("text")
                 )(outboundContext);
                 result = { ...delivery, chatId: target?.id };
               }

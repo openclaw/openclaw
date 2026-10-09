@@ -34,7 +34,8 @@ const {
   recordInboundSessionMock: vi.fn(),
 }));
 
-vi.mock("node:timers/promises", () => ({
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: <T>(delayMs: number, value?: T, options?: { signal?: AbortSignal }) =>
     new Promise<T | undefined>((resolve, reject) => {
       const signal = options?.signal;

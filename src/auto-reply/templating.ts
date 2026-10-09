@@ -7,7 +7,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { MediaFact } from "../media/media-facts.js";
+import type { LegacyMediaContextKey, MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -463,20 +463,8 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-type RuntimeMediaContextKey =
-  | "MediaPath"
-  | "MediaUrl"
-  | "MediaType"
-  | "MediaDir"
-  | "MediaPaths"
-  | "MediaUrls"
-  | "MediaTypes"
-  | "MediaWorkspaceDir"
-  | "MediaTranscribedIndexes"
-  | "MediaStaged";
-
 /** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
-export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+export type RuntimeMsgContext = Omit<MsgContext, LegacyMediaContextKey>;
 
 export type FinalizedRuntimeMsgContext = Omit<
   RuntimeMsgContext,

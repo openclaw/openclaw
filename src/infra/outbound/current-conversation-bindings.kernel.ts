@@ -19,6 +19,7 @@ import {
   type SqliteReadOperationRevision,
 } from "../sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../sqlite-transaction.js";
+import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
   CurrentConversationBindingRemove,
@@ -197,32 +198,33 @@ function createCurrentConversationBindingQueries(db: DatabaseSync) {
         parameter((key) => key),
       ),
     ),
-    upsert: prepareSqliteQuerySync<ReturnType<typeof currentConversationBindingRow>>(
-      db,
-      (parameter) => {
-        const row = {
-          binding_key: parameter((value) => value.binding_key),
-          binding_id: parameter((value) => value.binding_id),
-          target_session_key: parameter((value) => value.target_session_key),
-          channel: parameter((value) => value.channel),
-          account_id: parameter((value) => value.account_id),
-          conversation_kind: parameter((value) => value.conversation_kind),
-          parent_conversation_id: parameter((value) => value.parent_conversation_id),
-          conversation_id: parameter((value) => value.conversation_id),
-          target_kind: parameter((value) => value.target_kind),
-          status: parameter((value) => value.status),
-          bound_at: parameter((value) => value.bound_at),
-          expires_at: parameter((value) => value.expires_at),
-          metadata_json: parameter((value) => value.metadata_json),
-          record_json: parameter((value) => value.record_json),
-          updated_at: parameter((value) => value.updated_at),
-        };
-        return bindingDb
-          .insertInto("current_conversation_bindings")
-          .values(row)
-          .onConflict((conflict) => conflict.column("binding_key").doUpdateSet(row));
-      },
-    ),
+    upsert: prepareSqliteQuerySync<
+      ReturnType<typeof currentConversationBindingRow>,
+      CurrentConversationBindingRow
+    >(db, (parameter) => {
+      const row = {
+        binding_key: parameter((value) => value.binding_key),
+        binding_id: parameter((value) => value.binding_id),
+        target_session_key: parameter((value) => value.target_session_key),
+        channel: parameter((value) => value.channel),
+        account_id: parameter((value) => value.account_id),
+        conversation_kind: parameter((value) => value.conversation_kind),
+        parent_conversation_id: parameter((value) => value.parent_conversation_id),
+        conversation_id: parameter((value) => value.conversation_id),
+        target_kind: parameter((value) => value.target_kind),
+        status: parameter((value) => value.status),
+        bound_at: parameter((value) => value.bound_at),
+        expires_at: parameter((value) => value.expires_at),
+        metadata_json: parameter((value) => value.metadata_json),
+        record_json: parameter((value) => value.record_json),
+        updated_at: parameter((value) => value.updated_at),
+      };
+      return bindingDb
+        .insertInto("current_conversation_bindings")
+        .values(row)
+        .onConflict((conflict) => conflict.column("binding_key").doUpdateSet(row))
+        .returning(["binding_key", "binding_id", "target_session_key", "record_json"]);
+    }),
     generic: lists(true),
     all: lists(false),
   };
@@ -348,6 +350,13 @@ export function updateCurrentConversationBindingRecordInDatabase(
   if (!current) {
     if (existingRow) {
       getCurrentConversationBindingQueries(db).remove(existingRow.binding_key);
+      currentConversationBindingPublication.stage(db, [
+        {
+          key: existingRow.binding_key,
+          current: null,
+          previousTargetSessionKey: existingRow.target_session_key,
+        },
+      ]);
     }
     return { previous, current: null };
   }
@@ -359,7 +368,24 @@ export function updateCurrentConversationBindingRecordInDatabase(
     getCurrentConversationBindingQueries(db).remove(existingRow.binding_key);
   }
   const row = currentConversationBindingRow(current, conversation, bindingKey);
-  getCurrentConversationBindingQueries(db).upsert(row);
+  const persisted = getCurrentConversationBindingQueries(db).upsert(row).rows[0]!;
+  currentConversationBindingPublication.stage(db, [
+    ...(existingRow && existingRow.binding_key !== bindingKey
+      ? [
+          {
+            key: existingRow.binding_key,
+            current: null,
+            previousTargetSessionKey: existingRow.target_session_key,
+          },
+        ]
+      : []),
+    {
+      key: persisted.binding_key,
+      current: bindingRowToRecord(persisted),
+      currentTargetSessionKey: persisted.target_session_key,
+      previousTargetSessionKey: existingRow?.target_session_key,
+    },
+  ]);
   return { previous, current };
 }
 
@@ -453,6 +479,9 @@ export function pruneCurrentConversationBindingListInTransaction(
     const record = bindingRowToRecord(row);
     if (!record || isBindingExpired(record)) {
       getCurrentConversationBindingQueries(db).remove(row.binding_key);
+      currentConversationBindingPublication.stage(db, [
+        { key: row.binding_key, current: null, previousTargetSessionKey: row.target_session_key },
+      ]);
     } else {
       active.push(record);
     }
@@ -542,6 +571,9 @@ export function removeCurrentConversationBindingsInDatabase(
       continue;
     }
     getCurrentConversationBindingQueries(db).remove(row.binding_key);
+    currentConversationBindingPublication.stage(db, [
+      { key: row.binding_key, current: null, previousTargetSessionKey: row.target_session_key },
+    ]);
     if (record && !isBindingExpired(record)) {
       removed.push(record);
     }

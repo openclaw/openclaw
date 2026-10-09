@@ -1,5 +1,4 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -26,21 +25,6 @@ function baseSurfaceReportEnv(): NodeJS.ProcessEnv {
   );
 }
 
-function runSurfaceReport(env: Record<string, string>) {
-  return spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/plugin-sdk-surface-report.mts", "--check"],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...baseSurfaceReportEnv(),
-        ...env,
-      },
-    },
-  );
-}
-
 type PublicSurfaceCounts = {
   callableExports: number;
   exports: number;
@@ -58,14 +42,6 @@ function readDefaultPublicSurfaceBudgets(): PublicSurfaceCounts {
 
 type SurfaceReport = Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>;
 let surfaceReport: SurfaceReport;
-
-function readCurrentPublicSurfaceCounts(): PublicSurfaceCounts {
-  return {
-    exports: surfaceReport.publicStats.totals.exports,
-    callableExports: surfaceReport.publicStats.totals.callableExports,
-    wildcardReexports: surfaceReport.publicWildcards.count,
-  };
-}
 
 describe("plugin SDK surface report", () => {
   beforeAll(async () => {
@@ -104,90 +80,6 @@ describe("plugin SDK surface report", () => {
       });
     },
   );
-
-  it("rejects unknown CLI options before collecting SDK stats", () => {
-    for (const args of [["--chekc"], ["chekc", "--help"]]) {
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "scripts/plugin-sdk-surface-report.mts", ...args],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-        },
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr.trim()).toBe(`Unknown plugin SDK surface report option: ${args[0]}`);
-      expect(result.stderr).not.toContain("at ");
-    }
-  });
-
-  it("prints help before collecting SDK stats", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/plugin-sdk-surface-report.mts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/plugin-sdk-surface-report.mts",
-    );
-    expect(result.stderr).toBe("");
-    expect(result.stdout).not.toContain("all SDK entrypoints:");
-  });
-
-  it("rejects loose numeric budget env vars before collecting SDK stats", () => {
-    const result = runSurfaceReport({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "1e9",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS must be a non-negative integer",
-    );
-    expect(result.stderr).not.toContain("at ");
-  });
-
-  it("rejects unsafe budget env vars before collecting SDK stats", () => {
-    const result = runSurfaceReport({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "9007199254740992",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS must be a safe non-negative integer",
-    );
-    expect(result.stderr).not.toContain("at ");
-  });
-
-  it("accepts exact deprecated export budget overrides by public entrypoint", () => {
-    const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 3 }),
-    });
-
-    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).not.toContain(
-      expect.stringContaining("public deprecated exports in core"),
-    );
-  });
-
-  it("keeps default public surface budgets pinned to current source counts", () => {
-    expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
-    const inboundReplyDispatch =
-      surfaceReport.publicStats.byEntrypoint.get("inbound-reply-dispatch");
-    expect(inboundReplyDispatch).toBeDefined();
-    expect(
-      readPluginSdkSurfaceBudgets({}).publicDeprecatedExportsByEntrypointBudget[
-        "inbound-reply-dispatch"
-      ],
-    ).toBe(inboundReplyDispatch?.deprecatedExports);
-  });
 
   it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
     expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);

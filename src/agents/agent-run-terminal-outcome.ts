@@ -91,13 +91,6 @@ type LegacyAgentRunAttemptTerminalInput = {
 
 // Timeout owns mechanical abort/failure observations; within a timeout, the
 // latest concrete phase/source can only refine toward stronger attribution.
-const ATTEMPT_TERMINAL_KIND_RANK = {
-  ok: 0,
-  failed: 1,
-  aborted: 2,
-  timeout: 3,
-} as const;
-
 const ATTEMPT_TIMEOUT_PHASE_RANK = {
   prompt: 0,
   tool_execution: 1,
@@ -285,10 +278,7 @@ export function mergeAgentRunAttemptTerminal(
           : current.source;
       selected = { kind: "aborted", source };
     } else {
-      selected =
-        ATTEMPT_TERMINAL_KIND_RANK[incoming.kind] >= ATTEMPT_TERMINAL_KIND_RANK[current.kind]
-          ? incoming
-          : current;
+      selected = current.kind === "aborted" ? current : incoming;
     }
     for (const observation of [current.timeoutObservation, incoming.timeoutObservation]) {
       if (observation) {
@@ -353,6 +343,12 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
   const externalAbort =
     (terminal.kind === "aborted" || terminal.kind === "timeout") && terminal.source === "external";
   const timedOut = terminal.kind === "timeout" && terminal.source !== "observation";
+  const timeoutPhase =
+    terminal.kind === "timeout"
+      ? terminal.phase
+      : terminal.kind === "ok"
+        ? undefined
+        : terminal.timeoutObservation;
   return {
     ...(terminal.kind === "ok" &&
       terminal.settlementWarning && { settlementWarning: terminal.settlementWarning }),
@@ -368,14 +364,8 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
     promptErrorSource: failure?.source ?? null,
     timedOut,
     timedOutByRunBudget: terminal.kind === "timeout" && terminal.source === "run_budget",
-    timedOutDuringCompaction:
-      (terminal.kind === "timeout" && terminal.phase === "compaction") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "compaction"),
-    timedOutDuringToolExecution:
-      (terminal.kind === "timeout" && terminal.phase === "tool_execution") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "tool_execution"),
+    timedOutDuringCompaction: timeoutPhase === "compaction",
+    timedOutDuringToolExecution: timeoutPhase === "tool_execution",
   };
 }
 

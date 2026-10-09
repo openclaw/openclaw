@@ -49,6 +49,11 @@ does not pass that check. Each verification check has a 90-second deadline.
 Changing `agents.defaults.timeoutSeconds` does not extend setup verification.
 Failures identify whether the response check or tool-use check timed out.
 
+If the configured server executable is missing from OpenClaw's current managed
+installation, chat and local embeddings restore the same verified build before
+starting it. Custom server paths and installations from older releases still
+require manual repair or rerunning setup.
+
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before
@@ -106,6 +111,10 @@ device discovery. When an NVIDIA GPU has no compatible managed CUDA build,
 setup explains the limitation and names CPU execution in the confirmation.
 For other acceleration backends, run a compatible server yourself and choose
 **Existing llama-server**.
+
+Runtime validation allows up to two minutes per executable version check so
+macOS security assessment and Metal initialization can finish after installation
+or when reusing a runtime. Setup remains cancellable during validation.
 
 The verified macOS builds require macOS 13.3 or later, and setup stops before
 downloading on older releases. To keep managed chat and local embeddings there,

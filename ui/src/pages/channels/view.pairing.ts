@@ -262,9 +262,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
   const busy = props.channels.pairingBusyRequestId === request.requestId;
   const approving = prompt.kind === "approve";
   const ownerMissing = props.channels.pairingSnapshot?.commandOwnerConfigured === false;
-  const dialogTitle = approving
-    ? t("channels.pairing.approveDialogTitle")
-    : t("channels.pairing.dismissDialogTitle");
+  const dialogTitle = t(`channels.pairing.${prompt.kind}DialogTitle`);
   const option = (field: "notify" | "bootstrapCommandOwner", label: string) => html`
     <label class="channels-pairing-dialog__option">
       <input
@@ -288,11 +286,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
           (${request.accountId})
         </div>
         <div class="callout ${approving ? "info" : "warn"}">
-          ${
-            approving
-              ? t("channels.pairing.approveExplanation")
-              : t("channels.pairing.dismissExplanation")
-          }
+          ${t(`channels.pairing.${prompt.kind}Explanation`)}
         </div>
         ${
           props.channels.pairingError
@@ -324,7 +318,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
             ?disabled=${busy}
             @click=${props.onPairingPromptConfirm}
           >
-            ${approving ? t("channels.pairing.approve") : t("channels.pairing.dismiss")}
+            ${t(`channels.pairing.${prompt.kind}`)}
           </button>
           <button type="button" class="btn" ?disabled=${busy} @click=${props.onPairingPromptCancel}>
             ${t("common.cancel")}

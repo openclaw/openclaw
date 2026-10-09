@@ -22,9 +22,8 @@ import {
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
-import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -39,11 +38,11 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
-  type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createReplyOperation,
+  hasCommittedReplyOperationOutcome,
   isReplyRunSuccessorAdmissionBlocked,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
@@ -65,24 +64,10 @@ import {
   resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
 import { REPLY_WORK_ADMISSION_OWNER } from "./reply-turn-admission-owner.js";
+import type { ReplyTurnAdmission, ReplyTurnAdmissionParams } from "./reply-turn-admission.types.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
-
-type ReplyTurnAdmission =
-  | {
-      status: "owned";
-      operation: ReplyOperation;
-      sessionEntry?: SessionEntry;
-      databaseClaim?: SessionAdmissionDatabaseClaim;
-    }
-  | {
-      status: "skipped";
-      reason: "active-run" | "aborted" | "lifecycle-invalidated";
-      activeOperation?: ReplyOperation;
-      sessionEntry?: SessionEntry;
-      lifecycleAdmission?: SessionWorkAdmissionLease;
-    };
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
 class ReplyOperationChangedDuringAdmissionError extends Error {}
@@ -135,36 +120,6 @@ function rejectLifecycleInvalidatedWork(params: {
   }
   throw new Error(params.message);
 }
-
-type ReplyTurnAdmissionParams = {
-  assertRequestCurrent?: () => void;
-  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
-  agentId?: string;
-  sessionKey: string;
-  sessionId: string;
-  expectedSessionId?: string;
-  /** Observed predecessors, from oldest to newest. */
-  expectedActiveOperations?: readonly ReplyOperation[];
-  storePath?: string;
-  kind: ReplyTurnKind;
-  resetTriggered: boolean;
-  allowRestartTombstoneParentFork?: boolean;
-  allowRestartTombstoneReset?: boolean;
-  routeThreadId?: string | number;
-  originatingLeafEntryId?: string | null;
-  /**
-   * Move this already-held operation into sessionKey's run slot instead of
-   * creating a new one. Used when a native command turn (admitted under its
-   * slash source key) continues into a full agent turn on the target session.
-   */
-  adoptOperation?: ReplyOperation;
-  upstreamAbortSignal?: AbortSignal;
-  resolveGatewayContext?: GatewayContextResolver;
-  waitTimeoutMs?: number;
-  waitForActive?: boolean;
-  retainLifecycleAdmissionOnActive?: boolean;
-  onLifecycleInterrupt?: () => void;
-};
 
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
@@ -290,6 +245,9 @@ export async function admitReplyTurn(
           ? await beginSessionWorkAdmission({
               owner: REPLY_WORK_ADMISSION_OWNER,
               scope: storePath,
+              isSettling: () =>
+                operation !== undefined &&
+                (operation.result !== null || hasCommittedReplyOperationOutcome(operation)),
               resolveGatewayContext,
               identities: [params.sessionKey],
               storeWriterIdentities:

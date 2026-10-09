@@ -32,6 +32,7 @@ function observeNativeIo(filename: string) {
   const readSync = fs.readSync;
   const readFileSync = fs.readFileSync;
   const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
   const writeSync = fs.writeSync;
   const empty = () => ({ originalBytes: 0, capturedBytes: 0, wholeFileReads: 0, largestBuffer: 0 });
   let current: ReturnType<typeof empty> | undefined;
@@ -40,6 +41,12 @@ function observeNativeIo(filename: string) {
     if (current && stat.size === original.size) {
       copies.add(`${stat.dev}:${stat.ino}`);
     }
+  };
+  const recordCopiedFile = (copied: ReturnType<typeof fsSafeAdvanced.copyRootFileSync>) => {
+    if (current) {
+      recordCopy(fs.fstatSync(copied.fd));
+    }
+    return copied;
   };
   const spies = [
     vi.spyOn(fs, "readSync").mockImplementation((...args) => {
@@ -64,12 +71,15 @@ function observeNativeIo(filename: string) {
       }
       return result;
     }),
-    vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
-      const copied = copyRootFileSync(options);
-      if (current) {
-        recordCopy(fs.fstatSync(copied.fd));
-      }
-      return copied;
+    vi
+      .spyOn(fsSafeAdvanced, "copyRootFileSync")
+      .mockImplementation((options) => recordCopiedFile(copyRootFileSync(options))),
+    vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+      const batch = createBatch();
+      return {
+        ...batch,
+        copyFile: (options) => recordCopiedFile(batch.copyFile(options)),
+      };
     }),
     vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
       const length = Reflect.apply(writeSync, fs, args);

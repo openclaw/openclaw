@@ -53,9 +53,8 @@ sidebarTitle: "Troubleshooting"
 
   <Accordion title="Ollama not detected">
     Confirm Ollama is running and is in the agent's model scope. For ambient
-    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). A nonempty
-    manual model list skips discovery; an explicit self-hosted endpoint with
-    `models: []` does not:
+    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). An explicit
+    self-hosted endpoint is discovered whether or not it lists models:
 
     ```bash
     ollama serve
@@ -124,6 +123,18 @@ sidebarTitle: "Troubleshooting"
 
     If a small local model still fails on tool schemas, set
     `compat.supportsTools: false` on that model entry and retest.
+
+  </Accordion>
+
+  <Accordion title="Repeated tool errors stop the turn">
+    OpenClaw stops after three consecutive identical failures for the same tool
+    and arguments, including repeated unknown tool IDs. This protection is always
+    active; enabling `tools.loopDetection` is not required.
+
+    Check the arguments in the recorded error. If the model repeatedly invents
+    tool names or cannot use the exposed schemas, switch to a model with native
+    tool calling and start a new turn. Changed errors and successful retries
+    reset the count. See [Tool-loop detection](/tools/loop-detection).
 
   </Accordion>
 

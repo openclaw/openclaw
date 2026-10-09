@@ -104,7 +104,7 @@ import {
   agentDatabaseIntegrityBeforeMutationSteps,
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
   adoptOpenClawAgentDatabaseSchema,
@@ -189,6 +189,7 @@ export const {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
   withOpenClawAgentDatabaseRuntime,
+  withOpenClawAgentDatabaseRuntimeFromExecution,
   withOpenClawAgentDatabaseAdmission,
 } = createOpenClawAgentDatabaseAdmissionOwner(openOpenClawAgentDatabaseSteps);
 
@@ -289,7 +290,7 @@ function* openOpenClawAgentDatabaseSteps(
   }
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
-  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  revalidateAgentDatabaseTerminalOpen(pathname);
   const persistedFailure = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
     env: databaseOptions.env,
   });
