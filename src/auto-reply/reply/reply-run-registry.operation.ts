@@ -129,7 +129,8 @@ export function createReplyOperation(params: {
     },
   });
   const ownerSettlement = createDeferredCore();
-  const producerCompletion = createDeferredCore();
+  const producerCompletion = createDeferredCore<unknown>();
+  let producerError: unknown;
   let backendReady = createDeferredCore();
   const notifyBackendReady = () => {
     if (phase === "running" && getAttachedBackend(operation)) {
@@ -240,7 +241,7 @@ export function createReplyOperation(params: {
     barrier?: PromiseLike<unknown>,
     timeoutMs?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
   ) => {
-    producerCompletion.resolve();
+    producerCompletion.resolve(producerError);
     if (barrier) {
       // Admission may time out to free a slot; the old writer settles only when
       // its actual delivery/persistence barriers finish, including repeated complete().
@@ -517,6 +518,8 @@ export function createReplyOperation(params: {
     },
     completeWithAfterClearBarrier: complete,
     fail(code, cause) {
+      // Cancellation can win the outcome before the producer rejects its buffered output.
+      producerError ??= cause;
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
       finalizationLease.clear();

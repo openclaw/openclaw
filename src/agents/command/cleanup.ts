@@ -141,7 +141,7 @@ export async function finishAgentCommandCleanup(params: {
       }
     } finally {
       try {
-        await params.beforeTerminalDelivery?.();
+        await params.beforeTerminalDelivery?.(undefined, params.terminalEvent.data?.error);
       } finally {
         clearAgentRunContext(params.prepared.runId, params.lifecycleGeneration);
         params.sessionWorkAdmission?.release();

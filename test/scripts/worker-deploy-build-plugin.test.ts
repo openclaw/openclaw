@@ -727,7 +727,7 @@ export async function createAttachedBrowserToolRuntime(params) {
       ensureAttachTarget: async () => {
         attached += 1;
       },
-      agentSessionKey: "worker:session-1",
+      agentSessionKey: "agent:worker-agent:worker:session-1",
       agentDir: path.join(root, "agent"),
       workspaceDir: path.join(root, "workspace"),
     };

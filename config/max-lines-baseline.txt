@@ -50,7 +50,6 @@ extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts
-extensions/diagnostics-prometheus/src/service.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
@@ -346,7 +345,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/backup-verify.test.ts
 src/commands/channels.add.test.ts
-src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
@@ -539,7 +537,6 @@ src/plugins/update.test.ts
 src/secrets/apply.test.ts
 src/secrets/apply.ts
 src/secrets/configure.ts
-src/secrets/resolve.ts
 src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/secrets/runtime-web-tools.test.ts
@@ -575,7 +572,6 @@ ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/view.ts
-ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts

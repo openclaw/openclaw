@@ -268,14 +268,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   const roots = Object.freeze(
     [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
   );
-  const topology = () =>
-    [...inMemoryRuns.values()]
-      .map(({ childSessionKey, requesterSessionKey }) => ({ childSessionKey, requesterSessionKey }))
-      .toSorted(
-        (left, right) =>
-          left.childSessionKey.localeCompare(right.childSessionKey) ||
-          left.requesterSessionKey.localeCompare(right.requesterSessionKey),
-      );
+  const topology = () => getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
   let disposed = false;
   const assertCurrent = () => {
     if (disposed) {
@@ -336,10 +329,11 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
         );
       const relevantLinks = (values: typeof links) => values.filter(relevantEntry);
       const expectedTopology = JSON.stringify(relevantLinks(links));
-      if (
-        publications.some(relevantPublication) ||
-        expectedTopology !== JSON.stringify(relevantLinks(topology()))
-      ) {
+      const topologyChanged = () => {
+        const current = topology();
+        return current !== links && expectedTopology !== JSON.stringify(relevantLinks(current));
+      };
+      if (publications.some(relevantPublication) || topologyChanged()) {
         continue;
       }
       let invalidated = false;
@@ -353,7 +347,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
           ? { databaseBirthtime: context.admission.identity.birthtime }
           : {}),
         sessionKeys: roots,
-        liveTopology: Object.freeze(links.map((link) => Object.freeze(link))),
+        liveTopology: links,
         digest: reply?.descendantBasis?.digest ?? null,
       });
       return {
@@ -361,7 +355,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
         dispose,
         consume(consume) {
           assertCurrent();
-          if (invalidated || expectedTopology !== JSON.stringify(relevantLinks(topology()))) {
+          if (invalidated || topologyChanged()) {
             return { ready: false };
           }
           const runs = mergeSelectedFullRuns(
@@ -369,7 +363,14 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
             inMemoryRuns,
             persisted,
             (entry) => selected.has(entry.childSessionKey.trim()),
-            { context, freshPersisted: true },
+            {
+              context,
+              freshPersisted: true,
+              runIds: new Set([
+                ...persisted.keys(),
+                ...getSubagentSessionReadLookup(inMemoryRuns).selectChildren(selected),
+              ]),
+            },
           );
           return { ready: true, value: consumeSubagentRuns(runs, consume) };
         },

@@ -168,7 +168,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     },
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory("/tmp/workspace"),
-      assertActive: vi.fn(),
+      assertActive: vi.fn<() => void>(),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),

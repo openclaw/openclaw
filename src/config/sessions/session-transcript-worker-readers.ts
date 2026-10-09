@@ -140,6 +140,11 @@ export function createSessionHistoryWorkerReaders(
     ),
     readConversations: reader("conversation-rows", "conversations", (value) => value.rows),
     prewarm: reader("prewarm", "prewarm acknowledgement", () => undefined),
+    readRetirement: reader(
+      "session-retirement-read",
+      "session retirement facts",
+      (value) => value.result,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",
@@ -465,11 +470,12 @@ export function createSessionHistoryWorkerReaders(
       "a Goal operation receipt",
       (value) => value.result,
     ),
-    readEntryResult: reader("session-entry-read", "an entry", (value) =>
-      value.readError
+    readEntryResult: reader("session-entry-read", "an entry", (value) => ({
+      ...(value.readError
         ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-        : ok(value.entry),
-    ),
+        : ok(value.entry)),
+      source: value.source,
+    })),
     readEntryCurrent: reader(
       "session-entry-current",
       "entry currency facts",

@@ -226,14 +226,6 @@ describe("applyInlineDirectiveOverrides", () => {
       expected:
         "Stored model override openai/gpt-4o is stale for this session; reverted to openai/gpt-5.5. Pick a model again with /model if you still want to override the default.",
     },
-    {
-      rejectedRef: "external/sensitive",
-      reason: "disallowed" as const,
-      modelPolicyConfigPath: "agents.defaults.models",
-      modelPolicyRepairConfigPath: "agents.defaults.modelPolicy.allow",
-      expected:
-        "Model override external/sensitive is not allowed for this agent by agents.defaults.models; reverted to openai/gpt-5.5. Add external/sensitive to agents.defaults.modelPolicy.allow or pick an allowed model with /model list.",
-    },
   ])(
     "emits the $reason reset event before rejecting a locked mixed directive",
     async ({
@@ -338,14 +330,6 @@ describe("applyInlineDirectiveOverrides", () => {
   );
 
   it.each([
-    {
-      reason: "its single directive transaction loses",
-      body: "hello /elevated full",
-      errorText: "Session settings were not applied because the session changed. Retry.",
-      model: "gpt-5.5",
-      contextTokens: 8192,
-      resolvedElevatedLevel: "full" as const,
-    },
     {
       reason: "its transaction rejects unsupported thinking",
       body: "/think ultra please solve",

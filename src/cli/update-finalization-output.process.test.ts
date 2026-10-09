@@ -236,7 +236,15 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             "Gateway restarted and verified after Doctor repair.",
           );
           if (scenario === repairDeadlineScenarios.starting) {
-            expect(result.stderr, failure).toContain("Gateway is still starting");
+            expect(result.stderr, failure).toContain(
+              "Gateway started but readiness was not verified",
+            );
+            expect(result.stderr, failure).toContain("openclaw gateway status --deep");
+            expect(result.stderr, failure).toContain("openclaw gateway diagnostics export");
+          } else {
+            expect(result.stderr, failure).not.toContain(
+              "Gateway started but readiness was not verified",
+            );
           }
         }
         return;

@@ -50,9 +50,11 @@ export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
-  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "shouldProtectOwner" | "shouldRemoveOwner">>;
-  shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
-  shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
+  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
+  readOwnerState?: (
+    ownerKind: ManagedWorktreeOwnerKind,
+    ownerId: string,
+  ) => "active" | "retired" | "idle" | "other";
   withOwnerCleanup?: <T>(
     record: ManagedWorktreeRecord,
     run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
@@ -202,11 +204,11 @@ function assertOwnerPolicyAllowsCleanup(
   params: WorktreeCleanupOwnerPolicy,
   retiredOwner = false,
 ) {
-  if (
-    record.ownerId !== undefined &&
-    (params.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true ||
-      (retiredOwner && params.shouldRemoveOwner?.(record.ownerKind, record.ownerId) !== true))
-  ) {
+  if (record.ownerId === undefined) {
+    return;
+  }
+  const current = params.readOwnerState?.(record.ownerKind, record.ownerId);
+  if (current === "active" || (retiredOwner && current !== "retired")) {
     throw new WorktreeRemovalLockError("busy", "worktree owner became active during cleanup");
   }
 }
@@ -252,14 +254,16 @@ export function createWorktreeGcRemoval(context: {
     policy.withOwnerCleanup
       ? policy.withOwnerCleanup(record, run, signal)
       : run((mutation) => mutation());
-  const prepareOwnerCurrent = (record: ManagedWorktreeRecord, retiredOwner = false) =>
-    prepareWorktreeRegistryGuard(registryContext, {
+  const prepareOwnerCurrent = async (record: ManagedWorktreeRecord, retiredOwner = false) => {
+    const assertRegistryCurrent = await prepareWorktreeRegistryGuard(registryContext, {
       predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
-      assertCurrent: () => {
-        assertCurrent?.();
-        assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
-      },
+      assertCurrent,
     });
+    return () => {
+      assertRegistryCurrent();
+      assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
+    };
+  };
   const ownerGuard = (
     record: ManagedWorktreeRecord,
     retiredOwner: boolean,

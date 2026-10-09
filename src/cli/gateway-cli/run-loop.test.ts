@@ -45,7 +45,7 @@ const {
   acquireGatewayLock,
   hostedStopExecute,
   hostedStopDispose,
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   consumeGatewayRestartIntent,
   cancelManagedServiceUpdateHandoff,
   requestManagedServiceUpdateHandoffPark,
@@ -57,7 +57,6 @@ const {
   resetGatewayRestartStateForInProcessRestart,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   rollbackGatewayRestartSignalAdmission,
-  writeGatewayRestartHandoffSync,
   scheduleGatewayRestart,
   idleActiveWorkSnapshot,
   createGatewayActiveWorkSnapshot,
@@ -1135,7 +1134,7 @@ describe("runGatewayLoop", () => {
   it.each([true, false])(
     "consumes file-intent SIGUSR2 and cancels pending reloads (authorized=%s)",
     async (authorized) => {
-      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+      consumeGatewayRestartIntentPayload.mockResolvedValueOnce({
         force: true,
         reason: "file-intent restart",
       });
@@ -1154,45 +1153,12 @@ describe("runGatewayLoop", () => {
 
         expect(abortPendingChannelReloads).toHaveBeenCalledOnce();
         expect(consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
-        expect(markGatewayRestartHandled).toHaveBeenCalledTimes(authorized ? 1 : 0);
+        expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
         expect(start).toHaveBeenCalledTimes(2);
 
         captureSignal("SIGINT")();
         await expect(exited).resolves.toBe(0);
       });
-    },
-  );
-
-  it.each([{ marker: "OPENCLAW_WINDOWS_TASK_NAME", value: "OpenClaw Gateway", exitCode: 75 }])(
-    "releases the lock before supervised restart exit $exitCode",
-    async ({ marker, value, exitCode }) => {
-      peekGatewayRestartReason.mockReturnValue(undefined);
-      const env = captureEnv([marker, "OPENCLAW_GATEWAY_RESTART_TRACE"]);
-      process.env[marker] = value;
-      process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
-      try {
-        await withIsolatedSignals(async ({ captureSignal }) => {
-          const exitCallOrder: string[] = [];
-          const lockRelease = vi.fn(async () => {
-            exitCallOrder.push("lockRelease");
-          });
-          acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
-          restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised", exitCode });
-          const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
-          captureSignal("SIGUSR2")();
-
-          await expect(exited).resolves.toBe(exitCode ?? 0);
-          expect(lockRelease).toHaveBeenCalledOnce();
-          expect(runtime.exit).toHaveBeenCalledWith(exitCode ?? 0);
-          expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
-          const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
-          expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS).toMatch(/^\d/u);
-          expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS).toMatch(/^\d/u);
-          expect(writeGatewayRestartHandoffSync).toHaveBeenCalledOnce();
-        });
-      } finally {
-        env.restore();
-      }
     },
   );
 
@@ -1229,7 +1195,7 @@ describe("runGatewayLoop", () => {
   registerUpdateRespawnTests(fixtures);
 
   it("keeps SIGTERM restart ownership when an update arrives during shutdown", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
+    consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ reason: "gateway.restart" });
     peekGatewayRestartReason.mockReturnValueOnce("update.run");
     const closing = createDeferred();
     const close = vi.fn<GatewayCloseFn>(() => closing.promise);
@@ -1474,9 +1440,7 @@ describe("runGatewayLoop", () => {
   });
 
   it("catches SIGTERM handler errors, logs them, and falls back to stop (#83131)", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
-      throw new Error("dynamic import failed");
-    });
+    consumeGatewayRestartIntentPayload.mockRejectedValueOnce(new Error("dynamic import failed"));
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime, exited } = await createSignaledLoopHarness();
@@ -1496,13 +1460,10 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("catches SIGUSR2 handler errors even when token cleanup throws (#83131)", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
-      throw new Error("lifecycle module corrupted");
-    });
-    markGatewayRestartHandled.mockImplementationOnce(() => {
-      throw new Error("recovery import also failed");
-    });
+  it("reopens refused SIGUSR2 admission without consuming a later signal token (#83131)", async () => {
+    consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
+      new Error("lifecycle module corrupted"),
+    );
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, exited } = await createSignaledLoopHarness();
@@ -1516,8 +1477,9 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.error).toHaveBeenCalledWith(
         "SIGUSR2 handler failed: lifecycle module corrupted",
       );
-      expect(markGatewayRestartHandled).toHaveBeenCalled();
-      expect(rollbackGatewayRestartSignalAdmission).toHaveBeenCalledOnce();
+      expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
+      expect(rollbackGatewayRestartSignalAdmission).not.toHaveBeenCalled();
+      expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
 

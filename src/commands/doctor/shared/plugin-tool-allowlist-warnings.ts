@@ -314,10 +314,9 @@ function nonSandboxToolPoliciesBlockMcp(params: {
   return (
     profileToolPolicyBlocksMcp(profilePolicy, params.serverNames) ||
     profileToolPolicyBlocksMcp(providerProfilePolicy, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(globalTools, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(globalProviderPolicy, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(agentTools, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(agentProviderPolicy, params.serverNames)
+    [globalTools, globalProviderPolicy, agentTools, agentProviderPolicy].some((policy) =>
+      nonSandboxToolPolicyBlocksMcp(policy, params.serverNames),
+    )
   );
 }
 
@@ -339,13 +338,10 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const sandboxPolicies = collectActiveSandboxToolPolicies(cfg, serverNames);
   const issueSources = sandboxPolicies
     .filter(
-      ({ policy }) =>
+      ({ policy, nonSandboxToolPolicyBlocksMcp: blocked }) =>
         !toolPolicyAllowsMcpServers(policy, serverNames, "every") &&
-        !toolPolicyDeniesAllMcpServers(policy, serverNames),
-    )
-    .filter(
-      ({ nonSandboxToolPolicyBlocksMcp: nonSandboxToolPolicyBlocksMcpLocal }) =>
-        !nonSandboxToolPolicyBlocksMcpLocal,
+        !toolPolicyDeniesAllMcpServers(policy, serverNames) &&
+        !blocked,
     )
     .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {

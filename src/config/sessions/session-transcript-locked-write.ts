@@ -31,11 +31,12 @@ import type {
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
+  acceptSessionSourceValidation,
   captureExternalSessionCommitGuard,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
-  type SessionSourcePredicateFacts,
+  type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { withLockedSessionTranscriptReads } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
@@ -139,6 +140,8 @@ export async function withWorkerTranscriptWriteLock<T>(
               assertRestorationCurrent,
               {
                 target: resolved,
+                acceptSourceValidation: (validation) =>
+                  acceptSessionSourceValidation(owned, validation),
                 readMetadata: async () => {
                   const metadata = await runOpenClawAgentWorkerWrite(database, () =>
                     writer.runExisting(source, (worker) =>
@@ -189,13 +192,13 @@ export async function withWorkerTranscriptWriteLock<T>(
         if (facts.kind === "session-transcript-lock-source") {
           fresh = facts.fresh === true;
           const authority = fresh ? freshSource : owned;
-          authority?.assertCurrent();
-          if (isRecord(facts.refusedSource) && typeof facts.refusedSource.index === "number") {
-            authority?.checks[facts.refusedSource.index]?.refuse(
-              // SAFETY: The paired worker reads these facts in the current transaction.
-              facts.refusedSource.facts as SessionSourcePredicateFacts,
+          if (authority) {
+            acceptSessionSourceValidation(
+              authority,
+              // SAFETY: The paired worker supplies these source indices and matches from its transaction.
+              facts.sourceValidation as SessionSourceValidation,
             );
-            throw new Error("Session source refusal omitted its prepared assertion");
+            authority.assertCurrent();
           }
           return true;
         }

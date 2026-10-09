@@ -1,15 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadAgentRole } from "../agents/agent-roles.js";
 import { createAgentTeam } from "../agents/agent-team.js";
 import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { agentsAddCommand } from "./agents.commands.add.js";
 import { agentsTeamCreateCommand } from "./agents.commands.team.js";
@@ -313,22 +318,61 @@ describe("role and team creation through persisted configuration", () => {
     },
   );
 
-  it("detects a collision on the last specialist before publishing any team config or workspace", async () => {
-    await withState(async (root, configPath) => {
-      const initial = existingFleet(root);
-      if (initial.agents?.entries) {
-        initial.agents.entries.Reviewer = { workspace: path.join(root, "existing-reviewer") };
-      }
-      const original = JSON.stringify(initial);
-      await fs.writeFile(configPath, original);
-      const workspaceRoot = path.join(root, "team-workspaces");
-      const result = await createAgentTeam({ workspaceRoot });
-      expect(result).toMatchObject({
-        status: "error",
-        message: expect.stringContaining("reviewer"),
+  it.each(["roster", "pending deletion"] as const)(
+    "detects a %s collision on the last specialist before publishing any team config or workspace",
+    async (collision) => {
+      await withState(async (root, configPath) => {
+        const initial = existingFleet(root);
+        if (collision === "roster" && initial.agents?.entries) {
+          initial.agents.entries.Reviewer = { workspace: path.join(root, "existing-reviewer") };
+        }
+        const original = JSON.stringify(initial);
+        await fs.writeFile(configPath, original);
+        const workspaceRoot = path.join(root, "team-workspaces");
+        if (collision === "pending deletion") {
+          beginAgentDeletionJournal({
+            agentId: "reviewer",
+            operationId: "pending-reviewer",
+            agentDir: path.join(root, "agents", "reviewer", "agent"),
+            workspaceDir: path.join(workspaceRoot, "reviewer"),
+            sessionsDir: path.join(root, "agents", "reviewer", "sessions"),
+            deleteFiles: false,
+          });
+        }
+        const foreign =
+          collision === "pending deletion"
+            ? openNodeSqliteDatabase(resolveOpenClawStateSqlitePath())
+            : undefined;
+        let result: Awaited<ReturnType<typeof createAgentTeam>>;
+        try {
+          foreign?.exec(
+            "UPDATE agent_deletion_journal SET cleanup_completed = 1 WHERE agent_id = 'reviewer'",
+          );
+          result = await withOpenClawStateDatabaseReadSnapshot(async () => {
+            foreign?.exec(
+              "UPDATE agent_deletion_journal SET cleanup_completed = 0 WHERE agent_id = 'reviewer'",
+            );
+            const observation = observeHostDataSql();
+            try {
+              const created = await createAgentTeam({ workspaceRoot });
+              expect(
+                observation.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql)),
+              ).toEqual([]);
+              return created;
+            } finally {
+              observation.restore();
+            }
+          });
+        } finally {
+          foreign?.close();
+        }
+        expect(result).toMatchObject({
+          status: "error",
+          message: expect.stringContaining("reviewer"),
+        });
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        await expect(fs.access(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
       });
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      await expect(fs.access(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
+    },
+  );
 });

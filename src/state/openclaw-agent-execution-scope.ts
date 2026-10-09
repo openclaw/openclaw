@@ -1,3 +1,4 @@
+import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   assertExistingDatabaseIdentity,
@@ -7,18 +8,63 @@ import {
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { hasAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
+import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import type {
+  AgentDatabaseFileExecutionOwner,
+  OpenClawAgentDatabaseExecution,
   AgentDatabaseGenerationClaim,
   AgentDatabaseNativeGeneration,
   AgentDatabaseExecutionFileIdentity,
 } from "./openclaw-agent-execution-contract.js";
+import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
+
+export type AgentDatabaseExecutionCaptureConstraints = {
+  expectedIdentity?: AgentDatabaseExecutionFileIdentity;
+  expectedCreationIdentity?: DatabasePathIdentity;
+  /** The caller's locator before it pinned options.path to the physical file. */
+  requestedPath?: string;
+};
+
+export type AgentDatabaseExecutionPreparedTarget = {
+  agentId: string;
+  pathname: string;
+  identity: DatabasePathIdentity;
+  initialIdentity?: AgentDatabaseExecutionFileIdentity;
+  expectedCreationIdentity?: DatabasePathIdentity;
+  requestedPath?: string;
+};
+
+/** A read can borrow an already-selected file owner only within its current storage scope. */
+export function borrowExistingAgentDatabaseExecution(
+  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>,
+  options: { path: string; env?: NodeJS.ProcessEnv },
+  capture?: (target: OpenClawAgentDatabaseOptions) => OpenClawAgentDatabaseExecution,
+): OpenClawAgentDatabaseExecution | undefined {
+  const pathname = path.resolve(options.path);
+  const owner =
+    owners.get(pathname) ?? owners.get(readDatabasePathIdentitySync(pathname).canonicalPath);
+  if (!owner || owner.kind !== "file") {
+    return undefined;
+  }
+  const target = { ...options, agentId: owner.agentId, path: pathname };
+  if (!supportsAgentDatabaseExecutionScope(target)) {
+    return undefined;
+  }
+  try {
+    assertAgentDatabaseExecutionSharedState(target, owner.sharedDatabaseKey);
+    return capture ? capture(target) : owner.borrow(pathname);
+  } catch {
+    // Initial read selection does not inherit failures of an unrelated writable lifecycle.
+    return undefined;
+  }
+}
 
 export function assertAgentDatabaseExecutionSharedState(
   options: OpenClawAgentDatabaseOptions,
@@ -39,10 +85,11 @@ export function assertAgentDatabaseExecutionSharedState(
 export function supportsAgentDatabaseExecutionScope(
   options: OpenClawAgentDatabaseOptions,
 ): boolean {
+  const cleanup = getAgentDeletionDatabaseCleanup(options);
   return (
     getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
     !hasAgentDatabaseMaintenanceAuthority() &&
-    !getAgentDeletionDatabaseCleanup(options)
+    (!cleanup || cleanup.worker !== undefined)
   );
 }
 
@@ -54,6 +101,28 @@ export function supportsOpenClawAgentDatabaseExecution(
     !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
     supportsAgentDatabaseExecutionScope(options)
   );
+}
+
+export function assertAgentDatabaseExecutionCreationIdentity(
+  pathname: string,
+  expected: DatabasePathIdentity,
+  observed: DatabasePathIdentity | undefined,
+  expectedFile: AgentDatabaseExecutionFileIdentity | undefined,
+): void {
+  const capturesAbsence = expected.key.startsWith("path:");
+  if (
+    expectedFile ||
+    (capturesAbsence &&
+      (agentDatabaseLifecycle.databases.has(pathname) ||
+        agentDatabaseLifecycle.pending.has(pathname))) ||
+    (!capturesAbsence &&
+      (!expected.key.startsWith("file:") || typeof expected.birthtime !== "string")) ||
+    observed?.key !== expected.key ||
+    observed.canonicalPath !== expected.canonicalPath ||
+    observed.birthtime !== expected.birthtime
+  ) {
+    throw new Error("Agent creation no longer owns its originally observed target");
+  }
 }
 
 /** Each alias and retained file receipt must still name the borrower's original store. */

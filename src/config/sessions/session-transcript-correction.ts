@@ -19,6 +19,7 @@ import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
 import type { SessionTranscriptCorrectionCommitted } from "./session-message-rewrite.worker.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
@@ -174,5 +175,7 @@ export async function withPreparedTranscriptCorrection<T>(
       }
       return result.value;
     },
+    undefined,
+    targetDiscoveryLane,
   );
 }

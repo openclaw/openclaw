@@ -353,6 +353,26 @@ export async function loadAgentCompoundOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentPurgeOperations() {
+  const purge = await import("../config/sessions/session-agent-purge.worker.js");
+  return {
+    "session.agentPurge.prepare": purge.prepareSessionAgentPurge,
+    "session.agentPurge.commit": purge.commitSessionAgentPurge,
+  } satisfies Handlers;
+}
+
+export async function loadAgentMaintenanceFinalizationOperations() {
+  const finalization =
+    await import("../config/sessions/session-maintenance-finalization.worker.js");
+  const maintenanceStore =
+    await import("../config/sessions/session-accessor.sqlite-maintenance-store.js");
+  return {
+    "session.maintenance.finalize": finalization.finalizeSessionMaintenance,
+    "session.maintenance.size": (input: { sessionIds: string[] }, { open }) =>
+      maintenanceStore.readSessionTranscriptJsonlBytesInDatabase(open(), input.sessionIds),
+  } satisfies Handlers;
+}
+
 export async function loadAgentMessageCutOperations() {
   const kernel = await import("../config/sessions/session-message-cut.worker.js");
   return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
@@ -573,6 +593,8 @@ export async function loadConversationDeliveryOperations() {
 }
 
 export async function loadConversationRegistryOperations() {
+  const { deferConversationWorkerReceipt } =
+    await import("../config/sessions/session-accessor.sqlite-conversation-publication.js");
   const { prepareConversationIdentities, upsertConversationIdentities } =
     await import("../config/sessions/session-accessor.sqlite-conversation.js");
   const { selectConversationRowsFromDatabase, resolveConversationInDatabase } =
@@ -590,7 +612,10 @@ export async function loadConversationRegistryOperations() {
     ) => {
       const prepared = prepareConversationIdentities(input.identities);
       return writeTransaction("conversation.register", "Conversation registration", (database) => {
-        upsertConversationIdentities(database, prepared, input.discoveredAt);
+        const publication = upsertConversationIdentities(database, prepared, input.discoveredAt);
+        if (publication && typeof publication.source.identity === "string") {
+          deferConversationWorkerReceipt(database.db, publication);
+        }
         const rows = input.query
           ? selectConversationRowsFromDatabase(database, input.query)
           : undefined;
@@ -664,6 +689,8 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentPurgeOperations>> &
+    Awaited<ReturnType<typeof loadAgentMaintenanceFinalizationOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
     Awaited<ReturnType<typeof loadAgentMessageCutOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &

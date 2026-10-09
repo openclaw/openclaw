@@ -17,13 +17,12 @@ import { downloadTextFile } from "../../lib/download.ts";
 import "../../styles/usage.css";
 import { resolveUsageOverviewState } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery, formatIsoDate } from "./helpers.ts";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageInsightStats,
   formatUsageCost,
-  formatIsoDate,
   formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
@@ -70,11 +69,10 @@ function renderProviderUsage(
   unavailable: boolean,
   stalled: boolean,
 ) {
-  const notice = stalled
-    ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
-    : unavailable
+  const notice =
+    stalled || unavailable
       ? html`<div class="callout warning usage-callout">
-          ${t("usage.providerUsage.unavailable")}
+          ${t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
         </div>`
       : nothing;
   if (providers.length === 0) {
@@ -408,24 +406,22 @@ export function renderUsage(props: UsageProps) {
               <div class="usage-header-metrics">
                 ${
                   displayTotals
-                    ? html`
-                        <span class="usage-metric-badge">
-                          <strong>${formatUsageTokens(displayTotals.totalTokens)}</strong>
-                          ${t("usage.metrics.tokens")}
-                        </span>
-                        <span class="usage-metric-badge">
-                          <strong>${formatUsageCost(displayTotals.totalCost)}</strong>
-                          ${t("usage.metrics.cost")}
-                        </span>
-                        <span class="usage-metric-badge">
-                          <strong>${displaySessionCount}</strong>
-                          ${
+                    ? [
+                        [formatUsageTokens(displayTotals.totalTokens), t("usage.metrics.tokens")],
+                        [formatUsageCost(displayTotals.totalCost), t("usage.metrics.cost")],
+                        [
+                          displaySessionCount,
+                          t(
                             displaySessionCount === 1
-                              ? t("usage.metrics.session")
-                              : t("usage.metrics.sessions")
-                          }
-                        </span>
-                      `
+                              ? "usage.metrics.session"
+                              : "usage.metrics.sessions",
+                          ),
+                        ],
+                      ].map(
+                        ([value, label]) => html`
+                          <span class="usage-metric-badge"><strong>${value}</strong> ${label}</span>
+                        `,
+                      )
                     : nothing
                 }
                 <button

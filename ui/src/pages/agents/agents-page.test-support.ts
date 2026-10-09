@@ -69,7 +69,7 @@ export type TestAgentsPage = HTMLElement & {
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
   clearAgentSkills: (agentId: string) => void;
-  saveAgentConfig: () => void;
+  refreshAgents: (mode?: "ensure" | "refresh" | "save") => Promise<void>;
   identityDraft: { name: string | null; emoji: string | null; avatar: string | null };
   identitySaving: boolean;
   identityError: string | null;

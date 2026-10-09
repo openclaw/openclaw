@@ -11,7 +11,6 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
-import { applyImportanceMultiplier } from "./importance.js";
 import { buildFtsQuery } from "./keyword-query.js";
 import {
   runMemoryCuratedCandidates,
@@ -26,7 +25,7 @@ import type {
   MemoryKeywordWorkerResult,
 } from "./manager-search.worker.js";
 import {
-  applyProjectRanking,
+  applyRetrievalRanking,
   prepareActiveProjectKeys,
   projectScoreMultiplier,
 } from "./project-ranking.js";
@@ -110,38 +109,33 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     limit?: number;
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
-    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return await this.readCuratedMemoryCandidates({
-      limit,
-      projectsOnly: false,
-      activeProjectKeys: opts?.activeProjectKeys,
-    });
+    return await this.readCuratedMemoryCandidates(opts, false);
   }
 
   async listCuratedProjectCandidates(opts: {
     activeProjectKeys: string[];
     limit?: number;
   }): Promise<MemorySearchResult[]> {
-    const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
-    return await this.readCuratedMemoryCandidates({
-      limit,
-      projectsOnly: true,
-      activeProjectKeys: opts.activeProjectKeys,
-    });
+    return await this.readCuratedMemoryCandidates(opts, true);
   }
 
-  private async readCuratedMemoryCandidates(query: {
-    limit: number;
-    projectsOnly: boolean;
-    activeProjectKeys?: string[];
-  }): Promise<MemorySearchResult[]> {
+  private async readCuratedMemoryCandidates(
+    opts: { limit?: number; activeProjectKeys?: string[] } | undefined,
+    projectsOnly: boolean,
+  ): Promise<MemorySearchResult[]> {
+    const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? (projectsOnly ? 48 : 512))));
     return await this.withManagerOperation(async () => {
       const result = await runMemoryCuratedCandidates(
         {
           agentId: this.agentId,
           databasePath: resolveUserPath(this.settings.store.databasePath),
         },
-        { ...query, checkProvenanceRepair: this.memorySourceProvenanceRepairPending },
+        {
+          limit,
+          projectsOnly,
+          activeProjectKeys: opts?.activeProjectKeys,
+          checkProvenanceRepair: this.memorySourceProvenanceRepairPending,
+        },
       );
       this.memorySourceProvenanceRepairPending = result.provenanceRepairPending;
       if (this.memorySourceProvenanceRepairPending) {
@@ -203,7 +197,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
     const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
-    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
+    const ranked = applyRetrievalRanking(decayed, activeProjects)
       .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
       .map((entry) =>
         entry.exactPathSpecificity > 0

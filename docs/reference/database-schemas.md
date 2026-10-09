@@ -12,11 +12,20 @@ title: "Database schemas"
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
 Native SQLite initialization reads the loaded library's version and extension
-capability in one query before admitting real state databases. Quarantine
+capability in one query before admitting real state databases. Auth-profile
+readers install their lock-wait timeout at connection open.
+Non-mutating WAL observations reuse the loaded library's admitted capability;
+they still observe current WAL frames and read freshness on each use. Quarantine
 decision readers and writers set their existing lock-wait timeout at connection
-open; each decision still reads the current schema version and quarantine row
-and validates any recorded file generation. WAL safety, quarantine authority, and recovery
+open; each decision reads the current schema version and quarantine row in one
+SQLite snapshot and validates any recorded file generation. WAL safety, quarantine authority, and recovery
 behavior are unchanged.
+
+Managed writes publish committed facts before their public observers. Private
+receipts distinguish explicit absence from incomplete coverage and preserve known
+commits independently of reply delivery. See
+[committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+for ordering, rollback, and the writer families that still retain native guards.
 
 Schema-version, integrity, canonical-index, and table-existence checks belong to open/admission and the migration owner after migrations; runtime paths must carry admitted schema facts with the handle, never re-query them, and use fresh `PRAGMA data_version` checks to observe foreign commits on the next unpinned read while preserving active SQLite snapshots. Existing per-call checks are legacy and must be migrated when touched.
 
@@ -71,17 +80,18 @@ bytes, and update behavior are unchanged.
 
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
 
-Agent ownership metadata follows that admitted read revision as well. Unchanged
-reads reuse the handle's metadata; foreign commits, local mutations, and schema
-changes require a new ownership read. Managed transactions reuse metadata at
-their admitted revision; changed pinned snapshots and dynamic authorizers still
-query it. This changes no schema, stored bytes, or update behavior.
+Agent ownership metadata follows the admitted snapshot revision as well. Unchanged
+reads, including reads within one transaction or pinned snapshot, reuse the handle's
+metadata. Foreign commits on the next unpinned use, local mutations, rollback, and
+schema changes require a new ownership read. Dynamic authorizers keep querying
+the metadata. This changes no schema, stored bytes, or update behavior.
 
 The shared-state content-version marker uses the same admitted read revision.
 Unchanged reads reuse its successful result; foreign commits, local writes,
-rollback, schema changes, and connection disposal invalidate reuse. Transactions,
-pinned snapshots, and authorizer-controlled reads still query the marker. Version
-validation and upgrade or downgrade behavior are unchanged.
+rollback, schema changes, and connection disposal invalidate reuse. Transactions
+and pinned snapshots reuse the marker at their admitted revision;
+authorizer-controlled reads still query it. Version validation and upgrade or
+downgrade behavior are unchanged.
 
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and

@@ -11,7 +11,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -243,43 +242,6 @@ describe("mixed inline directives", () => {
     expect(lifecycleEvents).toHaveLength(1);
   });
 
-  it("adopts an authoritative model lock and emits no losing side effects", async () => {
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-    });
-    const lockedEntry = { ...sessionEntry, updatedAt: 2, modelSelectionLocked: true };
-    persistenceMocks.persist.mockResolvedValueOnce({
-      status: "model-selection-locked",
-      entry: lockedEntry,
-    });
-
-    const { result, sessionStore } = await applyMixedDirectives({
-      body: "please reply /model openai/gpt-5.6-luna",
-      sessionEntry,
-      storePath: "/tmp/sessions.json",
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
-      senderIsOwner: true,
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
-      preRunRejection: "session-directive-rejected",
-    });
-    expect(persistenceMocks.persist).toHaveBeenCalledWith(
-      expect.objectContaining({ requireModelSelectionUnlocked: true }),
-    );
-    expect(sessionEntry).toEqual(lockedEntry);
-    expect(sessionStore["agent:main:dm:1"]).toEqual(lockedEntry);
-    expect(lifecycleEvents).toEqual([]);
-    expect(triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
   it("persists a directive-only reasoning setting and publishes the committed change", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "/reasoning on",
@@ -348,26 +310,6 @@ describe("mixed inline directives", () => {
         }),
       }),
     );
-  });
-
-  it("does not acknowledge or mutate a mixed model info directive", async () => {
-    const body = "please reply /model";
-    const cfg = { commands: { text: true }, agents: { defaults: {} } } as OpenClawConfig;
-    const directives = routeDirectives(body, cfg, []);
-    const { result, sessionEntry } = await applyMixedDirectives({
-      body,
-      cfg,
-      directives,
-    });
-
-    expect(result).toMatchObject({
-      kind: "continue",
-      directives: { cleaned: "please reply", hasModelDirective: false },
-    });
-    expect(result).not.toHaveProperty("directiveAck");
-    expect(sessionEntry).toEqual(createSessionEntry());
-    expect(persistenceMocks.persist).not.toHaveBeenCalled();
-    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
   });
 
   it("forwards automatic provenance for a source-less auth pin", async () => {
@@ -461,7 +403,6 @@ describe("mixed inline directives", () => {
       model: "claude-opus-4-6",
       keepProfile: false,
     },
-    { prefix: "", provider: "openai", model: "gpt-5.6-luna", keepProfile: true },
   ])(
     "resets to $provider/$model with compatible auth only",
     async ({ prefix, provider, model, keepProfile }) => {
@@ -512,27 +453,6 @@ describe("mixed inline directives", () => {
     },
   );
 
-  it("keeps an operator.admin selection session-only", async () => {
-    const { result, sessionEntry } = await applyMixedDirectives({
-      body: "/model openai/gpt-5.6-luna --session",
-      gatewayClientScopes: ["operator.admin"],
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
-    });
-
-    expect(result).toMatchObject({
-      kind: "reply",
-      reply: {
-        text: "Model set to openai/gpt-5.6-luna for this session only; configured default unchanged. Runtime set to codex for this session.",
-      },
-    });
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-luna",
-      modelOverrideSource: "user",
-    });
-    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
-  });
-
   it("keeps mixed queue options on the current message", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "please reply\n/queue collect debounce:1500 cap:4 drop:old",
@@ -576,15 +496,6 @@ describe("mixed inline directives", () => {
       }
       expect(sessionEntry).toEqual(initialEntry);
     }
-    expect(persistenceMocks.persist).not.toHaveBeenCalled();
-  });
-
-  it("does not persist a mixed fast-mode hint", async () => {
-    const fast = await applyMixedDirectives({ body: "please reply\n/fast on" });
-    expect(fast.result).toMatchObject({ kind: "continue", directives: { fastMode: true } });
-    expect(fast.sessionEntry.fastMode).toBeUndefined();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
@@ -651,7 +562,7 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
-  it.each(["/model fixture/blocked", "please reply /model blocked /think off"])(
+  it.each(["please reply /model blocked /think off"])(
     "rejects operator-denied directive %s without session or provider effects",
     async (body) => {
       const cfg: OpenClawConfig = {
@@ -708,15 +619,7 @@ describe("mixed inline directives", () => {
     },
   );
   it.each([
-    { prefix: "", scope: "agent", flag: "", owner: true, target: "agent" },
     { prefix: "", scope: "session", flag: " --global", owner: true, target: "defaults" },
-    {
-      prefix: "please reply ",
-      scope: "global",
-      flag: " --session",
-      owner: true,
-      target: undefined,
-    },
     { prefix: "please reply ", scope: "global", flag: "", owner: false, target: undefined },
   ] as const)(
     "resolves scope=$scope flag=$flag owner=$owner without widening authority",

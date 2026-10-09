@@ -521,49 +521,41 @@ function collectGroundedShortTermSeedItems(
   const seen = new Set<string>();
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
-    const signals = [
-      ...file.memoryImplications.map((item) => ({
-        text: item.text,
-        refs: item.refs,
-        score: 0.92,
-        query: "__dreaming_grounded_backfill__:lasting-update",
-        signalCount: 2,
-      })),
-      ...file.candidates
-        .filter((candidate) => candidate.lean === "likely_durable")
-        .map((candidate) => ({
-          text: candidate.text,
-          refs: candidate.refs,
-          score: 0.82,
-          query: "__dreaming_grounded_backfill__:candidate",
-          signalCount: 1,
-        })),
-    ];
-    for (const signal of signals) {
-      if (!signal.text.trim()) {
-        continue;
+    for (const [signals, score, query, signalCount] of [
+      [file.memoryImplications, 0.92, "__dreaming_grounded_backfill__:lasting-update", 2],
+      [
+        file.candidates.filter((candidate) => candidate.lean === "likely_durable"),
+        0.82,
+        "__dreaming_grounded_backfill__:candidate",
+        1,
+      ],
+    ] as const) {
+      for (const signal of signals) {
+        if (!signal.text.trim()) {
+          continue;
+        }
+        const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
+        const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
+        if (!parsedRef) {
+          continue;
+        }
+        const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${query}:${signal.text.toLowerCase()}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({
+          source: "memory",
+          path: parsedRef.path,
+          startLine: parsedRef.startLine,
+          endLine: parsedRef.endLine,
+          snippet: signal.text,
+          score,
+          query,
+          signalCount,
+          ...(dayBucket ? { dayBucket } : {}),
+        });
       }
-      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
-      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
-      if (!parsedRef) {
-        continue;
-      }
-      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      items.push({
-        source: "memory",
-        path: parsedRef.path,
-        startLine: parsedRef.startLine,
-        endLine: parsedRef.endLine,
-        snippet: signal.text,
-        score: signal.score,
-        query: signal.query,
-        signalCount: signal.signalCount,
-        ...(dayBucket ? { dayBucket } : {}),
-      });
     }
   }
   return items;

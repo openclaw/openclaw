@@ -42,6 +42,10 @@ import {
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
@@ -332,18 +336,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       consumeSessionPendingInput(database, pending);
     }
   }
-  return {
-    result: {
-      appended: true,
-      ...(anchor ? { anchor } : {}),
-      effectiveParentId: parentId ?? null,
-      message: persistedMessage,
-      messageId,
+  return retainTranscriptAppendPostimage(
+    {
+      result: {
+        appended: true,
+        ...(anchor ? { anchor } : {}),
+        effectiveParentId: parentId ?? null,
+        message: persistedMessage,
+        messageId,
+      },
+      ...(metadata.visibleTailEntryId !== undefined &&
+      revision !== undefined &&
+      readSqliteNativeMutationRevision(database.db) === revision
+        ? { visibleTailEntryId: metadata.visibleTailEntryId }
+        : {}),
     },
-    ...(metadata.visibleTailEntryId !== undefined &&
-    revision !== undefined &&
-    readSqliteNativeMutationRevision(database.db) === revision
-      ? { visibleTailEntryId: metadata.visibleTailEntryId }
-      : {}),
-  };
+    readTranscriptAppendPostimage(metadata),
+  );
 }

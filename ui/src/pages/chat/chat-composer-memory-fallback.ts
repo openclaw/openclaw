@@ -47,15 +47,10 @@ function resolveChatComposerMemoryFallback(
       fallbackSourceKeys.add(key);
     }
   }
-  const candidates = [...fallbackSourceKeys]
-    .map((candidateScopeKey) => ({
-      fallback: state.chatComposerFallbackByScope[candidateScopeKey],
-      scopeKey: candidateScopeKey,
-    }))
-    .filter(
-      (candidate): candidate is { fallback: ChatComposerMemoryFallback; scopeKey: string } =>
-        candidate.fallback !== undefined,
-    );
+  const candidates = [...fallbackSourceKeys].flatMap((candidateScopeKey) => {
+    const fallback = state.chatComposerFallbackByScope[candidateScopeKey];
+    return fallback === undefined ? [] : [{ fallback, scopeKey: candidateScopeKey }];
+  });
   const newest = candidates.toSorted(
     (left, right) => right.fallback.sequence - left.fallback.sequence,
   )[0];

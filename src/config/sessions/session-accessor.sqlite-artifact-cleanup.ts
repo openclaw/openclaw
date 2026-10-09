@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -62,6 +63,13 @@ export async function cleanupSessionLifecycleArtifactsCore(
     }),
   );
   const requestedOptions = toDatabaseOptions(requested);
+  const preparation = getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(
+    requestedOptions.agentId,
+    { env: requested.env },
+  );
+  if (preparation) {
+    await preparation;
+  }
   const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(requestedOptions);
   const opened = useWorker ? getOpenClawAgentDatabaseIfOpen(requestedOptions) : undefined;
   const openedIdentity = opened ? readOpenClawAgentDatabaseIdentity(opened) : undefined;

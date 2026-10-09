@@ -84,6 +84,9 @@ type RouteReplyParams = {
   deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
+  /** Private producer authority revalidated at the final outbound adapter handoff. */
+  assertCurrent?: () => void;
+  beforeDeliver?: () => Promise<void>;
 };
 
 type RouteReplyResult = {
@@ -333,6 +336,9 @@ async function routeReplyOperation(
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
+      onPlatformSendDispatch: params.beforeDeliver,
+      assertDirectAdapterHandoff: params.assertCurrent,
+      ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
       ...(params.deliveryIntentId
         ? {
             deliveryIntentId: params.deliveryIntentId,

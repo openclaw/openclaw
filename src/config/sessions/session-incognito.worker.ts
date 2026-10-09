@@ -84,6 +84,7 @@ import type {
   PendingInputMutationReceipt,
 } from "./session-pending-input-operations.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
 
 /** Connection-bound kernels: no namespace lookup, second connection, or shared-state write. */
 export function createIncognitoSessionWorker(
@@ -263,7 +264,7 @@ export function createIncognitoSessionWorker(
   const entryAdmission = (
     stage: "transaction" | "commit",
     keys: readonly string[],
-    entry: { guarded?: boolean; value?: unknown },
+    entry: { guarded?: boolean; value?: unknown; sourceValidation?: SessionSourceValidation },
   ) => {
     if (stage === "transaction") {
       admit(stage, keys, undefined, undefined, entry);
@@ -283,7 +284,11 @@ export function createIncognitoSessionWorker(
         });
       },
       candidate,
-      (receipt) => ({ ...receipt, guarded: entry.guarded }),
+      (receipt) => ({
+        ...receipt,
+        guarded: entry.guarded,
+        sourceValidation: entry.sourceValidation,
+      }),
     );
   };
   const entryCreation = createIncognitoEntryCreationWorker(database, env, entryAdmission);

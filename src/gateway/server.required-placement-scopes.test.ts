@@ -271,7 +271,8 @@ test("required placement survives disconnect but stops setup when committed call
       void created.catch(() => {});
       try {
         if (afterAcknowledgment) {
-          expect((await created).ok).toBe(true);
+          const acknowledged = await created;
+          expect(acknowledged.ok, JSON.stringify(acknowledged.error)).toBe(true);
           await committed.promise;
         } else {
           await Promise.race([

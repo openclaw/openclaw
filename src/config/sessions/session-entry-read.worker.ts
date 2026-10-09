@@ -378,7 +378,7 @@ export function readExactSessionEntriesWithLifecycle(
                           entries.find((row) => row.sessionKey === key)?.entry,
                         ]),
                       ),
-                    ),
+                    ).refusedSource,
                   },
                 }
               : {}),

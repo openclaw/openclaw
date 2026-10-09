@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
+import * as entryWriter from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
@@ -25,10 +26,6 @@ import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
-
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
@@ -65,6 +62,49 @@ function createFixture() {
     },
   });
 }
+
+it.each(["pending", "after-usage", "failed-usage", "other-compaction-key"] as const)(
+  "consolidates only the completed turn's model switch after %s",
+  async (scenario) => {
+    const fixture = await createFixture();
+    if (scenario !== "after-usage") {
+      await fixture.replace({
+        ...fixture.context.activeSessionEntry!,
+        liveModelSwitchPending: true,
+      });
+    }
+    if (scenario === "other-compaction-key") {
+      const other = await createFixture();
+      const compaction = fixture.recordCompaction();
+      compaction.durable[0] = {
+        ...compaction.durable[0]!,
+        target: other.recordCompaction().durable[0]!.target,
+      };
+    }
+    const apply = entryWriter.applySessionEntryOperation;
+    const usage = vi
+      .spyOn(entryWriter, "applySessionEntryOperation")
+      .mockImplementation(async (scope, operation, options) => {
+        if (operation.kind === "usage-accounting" && scenario === "failed-usage") {
+          throw new Error("synthetic usage write failure");
+        }
+        const result = await apply(scope, operation, options);
+        if (operation.kind === "usage-accounting" && scenario === "after-usage") {
+          // A new selection can arrive after the usage commit has published.
+          await fixture.replace({ ...fixture.read()!, liveModelSwitchPending: true });
+        }
+        return result;
+      });
+    try {
+      await accountAgentTurn(fixture.context);
+      expect(fixture.read()?.liveModelSwitchPending).toBe(
+        scenario === "after-usage" ? true : undefined,
+      );
+    } finally {
+      usage.mockRestore();
+    }
+  },
+);
 
 it("publishes a prepared final only after its worker patch commits without host transactions", async () => {
   const fixture = await createFixture();

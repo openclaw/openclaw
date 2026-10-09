@@ -13,6 +13,7 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
 } from "./service-types.js";
+import { isSystemdManagerUid } from "./systemd-bus-query.js";
 
 export type GatewayServiceLayoutSummary = {
   execStart: string;
@@ -48,11 +49,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     isBunRuntime(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
-    (process.platform === "linux" &&
-      (managerUid === undefined ||
-        !Number.isInteger(managerUid) ||
-        managerUid < 0 ||
-        managerUid >= 0xffffffff)) ||
+    (process.platform === "linux" && !isSystemdManagerUid(managerUid)) ||
     (state.definitionMutationCapability?.kind ?? "writable") !== "writable" ||
     hasGatewayServiceLauncherOverride(command) ||
     resolveManagedGatewayServiceProcessEnv(command, state.env) === null ||

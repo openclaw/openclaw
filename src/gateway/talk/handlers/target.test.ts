@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -264,6 +265,40 @@ describe("Talk target preparation through Gateway authorization", () => {
       expect(mocks.bootstrap).not.toHaveBeenCalled();
     },
   );
+
+  it("creates Talk in its custom suffixed store without adopting an unsuffixed decoy", async () => {
+    config.session = { store: state.statePath("shared.json") };
+    config.agents!.defaults = { sessionStore: { agentId: "primary" } };
+    const unsuffixed = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: state.statePath("shared.sqlite"),
+    });
+    const selected = openOpenClawAgentDatabase({
+      agentId: "primary",
+      path: state.statePath("shared.primary.sqlite"),
+    });
+    const scope = { agentId: "primary", sessionKey: "agent:primary:main" };
+    await replaceSessionEntry(
+      { ...scope, storePath: unsuffixed.path },
+      {
+        sessionId: "unsuffixed-decoy",
+        updatedAt: 1,
+        label: "Other physical store",
+      },
+    );
+    expect(loadSessionEntry({ ...scope, storePath: selected.path })).toBeUndefined();
+    const respond = await dispatch("talk.client.create", {
+      ...createParams,
+      sessionKey: scope.sessionKey,
+    });
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+    const createdSessionId = loadSessionEntry({ ...scope, storePath: selected.path })?.sessionId;
+    expect(createdSessionId).toBeTruthy();
+    expect(createdSessionId).not.toBe("unsuffixed-decoy");
+    expect(loadSessionEntry({ ...scope, storePath: unsuffixed.path })?.sessionId).toBe(
+      "unsuffixed-decoy",
+    );
+  });
 
   it.each([
     { name: "custom main", sessionKey: "main", mainKey: "home", canonicalKey: "agent:voice:home" },
@@ -596,6 +631,7 @@ describe("Talk target preparation through Gateway authorization", () => {
         );
       }
       const ensure = clientVoiceSession.ensureClientVoiceAgentSessionEntry;
+      let changedAfterEnsure = false;
       vi.spyOn(clientVoiceSession, "ensureClientVoiceAgentSessionEntry").mockImplementationOnce(
         async (params) => {
           const sessionId = await ensure(params);
@@ -609,6 +645,7 @@ describe("Talk target preparation through Gateway authorization", () => {
               ...(change === "incognito" ? { incognito: true } : { visibility: "read-only" }),
             });
           }
+          changedAfterEnsure = true;
           return sessionId;
         },
       );
@@ -616,6 +653,7 @@ describe("Talk target preparation through Gateway authorization", () => {
         ...createParams,
         voiceSessionId: "provisional",
       });
+      expect(changedAfterEnsure).toBe(true);
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,

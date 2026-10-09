@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -103,8 +106,22 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   });
 }
 
+const journalAvailability = new WeakMap<SqliteSchemaFacts, boolean>();
+
 export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
-  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  let available = schema && journalAvailability.get(schema);
+  if (available === undefined) {
+    const sql = schema?.tableSql.get("agent_deletion_journal");
+    available = schema
+      ? sql !== undefined &&
+        parseSqliteTableDefinition(sql, "agent_deletion_journal").columns.has("agent_id")
+      : tableHasColumn(database, "agent_deletion_journal", "agent_id");
+    if (schema) {
+      journalAvailability.set(schema, available);
+    }
+  }
+  if (!available) {
     throw new Error(
       "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
     );

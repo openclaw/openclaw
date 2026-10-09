@@ -1051,6 +1051,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
+      // Reserve headroom for the prompt, previous summary, and reasoning budget
+      // that generateSummary adds to each adaptively sized conversation chunk.
+      const resolveMaxChunkTokens = async (messages: AgentMessage[]) => {
+        const ratio = await computeAdaptiveChunkRatioWithWorker({
+          messages,
+          contextWindow: contextWindowTokens,
+          signal,
+        });
+        return Math.max(1, Math.floor(contextWindowTokens * ratio) - SUMMARIZATION_OVERHEAD_TOKENS);
+      };
       let messagesToSummarize = baseMessagesToSummarize;
       const headers = buildCompactionSummaryHeaders({
         model,
@@ -1107,15 +1117,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
               try {
-                const droppedChunkRatio = await computeAdaptiveChunkRatioWithWorker({
-                  messages: pruned.droppedMessagesList,
-                  contextWindow: contextWindowTokens,
-                  signal,
-                });
-                const droppedMaxChunkTokens = Math.max(
-                  1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio) -
-                    SUMMARIZATION_OVERHEAD_TOKENS,
+                const droppedMaxChunkTokens = await resolveMaxChunkTokens(
+                  pruned.droppedMessagesList,
                 );
                 droppedSummary = await summarizeViaLLM({
                   ...llmSummaryParams,
@@ -1159,28 +1162,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         !latestUnresolvedUserRequest &&
         qualityGuardEnabled &&
         latestPreparedAsk === latestUserAsk &&
-        Boolean(latestPreparedAsk) &&
-        (summaryTargetMessages.length > 0 ||
-          !preservedTurnsSectionLocal.text.includes(requiredAskContext));
-      messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-
-      // Use adaptive chunk ratio based on message sizes, reserving headroom for
-      // the summarization prompt, system prompt, previous summary, and reasoning budget
-      // that generateSummary adds on top of the serialized conversation chunk.
-      const adaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
-        messages: allMessages,
-        contextWindow: contextWindowTokens,
-        signal,
-      });
-      const maxChunkTokens = Math.max(
-        1,
-        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
-      );
-      // Feed dropped-messages summary as previousSummary so the main summarization
-      // incorporates context from pruned messages instead of losing it entirely.
+        !preservedTurnsSectionLocal.text.includes(requiredAskContext);
+      // Retained excerpts supplement the handoff; they cannot update an older decision
+      // by themselves. Reconcile the complete prepared window whenever there is a
+      // summary to update or non-preserved/split-turn work to summarize.
       const effectivePreviousSummary = droppedSummary ?? previousSummary;
+      const reconciliationMessages =
+        effectivePreviousSummary ||
+        includePreservedContext ||
+        summaryTargetMessages.length > 0 ||
+        turnPrefixMessages.length > 0
+          ? oracleMessages
+          : [];
 
+      const maxChunkTokens = await resolveMaxChunkTokens(reconciliationMessages);
       let correctiveInstructions = "";
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
 
@@ -1191,10 +1186,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const producerLosses = new Set<CompactionLoss>();
         try {
           historySummary =
-            messagesToSummarize.length > 0
+            reconciliationMessages.length > 0
               ? await summarizeViaLLM({
                   ...llmSummaryParams,
-                  messages: messagesToSummarize,
+                  messages: reconciliationMessages,
                   maxChunkTokens,
                   summaryPrompt: { kind: "custom", instructions: structuredInstructions },
                   customInstructions: correctiveInstructions,
@@ -1266,9 +1261,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             : undefined,
         );
 
-        const canRegenerate =
-          messagesToSummarize.length > 0 ||
-          (preparation.isSplitTurn && turnPrefixMessages.length > 0);
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
         }
@@ -1294,7 +1286,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (quality.ok) {
           return compactionResult(finalized.summary);
         }
-        if (!canRegenerate || attempt >= totalAttempts - 1) {
+        if (reconciliationMessages.length === 0 || attempt >= totalAttempts - 1) {
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];

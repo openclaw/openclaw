@@ -80,6 +80,7 @@ export function startRequesterSettleWakeAttempt(
     status: "dispatching",
     attemptCount: state.attemptCount + 1,
     batchRunIds,
+    deferralCount: state.deferralCount,
     ...retainedYieldIdentity(state),
     ...admissionMarker,
   };

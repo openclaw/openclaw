@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export function installPackageActivationFault({ journal, evidence, cut, terminate }) {
+function installPackageActivationFault({ journal, evidence, cut, terminate }) {
   assert(path.isAbsolute(journal) && path.isAbsolute(evidence));
   assert(["publication-complete", "verification"].includes(cut));
   // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.
@@ -14,14 +14,13 @@ export function installPackageActivationFault({ journal, evidence, cut, terminat
   // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.
   const exec = DatabaseSync.prototype.exec;
   const armed = new WeakSet();
-  const matched = (row) => row?.phase === "publication-complete";
   const observeCommit = (db) => {
     if (!armed.has(db) || db.location() !== journal) {
       return;
     }
     armed.delete(db);
     const row = prepare.call(db, "SELECT * FROM package_activation WHERE slot = 1").get();
-    if (!matched(row) || fs.existsSync(evidence)) {
+    if (row?.phase !== "publication-complete" || fs.existsSync(evidence)) {
       return;
     }
     fs.writeFileSync(evidence, JSON.stringify({ cut, pid: process.pid, journal, row }));
@@ -54,10 +53,6 @@ export function installPackageActivationFault({ journal, evidence, cut, terminat
       observeCommit(this);
     }
     return result;
-  };
-  return () => {
-    DatabaseSync.prototype.prepare = prepare;
-    DatabaseSync.prototype.exec = exec;
   };
 }
 

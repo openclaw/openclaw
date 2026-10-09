@@ -467,8 +467,12 @@ provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
 preparation; a failed or superseded preparation leaves it in place. A provider
 whose discovery fails publishes with the new generation's built-in rows.
-Admitted runs retain their captured generation, and each usage-estimation
-operation uses one pricing context.
+Reply, scheduled-run, and agent RPC preparation retain their captured model
+generation through admission. Publishing a newer catalog does not interrupt
+those turns before their first model request. Native model lookups can finish
+for an admitted turn without replacing the newer shared catalog. Nested model
+calls keep the admitted config, and each usage-estimation operation uses one
+pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a
 background refresh fails, the Gateway records the error and keeps serving its
@@ -513,12 +517,22 @@ mixing rates from different sources.
 Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
 catalogs, so connected installations can receive advertised price changes without
 a new OpenClaw release. When a valid native feed no longer supplies a model's
-price, publication preserves the model metadata without an estimate. It does not
-infer retirement or substitute another source's rate. Explicit user costs still
-win. DeepInfra uses its agent projection for model metadata and its native
+price, publication preserves the model metadata without an estimate. A missing
+price alone does not retire the model or substitute another source's rate.
+Explicit user costs still win. DeepInfra uses its agent projection for model
+metadata and its native
 `/models/list` feed for prices, including numeric discounts. Qualified schedules
 that cannot be represented as unconditional token costs stay unknown. Models
 remain available. See [DeepInfra price estimates](/providers/deepinfra#price-estimates).
+
+For providers with a public model list that needs no API key (Chutes, DeepInfra,
+Hugging Face, Kilo Gateway, Novita, NVIDIA, OpenCode Zen, OpenCode Go, and
+Venice), publication also fetches that list. A published row the provider no
+longer lists is marked `deprecated`, so pickers and recommended models drop it
+while an exact configured reference still resolves. Ids are matched exactly,
+except for Novita, whose list mixes letter case, so only a case-insensitive miss
+counts. If a list is unreachable, malformed, or empty, that provider's rows
+publish as authored.
 
 Run `openclaw models refresh` for an immediate metadata and pricing check, or
 disable every hosted catalog request with `models.catalogRefresh.enabled:
