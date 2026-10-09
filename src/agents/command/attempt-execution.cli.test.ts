@@ -1418,9 +1418,7 @@ describe("CLI attempt execution", () => {
     });
     expect(hasClaudeSessionMock).toHaveBeenCalledWith({
       backendId: "claude-cli",
-      agentAccountId: undefined,
       agentId: "main",
-      authProfileId: "anthropic:claude-cli",
       sessionId: "openclaw-sid",
       sessionKey,
     });

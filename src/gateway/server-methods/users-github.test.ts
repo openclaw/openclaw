@@ -236,7 +236,7 @@ beforeEach(async () => {
   lifecycle = createGitHubOAuthLifecycle({
     scheduler: createTestGatewayScheduler(),
     getConfig: () => config,
-    getPersistedConfig: () => config,
+    getPersistedConfig: async () => config,
     warn: vi.fn(),
   });
   context = {

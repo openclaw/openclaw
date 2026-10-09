@@ -181,7 +181,7 @@ describe("model resolution auth row snapshots", () => {
         if (
           sql ===
           (stage === "row"
-            ? "SELECT type FROM sqlite_master WHERE name = ?"
+            ? 'select "value_json" from "config_machine_state" where "state_key" = ?'
             : "PRAGMA main.wal_checkpoint(NOOP)")
         ) {
           injected = true;

@@ -13,6 +13,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
+  WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
@@ -23,22 +24,27 @@ import {
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { hasCloudWorkerSetupDeviceBinding } from "./device-pairing-cloud-worker.js";
 import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
-import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import {
+  requestDevicePairingMutationAdmission,
+  withDevicePairingMutationAdmission,
+} from "./device-pairing-mutation.worker.js";
 import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
   confirmDevicePairSetupCompletionDeliveryInTransaction,
   consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
+  hasExpiredDevicePairSetupCompletionsInDatabase,
   loadDeviceBootstrapTokenRecords,
   withDevicePairingStoreDatabase,
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
-  pruneExpiredDevicePairSetupCompletionRecords,
+  pruneExpiredDevicePairSetupCompletionsInDatabase,
 } from "./device-pairing-store.js";
 import type {
   DeviceBootstrapTokenRecord,
   DevicePairSetupCompletionRecord,
 } from "./device-pairing.types.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 // Outlive generic setup credentials; cloud-worker completion also binds durably
 // on its environment row, independently of this retained delivery outcome.
@@ -496,9 +502,20 @@ export const deviceBootstrapOperations = {
   "bootstrap.readCompletion": devicePairingMutation((input: { setupId: string; nowMs: number }) =>
     loadDevicePairSetupCompletionRecord(input.setupId, input.nowMs),
   ),
-  "bootstrap.prune": devicePairingMutation((input: { nowMs: number }) =>
-    pruneExpiredDevicePairSetupCompletionRecords(input.nowMs),
-  ),
+  "bootstrap.prune": (input: { nowMs: number }, { open, write }) => {
+    const database = open();
+    const due = runSqliteReadOperationSync(database.db, () =>
+      hasExpiredDevicePairSetupCompletionsInDatabase(database.db, input.nowMs),
+    );
+    if (!due) {
+      return 0;
+    }
+    return write(({ db }) =>
+      withDevicePairingMutationAdmission(() => ({
+        value: pruneExpiredDevicePairSetupCompletionsInDatabase(db, input.nowMs),
+      })),
+    );
+  },
   "bootstrap.clear": devicePairingMutation(clearDeviceBootstrapTokens),
   "bootstrap.revoke": devicePairingMutation(
     (input: Parameters<typeof revokeDeviceBootstrapToken>[0], { database }) =>
@@ -507,6 +524,6 @@ export const deviceBootstrapOperations = {
   "bootstrap.restore": devicePairingMutation(restoreGenericDeviceBootstrapToken),
   "bootstrap.redeem": devicePairingMutation(redeemDeviceBootstrapTokenProfile),
   "bootstrap.verify": devicePairingMutation(verifyDeviceBootstrapToken),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type DeviceBootstrapOperations = WorkerOperations<typeof deviceBootstrapOperations>;

@@ -72,10 +72,38 @@ internal enum class GatewayEndpointValidationError {
   IPV6_ZONE_ID_UNSUPPORTED,
 }
 
-internal enum class GatewayEndpointInputSource {
-  SETUP_CODE,
-  MANUAL,
-  QR_SCAN,
+internal enum class GatewayEndpointInputSource(
+  val insecureRemoteText: NativeText,
+  val ipv6ZoneIdText: NativeText,
+  val invalidUrlText: NativeText,
+) {
+  SETUP_CODE(
+    nativeText(
+      "Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+      remoteGatewaySecurityRuleText(),
+      remoteGatewaySecurityFixText(),
+    ),
+    nativeText("Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."),
+    nativeText("Setup code has invalid gateway URL."),
+  ),
+  MANUAL(
+    nativeText(
+      "\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+      remoteGatewaySecurityRuleText(),
+      remoteGatewaySecurityFixText(),
+    ),
+    nativeText("IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname."),
+    nativeText("Enter a valid manual endpoint to connect."),
+  ),
+  QR_SCAN(
+    nativeText(
+      "QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
+      remoteGatewaySecurityRuleText(),
+      remoteGatewaySecurityFixText(),
+    ),
+    nativeText("QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."),
+    nativeText("QR code did not contain a valid setup code."),
+  ),
 }
 
 internal data class GatewayEndpointParseResult(
@@ -317,49 +345,9 @@ internal fun gatewayEndpointValidationText(
   source: GatewayEndpointInputSource,
 ): NativeText =
   when (error) {
-    GatewayEndpointValidationError.INSECURE_REMOTE_URL -> {
-      when (source) {
-        GatewayEndpointInputSource.SETUP_CODE -> {
-          nativeText(
-            "Setup code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
-            remoteGatewaySecurityRuleText(),
-            remoteGatewaySecurityFixText(),
-          )
-        }
-
-        GatewayEndpointInputSource.QR_SCAN -> {
-          nativeText(
-            "QR code points to an insecure remote gateway. \$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
-            remoteGatewaySecurityRuleText(),
-            remoteGatewaySecurityFixText(),
-          )
-        }
-
-        GatewayEndpointInputSource.MANUAL -> {
-          nativeText(
-            "\$remoteGatewaySecurityRule \$remoteGatewaySecurityFix",
-            remoteGatewaySecurityRuleText(),
-            remoteGatewaySecurityFixText(),
-          )
-        }
-      }
-    }
-
-    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED -> {
-      when (source) {
-        GatewayEndpointInputSource.SETUP_CODE -> nativeText("Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
-        GatewayEndpointInputSource.QR_SCAN -> nativeText("QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.")
-        GatewayEndpointInputSource.MANUAL -> nativeText("IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.")
-      }
-    }
-
-    GatewayEndpointValidationError.INVALID_URL -> {
-      when (source) {
-        GatewayEndpointInputSource.SETUP_CODE -> nativeText("Setup code has invalid gateway URL.")
-        GatewayEndpointInputSource.QR_SCAN -> nativeText("QR code did not contain a valid setup code.")
-        GatewayEndpointInputSource.MANUAL -> nativeText("Enter a valid manual endpoint to connect.")
-      }
-    }
+    GatewayEndpointValidationError.INSECURE_REMOTE_URL -> source.insecureRemoteText
+    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED -> source.ipv6ZoneIdText
+    GatewayEndpointValidationError.INVALID_URL -> source.invalidUrlText
   }
 
 private const val defaultManualGatewayPort = 18789

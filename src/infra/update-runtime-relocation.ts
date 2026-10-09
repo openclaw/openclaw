@@ -93,51 +93,48 @@ export async function relocateRuntimeLauncher(
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
   const bunLauncher = parseBunCliLauncher(original);
+  let content: string;
   if (bunLauncher) {
-    const content = renderBunCliLauncher({
+    content = renderBunCliLauncher({
       bunPath: relocateRuntimePath(bunLauncher.bunPath, prepared),
       entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
     });
-    if (content !== original) {
-      assertBeforeMutation?.();
-      await fs.writeFile(file, content);
-    }
-    return;
-  }
-  // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
-  // Resolve them before changing the directory; absolute store/runtime paths stay external.
-  let content = original.replace(
-    /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
-    (match, prefix: string, relative: string) => {
-      if (/[$%]/u.test(relative)) {
-        return match;
-      }
-      const sourceTarget = path.resolve(
-        path.dirname(sourceFile),
-        relative.replaceAll("\\", path.sep),
-      );
-      const target = isPathInside(path.dirname(sourceFile), sourceTarget)
-        ? path.resolve(
-            path.dirname(destinationFile),
-            path.relative(path.dirname(sourceFile), sourceTarget),
-          )
-        : relocateRuntimePath(sourceTarget, prepared);
-      const replacement = path.relative(path.dirname(destinationFile), target);
-      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
-    },
-  );
-  for (const relocation of prepared.rules) {
-    for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
-      // NODE_PATH and the shim's target comment can carry absolute project paths.
-      content = content.replaceAll(
-        `${sourceRoot}${path.sep}`,
-        `${relocation.destinationRoot}${path.sep}`,
-      );
-      if (path.sep === "\\") {
-        content = content.replaceAll(
-          `${sourceRoot.replaceAll("\\", "/")}/`,
-          `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+  } else {
+    // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
+    // Resolve them before changing the directory; absolute store/runtime paths stay external.
+    content = original.replace(
+      /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
+      (match, prefix: string, relative: string) => {
+        if (/[$%]/u.test(relative)) {
+          return match;
+        }
+        const sourceTarget = path.resolve(
+          path.dirname(sourceFile),
+          relative.replaceAll("\\", path.sep),
         );
+        const target = isPathInside(path.dirname(sourceFile), sourceTarget)
+          ? path.resolve(
+              path.dirname(destinationFile),
+              path.relative(path.dirname(sourceFile), sourceTarget),
+            )
+          : relocateRuntimePath(sourceTarget, prepared);
+        const replacement = path.relative(path.dirname(destinationFile), target);
+        return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
+      },
+    );
+    for (const relocation of prepared.rules) {
+      for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
+        // NODE_PATH and the shim's target comment can carry absolute project paths.
+        content = content.replaceAll(
+          `${sourceRoot}${path.sep}`,
+          `${relocation.destinationRoot}${path.sep}`,
+        );
+        if (path.sep === "\\") {
+          content = content.replaceAll(
+            `${sourceRoot.replaceAll("\\", "/")}/`,
+            `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+          );
+        }
       }
     }
   }

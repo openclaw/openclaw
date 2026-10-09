@@ -101,6 +101,7 @@ export async function startCodexAttemptThread(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   shellEnvironment?: Readonly<Record<string, string>>;
   shellPathPrepend?: readonly string[];
+  shellGitConfigParameters?: string;
   disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
   runtimeModelId?: string;
@@ -441,6 +442,7 @@ export async function startCodexAttemptThread(params: {
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
                 shellPathPrepend: params.shellPathPrepend,
+                shellGitConfigParameters: params.shellGitConfigParameters,
                 disableLoginShell: params.disableLoginShell,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayRequired: params.nativeHookRelayRequired,

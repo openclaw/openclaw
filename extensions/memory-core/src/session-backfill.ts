@@ -28,16 +28,15 @@ import {
 } from "./session-backfill-lifecycle.js";
 import { normalizeSessionBackfillSelection } from "./session-backfill-selection.js";
 import {
-  SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
-  SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   SESSION_INGESTION_SCORE,
   appendSessionCorpusLines,
   foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
   resolveAdmissionPolicy,
+  resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
-  sessionExclusionReason,
+  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
   type SessionIngestionCandidate,
@@ -101,15 +100,20 @@ async function listSessionBackfillSources(params: {
       (entry) => entry.sessionId,
     ),
   );
-  const sources = corpus
+  const candidates = corpus
     .map(sessionIngestionSourceFromCorpus)
     .filter(
       (entry): entry is SessionIngestionSource =>
         entry !== null &&
         !entry.buildOptions.generatedByDreamingNarrative &&
-        !entry.buildOptions.generatedByCronRun &&
-        !sessionExclusionReason(entry, params.admissionPolicy, forgottenSessionIds),
+        !entry.buildOptions.generatedByCronRun,
     );
+  const excludedReasons = sessionExclusionReasons(
+    candidates,
+    params.admissionPolicy,
+    forgottenSessionIds,
+  );
+  const sources = candidates.filter((source) => !excludedReasons.has(source));
   const canonicalPaths = new Set(sources.map((entry) => path.resolve(entry.absolutePath)));
   for (const archiveFile of params.archiveFiles) {
     // Foreign files do not inherit canonical session identity from a matching basename.
@@ -152,13 +156,7 @@ async function collectSessionBackfillCandidates(params: {
 }) {
   const candidates: SessionIngestionCandidate[] = [];
   const scans: SessionBackfillScan[] = [];
-  const perFileCap = Math.min(
-    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
-    Math.max(
-      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP / Math.max(1, params.sources.length)),
-    ),
-  );
+  const perFileCap = resolveSessionIngestionFileCap(params.sources.length);
 
   for (const source of params.sources) {
     const scan = await scanSessionIngestionSource({

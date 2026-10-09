@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
@@ -9,6 +9,7 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
@@ -63,6 +64,19 @@ const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
+let nativeRuntimeAdmissionSent = false;
+
+async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
+  if (!sourceLoaderRegistered && sourceLoaderUrl) {
+    const loader: unknown = await import(sourceLoaderUrl);
+    if (!isRecord(loader) || typeof loader.register !== "function") {
+      throw new Error("SQLite source worker loader is unavailable");
+    }
+    loader.register();
+    sourceLoaderRegistered = true;
+  }
+  return import(moduleUrl);
+}
 
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
   const context = stateContexts.get(actor);
@@ -302,15 +316,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      if (!sourceLoaderRegistered && request.sourceLoaderUrl) {
-        const loader: unknown = await import(request.sourceLoaderUrl);
-        if (!isRecord(loader) || typeof loader.register !== "function") {
-          throw new Error("SQLite source worker loader is unavailable");
-        }
-        loader.register();
-        sourceLoaderRegistered = true;
-      }
-      const module: unknown = await import(request.moduleUrl);
+      const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
       const factoryName = request.existingIdentity
         ? "openExistingSqliteWorkerBackend"
         : "createSqliteWorkerBackend";
@@ -463,6 +469,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     nativeCleanupFailure = undefined;
   }
   if (reply.ok) {
+    if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {
+      const admission = captureSqliteNativeRuntimeAdmission();
+      if (admission) {
+        reply.nativeRuntimeAdmission = admission;
+        nativeRuntimeAdmissionSent = true;
+      }
+    }
     const bytes = ownedWorkerBytes(reply.value);
     port.postMessage({ ...reply, value: bytes }, [bytes.buffer]);
   } else {
@@ -471,6 +484,20 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete) {
     scheduleWorkerIdleGc();
   }
+}
+
+// Preparation has no actor, native locator, input, or admission grant.
+const runtimeData: unknown = workerData;
+if (isRecord(runtimeData) && runtimeData.sqliteRuntimePreparation !== undefined) {
+  const source = runtimeData.sqliteRuntimePreparation;
+  if (
+    !isRecord(source) ||
+    typeof source.moduleUrl !== "string" ||
+    (source.sourceLoaderUrl !== undefined && typeof source.sourceLoaderUrl !== "string")
+  ) {
+    throw new Error("SQLite runtime preparation is invalid");
+  }
+  await loadBackendModule(source.moduleUrl, source.sourceLoaderUrl);
 }
 
 // The broker sends one request at a time, including module initialization.

@@ -22,6 +22,8 @@ import {
 } from "../plugins/hook-claim-admission.js";
 import type { PluginHookAgentContext } from "../plugins/hook-types.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
@@ -450,9 +452,16 @@ describe("runCliAgent before_agent_reply seam", () => {
 
   it("does not settle auth health when before_agent_run blocks before backend execution", async () => {
     prepareProfile("codex-cli");
-    const recorder = {
-      persistBlocked: vi.fn(async (message) => ({ message })),
-    } as unknown as NonNullable<Parameters<typeof runCliAgent>[0]["userTurnTranscriptRecorder"]>;
+    const transcript = await import("./cli-runner/cli-run-transcript.js");
+    const persistBlock = vi.spyOn(transcript, "persistCliRunBlock").mockResolvedValue(undefined);
+    onTestFinished(() => persistBlock.mockRestore());
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: runParams.prompt },
+      target: createTestUserTurnTranscriptTarget({
+        sessionId: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+      }),
+    });
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_run");
     beforeRunMock.mockResolvedValueOnce({
       pluginId: "policy-plugin",

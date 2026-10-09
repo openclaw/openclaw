@@ -160,7 +160,7 @@ suite.define(() => {
             .locator('.agent-chat__attach-menu-option[value="file"]')
             .waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Take photo", "Attach…"] : ["Take photo", "Photo", "File"],
+            fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
           );
           for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
             expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(true);
@@ -177,16 +177,7 @@ suite.define(() => {
           expect(await chooser.element().getAttribute("capture")).toBeNull();
           const accept = await chooser.element().getAttribute("accept");
           if (kind === "file") {
-            for (const type of [
-              "image/*",
-              "video/*",
-              "audio/*",
-              "application/pdf",
-              ".docx",
-              ".zip",
-            ]) {
-              expect(accept).toContain(type);
-            }
+            expect(accept).toBeNull();
           } else {
             expect(accept).toBe("image/*");
           }

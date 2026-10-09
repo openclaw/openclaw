@@ -36,9 +36,14 @@ leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Lo
 heartbeat timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
+Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admission,
+including wakes waiting to retry. They cannot start another turn in the draining runtime.
+Already-running wakes and pending final reply writes retain their drain grace.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
-the remaining work categories, writes a diagnostic stability bundle, and exits
+the remaining work categories and pending owners (including command lanes and
+request origins), writes a diagnostic stability bundle, and exits
 with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
 start a fresh Gateway for a restart.
@@ -64,6 +69,12 @@ those schemas, or stop the service and restore your pre-upgrade backup. Startup
 retains exit status `78` and parks a managed LaunchAgent when possible. A refused
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.
+
+When the shared-state database cannot be read at all (for example, the file is
+damaged), `openclaw gateway status --deep` fails with exit status `1` and names
+the database path and read error instead of reporting a config read failure.
+Stop OpenClaw processes, then restore that file from a verified backup, as
+`openclaw doctor` also advises.
 
 Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.

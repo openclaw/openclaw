@@ -361,25 +361,16 @@ export class NodeWorkerWorkspaceRuntime {
             continue;
           }
           const generation = parseGenerationName(entry.name);
-          const artifactGeneration = parseTransferArtifactGeneration(entry.name);
-          if (generation !== undefined) {
-            const key = workspaceGenerationKey({ ...session, generation });
-            if (!currentSnapshot.retainedGenerations.has(key) && !localProtection.has(key)) {
-              candidates.push({
-                path: path.join(session.sessionRoot, entry.name),
-                generationKey: key,
-              });
-            }
+          const targetGeneration = generation ?? parseTransferArtifactGeneration(entry.name);
+          if (targetGeneration === undefined) {
             continue;
           }
-          if (artifactGeneration === undefined) {
-            continue;
-          }
-          const key = workspaceGenerationKey({ ...session, generation: artifactGeneration });
-          const retainedTargetMissing =
+          const key = workspaceGenerationKey({ ...session, generation: targetGeneration });
+          // Transfer artifacts stay recoverable only while their retained target is missing.
+          const retained =
             currentSnapshot.retainedGenerations.has(key) &&
-            !existingGenerations.has(artifactGeneration);
-          if (!localProtection.has(key) && !retainedTargetMissing) {
+            (generation !== undefined || !existingGenerations.has(targetGeneration));
+          if (!localProtection.has(key) && !retained) {
             candidates.push({
               path: path.join(session.sessionRoot, entry.name),
               generationKey: key,

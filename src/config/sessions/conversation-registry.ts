@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity } from "./conversation-identity.js";
 import type { ConversationReadQuery, ConversationRecord } from "./conversation-registry.types.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import { withConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { selectConversationRowsFromDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
@@ -214,18 +215,29 @@ export async function registerConversationAddresses(
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent() {},
     createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          if (request.stage === "transaction" || request.stage === "commit") {
-            assertCurrent();
-          }
-          if (!grant()) {
-            throw new Error("Conversation registration authority expired");
-          }
-        }, binding.attachment),
-      });
+      return withConversationPublication(
+        () => ({
+          nativeLocations: binding.nativeLocations,
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(request);
+            if (request.stage === "transaction" || request.stage === "commit") {
+              assertCurrent();
+            }
+            if (!grant()) {
+              throw new Error("Conversation registration authority expired");
+            }
+          }, binding.attachment),
+        }),
+        () => binding.assertCurrent(),
+        () => execution.captureGenerationClaim(),
+        () => [
+          ...new Set(
+            input.identities.map((identity) =>
+              JSON.stringify(["catalogue", identity.conversationRef]),
+            ),
+          ),
+        ],
+      );
     },
   };
   const execution = captureOpenClawAgentDatabaseExecution(options);

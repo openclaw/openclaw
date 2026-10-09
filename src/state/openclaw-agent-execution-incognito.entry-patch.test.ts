@@ -1,21 +1,29 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
-import type { PreparedSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+} from "../config/sessions/session-source-authority.js";
+import { patchSessionEntry as patchSdkSessionEntry } from "../plugin-sdk/session-store-runtime.js";
+import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -23,7 +31,6 @@ const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
 let durableSource: CapturedSessionEntryReadSource;
-let sql: ReturnType<typeof observeHostDataSql>;
 const target = (name: string) => ({
   agentId: "main",
   env,
@@ -41,25 +48,9 @@ beforeAll(async () => {
     databaseIdentity: physical.identity,
     databaseBirthtime: physical.birthtime,
   };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+  actor = await openIncognitoTestActor(env, authority);
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
@@ -188,31 +179,56 @@ it("rejects a valid captured durable source before reading outside its actor", a
   ).rejects.toThrow("Captured session database changed");
 });
 
-it.each(["transaction", "commit"] as const)(
-  "rechecks host permission at %s and never publishes a refused write",
-  async (stage) => {
-    const scope = await create(`revoked-${stage}`);
+it.each(
+  (["core", "SDK", "runtime", "composed SDK"] as const).flatMap((boundary) =>
+    (["transaction", "commit", "allowed"] as const).map((stage) => ({ boundary, stage })),
+  ),
+)(
+  "rechecks $boundary host permission at $stage and persists only allowed writes",
+  async ({ boundary, stage }) => {
+    const name = `permission-${boundary}-${stage}`.toLowerCase().replaceAll(" ", "-");
+    const scope = await create(name);
     let grants = 0;
-    let publications = 0;
-    await expect(
-      withIncognitoSessionActor(actor, () =>
-        patchSessionEntryCore(scope, () => ({ label: "forbidden" }), {
-          assertCommitAllowed() {
-            grants += 1;
-            if (grants === (stage === "transaction" ? 1 : 2)) {
-              throw new Error("permission revoked");
-            }
-          },
-          onCommitted() {
-            publications += 1;
-          },
-        }),
-      ),
-    ).rejects.toThrow("permission revoked");
-    expect(publications).toBe(0);
+    const assertCommitAllowed = () => {
+      grants += 1;
+      if (stage !== "allowed" && grants === (stage === "transaction" ? 1 : 2)) {
+        throw new Error("permission revoked");
+      }
+    };
+    const update = () => ({ label: "allowed" });
+    const guard =
+      boundary === "composed SDK"
+        ? composeSessionSourceAssertion([
+            captureSessionEntrySourceAssertion({
+              scope,
+              expected: { sessionId: name },
+              fields: ["sessionId"],
+              assertCurrent: assertCommitAllowed,
+              refuse() {
+                throw new Error("permission revoked");
+              },
+            }),
+          ])
+        : assertCommitAllowed;
+    const patch = withIncognitoSessionActor(actor, () =>
+      boundary === "core"
+        ? patchSessionEntryCore(scope, update, { assertCommitAllowed })
+        : (boundary === "runtime"
+            ? createRuntimeAgent().session.patchSessionEntry
+            : patchSdkSessionEntry)({
+            ...scope,
+            update,
+            assertCommitAllowed: guard,
+          }),
+    );
+    if (stage === "allowed") {
+      await expect(patch).resolves.toMatchObject({ label: "allowed" });
+    } else {
+      await expect(patch).rejects.toThrow("permission revoked");
+    }
     expect(
       (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
-    ).toBeUndefined();
+    ).toBe(stage === "allowed" ? "allowed" : undefined);
   },
 );
 
@@ -224,7 +240,7 @@ it("rejects bindings and selections for another physical store or session", asyn
         { ...scope, env: { OPENCLAW_STATE_DIR: tempDirs.make("foreign-incognito-") } },
         () => ({ label: "foreign" }),
       ),
-    ).rejects.toThrow("another incognito actor");
+    ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
     await expect(
       patchSessionEntryTarget(
         {

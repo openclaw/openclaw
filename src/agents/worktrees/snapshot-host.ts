@@ -104,12 +104,13 @@ export async function captureManagedWorktreeSnapshot(params: {
                 ],
                 effect.input.purpose,
                 true,
+                signal,
               );
               assertCurrent();
               return undefined;
             case "worktree.snapshot-provisioned-reset":
             case "worktree.snapshot-provisioned-chunk":
-              return await writeProvisioned(effect, () => signal.throwIfAborted());
+              return await writeProvisioned(effect, signal);
             case "worktree.eviction-fence":
             case "worktree.eviction-admit":
               throw new Error("Snapshot capture cannot authorize worktree eviction");
@@ -151,8 +152,8 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       git: params.git.worker,
-      onEffect: async () => {
-        params.signal?.throwIfAborted();
+      onEffect: async (_effect, { signal }) => {
+        signal.throwIfAborted();
         params.assertCurrent();
         return undefined;
       },

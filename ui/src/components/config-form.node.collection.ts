@@ -33,7 +33,7 @@ import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   configChildRenderOptions,
   getSensitiveRenderState,
-  removeCollectionRow,
+  renderCollectionRemoveButton,
   renderFieldRow,
   renderSchemaDefaultDescription,
   type ConfigNodeRenderer,
@@ -439,26 +439,11 @@ function renderArrayContent(
                       uniqueItems,
                       false,
                     );
-                    const removeControl = html` <openclaw-tooltip
-                      .content=${t("configForm.removeItem")}
-                    >
-                      <button
-                        type="button"
-                        class="btn btn--icon"
-                        style="width:28px;height:28px;padding:0;"
-                        aria-label=${t("configForm.removeItem")}
-                        ?disabled=${disabled || arrayValue.length <= minimumItems || !canRemove}
-                        @click=${(event: MouseEvent) => {
-                          if (canRemove) {
-                            removeCollectionRow(event, () =>
-                              patch(nextValue, rowIdentities.toSpliced(index, 1)),
-                            );
-                          }
-                        }}
-                      >
-                        ${icons.trash}
-                      </button>
-                    </openclaw-tooltip>`;
+                    const removeControl = renderCollectionRemoveButton(
+                      t("configForm.removeItem"),
+                      disabled || arrayValue.length <= minimumItems || !canRemove,
+                      () => canRemove && patch(nextValue, rowIdentities.toSpliced(index, 1)),
+                    );
                     const valueControl = renderNode({
                       ...configChildRenderOptions(params),
                       schema: inherited ? { ...itemSchema, default: item } : itemSchema,

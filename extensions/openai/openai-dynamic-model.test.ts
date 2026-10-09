@@ -379,4 +379,29 @@ describe("OpenAI dynamic model capabilities", () => {
     });
     expect(model?.compat).toEqual(exact.compat);
   });
+
+  // The API-key listing hides these families; config defaults and session overrides still name them.
+  it.each([
+    ["gpt-4o", false],
+    ["o3", true],
+    ["ft:gpt-4.1-mini:acme::abc123", false],
+  ] as const)("resolves the selected pre-GPT-5 ref %s with listing metadata", (id, reasoning) => {
+    const model = buildOpenAIProvider().resolveDynamicModel?.({
+      provider: "openai",
+      modelId: id,
+      modelRegistry: modelRegistry(),
+    });
+    expect(model).toEqual({
+      id,
+      name: id,
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    });
+  });
 });

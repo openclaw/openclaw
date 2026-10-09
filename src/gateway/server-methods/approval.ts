@@ -269,14 +269,11 @@ export function createApprovalHandlers(
       try {
         const prepared = id
           ? await loadVisibleApproval({
+              ...params,
               id,
               authority,
               client,
               getCfg: () => context.getRuntimeConfig(),
-              execApprovalManager: params.execApprovalManager,
-              pluginApprovalManager: params.pluginApprovalManager,
-              systemAgentApprovalManager: params.systemAgentApprovalManager,
-              databaseOptions: params.databaseOptions,
             })
           : null;
         record = prepared?.readCurrent() ?? null;
@@ -315,16 +312,13 @@ export function createApprovalHandlers(
       try {
         prepared = id
           ? await loadVisibleApproval({
+              ...params,
               id,
               authority,
               client,
               getCfg: () => context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
-              execApprovalManager: params.execApprovalManager,
-              pluginApprovalManager: params.pluginApprovalManager,
-              systemAgentApprovalManager: params.systemAgentApprovalManager,
-              databaseOptions: params.databaseOptions,
             })
           : null;
         record = prepared?.readCurrent() ?? null;
@@ -416,16 +410,13 @@ export function createApprovalHandlers(
       };
       let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;
       try {
-        const decisionParams = {
+        resolution = await applyApprovalDecision<ApprovalPayload>({
           id: record.id,
           decision: requestedDecision,
           forceMalformedDeny,
           resolver,
           localResolvedBy,
           guard: { family: approvalGuard.family, assertCurrent },
-        };
-        resolution = await applyApprovalDecision<ApprovalPayload>({
-          ...decisionParams,
           manager:
             record.kind === "exec"
               ? params.execApprovalManager
@@ -473,12 +464,10 @@ export function createApprovalHandlers(
         // SQLite CAS is canonical. Never make the winning surface wait for
         // best-effort channel, push, or legacy-event reconciliation.
         void publishAppliedApprovalResolution({
+          ...params,
           record: terminalRecord,
           liveRecord: resolution.liveRecord,
           context,
-          forwarder: params.forwarder,
-          iosPushDelivery: params.iosPushDelivery,
-          pluginIosPushDelivery: params.pluginIosPushDelivery,
         }).catch((error: unknown) => {
           context.logGateway?.error?.(
             `${terminalRecord.kind} approvals: unified resolve publication failed: ${String(error)}`,

@@ -141,37 +141,27 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         if (!existing) {
           throw new Error("INVALID_REQUEST: prepared workspace registration is missing");
         }
-        assertNodePreparedWorkspacePaths(root, {
+        const registeredWorkspace = {
           gatewayNamespace: existing.gateway_namespace,
           cacheKey: existing.cache_key,
           workspaceDir: existing.workspace_dir,
           homeDir: existing.home_dir,
-        });
+          sourceManifestRef: existing.source_manifest_ref,
+          preparedManifestRef: existing.prepared_manifest_ref,
+        };
+        assertNodePreparedWorkspacePaths(root, registeredWorkspace);
         if (existing.state === "available") {
           // Ready capacity must still match completed setup at its first claim.
           // Exact bind replay belongs to the session and must preserve its later edits.
           const hashMemo = hashMemos.get(ownerRoot) ?? new Map();
-          await verifyPrepared(
-            {
-              workspaceDir: existing.workspace_dir,
-              homeDir: existing.home_dir,
-              sourceManifestRef: existing.source_manifest_ref,
-              preparedManifestRef: existing.prepared_manifest_ref,
-            },
-            hashMemo,
-          );
+          await verifyPrepared(registeredWorkspace, hashMemo);
           signal?.throwIfAborted();
           hashMemos.set(ownerRoot, hashMemo);
         }
         row = await store.bind(input, {
           assertCurrent: () => {
             signal?.throwIfAborted();
-            assertNodePreparedWorkspacePaths(root, {
-              gatewayNamespace: existing.gateway_namespace,
-              cacheKey: existing.cache_key,
-              workspaceDir: existing.workspace_dir,
-              homeDir: existing.home_dir,
-            });
+            assertNodePreparedWorkspacePaths(root, registeredWorkspace);
           },
         });
         const hashMemo = hashMemos.get(ownerRoot);

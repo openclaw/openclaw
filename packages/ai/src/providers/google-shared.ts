@@ -51,7 +51,7 @@ export type GoogleProviderOptions = StreamOptions & {
   thinking?: GoogleThinkingOptions;
 };
 
-type GoogleGenerateContentClient = {
+export type GoogleGenerateContentClient = {
   models: {
     generateContentStream(
       params: GenerateContentParameters,

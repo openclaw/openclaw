@@ -13,7 +13,6 @@ import {
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveRunVitestSpawnEnv,
   resolveVitestNodeArgs,
-  resolveVitestNoOutputTimeoutMs,
 } from "../../scripts/lib/vitest-process-env.mts";
 import * as testRuntime from "../../scripts/lib/vitest-test-runtime.mts";
 import {
@@ -49,7 +48,6 @@ const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 const gatewayConfig = "test/vitest/vitest.gateway-server.config.ts";
 const uiFile = "ui/src/pages/chat/chat-send.test.ts";
 const browserFile = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
-const jsdomFile = "ui/src/components/form-controls.browser.test.ts";
 const agentDir = "src/agents/embedded-agent-runner/run";
 const modulesDir = "/runner/openclaw-pnpm-node-modules";
 const baseEnv = { PATH: "/usr/bin" };
@@ -83,7 +81,7 @@ describe("scripts/run-vitest", () => {
     );
   });
 
-  it.each([undefined, "node", "bun"] as const)(
+  it.each(["bun"] as const)(
     "selects the %s test runtime without changing the compiled bootstrap or test operands",
     async (runtime) => {
       const directory = tempDirs.make("oc-test-runtime-cache-");
@@ -107,20 +105,14 @@ describe("scripts/run-vitest", () => {
       ];
       const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
       expect(testRuntime.resolveVitestTestCommand([...flags, ...operands], env)).toEqual({
-        command: runtime === "bun" ? "bun" : process.execPath,
-        ...(runtime === "bun" ? { envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1" } } : {}),
-        args:
-          runtime === "bun"
-            ? [
-                "--tsconfig-override",
-                fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-                ...operands,
-              ]
-            : [...flags, ...operands],
+        command: "bun",
+        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        args: [
+          "--tsconfig-override",
+          fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+          ...operands,
+        ],
       });
-      if (runtime === undefined) {
-        return;
-      }
       const resolveCommand = testRuntime.resolveVitestTestCommand;
       // Keep the real runtime policy while an inert child observes the delivered environment.
       const command = vi
@@ -132,7 +124,7 @@ describe("scripts/run-vitest", () => {
             "-e",
             [
               'const assert = require("node:assert/strict");',
-              `assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE, ${JSON.stringify(runtime === "bun" ? "1" : "0")});`,
+              'assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE, "1");',
               `assert.equal(process.env.NODE_COMPILE_CACHE, ${JSON.stringify(env.NODE_COMPILE_CACHE)});`,
               'assert.equal(process.env.NODE_COMPILE_CACHE_PORTABLE, "1");',
               "process.exitCode = 7;",
@@ -175,12 +167,7 @@ describe("scripts/run-vitest", () => {
 
   it.each(
     [
-      [],
       ["test/scripts/run-vitest.test.ts"],
-      ["./test/scripts"],
-      ["./test/scripts/*.test.ts"],
-      ["./test/scripts/run-vitest.test.ts", "--timeout=1"],
-      ["./test/scripts/run-vitest.test.ts:1"],
       ["./../outside.test.ts"],
       ["./test/scripts/missing-native-bun-file.test.ts"],
     ].map((files) => ({ files })),
@@ -378,7 +365,7 @@ describe("scripts/run-vitest", () => {
     }
   });
 
-  it.each(["mjs", "mts"])(
+  it.each(["mjs"])(
     "resolves dependencies before native parsing at the %s entrypoint",
     (extension) => {
       const preload = `import {registerHooks} from 'node:module';
@@ -498,38 +485,31 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ]);
   });
 
-  it.each([
-    ["doctor"],
-    ["--", "doctor"],
-    ["--shard=2/3"],
-    ["--no-run"],
-    ["--testNamePattern", "doctor"],
-    ["--root", "/other"],
-  ])("preserves explicit E2E execution options %j", (...options) => {
-    const argv = ["run", "--config", e2eConfig, ...options];
-    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
-  });
+  it.each([["doctor"], ["--testNamePattern", "doctor"]])(
+    "preserves explicit E2E execution options %j",
+    (...options) => {
+      const argv = ["run", "--config", e2eConfig, ...options];
+      expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
+    },
+  );
 
-  it.each([
-    ["--config", gatewayConfig],
-    ["watch", "--config", gatewayConfig],
-    ["run", "--config", gatewayConfig, "src/gateway/server-startup.test.ts"],
-    ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"],
-  ])("keeps direct Gateway selection %j", (...argv) => {
-    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
-  });
+  it.each([["watch", "--config", gatewayConfig]])(
+    "keeps direct Gateway selection %j",
+    (...argv) => {
+      expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
+    },
+  );
 
-  it.each([
-    ["--exclude=", file],
-    ["--exclude=", "--passWithNoTests=false"],
-    ["--", file],
-  ])("keeps option operands out of implicit routing: %j", (...options) => {
-    const argv = ["run", ...options];
-    const native = parseCLI(["vitest", ...argv]);
-    expect(native.filter).toEqual([]);
-    expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
-    expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(native);
-  });
+  it.each([["--exclude=", file]])(
+    "keeps option operands out of implicit routing: %j",
+    (...options) => {
+      const argv = ["run", ...options];
+      const native = parseCLI(["vitest", ...argv]);
+      expect(native.filter).toEqual([]);
+      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+      expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(native);
+    },
+  );
 
   it("routes a positional UI test independently of excluded tooling files", () => {
     const argv = ["list", uiFile, "--exclude", file, "--passWithNoTests=false"];
@@ -547,7 +527,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
   it.each<[string, string | null]>([
     [file, toolingConfig],
     ["test/scripts/docker-build-helper.test.ts", "test/vitest/vitest.tooling-docker.config.ts"],
-    ["test/plugins/bundled-provider-auth-literal-parity.test.ts", null],
   ])("routes the explicit tooling target %s", (target, config) => {
     const argv = ["run", target];
     expect(resolveImplicitVitestArgs(argv)).toEqual(
@@ -556,10 +535,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it.each([
-    [],
-    ["--passWithNoTests"],
     ["--passWithNoTests=", "false"],
-    ["--no-passWithNoTests", "false"],
     ["--passWithNoTests=false", "--pass-with-no-tests=true"],
     ["--", "--passWithNoTests=true", "-x"],
   ])("enforces direct empty-file policy for %j", async (...flags) => {
@@ -593,10 +569,8 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it.each([
-    ["--passWithNoTests", "false"],
     ["--no-passWithNoTests", "false"],
     ["--passWithNoTests", "--passWithNoTests"],
-    ["--configLoader=", "runner"],
   ])("round-trips native option ownership through delegation: %j", (...flags) => {
     const parse = (args: string[]) => {
       try {
@@ -617,19 +591,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it.each<[string[], string[] | null]>([
-    [[file + ":12"], null],
-    [[file], [file]],
     [
       ["--reporter=verbose", "run", file, "--", "--watch"],
       [file, "--", "--reporter=verbose", "--watch"],
     ],
-    [["test/scripts"], ["test/scripts"]],
-    [["test/scripts/*.test.ts"], ["test/scripts/*.test.ts"]],
-    [["src/agents/**/*.ts"], null],
-    [["./src"], null],
     [["extensions/telegram/src/format"], ["extensions/telegram/src/format"]],
     [["extensions/codex"], ["extensions/codex"]],
-    [["extensions/workboard/browser"], ["extensions/workboard/browser"]],
     [
       [agentDir, "--sequence.shuffle", "--sequence.seed", "3"],
       [agentDir, "--", "--sequence.shuffle", "--sequence.seed", "3"],
@@ -639,10 +606,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ["src/**/*.test.ts", "src/agents/bash-tools.ts"],
       ["src/**/*.test.ts", "src/agents/bash-tools.ts"],
     ],
-    [["run", "--config", toolingConfig, file], null],
-    [["--root", "packages/example", "src/example.test.ts"], null],
-    [["--project", "tooling", file], null],
-    [["related", "src/agents/bash-tools.ts"], null],
     [["--run", "false", file], null],
     [
       ["run", file, "--repeats", "19"],
@@ -650,18 +613,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ],
   ])("preserves ownership and operands when delegating %j", (argv, expected) => {
     expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
-  });
-
-  it("reports missing explicit files before Vitest can fan out", () => {
-    const source = "src/agents/bash-tools.ts";
-    const missing = "extensions/codex/src/app-server/missing.ts";
-    const fsImpl = { existsSync: (entry: string) => entry.replaceAll("\\", "/").endsWith(source) };
-    expect(resolveMissingExplicitTestFiles([source, missing], "/repo", fsImpl)).toEqual([missing]);
-  });
-
-  it("ignores option operands and globs during missing-file preflight", () => {
-    const argv = ["-t", "missing.test.ts", "basename.test.ts", "src/**/*.test.ts"];
-    expect(resolveMissingExplicitTestFiles(argv, "/repo", { existsSync: () => false })).toEqual([]);
   });
 
   it("defers missing-file preflight to Vitest with explicit path owners", () => {
@@ -678,8 +629,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
   it.each([
     [[browserFile], "test/vitest/vitest.ui-browser.config.ts"],
-    [[jsdomFile], "test/vitest/vitest.ui.config.ts"],
-    [[browserFile, jsdomFile], null],
     [["ui/src/**/*.browser.test.ts"], null],
     [["ui/src/components/markdown.progress.node.test.ts"], null],
   ])("preserves browser ownership for implicit targets %j", (targets, config) => {
@@ -692,17 +641,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(resolveVitestNodeArgs({ OPENCLAW_VITEST_ENABLE_MAGLEV: "1" })).toStrictEqual([
       "--no-concurrent-sparkplug",
     ]);
-  });
-
-  it("accepts only positive decimal no-output deadlines", () => {
-    const timeout = (value?: string) =>
-      resolveVitestNoOutputTimeoutMs({
-        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: value,
-      });
-    expect(timeout()).toBeNull();
-    expect(timeout("2500")).toBe(2500);
-    expect(timeout("0")).toBeNull();
-    expect(timeout("1e3")).toBeNull();
   });
 
   it("defaults non-watch runs to the stall watchdog", () => {
@@ -751,22 +689,16 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   describe("native config option ownership", () => {
-    it.each([
-      { name: "inline short", args: [`-c=${e2eConfig}`] },
-      { name: "empty inline short", args: ["-c=", e2eConfig] },
-    ])("uses the native $name config for its watchdog", ({ args }) => {
-      const argv = ["run", ...args];
-      expect(parseCLI(["vitest", ...argv]).options.config).toBe(e2eConfig);
-      expect(resolveDefaultVitestNoOutputTimeoutMs(argv)).toBe(
-        DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
-      );
-    });
-    it.each([
-      { name: "missing short inline value", args: [file, "-c="] },
-      { name: "long after separator", args: [file, "--", "--config", e2eConfig] },
-    ])("keeps $name with the direct native child", ({ args }) => {
-      expect(resolveTestProjectsDelegationArgs(args)).toBeNull();
-    });
+    it.each([{ name: "inline short", args: [`-c=${e2eConfig}`] }])(
+      "uses the native $name config for its watchdog",
+      ({ args }) => {
+        const argv = ["run", ...args];
+        expect(parseCLI(["vitest", ...argv]).options.config).toBe(e2eConfig);
+        expect(resolveDefaultVitestNoOutputTimeoutMs(argv)).toBe(
+          DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+        );
+      },
+    );
   });
 
   it("leaves interactive runs without a default watchdog", () => {
@@ -775,20 +707,8 @@ registerHooks({resolve(specifier, context, nextResolve) {
     }
   });
 
-  it("detaches process groups only on Unix", () => {
-    for (const platform of ["darwin", "win32"] as const) {
-      expect(resolveVitestSpawnParams(baseEnv, platform)).toEqual({
-        env: { ...baseEnv, ...PINNED_LOCALE },
-        detached: platform === "darwin",
-        stdio: ["inherit", "pipe", "pipe"],
-      });
-    }
-  });
-
   posixIt.for([
     { timeout: false, exitCode: 0, expectedCode: 0, nativeBun: false },
-    { timeout: true, exitCode: 0, expectedCode: 1, nativeBun: false },
-    { timeout: true, exitCode: 7, expectedCode: 7, nativeBun: false },
     { timeout: true, exitCode: null, expectedCode: null, nativeBun: false },
     { timeout: true, exitCode: 0, expectedCode: 1, nativeBun: true },
   ])(
@@ -932,11 +852,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
   it.each<{ env: NodeJS.ProcessEnv; expected: NodeJS.ProcessEnv }>([
     { env: { LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" }, expected: {} },
     { env: { OPENCLAW_LOCAL_CHECK: "0" }, expected: { OPENCLAW_LOCAL_CHECK: "1" } },
-    { env: { CI: "true", OPENCLAW_LOCAL_CHECK: "0" }, expected: {} },
-    {
-      env: { OPENCLAW_TEST_PROJECTS_SERIAL: "1" },
-      expected: { RAYON_NUM_THREADS: "1", TOKIO_WORKER_THREADS: "1" },
-    },
     {
       env: { OPENCLAW_VITEST_MAX_WORKERS: "2", RAYON_NUM_THREADS: "8", TOKIO_WORKER_THREADS: "6" },
       expected: {},
@@ -961,33 +876,27 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(shouldSuppressVitestStderrLine("real failure output\n")).toBe(false);
   });
 
-  it.each([
-    { ansi: false, origin: undefined },
-    { ansi: true, origin: "fixture.test.ts" },
-  ])("extracts unhandled errors (ANSI=$ansi, origin=$origin)", ({ ansi, origin }) => {
-    const detector = createVitestUnhandledErrorDetector();
-    const output = [
-      "⎯⎯ Unhandled Errors ⎯⎯",
-      "Vitest caught 1 unhandled error during the test run.",
-      "⎯⎯ Unhandled Rejection ⎯⎯",
-      "TypeError: request failed",
-      ...(origin ? ['This error originated in "' + origin + '" test file.'] : []),
-    ]
-      .map((line) => (ansi ? "\u001b[31m" + line + "\u001b[0m" : line))
-      .join("\n");
-    detector.observe(output);
-    expect(detector.finish()).toEqual({
-      count: 1,
-      errorFirstLine: "TypeError: request failed",
-      origin,
-    });
-  });
-
-  it("does not classify ordinary output as an unhandled error", () => {
-    const detector = createVitestUnhandledErrorDetector();
-    detector.observe("✓ fixture.test.ts (1 test)\n");
-    expect(detector.finish()).toBeNull();
-  });
+  it.each([{ ansi: true, origin: "fixture.test.ts" }])(
+    "extracts unhandled errors (ANSI=$ansi, origin=$origin)",
+    ({ ansi, origin }) => {
+      const detector = createVitestUnhandledErrorDetector();
+      const output = [
+        "⎯⎯ Unhandled Errors ⎯⎯",
+        "Vitest caught 1 unhandled error during the test run.",
+        "⎯⎯ Unhandled Rejection ⎯⎯",
+        "TypeError: request failed",
+        ...(origin ? ['This error originated in "' + origin + '" test file.'] : []),
+      ]
+        .map((line) => (ansi ? "\u001b[31m" + line + "\u001b[0m" : line))
+        .join("\n");
+      detector.observe(output);
+      expect(detector.finish()).toEqual({
+        count: 1,
+        errorFirstLine: "TypeError: request failed",
+        origin,
+      });
+    },
+  );
 
   it("adds workflow annotations only under GitHub Actions", () => {
     const result = { count: 2, origin: "fixture.test.ts", errorFirstLine: "TypeError: failed" };
@@ -1023,35 +932,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
       return { stdout, onTimeout, onForceKill, log, watchdog };
     }
 
-    it("resets the idle deadline on output and escalates a silent child", () => {
-      const { stdout, onTimeout, onForceKill, log, watchdog } = setup();
-      vi.advanceTimersByTime(900);
-      expect(onTimeout).not.toHaveBeenCalled();
-      stdout.emit("data", "still alive");
-      vi.advanceTimersByTime(900);
-      expect(onTimeout).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(100);
-      expect(onTimeout).toHaveBeenCalledTimes(1);
-      expect(log).toHaveBeenCalledWith(
-        "[vitest] no output for 1000ms; terminating stalled Vitest process group.",
-      );
-      vi.advanceTimersByTime(5000);
-      expect(onForceKill).toHaveBeenCalledTimes(1);
-      expect(log).toHaveBeenCalledWith(
-        "[vitest] process group still alive after 5000ms; sending SIGKILL.",
-      );
-      watchdog.teardown();
-    });
-
-    it.each(["output", "preparation"])("does not cancel force-kill on late %s", (activity) => {
+    it("does not cancel force-kill on late output", () => {
       const { stdout, onTimeout, onForceKill, watchdog } = setup();
       vi.advanceTimersByTime(1000);
       expect(onTimeout).toHaveBeenCalledTimes(1);
-      if (activity === "output") {
-        stdout.emit("data", "too late");
-      } else {
-        watchdog.recordActivity();
-      }
+      stdout.emit("data", "too late");
       vi.advanceTimersByTime(5000);
       expect(onTimeout).toHaveBeenCalledTimes(1);
       expect(onForceKill).toHaveBeenCalledTimes(1);

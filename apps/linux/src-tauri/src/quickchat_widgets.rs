@@ -608,18 +608,13 @@ fn widget_belongs_to_surface(url: &Url, surface: &str) -> bool {
 }
 
 fn percent_decode_once(raw: &str) -> Option<String> {
-    let bytes = raw.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            decoded.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        let digits = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+    let mut pieces = raw.split('%');
+    let mut decoded = Vec::with_capacity(raw.len());
+    decoded.extend_from_slice(pieces.next()?.as_bytes());
+    for piece in pieces {
+        let (digits, tail) = piece.split_at_checked(2)?;
         decoded.push(u8::from_str_radix(digits, 16).ok()?);
-        index += 3;
+        decoded.extend_from_slice(tail.as_bytes());
     }
     String::from_utf8(decoded).ok()
 }
@@ -711,10 +706,9 @@ fn validate_widget_layout(widget: &QuickChatWidgetLayout) -> Result<Url, String>
     if widget.sandbox != "scripts" && widget.sandbox != "strict" {
         return Err("Quick Chat widget sandbox is invalid.".to_string());
     }
-    if !widget.x.is_finite()
-        || !widget.y.is_finite()
-        || !widget.width.is_finite()
-        || !widget.height.is_finite()
+    if ![widget.x, widget.y, widget.width, widget.height]
+        .into_iter()
+        .all(f64::is_finite)
         || widget.x < 0.0
         || widget.y < 0.0
         || widget.width < 1.0

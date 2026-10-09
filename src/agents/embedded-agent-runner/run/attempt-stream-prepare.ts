@@ -331,6 +331,7 @@ function prepareStream(
   const streamSubscription = subscribeEmbeddedAgentSession({
     // Keep the transcript session key; the sandbox key is only authority context.
     ...attempt,
+    ...agentSession,
     session: activeSession,
     onModelUsage: input.onModelUsage,
     messageChannel: input.runtimeChannel,
@@ -377,13 +378,6 @@ function prepareStream(
     currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
     agentId: input.hookAgentId,
-    builtinToolNames: agentSession.builtinToolNames,
-    coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
-    replaySafeToolNames: agentSession.replaySafeToolNames,
-    codeModeExecToolNames: agentSession.codeModeExecToolNames,
-    sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
-    sideEffectToolOwners: agentSession.sideEffectToolOwners,
-    trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
   });
   const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
   const subscription = { ...streamSubscription, unsubscribe };

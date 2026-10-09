@@ -151,7 +151,7 @@ export function readBoundIncognitoMemoryCorpus(
 ) {
   const binding = captureIncognitoSessionBinding({
     agentId: scope.normalizedAgentId,
-    env: scope.env,
+    // Corpus discovery captures ambient env; the configured sentinel owns its physical root.
     storePath: scope.storePath,
   });
   if (!binding) {

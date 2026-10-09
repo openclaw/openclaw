@@ -41,27 +41,21 @@ export function parseTelegramTopicConversation(params: {
     .trim()
     .replace(/:(direct-topic|topic):/i, (_match, marker: string) => `:${marker.toLowerCase()}:`);
   const target = parseTelegramTarget(conversationId);
-  const chatId = normalizeTelegramLookupTarget(target.chatId);
-  const thread: TelegramThreadSpec | null =
+  let chatId = normalizeTelegramLookupTarget(target.chatId);
+  let thread: TelegramThreadSpec | null =
     target.directMessagesTopicId != null
       ? { id: target.directMessagesTopicId, scope: "direct-messages" }
       : target.messageThreadId == null
         ? null
         : { id: target.messageThreadId, scope: "forum" };
-  if (chatId && thread) {
-    const canonicalConversationId = serializeTelegramTopicConversation({ chatId, thread });
-    return canonicalConversationId ? { chatId, thread, canonicalConversationId } : null;
+  if (!chatId || !thread) {
+    const parent = params.parentConversationId?.trim();
+    if (!/^\d+$/.test(conversationId) || !parent || parent === conversationId) {
+      return null;
+    }
+    chatId = parent;
+    thread = { id: Number(conversationId), scope: "forum" };
   }
-  const parent = params.parentConversationId?.trim();
-  if (!/^\d+$/.test(conversationId) || !parent || parent === conversationId) {
-    return null;
-  }
-  const parentThread: TelegramThreadSpec = { id: Number(conversationId), scope: "forum" };
-  const canonicalConversationId = serializeTelegramTopicConversation({
-    chatId: parent,
-    thread: parentThread,
-  });
-  return canonicalConversationId
-    ? { chatId: parent, thread: parentThread, canonicalConversationId }
-    : null;
+  const canonicalConversationId = serializeTelegramTopicConversation({ chatId, thread });
+  return canonicalConversationId ? { chatId, thread, canonicalConversationId } : null;
 }

@@ -106,7 +106,14 @@ Announce context is normalized to a stable internal event block:
 | Result content | Latest visible assistant text from the child                                                             |
 | Follow-up      | Instruction to review the result, continue unfinished work, and report the outcome                       |
 
-The result is the child's complete visible final answer for the completed run.
+The result is the child's complete visible final answer for the completed run,
+including ACP-backed runs and CLI fallback transcripts. A later turn in the same
+child session does not replace that run's answer.
+
+If completion receipts for the same run arrive out of order, the receipt with
+the newer producer end time owns the reply. Equal end times retain the first
+accepted reply; a correction with a newer end time can replace it.
+
 OpenClaw preserves prompt-data escaping and stable order when it delivers several
 results together. It does not shorten an answer to fit the former announce
 projection limits. The bounded lifecycle snapshot remains separate from the

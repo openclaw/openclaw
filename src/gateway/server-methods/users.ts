@@ -56,7 +56,7 @@ import {
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -286,12 +286,11 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.merge": async (options) => {
-    const { context, params, respond } = options;
-    if (!assertValidParams(params, validateUsersMergeParams, "users.merge", respond)) {
-      return;
-    }
-    try {
+  "users.merge": defineValidatedGatewayHandler(
+    "users.merge",
+    validateUsersMergeParams,
+    async (options) => {
+      const { context, params, respond } = options;
       const assertCurrent = await prepareUserProfileAdministration(options);
       holdGatewayPolicyResponse(respond);
       const { profile, movedAliasKinds } = await mergeCanonicalUserProfiles(
@@ -319,18 +318,14 @@ export const usersHandlers: GatewayRequestHandlers = {
         broadcastChatMetadataChanged(context);
       }
       respond(true, { profile, movedAliasKinds });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
-  "users.setDisplayName": async (options) => {
-    const { context, params, respond } = options;
-    if (
-      !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
-    ) {
-      return;
-    }
-    try {
+    },
+    profileError,
+  ),
+  "users.setDisplayName": defineValidatedGatewayHandler(
+    "users.setDisplayName",
+    validateUsersSetDisplayNameParams,
+    async (options) => {
+      const { context, params, respond } = options;
       const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
       if (!assertCurrent) {
         return;
@@ -343,10 +338,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       assertCurrent();
       refreshConnectedProfile(context, profile.id);
       respond(true, { profile });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
+    },
+    profileError,
+  ),
   "users.setRole": async (options) => {
     const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {

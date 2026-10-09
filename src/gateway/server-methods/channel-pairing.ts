@@ -138,17 +138,13 @@ function publicRequest(params: {
   const senderId = params.request.meta?.senderId ?? params.request.id;
   return {
     requestId: resolveChannelPairingRequestId(params.account.plugin.id, params.request),
-    channel: params.account.plugin.id,
-    channelLabel: params.account.plugin.meta.label,
-    accountId: params.account.accountId,
-    ...(params.account.accountLabel ? { accountLabel: params.account.accountLabel } : {}),
+    ...publicAccount(params.account),
     senderId,
     senderLabel: adapter.idLabel,
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
     createdAt: params.request.createdAt,
     lastSeenAt: params.request.lastSeenAt,
     expiresAt: new Date(createdAtMs + CHANNEL_PAIRING_PENDING_TTL_MS).toISOString(),
-    notifySupported: Boolean(adapter.notifyApproval),
   };
 }
 

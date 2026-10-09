@@ -306,7 +306,7 @@ struct CommandCenterTab: View {
                     self.gatewayFact(
                         icon: "network",
                         title: "Connection",
-                        value: self.gatewayConnectionText,
+                        value: self.gatewayDisplayState.statusPresentation.title,
                         color: self.gatewayStatusColor)
                     Divider().frame(height: 38)
                     self.gatewayFact(
@@ -438,30 +438,9 @@ struct CommandCenterTab: View {
         GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
-    private var gatewayConnectionText: String {
-        switch self.gatewayDisplayState {
-        case .connected:
-            String(localized: "Online")
-        case .connecting:
-            String(localized: "Connecting")
-        case .error:
-            String(localized: "Attention")
-        case .disconnected:
-            String(localized: "Offline")
-        }
-    }
-
     private var gatewayStatusColor: Color {
-        switch self.gatewayDisplayState {
-        case .connected:
-            OpenClawBrand.ok
-        case .connecting:
-            OpenClawBrand.accent
-        case .error:
-            OpenClawBrand.warn
-        case .disconnected:
-            .secondary
-        }
+        let state = self.gatewayDisplayState
+        return state == .disconnected ? .secondary : state.statusPresentation.tone.color
     }
 
     private var gatewayAddressText: String {

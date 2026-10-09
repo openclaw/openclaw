@@ -32,25 +32,23 @@ class PendingSessionCreate extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
-      (gateway, notify) =>
-        gateway.subscribe(() => {
-          this.closeImage();
-          notify();
-        }),
+      (gateway, notify) => gateway.subscribe(this.closeImageBefore(notify)),
     )
     .watch(
       () => this.context?.chatSubmissions,
-      (submissions, notify) =>
-        submissions.subscribeCreate(() => {
-          this.closeImage();
-          notify();
-        }),
+      (submissions, notify) => submissions.subscribeCreate(this.closeImageBefore(notify)),
     )
     .watchStore(() => this.context?.placementStartup);
   private readonly closeImage = () => {
     this.image?.release?.();
     this.image = null;
   };
+  private closeImageBefore(notify: () => void) {
+    return () => {
+      this.closeImage();
+      notify();
+    };
+  }
   override disconnectedCallback() {
     this.closeImage();
     this.subscriptions.clear();

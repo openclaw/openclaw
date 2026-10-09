@@ -499,19 +499,18 @@ async function runAgentHarnessOperation<T>(
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  if (isBuiltInOpenClawAgentHarness(harness)) {
-    return await runWithDiagnosticTraceContext(harnessTrace, execute);
-  }
-
+  const builtIn = isBuiltInOpenClawAgentHarness(harness);
   try {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   } catch (error) {
-    log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
-      harnessId: harness.id,
-      provider: params.provider,
-      modelId: params.modelId,
-      error: formatErrorMessage(error),
-    });
+    if (!builtIn) {
+      log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
+        harnessId: harness.id,
+        provider: params.provider,
+        modelId: params.modelId,
+        error: formatErrorMessage(error),
+      });
+    }
     throw error;
   }
 }
@@ -599,6 +598,7 @@ function withoutPluginHarnessPrivateState(
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     completionCheck: _completionCheck,
+    preparedSessionTarget: _preparedSessionTarget,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,

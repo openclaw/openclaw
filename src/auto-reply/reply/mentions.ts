@@ -235,11 +235,10 @@ function warnRejectedMentionPattern(
   if (mentionPatternWarningCache.has(key)) {
     return;
   }
-  mentionPatternWarningCache.add(key);
-  if (mentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+  if (mentionPatternWarningCache.size >= MAX_MENTION_PATTERN_WARNING_KEYS) {
     mentionPatternWarningCache.clear();
-    mentionPatternWarningCache.add(key);
   }
+  mentionPatternWarningCache.add(key);
   log.warn("Ignoring unsupported group mention pattern", {
     pattern,
     flags,
@@ -359,10 +358,7 @@ export function stripStructuralPrefixes(text: string): string {
     afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
   const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
-  if (stripped.startsWith("/")) {
-    return stripped.replace(/[ \t]+/g, " ");
-  }
-  return stripped.replace(/\s+/g, " ");
+  return stripped.replace(stripped.startsWith("/") ? /[ \t]+/g : /\s+/g, " ");
 }
 
 export function stripMentions(

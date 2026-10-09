@@ -8,6 +8,11 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import {
+  readSystemdBusOwner,
+  readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
+} from "./systemd-bus-query.js";
+import {
   execBusctlSystem,
   execSystemctl,
   isRunningAsRoot,
@@ -112,7 +117,6 @@ async function inspectLoadedSystemOwnership(
   timeoutMs?: number,
 ): Promise<SystemSystemdOwnership> {
   const manager = "org.freedesktop.systemd1";
-  const bus = "org.freedesktop.DBus";
   const missingUnit = Symbol("affirmative native absence");
   const deadline =
     performance.now() +
@@ -149,51 +153,22 @@ async function inspectLoadedSystemOwnership(
     }
     return parsed.data;
   };
-  const readOwner = async () => {
-    const value = await query(
-      ["call", bus, "/org/freedesktop/DBus", bus, "GetNameOwner", "s", manager],
-      "s",
+  const readOwner = () =>
+    readSystemdBusOwner(
+      async (args, signatures) => [await query(args, signatures[0]!)],
+      unavailable,
     );
-    if (
-      !Array.isArray(value) ||
-      value.length !== 1 ||
-      typeof value[0] !== "string" ||
-      !/^:[0-9]+\.[0-9]+$/.test(value[0])
-    ) {
-      throw unavailable();
-    }
-    return value[0];
-  };
   try {
     if (path.posix.basename(unitName) !== unitName) {
       throw unavailable();
     }
     const owner = await readOwner();
     const readLoaded = async () => {
-      const value = await query(
-        [
-          "call",
-          owner,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnit",
-          "s",
-          unitName,
-        ],
-        "o",
-        true,
-      );
+      const value = await query(systemdUnitCallArgs(owner, unitName, "GetUnit"), "o", true);
       if (value === missingUnit) {
         return false;
       }
-      if (
-        !Array.isArray(value) ||
-        value.length !== 1 ||
-        typeof value[0] !== "string" ||
-        !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(value[0])
-      ) {
-        throw unavailable();
-      }
+      readSystemdUnitObjectPath(value, unavailable);
       return true;
     };
     if (await readLoaded()) {

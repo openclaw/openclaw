@@ -1,5 +1,5 @@
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
 import type {
   WorkerDispatchEnvironmentService,
   WorkerDispatchPlacement,

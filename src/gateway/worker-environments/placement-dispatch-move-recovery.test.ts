@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
@@ -53,17 +54,12 @@ describe("worker Gateway move recovery", () => {
     "refuses abandonment when the device runner reconnects at %s admission",
     async (stage) => {
       const { placements, options, harness, active, request } = await abandonmentFixture();
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((admissionRequest, grant) => {
-            if (admissionRequest.stage === stage) {
-              options.deviceRunnerAvailable = true;
-            }
-            admit(admissionRequest, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(operationAdmission, (admissionRequest, grant, admit) => {
+        if (admissionRequest.stage === stage) {
+          options.deviceRunnerAvailable = true;
+        }
+        admit(admissionRequest, grant);
+      });
       const sql = observeMainThreadSql();
       try {
         await expect(harness.service.move(request)).rejects.toThrow("Device runner is available");
@@ -405,17 +401,12 @@ describe("worker Gateway move recovery", () => {
         expect(restartedStore.get(active.sessionId)?.state).toBe("reconciling");
         if (owner === "policy-at-transaction" || owner === "policy-at-commit") {
           const stage = owner === "policy-at-transaction" ? "transaction" : "commit";
-          const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-          const admission = vi
-            .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                if (request.stage === stage) {
-                  setRuntimeConfigSnapshot({ cloudWorkers: { requiredProfile: "development" } });
-                }
-                admit(request, grant);
-              }, attachment),
-            );
+          const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+            if (request.stage === stage) {
+              setRuntimeConfigSnapshot({ cloudWorkers: { requiredProfile: "development" } });
+            }
+            admit(request, grant);
+          });
           restoreAdmission = () => admission.mockRestore();
         }
       });

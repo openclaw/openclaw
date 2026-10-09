@@ -11,16 +11,12 @@ import {
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
-  MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
-  MemoryRemBackfillOptions,
-  MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
   MemoryResetCommandOptions,
 } from "./cli.types.js";
 import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
-import type { MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
@@ -63,6 +59,20 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
   if (hostOptions?.openKeyedStore) {
     configureMemoryCoreDreamingState(hostOptions.openKeyedStore);
   }
+  const lazyAction =
+    (
+      name:
+        | "runMemoryStatus"
+        | "runMemoryIndex"
+        | "runMemoryPromote"
+        | "runMemoryRemHarness"
+        | "runMemoryRemBackfill"
+        | "runMemorySessionBackfill",
+    ) =>
+    async (opts: MemoryCommandOptions) => {
+      const runtime = await import("./cli.runtime.js");
+      await runtime[name](opts, hostOptions);
+    };
   const memory = program
     .command("memory")
     .description("Search, inspect, and reindex memory files")
@@ -127,10 +137,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--index", "Reindex if dirty (implies --deep)")
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryStatus(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryStatus"));
 
   memory
     .command("index")
@@ -138,10 +145,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryIndex(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryIndex"));
 
   memory
     .command("reset")
@@ -237,10 +241,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--apply", "Append selected candidates to MEMORY.md", false)
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
-    .action(async (opts: MemoryPromoteCommandOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryPromote(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryPromote"));
 
   memory
     .command("promote-explain")
@@ -266,10 +267,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--grounded", "Also render a grounded day-level REM preview")
     .option("--include-promoted", "Include already promoted deep candidates", false)
     .option("--json", "Print JSON")
-    .action(async (opts: MemoryRemHarnessOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryRemHarness(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryRemHarness"));
 
   memory
     .command("rem-backfill")
@@ -288,10 +286,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       false,
     )
     .option("--json", "Print JSON")
-    .action(async (opts: MemoryRemBackfillOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemoryRemBackfill(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryRemBackfill"));
 
   memory
     .command("session-backfill")
@@ -317,10 +312,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       "Also inspect foreign transcript archive files conservatively",
     )
     .option("--json", "Print JSON")
-    .action(async (opts: MemorySessionBackfillOptions) => {
-      const runtime = await import("./cli.runtime.js");
-      await runtime.runMemorySessionBackfill(opts, hostOptions);
-    });
+    .action(lazyAction("runMemorySessionBackfill"));
 
   memory.action(() => {
     memory.outputHelp();

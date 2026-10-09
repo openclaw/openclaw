@@ -316,8 +316,11 @@ describe("worker turn launcher claim admission", () => {
       runId: "remote-result-run",
       owner: placementTurnOwner(active),
     });
+    const projectionReads = vi.spyOn(placements, "readProjection");
+    let readsBeforeClaim = 0;
     const claimTurn = placements.claimTurn.bind(placements);
     vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      readsBeforeClaim = projectionReads.mock.calls.length;
       try {
         return await claimTurn(...args);
       } catch (error) {
@@ -352,6 +355,8 @@ describe("worker turn launcher claim admission", () => {
     await expect(replacement).rejects.toThrow(
       "Active remote-exec placement does not match its attached environment",
     );
+    // Placement and pending-result preparation must use the same worker request.
+    expect(readsBeforeClaim).toBe(1);
   });
 
   it("redispatches the admitted replacement after pending-result recovery reclaims it", async () => {

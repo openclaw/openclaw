@@ -3,6 +3,7 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
+import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   findModelInCatalog,
@@ -23,6 +24,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
@@ -48,6 +50,21 @@ export function resolveModelFallbackOptions(
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
+  };
+}
+
+export function buildRunEntrySelection(
+  selection: Parameters<typeof runEmbeddedAgentEntry>[0]["selection"],
+  run: FollowupRun["run"],
+) {
+  return {
+    cfg: selection.cfg,
+    provider: selection.provider,
+    model: selection.model,
+    requestedRouteResolution: selection.requestedRouteResolution,
+    agentDir: selection.agentDir,
+    fallbacksOverride: selection.fallbacksOverride,
+    userLockedAuthProfileId: run.authProfileIdSource === "user" ? run.authProfileId : undefined,
   };
 }
 
@@ -150,7 +167,6 @@ export async function buildEmbeddedRunBaseParams(params: {
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     toolBindings: params.run.toolBindings,
-    skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,
@@ -183,7 +199,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
-    trigger: turn.isHeartbeat ? "heartbeat" : "user",
+    trigger: resolveReplyRunTrigger(turn),
     lane: params.runLane,
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
@@ -238,5 +254,28 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     bootstrapUserProfileId: run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
+  };
+}
+
+export function buildReplyMediaContextParams(
+  { run, originatingAccountId }: FollowupRun,
+  sessionKey: string | undefined,
+  cfg: FollowupRun["run"]["config"],
+) {
+  return {
+    cfg,
+    agentId: run.agentId,
+    sessionKey,
+    workspaceDir: run.workspaceDir,
+    mediaNormalizationOwner: run.mediaNormalizationOwner,
+    messageProvider: run.messageProvider,
+    accountId: originatingAccountId ?? run.agentAccountId,
+    groupId: run.groupId,
+    groupChannel: run.groupChannel,
+    groupSpace: run.groupSpace,
+    requesterSenderId: run.senderId,
+    requesterSenderName: run.senderName,
+    requesterSenderUsername: run.senderUsername,
+    requesterSenderE164: run.senderE164,
   };
 }

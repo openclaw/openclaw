@@ -15,7 +15,10 @@ import {
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import {
   assertSqliteSchemaContains,
+  canReuseSqliteSchemaInTransaction,
+  createSqliteTableContractReader,
   runSqliteImmediateTransactionSync,
+  type SqliteTableContractReader,
 } from "./openclaw-runtime-sqlite.js";
 
 // Frozen pre-binary contract, including the older non-STRICT spelling below.
@@ -66,7 +69,12 @@ const INLINE_RECALL_COLUMNS = [
 
 type StorageShape = "absent" | "legacy" | "binary";
 
-function storageShape(db: DatabaseSync, table: string, chunks: boolean): StorageShape {
+function storageShape(
+  db: DatabaseSync,
+  table: string,
+  chunks: boolean,
+  readTable?: SqliteTableContractReader,
+): StorageShape {
   const tableColumns = columns(db, table);
   if (tableColumns.size === 0) {
     return "absent";
@@ -117,20 +125,26 @@ function storageShape(db: DatabaseSync, table: string, chunks: boolean): Storage
   schema += indexes
     .map((index) => `CREATE INDEX ${index.name} ON ${table}(${index.columns});`)
     .join("\n");
-  assertSqliteSchemaContains(db, `memory storage ${table}`, schema, {
-    // Current tables are not rebuilt; preserve the agent owner's compatible
-    // nullable additions while refusing every extra column on conversion input.
-    allowCompatibleAdditiveColumns: shape === "binary",
-    allowedMissingIndexes: indexes.map((index) => index.name),
-    optionalCanonicalTriggerGroups: chunks
-      ? [
-          { tableName: table, triggers: CHUNK_REVISION_TRIGGERS },
-          ...(shape === "binary"
-            ? [{ tableName: table, triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS }]
-            : []),
-        ]
-      : [],
-  });
+  assertSqliteSchemaContains(
+    db,
+    `memory storage ${table}`,
+    schema,
+    {
+      // Current tables are not rebuilt; preserve the agent owner's compatible
+      // nullable additions while refusing every extra column on conversion input.
+      allowCompatibleAdditiveColumns: shape === "binary",
+      allowedMissingIndexes: indexes.map((index) => index.name),
+      optionalCanonicalTriggerGroups: chunks
+        ? [
+            { tableName: table, triggers: CHUNK_REVISION_TRIGGERS },
+            ...(shape === "binary"
+              ? [{ tableName: table, triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS }]
+              : []),
+          ]
+        : [],
+    },
+    readTable,
+  );
   if (shape === "legacy") {
     assertKnownRebuildDependents(
       db,
@@ -191,9 +205,13 @@ function assertKnownRebuildDependents(
 }
 
 function storageShapes(db: DatabaseSync, cacheTable: string) {
+  // Both checks are read-only; a later migration stage takes a new catalog snapshot.
+  const readTable = canReuseSqliteSchemaInTransaction(db)
+    ? createSqliteTableContractReader(db)
+    : undefined;
   return {
-    chunks: storageShape(db, "memory_index_chunks", true),
-    cache: storageShape(db, cacheTable, false),
+    chunks: storageShape(db, "memory_index_chunks", true, readTable),
+    cache: storageShape(db, cacheTable, false, readTable),
   };
 }
 

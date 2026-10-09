@@ -28,6 +28,10 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  captureExternalSessionCommitGuard,
+  sessionEntryCommitGuardOptions,
+} from "../../config/sessions/session-source-authority.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -79,11 +83,24 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
+async function getSessionEntryAsync(
+  params: RuntimeSessionStoreReadParams,
+): Promise<SessionEntry | undefined> {
+  const { readSessionEntryReadOnlyInWorker } =
+    await import("../../config/sessions/session-entry-read-runtime.js");
+  return await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
+}
+
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return listEntries({
+    ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
+    ...(params.includeParticipants !== undefined
+      ? { includeParticipants: params.includeParticipants }
+      : {}),
+    ...(params.captureSource ? { captureSource: params.captureSource } : {}),
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -95,7 +112,9 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
 
 const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
-    assertCommitAllowed: params.assertCommitAllowed,
+    ...sessionEntryCommitGuardOptions(
+      captureExternalSessionCommitGuard(params.assertCommitAllowed),
+    ),
     fallbackEntry: params.fallbackEntry,
     maintenanceConfig:
       params.maintenanceConfig !== undefined
@@ -466,7 +485,7 @@ async function createSessionEntry(
             {
               preserveActivity: true,
               requireWriteSuccess: true,
-              assertCommitAllowed: () => initialization?.handle.assertCurrent(),
+              ...sessionEntryCommitGuardOptions(creationOwner.assertCurrent),
             },
           );
           if (!finalized) {
@@ -684,6 +703,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
+    getSessionEntryAsync,
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,

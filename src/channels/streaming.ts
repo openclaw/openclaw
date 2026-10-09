@@ -1028,21 +1028,12 @@ export function formatPlanChecklistLines(
   },
 ): string[] {
   const selected = selectPlanChecklistSteps(steps, options);
-  const marker = (status: AgentPlanStepStatus) =>
-    options.plain
-      ? status === "completed"
-        ? "Completed:"
-        : status === "in_progress"
-          ? "In progress:"
-          : "Pending:"
-      : status === "completed"
-        ? "✅"
-        : status === "in_progress"
-          ? "▸"
-          : "▢";
+  const markers = options.plain
+    ? { completed: "Completed:", in_progress: "In progress:", pending: "Pending:" }
+    : { completed: "✅", in_progress: "▸", pending: "▢" };
   return [
     ...(selected.summary ? [`${options.plain ? "" : "✅ "}${selected.summary}`] : []),
-    ...selected.steps.map((entry) => `${marker(entry.status)} ${entry.step}`),
+    ...selected.steps.map((entry) => `${markers[entry.status]} ${entry.step}`),
   ].map((line) => compactChannelProgressDraftLine(line, options.maxLineChars));
 }
 

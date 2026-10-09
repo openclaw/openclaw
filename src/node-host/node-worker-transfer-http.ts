@@ -80,21 +80,10 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
     bindSocket = (socket) => {
       tlsSocket = socket as TLSSocket;
       const validated = validatedTlsSocketPins.get(tlsSocket);
-      if (validated) {
-        finish(
-          validated === expected
-            ? undefined
-            : new NodeWorkerTransferHttpError(
-                "tls-fingerprint-mismatch",
-                "worker transfer gateway TLS fingerprint mismatch",
-              ),
-        );
-        return;
-      }
       verify = () => {
-        const actual = normalizeTlsFingerprint(
-          tlsSocket!.getPeerCertificate().fingerprint256 ?? "",
-        );
+        const actual =
+          validated ??
+          normalizeTlsFingerprint(tlsSocket!.getPeerCertificate().fingerprint256 ?? "");
         if (!actual || expected !== actual) {
           finish(
             new NodeWorkerTransferHttpError(
@@ -107,7 +96,7 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
         validatedTlsSocketPins.set(tlsSocket!, actual);
         finish();
       };
-      const peerFingerprint = tlsSocket.getPeerCertificate().fingerprint256;
+      const peerFingerprint = validated || tlsSocket.getPeerCertificate().fingerprint256;
       if (request.reusedSocket || peerFingerprint) {
         verify();
       } else {

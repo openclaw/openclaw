@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
+import { createPluginBackgroundRunner } from "./plugin-instance-background.js";
 import { createPluginInstanceBindings } from "./plugin-instance-bindings.js";
 import { DisposalFailures, type DisposalCleanup } from "./plugin-instance-disposal.js";
 import {
@@ -109,6 +110,10 @@ export class PluginInstance {
     this.lifecycle = Object.freeze({
       signal: this.controller.signal,
       onDispose: (cleanup: () => void | Promise<void>) => this.addCleanup(cleanup, "plugin"),
+      runInBackgroundContext: createPluginBackgroundRunner(
+        this,
+        (token) => this.calls.get(token)?.cleanup === true,
+      ),
     });
   }
 
@@ -169,7 +174,7 @@ export class PluginInstance {
   }
 
   runInRegistry<T>(
-    registry: PluginRegistry,
+    registry: PluginRegistry | undefined,
     run: () => T,
     options?: { joinDisposal?: boolean },
   ): T {
@@ -186,25 +191,7 @@ export class PluginInstance {
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
   adopt<T>(value: T): T {
-    const seen = new Set<object>();
-    const visit = (candidate: unknown) => {
-      if (
-        !candidate ||
-        (typeof candidate !== "object" && typeof candidate !== "function") ||
-        seen.has(candidate)
-      ) {
-        return;
-      }
-      seen.add(candidate);
-      valueInstances.set(candidate, this);
-      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
-        if ("value" in descriptor) {
-          visit(descriptor.value);
-        }
-      }
-    };
-    visit(value);
-    return value;
+    return valueInstances.adopt(value, this);
   }
 
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {

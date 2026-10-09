@@ -19,6 +19,7 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
@@ -26,6 +27,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
+import { captureReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
@@ -47,11 +49,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
   const run = queued.run;
   const surface = queued.originatingChannel ?? run.messageProvider;
   const sessionKey = turn.session.kind === "session" ? turn.session.key : run.sessionKey;
-  const currentMessageId =
-    run.inputProvenance?.kind === "internal_system" &&
-    run.inputProvenance.sourceTool === "restart-sentinel"
-      ? queued.originatingReplyToId
-      : queued.messageId;
+  const currentMessageId = resolveFollowupCurrentMessageId(queued);
   return {
     Provider: run.messageProvider,
     Surface: surface,
@@ -102,7 +100,10 @@ export async function executeFollowupTurn(params: {
   // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const progressAllowed = () =>
+    deliveryAllowed() &&
+    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
   const verboseRead =
     turn.session.kind === "session" && turn.session.storePath
       ? captureSessionEntryReadScope({
@@ -263,12 +264,12 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const wrapVisibility = <Args extends unknown[]>(
     callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
-    allowed = progressAllowed,
+    allowed: (...args: Args) => boolean = progressAllowed,
   ) =>
     callback
       ? (...args: Args) =>
           enqueueProgressResult(async () => {
-            if (!allowed()) {
+            if (!allowed(...args)) {
               return false;
             }
             return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
@@ -294,8 +295,9 @@ export async function executeFollowupTurn(params: {
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
     isHeartbeat,
-    // Queue callbacks are refreshed per session, but authority, cancellation, and
-    // run observers belong to the queued turn. Never borrow them from another runner.
+    sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
+    internalEventExecution: turn.queued.run.internalEventExecution,
+    // A refreshed runner owns presentation defaults, never another source's authority or callbacks.
     operatorAuthority: turn.queued.operatorAuthority,
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
@@ -305,6 +307,7 @@ export async function executeFollowupTurn(params: {
     onModelSelected: turn.queued.runObservers?.onModelSelected,
     prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
     resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+    onDeliberateSilentTerminalReply: turn.queued.runObservers?.onDeliberateSilentTerminalReply,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
@@ -313,20 +316,13 @@ export async function executeFollowupTurn(params: {
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),
-    onItemEvent: sourceOpts?.onItemEvent
-      ? (item) =>
-          enqueueProgressResult(async () => {
-            // Only an explicit draft-vs-durable owner contract may bypass hidden
-            // tool-progress filtering for queued preambles.
-            const draftOwnsPreamble =
-              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
-            if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
-              return false;
-            }
-            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
-              .visible;
-          })
-      : undefined,
+    onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
+      sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
+      (item) =>
+        // Only the explicit draft owner may bypass hidden tool-progress filtering for preambles.
+        (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+        shouldEmitStructuredProgress(),
+    ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
@@ -338,10 +334,10 @@ export async function executeFollowupTurn(params: {
     onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
-        if (!progressAllowed()) {
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (!deliveryAllowed() || (!requiresDurableToolResult && !progressAllowed())) {
           return false;
         }
-        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }
@@ -424,7 +420,13 @@ export async function executeFollowupTurn(params: {
       turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
-      await turn.operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(turn.queued));
+      await turn.operation.bindToolAuthoritySnapshotAsync(
+        prepareReplyToolAuthority(
+          turn.queued,
+          undefined,
+          captureReplyOperationSessionReader(turn.operation),
+        ),
+      );
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&

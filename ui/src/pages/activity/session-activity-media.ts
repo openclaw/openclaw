@@ -292,30 +292,27 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     if (!entry || !owner || !client) {
       return nothing;
     }
+    const currentConnection = () =>
+      gateway.snapshot.client === client &&
+      gateway.snapshot.hello === hello &&
+      gateway.snapshot.phase === "connected";
+    const loadAction = (label: string) => html`<button
+      class="activity-feed__note-action"
+      ?disabled=${Boolean(entry.pending)}
+      @click=${() => this.load(entry)}
+    >
+      ${label}
+    </button>`;
     const hasImages = this.displayedImages.length > 0;
     const older =
       entry.cursor && entry.images.length < 4 && !entry.error
-        ? [
-            html`<button
-              class="activity-feed__note-action"
-              ?disabled=${Boolean(entry.pending)}
-              @click=${() => this.load(entry)}
-            >
-              ${entry.pending ? t("common.loading") : t("activity.images.older")}
-            </button>`,
-          ]
+        ? [loadAction(t(entry.pending ? "common.loading" : "activity.images.older"))]
         : [];
     const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
     const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
       entry.error
         ? html`<span role="status">${t("activity.images.failed")}</span
-            ><button
-              class="activity-feed__note-action"
-              ?disabled=${Boolean(entry.pending)}
-              @click=${() => this.load(entry)}
-            >
-              ${t("common.retry")}
-            </button>`
+            >${loadAction(t("common.retry"))}`
         : hasImages
           ? nothing
           : older
@@ -348,9 +345,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
                             !this.isConnected ||
                             this.owner !== owner ||
                             this.imageIdentity !== imageIdentity ||
-                            gateway.snapshot.client !== client ||
-                            gateway.snapshot.hello !== hello ||
-                            gateway.snapshot.phase !== "connected" ||
+                            !currentConnection() ||
                             version !== this.imageRequest
                           ) {
                             item.release?.();
@@ -367,11 +362,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
                                 return gateway.snapshot.client;
                               },
                               get connected() {
-                                return (
-                                  gateway.snapshot.client === client &&
-                                  gateway.snapshot.hello === hello &&
-                                  gateway.snapshot.phase === "connected"
-                                );
+                                return currentConnection();
                               },
                               resourceBasePath: this.context.resourceBasePath,
                             },

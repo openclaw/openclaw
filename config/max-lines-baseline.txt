@@ -19,7 +19,6 @@ extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
 extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
-extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
@@ -48,10 +47,8 @@ extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
-extensions/copilot/src/tool-bridge.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts
-extensions/diagnostics-prometheus/src/service.ts
 extensions/discord/src/actions/runtime.test.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
@@ -204,7 +201,6 @@ packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/gateway-client/src/client.ts
-packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
@@ -213,7 +209,6 @@ src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
 src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
-src/agents/agent-scope.test.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
@@ -222,7 +217,6 @@ src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/profiles.test.ts
 src/agents/auth-profiles/store.ts
 src/agents/auth-profiles/usage.test.ts
-src/agents/auth-profiles/usage.ts
 src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
@@ -266,8 +260,6 @@ src/agents/models.profiles.live.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
-src/agents/provider-transport-fetch.ts
-src/agents/runtime-plan/prepare-auth.test.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
@@ -294,7 +286,6 @@ src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
-src/auto-reply/reply/agent-runner-payloads.test.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
@@ -351,7 +342,6 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/backup-verify.test.ts
 src/commands/channels.add.test.ts
-src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
@@ -544,7 +534,6 @@ src/plugins/update.test.ts
 src/secrets/apply.test.ts
 src/secrets/apply.ts
 src/secrets/configure.ts
-src/secrets/resolve.ts
 src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/secrets/runtime-web-tools.test.ts
@@ -553,7 +542,6 @@ src/security/audit-extra.sync.ts
 src/security/audit.ts
 src/shared/json-schema-defaults.ts
 src/skills/lifecycle/clawhub.test.ts
-src/skills/workshop/service.test.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
@@ -581,7 +569,6 @@ ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/view.ts
-ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts

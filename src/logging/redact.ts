@@ -45,22 +45,14 @@ import {
 } from "./redact-pattern-runtime.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
-  AMBIGUOUS_ASSIGNMENT_MATCHERS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
-  BODY_SECRET_KEYS,
-  CHUNK_UNSAFE_PATTERN_SOURCES,
-  CREDENTIAL_HEADER_FIELD_RE,
+  createBackendRedactPatterns,
   DEFAULT_REDACT_PATTERNS,
-  FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
   PAYMENT_CREDENTIAL_ENV_KEYS,
   PAYMENT_CREDENTIAL_JSON_KEYS,
   PAYMENT_CREDENTIAL_QUERY_KEYS,
-  REDACT_PATTERN_PREFILTERS,
-  SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
-  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
-  TOOL_PAYLOAD_REDACT_PATTERNS,
   VENDOR_TOKEN_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
@@ -82,6 +74,7 @@ type RedactSensitiveMode = "off" | "tools";
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
+const backendPatterns = createBackendRedactPatterns();
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
 // Built-in resolved patterns scan whole text; only operator-configured regexes use the
 // bounded chunked scan, whose cost on operator expressions is the measured safeguard.
@@ -94,7 +87,7 @@ const chunkUnsafePatterns = new WeakSet<ResolvedRedactPattern>();
 // Canonical built-in sources are the only expressions the repeat rewriter optimizes; every
 // operator-configured source compiles unmodified so its exact legacy language is preserved.
 const canonicalBuiltInSources = new Set<string>(
-  [...DEFAULT_REDACT_PATTERNS, ...TOOL_PAYLOAD_REDACT_PATTERNS].filter(
+  [...DEFAULT_REDACT_PATTERNS, ...backendPatterns.toolPayload].filter(
     (entry): entry is string => typeof entry === "string",
   ),
 );
@@ -173,7 +166,7 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     return PEM_REDACT_MATCHER;
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
-    if (AMBIGUOUS_ASSIGNMENT_MATCHERS.has(raw)) {
+    if (backendPatterns.ambiguousMatchers.has(raw)) {
       sourceAssignmentPatterns.add(raw);
     }
     return raw;
@@ -206,19 +199,19 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
       pattern.exec === RegExp.prototype.exec &&
       pattern[Symbol.replace] === RegExp.prototype[Symbol.replace];
   }
-  if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
+  if (pattern && typeof raw === "string" && backendPatterns.shellReferencePreserving.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
   }
-  if (pattern && typeof raw === "string" && TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
+  if (pattern && typeof raw === "string" && backendPatterns.ambiguousAssignments.has(raw)) {
     sourceAssignmentPatterns.add(pattern);
   }
-  if (pattern && typeof raw === "string" && FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
+  if (pattern && typeof raw === "string" && backendPatterns.formAware.has(raw)) {
     formAwareEqualsAssignmentPatterns.add(pattern);
   }
   if (
     pattern &&
     typeof raw === "string" &&
-    (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
+    (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || backendPatterns.chunkUnsafe.has(raw))
   ) {
     chunkUnsafePatterns.add(pattern);
   }
@@ -240,7 +233,7 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
             (pattern.flags === flags && pattern[Symbol.replace] === replace)),
       );
     }
-    const probe = REDACT_PATTERN_PREFILTERS.get(raw);
+    const probe = backendPatterns.prefilters.get(raw);
     if (canPrefilter && probe) {
       setRedactPatternPrefilter(pattern, probe);
     }
@@ -249,10 +242,10 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
 }
 
 function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPattern[] {
-  if (value === TOOL_PAYLOAD_REDACT_PATTERNS) {
-    toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map(parsePattern).filter(
-      (re): re is ResolvedRedactPattern => Boolean(re),
-    );
+  if (value === backendPatterns.toolPayload) {
+    toolPayloadResolvedPatterns ??= backendPatterns.toolPayload
+      .map(parsePattern)
+      .filter((re): re is ResolvedRedactPattern => Boolean(re));
     return toolPayloadResolvedPatterns;
   }
   if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
@@ -282,7 +275,7 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
 
 function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
   return (
-    !value?.length || value === DEFAULT_REDACT_PATTERNS || value === TOOL_PAYLOAD_REDACT_PATTERNS
+    !value?.length || value === DEFAULT_REDACT_PATTERNS || value === backendPatterns.toolPayload
   );
 }
 
@@ -299,7 +292,10 @@ function normalizeSensitiveKeyName(value: string): string {
 }
 
 function isSensitiveBodyKey(key: string): boolean {
-  return isSensitiveUrlQueryParamName(key) || BODY_SECRET_KEYS.has(normalizeSensitiveKeyName(key));
+  return (
+    isSensitiveUrlQueryParamName(key) ||
+    backendPatterns.bodySecretKeys.has(normalizeSensitiveKeyName(key))
+  );
 }
 
 function hasEncodedOrInvisibleFormKey(key: string): boolean {
@@ -857,8 +853,8 @@ function resolveModelVisibleToolPayloadRedaction(
   return {
     mode: "tools",
     patterns: hasUserPatterns
-      ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
-      : TOOL_PAYLOAD_REDACT_PATTERNS,
+      ? [...userPatterns, ...backendPatterns.toolPayload]
+      : backendPatterns.toolPayload,
     sensitiveFieldPatterns: hasUserPatterns
       ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
       : DEFAULT_REDACT_PATTERNS,
@@ -1163,7 +1159,7 @@ function classifyLogFieldProtection(
       ? shouldRedactStructuredPrimitiveField(key, path)
       : isPublicShareIdPath(path) ||
         shouldRedactStructuredStringField(key, value, path, objectPath);
-  return legacy ? "legacy" : CREDENTIAL_HEADER_FIELD_RE.test(key) ? "header" : undefined;
+  return legacy ? "legacy" : backendPatterns.credentialHeaderField.test(key) ? "header" : undefined;
 }
 
 function getFieldRecordEdits(field: RedactionField, mode: RedactSensitiveMode): RedactionEdit[] {

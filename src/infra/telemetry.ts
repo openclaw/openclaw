@@ -311,23 +311,15 @@ export async function checkTelemetryUpdate(
       ? { version: state.latestVersion, ...(state.note ? { note: state.note } : {}) }
       : null;
     if (
-      state.lastPingAt !== undefined &&
-      nowMs >= state.lastPingAt &&
-      nowMs - state.lastPingAt < TELEMETRY_CHECK_INTERVAL_MS
-    ) {
-      return { update: cached, networkAttempted: false };
-    }
-    if (
-      !options.fetchImpl &&
-      (process.env.VITEST !== undefined || process.env.NODE_ENV === "test")
-    ) {
-      return { update: cached, networkAttempted: false };
-    }
-    if (
-      lastFailedAttempt?.endpoint === endpoint &&
-      lastFailedAttempt.stateDirectory === stateDirectory &&
-      nowMs >= lastFailedAttempt.at &&
-      nowMs - lastFailedAttempt.at < TELEMETRY_FAILURE_BACKOFF_MS
+      (state.lastPingAt !== undefined &&
+        nowMs >= state.lastPingAt &&
+        nowMs - state.lastPingAt < TELEMETRY_CHECK_INTERVAL_MS) ||
+      (!options.fetchImpl &&
+        (process.env.VITEST !== undefined || process.env.NODE_ENV === "test")) ||
+      (lastFailedAttempt?.endpoint === endpoint &&
+        lastFailedAttempt.stateDirectory === stateDirectory &&
+        nowMs >= lastFailedAttempt.at &&
+        nowMs - lastFailedAttempt.at < TELEMETRY_FAILURE_BACKOFF_MS)
     ) {
       return { update: cached, networkAttempted: false };
     }
@@ -374,35 +366,34 @@ export async function checkTelemetryUpdate(
       init.signal = AbortSignal.timeout(TELEMETRY_TIMEOUT_MS);
       networkAttempted = true;
       const response = await (options.fetchImpl ?? fetch)(endpoint, init);
-      if (response.status !== 200) {
-        lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
-        return { update: cached, networkAttempted };
+      if (response.status === 200) {
+        const parsed = TelemetryResponseSchema.parse(
+          await readProviderJsonResponse(response, "Telemetry update response"),
+        );
+        const note = parsed.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
+        const persisted = await persistTelemetrySuccess(
+          pendingKey,
+          {
+            lastPingAt: nowMs,
+            latestVersion: parsed.version,
+            ...(note ? { note } : {}),
+          },
+          context,
+        );
+        lastFailedAttempt = undefined;
+        return {
+          update: {
+            version: persisted.latestVersion,
+            ...(persisted.note ? { note: persisted.note } : {}),
+          },
+          networkAttempted,
+        };
       }
-      const parsed = TelemetryResponseSchema.parse(
-        await readProviderJsonResponse(response, "Telemetry update response"),
-      );
-      const note = parsed.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
-      const persisted = await persistTelemetrySuccess(
-        pendingKey,
-        {
-          lastPingAt: nowMs,
-          latestVersion: parsed.version,
-          ...(note ? { note } : {}),
-        },
-        context,
-      );
-      lastFailedAttempt = undefined;
-      return {
-        update: {
-          version: persisted.latestVersion,
-          ...(persisted.note ? { note: persisted.note } : {}),
-        },
-        networkAttempted,
-      };
     } catch {
-      lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
-      return { update: cached, networkAttempted };
+      // A failed check keeps the previous accepted update.
     }
+    lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
+    return { update: cached, networkAttempted };
   };
 
   // Publish completion only after the owning slot is released; a cached result is not a request.

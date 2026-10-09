@@ -185,9 +185,9 @@ describe("memory entry origins", () => {
       origin("queued", "session-1"),
     ]);
     const dispatch = Promise.withResolvers<void>();
-    const run = cpuRuntime.runMemoryOriginRows;
+    const run = cpuRuntime.runMemoryOriginRead;
     const transport = vi
-      .spyOn(cpuRuntime, "runMemoryOriginRows")
+      .spyOn(cpuRuntime, "runMemoryOriginRead")
       .mockImplementationOnce(async (...args) => {
         await dispatch.promise;
         return run(...args);

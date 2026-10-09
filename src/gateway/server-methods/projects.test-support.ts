@@ -69,7 +69,7 @@ export async function invokeProjectMethod(
   let ownedProjection: SessionRowProjection | undefined;
   try {
     ownedProjection =
-      !projection && method === "projects.list" && profileId && !params.includeObserved
+      !projection && method === "projects.list" && (profileId || params.includeObserved)
         ? await createSessionRowProjection({ cfg, modelCatalog: [] })
         : undefined;
     await handlers[method]!({

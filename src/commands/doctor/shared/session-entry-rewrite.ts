@@ -152,10 +152,13 @@ export function rewriteDoctorSessionEntries(
     params.assertCurrent?.();
     rewritten += runOpenClawAgentWriteTransaction(
       (database) => {
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        const assertRepairCurrent = () => {
+          params.assertCurrent?.();
+          if (params.expectedIdentity) {
+            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
+          }
+        };
+        assertRepairCurrent();
         const db = getSessionKysely(database.db);
         let batchRewritten = 0;
         for (const sessionKey of batch) {
@@ -256,10 +259,7 @@ export function rewriteDoctorSessionEntries(
               runOutcome = nextEntry;
             }
           }
-          params.assertCurrent?.();
-          if (params.expectedIdentity) {
-            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-          }
+          assertRepairCurrent();
           invalidateSessionEntryMaintenanceAgeFact(database.db);
           const runProjection = runOutcome
             ? {
@@ -308,10 +308,7 @@ export function rewriteDoctorSessionEntries(
           publishSessionEntryCacheInvalidation(database, { sessionKey });
           batchRewritten += 1;
         }
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        assertRepairCurrent();
         return batchRewritten;
       },
       databaseOptions,

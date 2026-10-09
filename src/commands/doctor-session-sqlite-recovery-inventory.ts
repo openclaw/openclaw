@@ -98,6 +98,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   const references = new Map<string, RecoveryArtifactReference[]>();
   const manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
+    artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
+  };
   let laterUpdateStartedAt = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
@@ -185,23 +188,26 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       consequence:
         "Permanently loses rollback to this original, including pre-repair branches and metadata.",
     };
+    const classify = (outcome: Outcome, reason: string) => {
+      item.outcome = outcome;
+      item.reason = reason;
+    };
     if (refs.some((ref) => !ref.trusted)) {
-      item.outcome = "protected";
-      item.reason = "unsupported-target-ownership";
+      classify("protected", "unsupported-target-ownership");
     } else if (refs.every((ref) => ref.move.artifact?.disposal.state === "disposed")) {
-      item.outcome = stat ? "protected" : "disposed";
-      item.reason = stat ? "recreated-after-disposal" : "intentionally-disposed";
+      classify(
+        stat ? "protected" : "disposed",
+        stat ? "recreated-after-disposal" : "intentionally-disposed",
+      );
     } else if (refs.some((ref) => ref.consumedByRestore)) {
-      item.outcome = "protected";
-      item.reason = "archive-consumed-by-restore";
+      classify("protected", "archive-consumed-by-restore");
     } else if (
       hasSymbolicLinkInDirectoryPath(path.dirname(archivePath)) ||
       (stat &&
         (!stat.isFile() ||
           (stat.nlink !== 1n && !isPendingMigrationArtifactClaim(archivePath, evidence))))
     ) {
-      item.outcome = "blocked";
-      item.reason = "artifact-alias-or-nonregular";
+      classify("blocked", "artifact-alias-or-nonregular");
     } else if (
       refs.some(
         ({ run, target }) =>
@@ -210,13 +216,13 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
       )
     ) {
-      item.outcome = "protected";
-      item.reason = "incomplete-recovery-operation";
+      classify("protected", "incomplete-recovery-operation");
     } else if (refs.some(({ move }) => move.artifact?.classification === "protected")) {
-      item.outcome = "protected";
-      item.reason = refs.find(
-        (ref) => ref.move.artifact?.classification === "protected",
-      )!.move.artifact!.reason;
+      classify(
+        "protected",
+        refs.find((ref) => ref.move.artifact?.classification === "protected")!.move.artifact!
+          .reason,
+      );
     } else if (
       refs.some(
         ({ target, run }) =>
@@ -224,11 +230,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           !(laterUpdateStartedAt > Date.parse(run.manifest.completedAt!)),
       )
     ) {
-      item.outcome = "protected";
-      item.reason = "awaiting-later-completed-update";
+      classify("protected", "awaiting-later-completed-update");
     } else if (refs.some(({ move }) => !move.artifact)) {
-      item.outcome = "verification-required";
-      item.reason = "historical-manifest-without-import-proof";
+      classify("verification-required", "historical-manifest-without-import-proof");
     } else if (
       current &&
       evidence &&
@@ -237,13 +241,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       )
     ) {
       // Preview can reject changed metadata without reading history; apply still verifies content.
-      item.outcome = "blocked";
-      item.reason = "artifact-metadata-changed";
+      classify("blocked", "artifact-metadata-changed");
     } else if (
       refs.some(({ move }) => !sameMigrationArtifact(move.artifact!.identity, evidence!.identity))
     ) {
-      item.outcome = "blocked";
-      item.reason = "conflicting-artifact-identities";
+      classify("blocked", "conflicting-artifact-identities");
     } else if (
       refs.some(({ move }) => {
         const receipt = move.artifact?.disposal;
@@ -254,8 +256,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
         );
       })
     ) {
-      item.outcome = "blocked";
-      item.reason = "conflicting-disposal-claims";
+      classify("blocked", "conflicting-disposal-claims");
     } else if (
       !stat &&
       !refs.every(
@@ -264,8 +265,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           move.artifact?.disposal.state === "disposed",
       )
     ) {
-      item.outcome = "blocked";
-      item.reason = "unexpectedly-missing-artifact";
+      classify("blocked", "unexpectedly-missing-artifact");
     } else if (refs.some(({ move }) => move.artifact?.disposal.state === "pending-disposal")) {
       item.reason = "resume-pending-disposal";
     }
@@ -301,13 +301,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       if (references.has(filePath)) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: entry.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-recovery-original",
-      });
+      protectUnmanifested(
+        filePath,
+        entry.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-recovery-original",
+      );
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
@@ -331,13 +329,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       ) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: item.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-artifact",
-      });
+      protectUnmanifested(
+        filePath,
+        item.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-artifact",
+      );
     }
   }
   if (
@@ -448,18 +444,17 @@ export function summarizeRecoveryCleanup(
     removedBytes: 0,
     removedFiles: 0,
   };
+  const byteTotals: Partial<Record<Outcome, keyof typeof totals>> = {
+    candidate: "candidateBytes",
+    "verification-required": "verificationRequiredBytes",
+    protected: "protectedBytes",
+    blocked: "blockedBytes",
+    failed: "blockedBytes",
+  };
   for (const item of artifacts) {
-    if (item.outcome === "candidate") {
-      totals.candidateBytes += item.bytes;
-    }
-    if (item.outcome === "verification-required") {
-      totals.verificationRequiredBytes += item.bytes;
-    }
-    if (item.outcome === "protected") {
-      totals.protectedBytes += item.bytes;
-    }
-    if (item.outcome === "blocked" || item.outcome === "failed") {
-      totals.blockedBytes += item.bytes;
+    const total = byteTotals[item.outcome];
+    if (total) {
+      totals[total] += item.bytes;
     }
     if (item.removedBytes !== undefined) {
       totals.removedBytes += item.removedBytes;

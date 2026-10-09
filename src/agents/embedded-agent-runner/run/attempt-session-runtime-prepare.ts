@@ -1,3 +1,4 @@
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -134,6 +135,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     attempt.model.api,
     attempt.model.baseUrl,
     transcriptPolicy.inHistorySystemUpdates === true,
+    // Personal bootstrap follows the selected human, not only the session ID.
+    attempt.bootstrapUserProfileId,
   ]);
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
@@ -191,41 +194,45 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     promptCache: undefined,
     systemPromptText,
   };
-  const preparedAgentSession = await prepareEmbeddedAttemptAgentSession({
-    ...sessionPreparation,
-    ...(input.activeContextEngine
-      ? { activeContextEngineInfo: input.activeContextEngine.info }
-      : {}),
-    agentCoreThinkingLevel,
-    clientToolPreparation: {
-      catalogToolHookContext,
-      clientTools,
-      codeModeControlsEnabledForRun,
-      deferredDirectoryToolsCallable,
-      effectiveTools,
-      replaySafetyOptions,
-      sandboxSessionKey,
-      sessionAgentId,
-      toolSearchCatalogRef,
-      toolSearchRuntimeConfig,
-      uncompactedEffectiveTools,
-      getToolAbortSignal: () => toolBase.toolAbortSignal,
-    },
-    getCurrentAttemptPluginMetadataSnapshot,
-    initialSystemPrompt: state.systemPromptText,
-    prepareSystemPromptUpdate,
-    markStage: (stage) => prepStages.mark(stage),
-    onSessionCreated: (session) => {
-      resources.session = session;
-    },
-    onSystemPromptChanged: (nextSystemPrompt) => {
-      state.systemPromptText = nextSystemPrompt;
-    },
-    runAbortSignal,
-    transcriptLifecycle: sessionLock.transcriptLifecycle,
-    sessionManager,
-    prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
-  });
+  const preparedAgentSession = await withOwnedSessionTranscriptWrites(
+    sessionLock.ownedTranscriptWriteContext,
+    async () =>
+      prepareEmbeddedAttemptAgentSession({
+        ...sessionPreparation,
+        ...(input.activeContextEngine
+          ? { activeContextEngineInfo: input.activeContextEngine.info }
+          : {}),
+        agentCoreThinkingLevel,
+        clientToolPreparation: {
+          catalogToolHookContext,
+          clientTools,
+          codeModeControlsEnabledForRun,
+          deferredDirectoryToolsCallable,
+          effectiveTools,
+          replaySafetyOptions,
+          sandboxSessionKey,
+          sessionAgentId,
+          toolSearchCatalogRef,
+          toolSearchRuntimeConfig,
+          uncompactedEffectiveTools,
+          getToolAbortSignal: () => toolBase.toolAbortSignal,
+        },
+        getCurrentAttemptPluginMetadataSnapshot,
+        initialSystemPrompt: state.systemPromptText,
+        prepareSystemPromptUpdate,
+        markStage: (stage) => prepStages.mark(stage),
+        onSessionCreated: (session) => {
+          resources.session = session;
+        },
+        onSystemPromptChanged: (nextSystemPrompt) => {
+          state.systemPromptText = nextSystemPrompt;
+        },
+        runAbortSignal,
+        transcriptLifecycle: sessionLock.transcriptLifecycle,
+        sessionManager,
+        prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
+      }),
+  );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
@@ -301,6 +308,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const trajectoryRecorder = await prepareEmbeddedAttemptTrajectory({
     ...sessionPreparation,
     activeSession,
+    transcriptOwner: sessionLock.ownedTranscriptWriteContext,
     clientToolCount: preparedAgentSession.clientToolDefs.length,
     effectiveToolCount,
     localModelLeanEnabled,

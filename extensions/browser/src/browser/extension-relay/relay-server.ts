@@ -17,8 +17,12 @@ import {
   type WebSocket,
 } from "openclaw/plugin-sdk/websocket-runtime";
 import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
+import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "../constants.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
-import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
+import {
+  authenticateExtensionWebSocket,
+  trackAuthenticatedRelaySocket,
+} from "./auth-v2-websocket.js";
 import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,
   BROWSER_RELAY_AUTH_COMPLETE_PATH,
@@ -36,7 +40,6 @@ import { attachRelayOwner } from "./owner-server.js";
 import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
-import { parseExtensionMessage } from "./relay-protocol.js";
 import {
   firstHeader,
   isAllowedExtensionOrigin,
@@ -50,21 +53,14 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 const INTERNAL_CDP_USERNAME = "openclaw-internal";
 const MAX_AUTH_BODY_BYTES = 8 * 1024;
 
-export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+export { EXTENSION_RELAY_MAX_PAYLOAD_BYTES };
 
+type HttpAuthGrant =
+  | { stage: "challenged" | "authenticated"; flow: "cdp" | "json-list" }
+  | { stage: "awaiting-upgrade" };
 type HttpAuthState =
   | { stage: "busy" }
-  | {
-      stage: "challenged" | "authenticated";
-      flow: "cdp" | "json-list";
-      authority: BrowserRelayAuthV2Authority;
-      timer: NodeJS.Timeout;
-    }
-  | {
-      stage: "awaiting-upgrade";
-      authority: BrowserRelayAuthV2Authority;
-      timer: NodeJS.Timeout;
-    };
+  | (HttpAuthGrant & { authority: BrowserRelayAuthV2Authority; timer: NodeJS.Timeout });
 
 export type ExtensionRelayHandle = {
   ownership: "owned";
@@ -174,41 +170,13 @@ function bindSocket(
   ws.on("error", (err) => log.warn(`relay socket error: ${String(err)}`));
 }
 
-function trackAuthenticatedSocket(authority: BrowserRelayAuthV2Authority, ws: WebSocket): boolean {
-  if (
-    !authority.registerAuthenticatedConnection(ws, () =>
-      ws.close(4003, "browser relay key rotated"),
-    )
-  ) {
-    ws.terminate();
-    return false;
-  }
-  ws.once("close", () => authority.releaseConnection(ws));
-  return true;
-}
-
 /** Wire an already-v2-authenticated extension socket to the bridge. */
 export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSocket): void {
-  const handlers = bridge.attachExtensionSocket(ws);
-  let helloSeen = false;
-  const helloTimer = setTimeout(() => {
+  const handlers = bridge.attachExtensionSocket(ws, () => {
     ws.close(4008, "extension hello timeout");
     ws.terminate();
-  }, BROWSER_RELAY_CHALLENGE_TTL_MS);
-  helloTimer.unref?.();
-  bindSocket(ws, {
-    onMessage: (raw) => {
-      if (!helloSeen && parseExtensionMessage(raw)?.type === "hello") {
-        helloSeen = true;
-        clearTimeout(helloTimer);
-      }
-      handlers.onMessage(raw);
-    },
-    onClose: () => {
-      clearTimeout(helloTimer);
-      handlers.onClose();
-    },
   });
+  bindSocket(ws, handlers);
 }
 
 export async function startExtensionRelayServer(params: {
@@ -255,10 +223,23 @@ export async function startExtensionRelayServer(params: {
     socketAuthorities.delete(socket);
     authority?.releaseConnection(socket);
   };
-  const armSocketTimer = (socket: Duplex): NodeJS.Timeout => {
-    const timer = setTimeout(() => socket.destroy(), BROWSER_RELAY_CHALLENGE_TTL_MS);
-    timer.unref?.();
-    return timer;
+  const beginAuthResponse = (socket: Duplex, res: ServerResponse) => {
+    const previous = httpStates.get(socket);
+    if (previous && "timer" in previous) {
+      clearTimeout(previous.timer);
+    }
+    const pending: HttpAuthState = { stage: "busy" };
+    httpStates.set(socket, pending);
+    return (grant: HttpAuthGrant, authority: BrowserRelayAuthV2Authority, payload: unknown) => {
+      res.once("finish", () => {
+        if (!socket.destroyed && httpStates.get(socket) === pending) {
+          const timer = setTimeout(() => socket.destroy(), BROWSER_RELAY_CHALLENGE_TTL_MS);
+          timer.unref?.();
+          httpStates.set(socket, { ...grant, authority, timer });
+        }
+      });
+      writeJson(res, 200, payload);
+    };
   };
   const registerHttpSocket = (
     socket: Duplex,
@@ -307,8 +288,7 @@ export async function startExtensionRelayServer(params: {
           rejectHttp(res, existingState ? 409 : 400, "Invalid relay auth sequence");
           return;
         }
-        const pending: HttpAuthState = { stage: "busy" };
-        httpStates.set(socket, pending);
+        const respond = beginAuthResponse(socket, res);
         const raw = await readAuthBody(req);
         const request =
           raw === null ? null : parseRelayHttpChallengeRequest(parseStrictJsonObject(raw));
@@ -333,17 +313,7 @@ export async function startExtensionRelayServer(params: {
           rejectHttp(res, 401, "Relay auth challenge rejected");
           return;
         }
-        res.once("finish", () => {
-          if (!socket.destroyed && httpStates.get(socket) === pending) {
-            httpStates.set(socket, {
-              stage: "challenged",
-              flow: request.flow,
-              authority,
-              timer: armSocketTimer(socket),
-            });
-          }
-        });
-        writeJson(res, 200, challenge);
+        respond({ stage: "challenged", flow: request.flow }, authority, challenge);
         return;
       }
 
@@ -356,9 +326,7 @@ export async function startExtensionRelayServer(params: {
           rejectHttp(res, 409, "Invalid relay auth sequence");
           return;
         }
-        clearTimeout(existingState.timer);
-        const pending: HttpAuthState = { stage: "busy" };
-        httpStates.set(socket, pending);
+        const respond = beginAuthResponse(socket, res);
         const raw = await readAuthBody(req);
         const request =
           raw === null ? null : parseRelayHttpCompleteRequest(parseStrictJsonObject(raw));
@@ -373,40 +341,23 @@ export async function startExtensionRelayServer(params: {
           rejectHttp(res, 401, "Relay auth proof failed");
           return;
         }
-        res.once("finish", () => {
-          if (!socket.destroyed && httpStates.get(socket) === pending) {
-            httpStates.set(socket, {
-              stage: "authenticated",
-              flow: existingState.flow,
-              authority: existingState.authority,
-              timer: armSocketTimer(socket),
-            });
-          }
-        });
-        writeJson(res, 200, completed.ok);
+        respond(
+          { stage: "authenticated", flow: existingState.flow },
+          existingState.authority,
+          completed.ok,
+        );
         return;
       }
 
       if (existingState?.stage === "authenticated") {
-        clearTimeout(existingState.timer);
-        const pending: HttpAuthState = { stage: "busy" };
-        httpStates.set(socket, pending);
+        const respond = beginAuthResponse(socket, res);
         if (existingState.flow === "cdp" && req.method === "GET" && req.url === "/json/version") {
           if (!bridge.extensionConnected) {
             clearSocketState(socket);
             rejectHttp(res, 503, "OpenClaw Chrome extension is not connected");
             return;
           }
-          res.once("finish", () => {
-            if (!socket.destroyed && httpStates.get(socket) === pending) {
-              httpStates.set(socket, {
-                stage: "awaiting-upgrade",
-                authority: existingState.authority,
-                timer: armSocketTimer(socket),
-              });
-            }
-          });
-          writeJson(res, 200, versionPayload());
+          respond({ stage: "awaiting-upgrade" }, existingState.authority, versionPayload());
           return;
         }
         if (
@@ -583,7 +534,7 @@ export async function startExtensionRelayServer(params: {
       }
       const authority = getBrowserRelayAuthV2Authority(liveToken);
       wss.handleUpgrade(req, socket, head, (ws) => {
-        if (!trackAuthenticatedSocket(authority, ws)) {
+        if (!trackAuthenticatedRelaySocket(authority, ws)) {
           return;
         }
         attachExtensionWebSocket(bridge, ws);
@@ -614,7 +565,7 @@ export async function startExtensionRelayServer(params: {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) =>
-        trackAuthenticatedSocket(authority, ws)
+        trackAuthenticatedRelaySocket(authority, ws)
           ? bindSocket(ws, bridge.attachCdpClientSocket(ws))
           : undefined,
       );

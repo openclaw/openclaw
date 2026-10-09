@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  CLI_HISTORY_CHANGED_BEFORE_PREPARATION,
   isKnownCliHistoryBoundary,
   runWithCliHistoryWriter,
   type CliHistoryBoundary,
@@ -13,6 +14,10 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
@@ -39,6 +44,25 @@ import type { PreparedCliRunContext } from "./types.js";
  * unknown until an explicitly empty context starts a new history boundary.
  */
 export async function prepareCliHistoryBoundary(
+  params: PreparedCliRunContext["params"],
+  identity: { credential?: AuthProfileCredential },
+): Promise<CliHistoryWriter | undefined> {
+  try {
+    return await prepareCliHistoryBoundaryOnce(params, identity);
+  } catch (error) {
+    if (
+      params.abortSignal?.aborted ||
+      !(error instanceof Error) ||
+      error.message !== CLI_HISTORY_CHANGED_BEFORE_PREPARATION
+    ) {
+      throw error;
+    }
+  }
+  // Settlement can move the tip after planning. Nothing committed; reread once.
+  return prepareCliHistoryBoundaryOnce(params, identity);
+}
+
+async function prepareCliHistoryBoundaryOnce(
   params: PreparedCliRunContext["params"],
   identity: { credential?: AuthProfileCredential },
 ): Promise<CliHistoryWriter | undefined> {
@@ -83,11 +107,28 @@ export async function prepareCliHistoryBoundary(
     return undefined;
   }
   const { target, snapshot, watermark, boundary, allowed, writerRunId } = plan;
-  const assertCurrent = () => {
-    assertRunCurrent();
+  const assertCurrent = composeSessionSourceAssertion([assertRunCurrent], (assertSource) => {
+    assertSource();
     assertPhysicalSource();
-  };
+  });
   assertCurrent();
+  const commitGuard = sessionEntryCommitGuardOptions(
+    composeSessionSourceAssertion([
+      assertCurrent,
+      composeSessionSourceAssertion([assertOwned], (assertSource) => {
+        // Planning may yield. Recheck foreign liveness at commit, then adopt the
+        // CLI claim so a later reuse of the dead run ID remains a visible takeover.
+        if (
+          snapshot.activeWriterRunId !== undefined &&
+          snapshot.activeWriterRunId !== writerRunId &&
+          hasLiveAgentRunContext(snapshot.activeWriterRunId)
+        ) {
+          throw new Error("CLI history owner changed before preparation");
+        }
+        assertSource();
+      }),
+    ]),
+  );
   const committed = await patchSessionEntryCore(
     target,
     (current: InternalSessionEntry) => {
@@ -116,21 +157,10 @@ export async function prepareCliHistoryBoundary(
           callerEntry.activeWriterRunId = entry.activeWriterRunId;
         }
       },
+      ...commitGuard,
       workerGuard: {
+        ...commitGuard.workerGuard,
         cliHistory: { sessionId: target.sessionId, admission: capturedAdmission, watermark },
-        assertCurrent: () => {
-          assertCurrent();
-          // Planning may yield. Recheck foreign liveness at commit, then adopt the
-          // CLI claim so a later reuse of the dead run ID remains a visible takeover.
-          if (
-            snapshot.activeWriterRunId !== undefined &&
-            snapshot.activeWriterRunId !== writerRunId &&
-            hasLiveAgentRunContext(snapshot.activeWriterRunId)
-          ) {
-            throw new Error("CLI history owner changed before preparation");
-          }
-          assertOwned();
-        },
       },
     },
   );
@@ -153,6 +183,9 @@ export async function prepareCliHistoryBoundary(
     assertCurrent: assertWriterCurrent,
     assertReadable: () => {
       assertWriterCurrent();
+      // Execution requires synchronous authority immediately before its effect.
+      // SDK sync writers bypass the FIFO; the connection-local witness misses
+      // foreign commits. Retain this fence until the next SDK major retires them.
       const current: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
       const proof = current?.cliHistoryBoundary;
       const tip = readSessionTranscriptWatermark(target);

@@ -1,7 +1,9 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
@@ -15,7 +17,6 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
-import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
@@ -44,7 +45,6 @@ import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-ca
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
-import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { EmbeddedRunTrigger, IsolatedCompletionPurpose } from "../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -81,8 +81,6 @@ export type RunCliAgentParams = {
   /** Heartbeat-transported turn that continues a conversation (its own command completion). */
   continuesConversation?: boolean;
   sessionFile: string;
-  /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
-  rootedExecution?: RootedExecutionRequest;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
   /**
@@ -157,8 +155,6 @@ export type RunCliAgentParams = {
   bashElevated?: ExecElevatedDefaults;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
-  /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   /** Server-authored origin for fresh automation mutations from this CLI run. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
@@ -168,7 +164,7 @@ export type RunCliAgentParams = {
     openClaw: string[];
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
   /** Internal completion caller's representation of operator authorization failures. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;
@@ -239,6 +235,8 @@ export function captureCliRunStartTime() {
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
+  /** Original host policy, retained before native tool translation consumes runtime caps. */
+  sessionEventSourcePolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
   /** Core-only original caller policy, bound to each native request's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;

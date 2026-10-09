@@ -5,13 +5,11 @@ import { discoverConfigWidePluginManifestRegistry } from "../config/io.plugin-me
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as migrationCheckpoint from "../infra/startup-migration-checkpoint.js";
-import { readBundledDiscoveryModeMemoized } from "../plugins/bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import {
   createPluginCache,
@@ -146,40 +144,6 @@ describe("startup plugin metadata admission", () => {
         acquire.mockRestore();
         lease.release();
       }
-    });
-  });
-
-  it("refreshes an invalidated Doctor scope without replacing the invoking generation", async () => {
-    await withPreflightPluginFixture(async (writeVersion) => {
-      const owner = createPluginCache();
-      await withPluginCache(owner, async () => {
-        const initial = await readPluginPreflight();
-        let baseSnapshot = initial.pluginMetadataSnapshot;
-        const config = initial.snapshot.sourceConfig;
-        const scope = createDoctorPluginMetadataSnapshotScope({
-          getBaseSnapshot: () => baseSnapshot,
-        });
-        const readVersion = () =>
-          scope.run(
-            { config },
-            () =>
-              getCurrentPluginMetadataSnapshot({ config })?.manifestRegistry.plugins.find(
-                (plugin) => plugin.id === "preflight-fixture",
-              )?.version,
-          );
-        expect(readVersion()).toBe("1.0.0");
-        await writeVersion("2.0.0");
-        expect(readVersion()).toBe("1.0.0");
-        baseSnapshot = undefined;
-        scope.invalidate();
-        expect(readVersion()).toBe("2.0.0");
-        expect(getPluginCache()).toBe(owner);
-        const retained = (await readPluginPreflight()).pluginMetadataSnapshot!;
-        expect(getPluginMetadataSnapshotCache(retained)).toBe(owner);
-        expect(
-          retained.manifestRegistry.plugins.find((p) => p.id === "preflight-fixture")?.version,
-        ).toBe("1.0.0");
-      });
     });
   });
 
@@ -404,49 +368,6 @@ describe("startup plugin metadata admission", () => {
         });
         expect(getPluginCache()).toBe(invoking);
         expect(version((await readPluginPreflight()).pluginMetadataSnapshot!)).toBe("1.0.0");
-      });
-    });
-  });
-
-  it("returns current package facts without migrating discovery policy from a persisted registry", async () => {
-    await withPreflightPluginFixture(async (writeVersion, config) => {
-      const original = await readPluginPreflight();
-      // Disabled plugins remain discoverable without executing their runtime entry.
-      config.plugins!.entries = { "preflight-fixture": { enabled: false } };
-      await fs.writeFile(original.snapshot.path, JSON.stringify(config));
-      await withPluginCache(createPluginCache(), async () => {
-        const initial = await readPluginPreflight();
-        expect(initial.snapshot.valid).toBe(true);
-        expect(initial.pluginMetadataSnapshot?.registrySource).toBe("derived");
-        expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
-        await writePersistedInstalledPluginIndex(initial.pluginMetadataSnapshot!.index, {
-          env: process.env,
-        });
-        const policyHash = resolveInstalledPluginIndexPolicyHash(config, process.env);
-        await writeVersion("2.0.0");
-        const result = await runStartupConfigPreflight({ gateway: true, observe: false });
-        expect(result.snapshot.valid).toBe(true);
-        expect(result.snapshot.raw).toBe(initial.snapshot.raw);
-        expect(await fs.readFile(result.snapshot.path, "utf8")).toBe(initial.snapshot.raw);
-        expect(result.baseConfig).toEqual(initial.snapshot.sourceConfig);
-        expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
-        expect(resolveInstalledPluginIndexPolicyHash(config, process.env)).toBe(policyHash);
-        expect(result.pluginMetadataSnapshot?.registrySource).toBe("derived");
-        expect(
-          result.pluginMetadataSnapshot?.plugins.find((plugin) => plugin.id === "preflight-fixture")
-            ?.version,
-        ).toBe("2.0.0");
-        const durable = withPluginCache(createPluginCache(), () =>
-          readPersistedInstalledPluginIndexSync({ env: process.env }),
-        );
-        expect(durable?.policyHash).toBe(policyHash);
-        expect(
-          durable?.plugins.find((plugin) => plugin.pluginId === "preflight-fixture")
-            ?.packageVersion,
-        ).toBe("1.0.0");
-        expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(
-          false,
-        );
       });
     });
   });

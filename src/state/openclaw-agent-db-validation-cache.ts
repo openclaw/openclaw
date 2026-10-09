@@ -13,6 +13,7 @@ import {
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError,
@@ -45,6 +46,7 @@ export type OpenClawAgentDatabaseValidation = {
   /** Canonical admission, separately revoked by local DDL without discarding integrity proof. */
   schema?: { facts: SqliteSchemaFacts; valid: SharedArrayBuffer };
 };
+export type OpenClawAgentDatabaseReadValidation = Omit<OpenClawAgentDatabaseValidation, "schema">;
 type ValidationDatabase = { db: DatabaseSync; path: string; agentId: string };
 type CanonicalValidationDatabase = { db: DatabaseSync; path?: string; agentId: string };
 type ValidationEntry = {
@@ -79,10 +81,20 @@ function bindValidationLifetime(
     return;
   }
   current?.unregister();
-  const unobserve = registerSqliteSchemaMutationListener(database.db, () => {
-    if (validation.schema) {
-      Atomics.store(new Int32Array(validation.schema.valid), 0, 0);
-    }
+  const unobserve = registerSqliteSchemaMutationListener(database.db, (observed) => {
+    const revoke = (schema: OpenClawAgentDatabaseValidation["schema"]) => {
+      // A late reader can observe DDL already covered by a newer admitted receipt.
+      // Local pre-mutation notifications have no markers and still revoke every receipt.
+      if (
+        schema &&
+        (!observed ||
+          schema.facts.schemaVersion !== observed.schemaVersion ||
+          schema.facts.userVersion !== observed.userVersion)
+      ) {
+        Atomics.store(new Int32Array(schema.valid), 0, 0);
+      }
+    };
+    revoke(validation.schema);
     // A retained alias can mutate after another opener replaced its receipt.
     const published = validatedPaths.get(path.resolve(database.path))?.validation;
     if (
@@ -90,7 +102,7 @@ function bindValidationLifetime(
       published.agentId === validation.agentId &&
       published.identity === validation.identity
     ) {
-      Atomics.store(new Int32Array(published.schema.valid), 0, 0);
+      revoke(published.schema);
     }
   });
   const unregister = registerNodeSqliteDisposeCallback(database.db, (reason) => {
@@ -248,6 +260,57 @@ export function getOpenClawAgentDatabaseValidationForTransfer(
   return entry.validation;
 }
 
+/** Readers borrow physical/canonical proof without copying the schema catalog or opening a host handle. */
+export function captureOpenClawAgentDatabaseReadValidation(
+  database: Pick<ValidationDatabase, "agentId" | "path">,
+) {
+  const current = getOpenClawAgentDatabaseValidationForTransfer(database);
+  if (!current) {
+    return undefined;
+  }
+  const capturedIdentity = readDatabasePathIdentitySync(database.path);
+  if (capturedIdentity.key !== `file:${current.identity}`) {
+    // A retained pathname receipt cannot admit its replacement file.
+    return undefined;
+  }
+  const { agentId, identity, receiptId, valid, canonicalReady } = current;
+  const validation: OpenClawAgentDatabaseReadValidation = {
+    agentId,
+    identity,
+    receiptId,
+    valid,
+    canonicalReady,
+  };
+  return {
+    validation,
+    inputBytes:
+      JSON.stringify(validation).length * 2 + valid.byteLength + canonicalReady.byteLength,
+    assertCurrent() {
+      if (getOpenClawAgentDatabaseValidationForTransfer(database) !== current) {
+        throw new Error("Session reader validation is no longer current");
+      }
+    },
+  };
+}
+
+/** Retire a replaced file's proof before capturing its successor's publication guard. */
+export function retireReplacedAgentValidation(
+  agentId: string,
+  pathname: string,
+  expectedIdentity?: { physicalIdentity: string },
+): void {
+  if (!expectedIdentity) {
+    return;
+  }
+  const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer({
+    agentId,
+    path: pathname,
+  });
+  if (retainedValidation && retainedValidation.identity !== expectedIdentity.physicalIdentity) {
+    invalidateOpenClawAgentDatabaseValidation(pathname, retainedValidation.identity);
+  }
+}
+
 /** Native admission supplies the checked file identity; no host SQLite handle is needed. */
 export function captureOpenClawAgentDatabaseValidationTransfer(
   database: Pick<ValidationDatabase, "agentId" | "path">,
@@ -272,6 +335,7 @@ function captureValidationTransfer(
         };
   validatedPaths.set(pathname, captured);
   const capturedValidation = captured.validation;
+  const capturedSchemaCell = capturedValidation?.schema?.valid;
   const wasValid = capturedValidation
     ? Atomics.load(new Int32Array(capturedValidation.valid), 0)
     : undefined;
@@ -298,6 +362,17 @@ function captureValidationTransfer(
       (schemaRequired && (!schema || (schemaValid !== 0 && schemaValid !== 1)))
     ) {
       return "invalid";
+    }
+    const currentSchemaCell = captured.validation?.schema?.valid;
+    // A checked opener can promote proof while admission is pending. Revocation
+    // of that newer proof must not be undone by the older independent handoff.
+    if (
+      schemaValid === 1 &&
+      currentSchemaCell !== undefined &&
+      currentSchemaCell !== capturedSchemaCell &&
+      Atomics.load(new Int32Array(currentSchemaCell), 0) !== 1
+    ) {
+      return "stale";
     }
     if (
       (schemaRequired && schemaValid !== 1) ||

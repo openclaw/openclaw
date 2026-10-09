@@ -61,12 +61,7 @@ export function resolveTelegramPrimaryMedia(
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
-  let label = name;
-  if (name && username) {
-    label = `${name} (${username})`;
-  } else if (!name && username) {
-    label = username;
-  }
+  const label = name && username ? `${name} (${username})` : name || username;
   const normalizedSenderId =
     senderId != null ? normalizeOptionalString(String(senderId)) : undefined;
   const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);

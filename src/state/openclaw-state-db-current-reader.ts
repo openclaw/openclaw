@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { createSqliteForeignObservation } from "../infra/sqlite-foreign-observation.js";
 import {
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
@@ -11,7 +12,6 @@ import {
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
-  readSqliteDataVersion,
   runSqliteReadOperationSync,
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
@@ -20,6 +20,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -53,17 +54,22 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 
 const log = createSubsystemLogger("state/db");
 
-/** One private live connection witnesses foreign commits without inheriting a caller's cursor. */
-export async function prepareOpenClawStateCurrentReader(
-  context: OpenClawStateWorkerContext,
-): Promise<
-  | {
-      dataVersion(): number;
-      read<T>(operation: (database: OpenClawStateReadOnlyDatabase) => T): T;
-      dispose(): void;
-    }
-  | undefined
-> {
+type CurrentReader = {
+  connection: OpenClawStateReadConnection;
+  observation: ReturnType<typeof createSqliteForeignObservation>;
+  users: number;
+  retiring: boolean;
+  closed: boolean;
+  close(): void;
+};
+
+const currentReaders = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateCurrentReaders"),
+  () => new Map<string, CurrentReader>(),
+);
+
+/** One private live connection per physical store, independent of caller cursors. */
+export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWorkerContext) {
   const pathname = context.admission.databasePath;
   const { key, canonicalPath, birthtime } = context.admission.identity;
   const signal = getAsyncWorkSignal();
@@ -82,80 +88,134 @@ export async function prepareOpenClawStateCurrentReader(
     return undefined;
   }
   assertExistingDatabaseIdentity(pathname, key, birthtime);
-  const admitted = await executeExistingOpenClawStateRead(
-    { path: pathname, env: context.environment },
-    { type: "admit" },
-    { context, current: true, signal },
-  );
-  assertSource();
-  assertExistingDatabaseIdentity(pathname, key, birthtime);
-  if (!admitted?.ok || admitted.type !== "admit") {
-    throw new Error("Current shared-state reader admission did not settle");
+  const physicalKey = `${key}:${birthtime ?? ""}`;
+  const previous = currentReaders.get(physicalKey);
+  if (previous?.retiring) {
+    previous.close();
   }
-  const connection = openOpenClawStateReadConnection(pathname, pathname, key);
-  let active = true;
-  let closed = false;
-  let unregister = () => {};
-  const close = () => {
-    active = false;
-    if (closed) {
-      return;
+  if (!currentReaders.has(physicalKey)) {
+    const admitted = await executeExistingOpenClawStateRead(
+      { path: pathname, env: context.environment },
+      { type: "admit" },
+      { context, current: true, signal },
+    );
+    assertSource();
+    assertExistingDatabaseIdentity(pathname, key, birthtime);
+    if (!admitted?.ok || admitted.type !== "admit") {
+      throw new Error("Current shared-state reader admission did not settle");
     }
-    if (!connection.close()) {
-      throw new Error("Current shared-state reader cleanup is incomplete");
-    }
-    closed = true;
-    unregister();
-  };
-  const resource = {
-    async close(identity?: { key: string; canonicalPath: string }) {
-      if (!identity || identity.key === key || identity.canonicalPath === canonicalPath) {
-        close();
+  }
+  let reader = currentReaders.get(physicalKey);
+  if (!reader) {
+    const connection = openOpenClawStateReadConnection(pathname, pathname, key);
+    let unregister = () => {};
+    const opened: CurrentReader = {
+      connection,
+      observation: createSqliteForeignObservation(connection.database.db, () => {
+        if (opened.retiring) {
+          throw new Error("Current shared-state reader is closed");
+        }
+        assertExistingDatabaseIdentity(canonicalPath, key, birthtime);
+      }),
+      users: 0,
+      retiring: false,
+      closed: false,
+      close() {
+        if (opened.closed) {
+          return;
+        }
+        opened.retiring = true;
+        opened.observation.invalidate();
+        if (!connection.close()) {
+          throw new Error("Current shared-state reader cleanup is incomplete");
+        }
+        opened.closed = true;
+        if (currentReaders.get(physicalKey) === opened) {
+          currentReaders.delete(physicalKey);
+        }
+        unregister();
+      },
+    };
+    try {
+      unregister = registerOpenClawStateDatabaseAsyncResource({
+        async close(identity) {
+          if (!identity || identity.key === key || identity.canonicalPath === canonicalPath) {
+            opened.close();
+          }
+        },
+      });
+    } catch (error) {
+      try {
+        opened.close();
+      } catch (cleanupError) {
+        throwSqliteLifecycleErrors(
+          [error, cleanupError],
+          "Current shared-state reader registration and cleanup failed",
+        );
       }
-    },
-  };
+      throw error;
+    }
+    currentReaders.set(physicalKey, opened);
+    reader = opened;
+  }
+  const retained = reader;
+  retained.users += 1;
+  let active = true;
   const assertCurrent = () => {
-    if (!active || !connection.database.db.isOpen) {
+    if (!active || retained.retiring || !retained.connection.database.db.isOpen) {
       throw new Error("Current shared-state reader is closed");
     }
     assertSource();
-    assertExistingDatabaseIdentity(pathname, key, birthtime);
+    const integrity = context.stateIntegrity;
     if (
-      connection.database.db.isTransaction ||
-      getSqlitePinnedReadSnapshot(connection.database.db)
+      (integrity && Atomics.load(new BigInt64Array(integrity.revision), 0) !== integrity.epoch) ||
+      (context.existingSchemaPath !== undefined &&
+        (!integrity || Atomics.load(new BigInt64Array(integrity.proof), 0) === -1n))
+    ) {
+      throw new Error("Shared-state reader requires current worker integrity proof");
+    }
+    try {
+      assertExistingDatabaseIdentity(pathname, key, birthtime);
+    } catch (error) {
+      // Every domain sharing this probe loses its baseline after an observed alias rebind.
+      retained.observation.invalidate();
+      throw error;
+    }
+    if (
+      retained.connection.database.db.isTransaction ||
+      getSqlitePinnedReadSnapshot(retained.connection.database.db)
     ) {
       throw new Error("Current shared-state reader cannot retain a transaction or snapshot");
     }
   };
+  const release = () => {
+    if (active) {
+      active = false;
+      retained.users -= 1;
+    }
+    if (retained.users === 0 && !retained.closed) {
+      retained.close();
+    }
+  };
+  const resource = {
+    async close() {
+      release();
+    },
+  };
   try {
-    unregister = registerOpenClawStateDatabaseAsyncResource(resource);
     context.maintenanceScope?.own(resource, "shared-resources", () => resource.close());
     assertCurrent();
     return {
-      dataVersion() {
+      createCertification() {
         assertCurrent();
-        const version = readSqliteDataVersion(connection.database.db);
-        assertCurrent();
-        return version;
+        return retained.observation.createCertification(assertCurrent);
       },
-      read(operation) {
-        const assertReadCurrent = () => {
-          assertCurrent();
-          const integrity = context.stateIntegrity;
-          if (
-            context.existingSchemaPath !== undefined &&
-            (!integrity ||
-              Atomics.load(new BigInt64Array(integrity.revision), 0) !== integrity.epoch ||
-              Atomics.load(new BigInt64Array(integrity.proof), 0) === -1n)
-          ) {
-            throw new Error("Shared-state reader requires current worker integrity proof");
-          }
-        };
-        assertReadCurrent();
+      read<T>(operation: (database: OpenClawStateReadOnlyDatabase) => T): T {
+        assertCurrent();
         const read = () =>
           runWithSqliteWorkerStateContext(context, () =>
             runOpenClawStateCurrentReadConnection(
-              connection,
+              retained.connection,
               operation,
               undefined,
               "require-proof",
@@ -164,12 +224,12 @@ export async function prepareOpenClawStateCurrentReader(
         const result = context.runInCapturedSchemaScope
           ? context.runInCapturedSchemaScope(read)
           : read();
-        assertReadCurrent();
+        assertCurrent();
         return result;
       },
       dispose() {
         try {
-          close();
+          release();
         } catch (error) {
           log.warn("Current shared-state reader cleanup failed; retaining cleanup custody", {
             error,
@@ -179,7 +239,7 @@ export async function prepareOpenClawStateCurrentReader(
     };
   } catch (error) {
     try {
-      close();
+      release();
     } catch (cleanupError) {
       throwSqliteLifecycleErrors(
         [error, cleanupError],

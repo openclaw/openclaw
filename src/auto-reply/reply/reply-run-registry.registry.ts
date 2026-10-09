@@ -216,49 +216,41 @@ export const replyRunRegistry: ReplyRunRegistry = {
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-      const waiters = replyRunState.waitersByKey.get(normalizedSessionKey) ?? new Set();
+      const waiters =
+        replyRunState.waitersByKey.get(normalizedSessionKey) ?? new Set<ReplyRunWaiter>();
       let abortHandler: (() => void) | undefined;
-      let settled = false;
-      const waiter: ReplyRunWaiter = {
-        finish: (ended) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          waiters.delete(waiter);
-          if (waiters.size === 0) {
-            replyRunState.waitersByKey.delete(normalizedSessionKey);
-          }
-          if (waiter.timer) {
-            clearTimeout(waiter.timer);
-          }
-          if (abortHandler) {
-            opts?.signal?.removeEventListener("abort", abortHandler);
-          }
-          resolve(ended);
-        },
+      let timer: NodeJS.Timeout | undefined;
+      const waiter: ReplyRunWaiter = (ended) => {
+        if (!waiters.delete(waiter)) {
+          return;
+        }
+        if (waiters.size === 0) {
+          replyRunState.waitersByKey.delete(normalizedSessionKey);
+        }
+        clearTimeout(timer);
+        if (abortHandler) {
+          opts?.signal?.removeEventListener("abort", abortHandler);
+        }
+        resolve(ended);
       };
       if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-        waiter.timer = setTimeout(
-          () => waiter.finish(false),
-          resolveTimerTimeoutMs(timeoutMs, 100, 100),
-        );
+        timer = setTimeout(() => waiter(false), resolveTimerTimeoutMs(timeoutMs, 100, 100));
       }
       if (opts?.signal) {
-        abortHandler = () => waiter.finish(false);
+        abortHandler = () => waiter(false);
         opts.signal.addEventListener("abort", abortHandler, { once: true });
       }
       waiters.add(waiter);
       replyRunState.waitersByKey.set(normalizedSessionKey, waiters);
       if (!replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
-        waiter.finish(true);
+        waiter(true);
       }
     });
   },
   resolveSessionId(sessionKey) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     return normalizedSessionKey
-      ? replyRunState.activeSessionIdsByKey.get(normalizedSessionKey)
+      ? replyRunState.activeRunsByKey.get(normalizedSessionKey)?.sessionId
       : undefined;
   },
 };
@@ -488,11 +480,11 @@ export function getActiveReplyRunCount(): number {
 }
 
 export function listActiveReplyRunSessionIds(): string[] {
-  return [...replyRunState.activeSessionIdsByKey.values()];
+  return Array.from(replyRunState.activeRunsByKey.values(), (operation) => operation.sessionId);
 }
 
 export function listActiveReplyRunSessionKeys(): string[] {
-  return [...replyRunState.activeSessionIdsByKey.keys()];
+  return [...replyRunState.activeRunsByKey.keys()];
 }
 
 function evictPriorLifecycleReplyRuns(): void {
@@ -548,15 +540,14 @@ registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleRepl
 
 const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {
-    for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
+    for (const [sessionKey, operation] of replyRunState.activeRunsByKey) {
       markDiagnosticRunProgress({
         sessionKey,
-        sessionId,
+        sessionId: operation.sessionId,
         reason: "reply_operation:registry_reset",
       });
     }
     replyRunState.activeRunsByKey.clear();
-    replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
     replyRunState.sourceTurnByKey.clear();
@@ -564,7 +555,7 @@ const replyRunRegistryTestApi = {
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {
-        waiter.finish(false);
+        waiter(false);
       }
     }
     replyRunState.waitersByKey.clear();
