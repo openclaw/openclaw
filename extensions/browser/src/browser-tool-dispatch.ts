@@ -195,22 +195,24 @@ export async function executeBrowserTabAction(context: {
         signal,
       });
     }
-    case "console":
+    case "console": {
+      const result = await executeConsoleAction(actionOptions);
+      const targetId = readStringParam(params, "targetId");
+      const canonicalTargetId = readStringValue(asNullableRecord(result.details)?.targetId);
+      await touchTab(canonicalTargetId ?? targetId);
+      return result;
+    }
     case "requests":
     case "errors":
     case "text":
     case "emulate": {
       const result =
-        action === "console"
-          ? await executeConsoleAction(actionOptions)
-          : action === "requests" || action === "errors"
-            ? await executeDebugLogAction(action, actionOptions)
-            : await (action === "text" ? executeTextAction : executeEmulateAction)(actionOptions);
-      const consoleTargetId =
-        action === "console" ? readStringParam(params, "targetId") : undefined;
+        action === "requests" || action === "errors"
+          ? await executeDebugLogAction(action, actionOptions)
+          : await (action === "text" ? executeTextAction : executeEmulateAction)(actionOptions);
       await touchTab(
         readStringValue(asNullableRecord(result.details)?.targetId) ??
-          (action === "console" ? consoleTargetId : readStringValue(params.targetId)),
+          readStringValue(params.targetId),
       );
       return result;
     }

@@ -114,27 +114,21 @@ type ApiFacadeModule = {
   }) => Promise<{ dreamsPath: string; removed: number }>;
 };
 
-function loadApiFacadeModule(): ApiFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<ApiFacadeModule>({
+function loadFacadeModule<T extends Pick<ApiFacadeModule, "configureMemoryCoreDreamingState">>(
+  artifactBasename: "api.js" | "runtime-api.js",
+): T {
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<T>({
     dirName: "memory-core",
-    artifactBasename: "api.js",
+    artifactBasename,
   });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
+  module.configureMemoryCoreDreamingState(<Value>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<Value>("memory-core", options),
   );
   return module;
 }
 
-function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<RuntimeFacadeModule>({
-    dirName: "memory-core",
-    artifactBasename: "runtime-api.js",
-  });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
-  );
-  return module;
-}
+const loadApiFacadeModule = () => loadFacadeModule<ApiFacadeModule>("api.js");
+const loadRuntimeFacadeModule = () => loadFacadeModule<RuntimeFacadeModule>("runtime-api.js");
 
 /** Returns the memory-core-owned recovery message for an absent local provider plugin. */
 export function getMissingLocalMemoryEmbeddingProviderMessage(): string {
