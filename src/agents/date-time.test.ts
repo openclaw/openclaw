@@ -111,3 +111,56 @@ describe("formatUserTime", () => {
     expect(formatUserTime(after, "Europe/Vienna", "12")).toBe("Sunday, March 29th, 2026 - 3:30 AM");
   });
 });
+
+describe("timezone formatter caching", () => {
+  // The caches are process-stable, so every case warms its keys outside the spy
+  // and asserts the alternating calls construct nothing.
+  const countingConstructions = (run: () => void): string[] => {
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    const timeZones: string[] = [];
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (
+      locales?: string | string[],
+      options?: Intl.DateTimeFormatOptions,
+    ) {
+      timeZones.push(String(options?.timeZone));
+      return new RealDateTimeFormat(locales, options);
+    } as unknown as typeof Intl.DateTimeFormat);
+    run();
+    return timeZones;
+  };
+
+  it("reuses one date-stamp formatter per timezone while local and UTC alternate", () => {
+    const nowMs = Date.parse("2026-10-08T12:00:00.000Z");
+    const local = formatDateStamp(nowMs, "Europe/Berlin");
+    const utc = formatDateStamp(nowMs, "UTC");
+
+    const constructed = countingConstructions(() => {
+      for (let index = 0; index < 4; index += 1) {
+        expect(formatDateStamp(nowMs, "Europe/Berlin")).toBe(local);
+        expect(formatDateStamp(nowMs, "UTC")).toBe(utc);
+      }
+    });
+
+    expect(constructed).toEqual([]);
+  });
+
+  it("reuses one user-time formatter per timezone and hour format", () => {
+    const date = new Date("2026-10-08T12:00:00.000Z");
+    const berlin24 = formatUserTime(date, "Europe/Berlin", "24");
+    const berlin12 = formatUserTime(date, "Europe/Berlin", "12");
+    const utc24 = formatUserTime(date, "UTC", "24");
+    expect(berlin24).toBeDefined();
+    expect(berlin12).toBeDefined();
+    expect(utc24).toBeDefined();
+
+    const constructed = countingConstructions(() => {
+      for (let index = 0; index < 4; index += 1) {
+        expect(formatUserTime(date, "Europe/Berlin", "24")).toBe(berlin24);
+        expect(formatUserTime(date, "Europe/Berlin", "12")).toBe(berlin12);
+        expect(formatUserTime(date, "UTC", "24")).toBe(utc24);
+      }
+    });
+
+    expect(constructed).toEqual([]);
+  });
+});

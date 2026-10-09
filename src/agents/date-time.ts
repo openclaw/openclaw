@@ -7,11 +7,15 @@ import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coer
 type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
-// Retain only the latest timezone formatter for each prompt format.
-let dateStampFormatter: { timeZone: string; formatter: Intl.DateTimeFormat } | undefined;
-let userTimeFormatter:
-  | { timeZone: string; format: ResolvedTimeFormat; formatter: Intl.DateTimeFormat }
-  | undefined;
+// Prompt assembly asks for the local zone and UTC in the same turn
+// (`startup-context.ts`), so one slot per timezone is the smallest cache that can
+// hit twice; a single slot would evict the other zone and rebuild on every call.
+const dateStampFormatters = new Map<string, Intl.DateTimeFormat>();
+const userTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function userTimeFormatterKey(timeZone: string, format: ResolvedTimeFormat): string {
+  return `${format}\u0000${timeZone}`;
+}
 
 /** Resolve a valid IANA timezone from config, host preferences, or UTC. */
 export function resolveUserTimezone(configured?: string): string {
@@ -41,8 +45,9 @@ export function resolveUserTimeFormat(preference?: "auto" | "12" | "24"): Resolv
 }
 
 function getDateStampFormatter(timeZone: string): Intl.DateTimeFormat {
-  if (dateStampFormatter?.timeZone === timeZone) {
-    return dateStampFormatter.formatter;
+  const cached = dateStampFormatters.get(timeZone);
+  if (cached) {
+    return cached;
   }
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -50,7 +55,7 @@ function getDateStampFormatter(timeZone: string): Intl.DateTimeFormat {
     month: "2-digit",
     day: "2-digit",
   });
-  dateStampFormatter = { timeZone, formatter };
+  dateStampFormatters.set(timeZone, formatter);
   return formatter;
 }
 
@@ -226,10 +231,8 @@ export function formatUserTime(
 ): string | undefined {
   const use24Hour = format === "24";
   try {
-    let formatter =
-      userTimeFormatter?.timeZone === timeZone && userTimeFormatter.format === format
-        ? userTimeFormatter.formatter
-        : undefined;
+    const formatterKey = userTimeFormatterKey(timeZone, format);
+    let formatter = userTimeFormatters.get(formatterKey);
     if (!formatter) {
       formatter = new Intl.DateTimeFormat("en-US", {
         timeZone,
@@ -241,7 +244,7 @@ export function formatUserTime(
         minute: "2-digit",
         hourCycle: use24Hour ? "h23" : "h12",
       });
-      userTimeFormatter = { timeZone, format, formatter };
+      userTimeFormatters.set(formatterKey, formatter);
     }
     const parts = formatter.formatToParts(date);
     const map: Record<string, string> = {};
