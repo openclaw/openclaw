@@ -15,6 +15,14 @@ export const TELEGRAM_MINIAPP_PATH_PREFIX = "/__openclaw_tg_miniapp/";
 export const TELEGRAM_MINIAPP_URL_ERROR =
   "Mini App needs an HTTPS gateway URL. Set an https `gateway.publicOrigin`, or set `gateway.tailscale.mode: serve` or `funnel`, then retry /controlui.";
 
+/** Expected publishing failure whose message is safe to show the bot owner. */
+export class TelegramMiniAppUrlError extends Error {}
+
+/** Owner-facing text for a URL resolution failure; unexpected errors stay generic. */
+export function describeTelegramMiniAppUrlError(err: unknown): string {
+  return err instanceof TelegramMiniAppUrlError ? err.message : TELEGRAM_MINIAPP_URL_ERROR;
+}
+
 function telegramMiniAppOriginNotAllowedError(origin: string): string {
   return `Mini App cannot use \`gateway.publicOrigin\` (${origin}) because \`gateway.controlUi.allowedOrigins\` does not include it. Add ${origin} to \`gateway.controlUi.allowedOrigins\`, or set \`gateway.tailscale.mode: serve\` or \`funnel\`, then retry /controlui.`;
 }
@@ -51,7 +59,7 @@ export async function resolveTelegramMiniAppUrls(params: {
 
   const mode = params.cfg.gateway?.tailscale?.mode ?? "off";
   if (mode !== "serve" && mode !== "funnel") {
-    throw new Error(unavailableError);
+    throw new TelegramMiniAppUrlError(unavailableError);
   }
 
   const tailnetHost = await resolveTailnetHostWithRunner(
@@ -62,7 +70,7 @@ export async function resolveTelegramMiniAppUrls(params: {
     tailnetHost,
   });
   if (!publishedHost) {
-    throw new Error(unavailableError);
+    throw new TelegramMiniAppUrlError(unavailableError);
   }
 
   return buildMiniAppUrls(publishedHost, controlUiPath);

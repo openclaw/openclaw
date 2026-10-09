@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { resolveTelegramMiniAppUrls, TELEGRAM_MINIAPP_URL_ERROR } from "./url.js";
+import {
+  describeTelegramMiniAppUrlError,
+  resolveTelegramMiniAppUrls,
+  TELEGRAM_MINIAPP_URL_ERROR,
+  TelegramMiniAppUrlError,
+} from "./url.js";
 
 describe("resolveTelegramMiniAppUrls", () => {
   it("resolves HTTPS page and WSS gateway URLs from Tailscale Serve", async () => {
@@ -156,16 +161,20 @@ describe("resolveTelegramMiniAppUrls", () => {
     );
 
     it("names controlUi.allowedOrigins when the public origin is excluded and Tailscale is off", async () => {
-      await expect(
-        resolveTelegramMiniAppUrls({
-          cfg: {
-            gateway: {
-              publicOrigin: "https://gateway.example.com",
-              controlUi: { allowedOrigins: ["https://other.example.com"] },
-            },
+      const failure = resolveTelegramMiniAppUrls({
+        cfg: {
+          gateway: {
+            publicOrigin: "https://gateway.example.com",
+            controlUi: { allowedOrigins: ["https://other.example.com"] },
           },
-        }),
-      ).rejects.toThrow("Add https://gateway.example.com to `gateway.controlUi.allowedOrigins`");
+        },
+      }).catch((err: unknown) => err);
+      await expect(failure).resolves.toBeInstanceOf(TelegramMiniAppUrlError);
+      // The command and auth route surface this text instead of the generic hint.
+      expect(describeTelegramMiniAppUrlError(await failure)).toContain(
+        "Add https://gateway.example.com to `gateway.controlUi.allowedOrigins`",
+      );
+      expect(describeTelegramMiniAppUrlError(new Error("boom"))).toBe(TELEGRAM_MINIAPP_URL_ERROR);
     });
   });
 });

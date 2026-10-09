@@ -16,6 +16,7 @@ import {
   createTelegramMiniAppLaunchTickets,
   type TelegramMiniAppLaunchTickets,
 } from "./launch-ticket.js";
+import { TelegramMiniAppUrlError } from "./url.js";
 
 type OpenClawPluginHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
@@ -605,7 +606,7 @@ describe("registerTelegramMiniAppRoutes", () => {
   });
 
   it("does not consume a launch ticket when URL resolution fails", async () => {
-    resolveTelegramMiniAppUrls.mockRejectedValueOnce(new Error("not published"));
+    resolveTelegramMiniAppUrls.mockRejectedValueOnce(new TelegramMiniAppUrlError("not published"));
     const route = createRoute(config());
     const initData = signedInitData("123456", "url-retry");
     const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
@@ -621,7 +622,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     const unavailable = await callRoute(request);
     const retry = await callRoute(request);
 
-    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable).toMatchObject({ statusCode: 503, body: "not published" });
     expect(retry.statusCode).toBe(200);
     expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
   });
