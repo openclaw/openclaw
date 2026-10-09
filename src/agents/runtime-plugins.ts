@@ -72,9 +72,10 @@ type AgentRuntimePluginRegistryParams = {
   purpose?: RuntimePluginLoadPurpose;
 };
 
-function resolveAgentRuntimePluginRegistryLoad(
-  params: AgentRuntimePluginRegistryParams,
-): PluginLoadOptions {
+function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams): {
+  loadOptions: PluginLoadOptions;
+  metadataSnapshot?: PluginMetadataSnapshot;
+} {
   const loadOptions: PluginLoadOptions = {
     config: params.config,
     activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
@@ -88,7 +89,7 @@ function resolveAgentRuntimePluginRegistryLoad(
       : undefined,
   };
   if (params.config?.plugins?.enabled === false) {
-    return { ...loadOptions, onlyPluginIds: [] };
+    return { loadOptions: { ...loadOptions, onlyPluginIds: [] } };
   }
   const metadataSnapshot =
     params.metadataSnapshot ??
@@ -137,18 +138,40 @@ function resolveAgentRuntimePluginRegistryLoad(
     // SAFETY: Typed config inputs project only the planner's plugin-policy edits onto authored config.
     activationSourceConfig = projectedSource as OpenClawConfig;
   }
+  // Superset path (see reusableAgentRuntimeRegistry below): for a model-catalog request, thread
+  // the previous cumulative registry through as `previousRegistry` so a cache-miss (superset)
+  // rebuild uses `loadOpenClawPluginsCore`'s own real, already-existing per-plugin incremental-
+  // reuse mechanism (signature-matched candidate retention -> `projectPluginContributions`, see
+  // loader-runtime-core.ts) instead of cold-reloading every already-loaded plugin. This is a
+  // no-op when the exact/subset containment check in `reusableAgentRuntimeRegistry` already
+  // short-circuits before the loader is ever called, and undefined (byte-identical to before)
+  // for every non-model-catalog caller.
+  const previousRegistryForIncrementalReuse =
+    params.purpose === "model-catalog" && params.reusableRegistry
+      ? params.reusableRegistry
+      : undefined;
   return {
-    ...loadOptions,
-    config: plan.config,
-    activationSourceConfig,
-    workspaceDir,
-    discovery: metadataSnapshot.discovery,
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-    manifestRegistry: metadataSnapshot.manifestRegistry,
-    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
-    onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
-    channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
-    borrowRegistry: params.borrowRegistry,
+    loadOptions: {
+      ...loadOptions,
+      config: plan.config,
+      activationSourceConfig,
+      workspaceDir,
+      discovery: metadataSnapshot.discovery,
+      installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
+      onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
+      channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
+      borrowRegistry: params.borrowRegistry,
+      ...(previousRegistryForIncrementalReuse
+        ? { previousRegistry: previousRegistryForIncrementalReuse }
+        : {}),
+      // For model-catalog worker handoff, enable ownership transfer when reusing previous registry
+      ...(params.purpose === "model-catalog" && previousRegistryForIncrementalReuse
+        ? { transferInstanceOwnership: true }
+        : {}),
+    },
+    metadataSnapshot,
   };
 }
 
@@ -157,12 +180,16 @@ function reusableAgentRuntimeRegistry(
   loadOptions: PluginLoadOptions,
 ): PluginRegistry | undefined {
   const pluginIds = loadOptions.onlyPluginIds;
-  return params.reusableRegistry &&
-    pluginIds !== undefined &&
-    ((params.purpose !== "model-catalog" && params.purpose !== "isolated-completion") ||
-      listRuntimePluginIdsFromRegistry(params.reusableRegistry).every((pluginId) =>
-        pluginIds.includes(pluginId),
-      )) &&
+  if (!params.reusableRegistry || pluginIds === undefined) {
+    return undefined;
+  }
+  if (params.purpose === "model-catalog") {
+    return undefined;
+  }
+  return (params.purpose !== "isolated-completion" ||
+    listRuntimePluginIdsFromRegistry(params.reusableRegistry).every((pluginId) =>
+      pluginIds.includes(pluginId),
+    )) &&
     registryContainsRuntimePluginIds(params.reusableRegistry, pluginIds)
     ? params.reusableRegistry
     : undefined;
@@ -254,15 +281,15 @@ export type AcquiredAgentRuntimePluginRegistry =
 export async function acquireAgentRuntimePluginRegistry(
   params: AgentRuntimePluginRegistryParams,
 ): Promise<AcquiredAgentRuntimePluginRegistry> {
-  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const { loadOptions, metadataSnapshot } = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     return { registry: bindAdmittingGateway(reusable), primaryRegistry: reusable };
   }
   const acquire = () => acquirePluginRegistryForInspection(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
-  const acquired = await (params.metadataSnapshot
-    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, acquire)
+  const acquired = await (metadataSnapshot
+    ? withPluginMetadataSnapshotScope(metadataSnapshot, acquire)
     : acquire());
   let releaseWork = () => {};
   try {
@@ -316,7 +343,7 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
-  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const { loadOptions, metadataSnapshot } = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     onPrimaryRegistry?.(reusable);
@@ -327,8 +354,8 @@ export function loadAgentRuntimePluginRegistryHandle(
   // Prepared metadata outlives a transient caller's install or reload lease.
   const load = () => loadPluginRegistryHandle(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
-  const pluginRegistry = params.metadataSnapshot
-    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
+  const pluginRegistry = metadataSnapshot
+    ? withPluginMetadataSnapshotScope(metadataSnapshot, load)
     : load();
   // Media providers remain owned by this source when full-only donors require a copy.
   onPrimaryRegistry?.(pluginRegistry);

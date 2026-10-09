@@ -47,6 +47,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
       return context;
     },
+
     onChanged: (change) => {
       if (context) {
         broadcastChatMetadataChanged(context, change);

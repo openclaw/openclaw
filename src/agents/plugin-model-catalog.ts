@@ -567,7 +567,10 @@ export async function replacePersistedPluginModelCatalogs(params: {
     withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
       scope.execute({
         type: "catalog.replace",
-        input: { planned: [...planned], authSnapshot, env: options.env },
+        // Windows env clones preserve case-insensitive lookup through a Proxy for in-process
+        // reads. SQLite worker commands cross a v8 serialization boundary, so send a plain
+        // snapshot and let the worker-side readers apply their own platform semantics as needed.
+        input: { planned: [...planned], authSnapshot, env: { ...options.env } },
       }),
     ),
   );

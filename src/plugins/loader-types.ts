@@ -82,4 +82,11 @@ export type PluginLoadOptions = {
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
+  /**
+   * When a plugin is retained from previousRegistry (not borrowed), whether to transfer
+   * instance ownership forward to this registry. Default is false, preserving the
+   * predecessor's custody. Set true for strict generation handoff where ownership *must*
+   * move forward (e.g., model-catalog worker promotion).
+   */
+  transferInstanceOwnership?: boolean;
 };

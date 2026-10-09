@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  createRootFileCopyBatchSync,
-  type RootFileCopyBatchSync,
-} from "@openclaw/fs-safe/advanced";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -18,6 +15,21 @@ import {
   pluginSourceInputIdentity,
   type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
+
+type PluginSourceCopyFile = NonNullable<Parameters<typeof copyPluginSourceFile>[3]>["copyFile"];
+type PluginSourceCopyBatch = {
+  copyFile?: PluginSourceCopyFile;
+  [Symbol.dispose](): void;
+};
+
+function createPluginSourceCopyBatch(): PluginSourceCopyBatch {
+  const createBatch = (
+    fsSafeAdvanced as {
+      createRootFileCopyBatchSync?: () => PluginSourceCopyBatch;
+    }
+  ).createRootFileCopyBatchSync;
+  return createBatch ? createBatch() : { [Symbol.dispose]() {} };
+}
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -69,13 +81,16 @@ export function createPluginGenerationFileCapture({
   deferExternalLinks: boolean;
   nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
-  retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
+  retained?: {
+    source: PluginRecoverySource;
+    files: ReadonlyMap<string, PluginCapturedSourceFact>;
+  };
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
   const { inputs, pendingInputs, additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (source: string, target: string, copyFile: RootFileCopyBatchSync["copyFile"]) => {
+  const copy = (source: string, target: string, copyFile: PluginSourceCopyFile | undefined) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -238,7 +253,7 @@ export function createPluginGenerationFileCapture({
     }
   };
   return (source: string, target: string) => {
-    using batch = createRootFileCopyBatchSync();
-    return copy(source, target, batch.copyFile.bind(batch));
+    using batch = createPluginSourceCopyBatch();
+    return copy(source, target, batch.copyFile?.bind(batch));
   };
 }

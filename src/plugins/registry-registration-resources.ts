@@ -1,4 +1,6 @@
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
 export type RegistrationDisposer = { id: string; dispose: () => void | Promise<void> };
@@ -22,7 +24,10 @@ export class PluginRegistrationResourceSource {
   #claims = 0;
   #closed = false;
 
-  constructor(private readonly retire: () => Promise<void>) {}
+  constructor(
+    private readonly retire: (currentRegistry?: PluginRegistry) => Promise<void>,
+    private readonly getRegistry?: () => PluginRegistry | undefined,
+  ) {}
 
   acquireClaim(owner: "inspection" | "borrower"): { release: () => Promise<Error[]> } {
     if (this.#closed) {
@@ -43,7 +48,9 @@ export class PluginRegistrationResourceSource {
               // Construction owns rollback failures; the last claim owns successful entries.
               .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
             // Queue the whole batch before any signal's awaited cleanup can reach disposal.
-            const disposals = entries.map(([pluginId, entry]) => this.#dispose(pluginId, entry));
+            const disposals = entries.map(([pluginId, entry]) =>
+              this.#dispose(pluginId, entry, this.getRegistry?.()),
+            );
             await this.#waitForRegistrations();
             const outcomes = await Promise.allSettled(disposals);
             // Callback faults resolve as rows; rejection leaves a cleanup prerequisite unfinished.
@@ -56,7 +63,9 @@ export class PluginRegistrationResourceSource {
               // Rollback errors belong to construction; join its work before
               // the final physical claim retires the shared instances and cache.
               await Promise.allSettled(
-                [...this.#registrations].map(([pluginId, entry]) => this.#dispose(pluginId, entry)),
+                [...this.#registrations].map(([pluginId, entry]) =>
+                  this.#dispose(pluginId, entry, this.getRegistry?.()),
+                ),
               );
               try {
                 await this.retire();
@@ -150,7 +159,18 @@ export class PluginRegistrationResourceSource {
     const entry = this.#registration(pluginId);
     entry.rolledBack = true;
     entry.retire ??= retire;
-    void this.#dispose(pluginId, entry);
+    void this.#dispose(pluginId, entry, this.getRegistry?.());
+  }
+
+  transferRegistration(pluginId: string, target: PluginRegistrationResourceSource): void {
+    const entry = this.#registrations.get(pluginId);
+    if (!entry) {
+      return; // Nothing to transfer
+    }
+    // Remove from this source and add to target
+    this.#registrations.delete(pluginId);
+    // Note: we don't need to clone the entry since we're moving ownership
+    target.#registrations.set(pluginId, entry);
   }
 
   async #waitForRegistrations(): Promise<void> {
@@ -165,7 +185,11 @@ export class PluginRegistrationResourceSource {
       .map((entry) => entry.work);
   }
 
-  #dispose(pluginId: string, entry: RegistrationResources): Promise<Error[]> {
+  #dispose(
+    pluginId: string,
+    entry: RegistrationResources,
+    currentRegistry?: PluginRegistry,
+  ): Promise<Error[]> {
     return (entry.disposal ??= Promise.resolve().then(async () => {
       const signalCleanup = async () => {
         entry.work.beginClose();
@@ -185,16 +209,25 @@ export class PluginRegistrationResourceSource {
           () =>
             entry.work.track(async () => {
               entry.disposalStarted = true;
-              const disposers = entry.disposers.splice(0);
-              for (const { id, dispose } of disposers) {
-                try {
-                  await dispose();
-                } catch (cause) {
-                  failures.push(
-                    new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
-                  );
+              // Check if any instance of this plugin in current registry has been transferred away
+              const shouldDispose =
+                !currentRegistry ||
+                !this.#isInstanceOwnedByAnotherRegistry(pluginId, currentRegistry);
+              if (shouldDispose) {
+                // Remove and dispose all disposers
+                const disposers = entry.disposers.splice(0);
+                for (const { id, dispose } of disposers) {
+                  try {
+                    await dispose();
+                  } catch (cause) {
+                    failures.push(
+                      new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
+                    );
+                  }
                 }
               }
+              // If we didn't dispose (instance was transferred), keep the disposers list
+              // so they can be disposed later by the registry that now owns the instance
             }),
         );
         try {
@@ -214,5 +247,29 @@ export class PluginRegistrationResourceSource {
         }
       }
     }));
+  }
+
+  /**
+   * Determines whether cleanup should skip disposal because the plugin's managed
+   * instance has been transferred to a different registry's ownership. Registrations
+   * with no managed instance at all (e.g. lifecycle-only disposers registered via
+   * registry-registrars-host.ts) have no successor to transfer ownership to, so they
+   * must never be skipped here.
+   */
+  #isInstanceOwnedByAnotherRegistry(pluginId: string, currentRegistry: PluginRegistry): boolean {
+    // Look through all plugin records in the registry for a transferred-away instance.
+    for (const record of currentRegistry.plugins) {
+      if (record.id === pluginId) {
+        const instance = getPluginInstance(record);
+        if (instance && instance.owner && instance.owner.registry !== currentRegistry) {
+          // Instance exists but ownership moved to a different registry: the successor
+          // registry now owns disposal, so skip here.
+          return true;
+        }
+      }
+    }
+    // Either no instance exists for this plugin, or the instance is still owned by
+    // this registry: in both cases, disposal should proceed here.
+    return false;
   }
 }

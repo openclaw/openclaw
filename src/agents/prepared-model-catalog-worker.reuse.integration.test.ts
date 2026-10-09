@@ -286,7 +286,7 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
         .slice(before)
         .map((entry) => entry.provider)
         .toSorted(),
-    ).toEqual(index === 0 ? [PROVIDER_ID, ...providerIds].toSorted() : []);
+    ).toEqual(index === 0 ? providerIds.toSorted() : []);
     const expanded = registrations();
     const footprint = readCatalogCaptureFootprint(captureRoot);
     // Retired capture files disappear even if native ESM payloads remain cached.
@@ -298,8 +298,8 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   const retained = JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8"));
   console.log("Retired catalog registries", JSON.stringify(retained));
   expect(retained.controlCollected).toBe(true);
-  // The auth-only base is replaced once for all known owners; both native exports stay rooted.
-  expect(retained.captured).toBe(2);
+  // The auth-only base is retained through scope expansion instead of being registered again.
+  expect(retained.captured).toBe(1);
   expect(retained.nativeExports).toBe(retained.captured);
   expect(retained.registries).toBe(1);
   const warmedRegistrations = registrations();
@@ -338,8 +338,8 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   expect(
     JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8")),
   ).toMatchObject({
-    captured: 2,
-    nativeExports: 2,
+    captured: 1,
+    nativeExports: 1,
     registries: 1,
     controlCollected: true,
   });

@@ -224,6 +224,10 @@ export function activateGatewayAgentDatabaseStartup(params: {
               catalogMode: "static",
               allowGatewaySubagentBinding: true,
               ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+              // Per-agent lazy startup preparation reuses the already-captured plugin
+              // metadata snapshot for this gateway generation; it never changes plugin
+              // config itself, so it must not force a full plugin-generation rebuild.
+              resetPluginGeneration: false,
               isPublicationCurrent: () => {
                 try {
                   assertPreparationCurrent();

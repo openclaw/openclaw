@@ -285,6 +285,10 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
   const inventories = collectPreparedModelRuntimeInventories(owners.values());
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retainedConfig: config,
+    // This config-driven refresh already handles plugin state via retainedConfig/catalogInventory
+    // reuse below; it never reset the shared plugin generation before this option existed, so keep
+    // that pre-existing behavior explicit now that updateOwnersForScopedRefresh defaults to true.
+    resetPluginGeneration: false,
   });
   const entries: Array<{ owner?: PreparedModelRuntimeOwner; input: PreparedModelRuntimeInput }> =
     [];

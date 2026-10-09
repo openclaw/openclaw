@@ -144,7 +144,7 @@ export function updateOwnersForScopedRefresh(
     if (options.clearPending) {
       owner.pending = undefined;
     }
-    if (options.resetPluginGeneration) {
+    if (options.resetPluginGeneration ?? true) {
       owner.pluginGeneration = undefined;
       retiredPublications.push(owner);
     }

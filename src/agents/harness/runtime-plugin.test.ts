@@ -634,20 +634,40 @@ describe("harness runtime plugins", () => {
   });
 
   it.each([
-    { basePluginIds: [], allowed: ["catalog-provider"], expected: [] },
+    { basePluginIds: [], config: { plugins: { allow: ["catalog-provider"] } }, expected: [] },
     {
       basePluginIds: ["catalog-provider"],
-      allowed: ["catalog-provider"],
+      config: { plugins: { allow: ["catalog-provider"] } },
       expected: ["catalog-provider"],
+      entries: { "catalog-provider": { enabled: true } },
     },
-    { basePluginIds: ["memory-core"], allowed: ["memory-core"], expected: ["memory-core"] },
-    { basePluginIds: ["catalog-provider"], allowed: ["other-provider"], expected: [] },
+    {
+      basePluginIds: ["memory-core"],
+      config: { plugins: { allow: ["memory-core"] } },
+      expected: ["memory-core"],
+      entries: { "memory-core": { enabled: true } },
+    },
+    {
+      basePluginIds: ["catalog-provider"],
+      config: { plugins: { allow: ["other-provider"] } },
+      expected: [],
+    },
+    {
+      basePluginIds: ["catalog-provider"],
+      config: { plugins: { entries: { "catalog-provider": { enabled: false } } } },
+      expected: [],
+      entries: { "catalog-provider": { enabled: false } },
+    },
   ])(
-    "keeps catalog scope $basePluginIds within allowlist $allowed",
-    ({ basePluginIds, allowed, expected }) => {
+    "keeps catalog scope $basePluginIds within activation policy",
+    ({ basePluginIds, config: caseConfig, expected, entries }) => {
+      const caseAllow = "allow" in caseConfig.plugins ? caseConfig.plugins.allow : undefined;
       const config: OpenClawConfig = {
         plugins: {
-          allow: [...allowed, "memory-lancedb", "custom-context-engine", "codex"],
+          ...caseConfig.plugins,
+          allow: caseAllow
+            ? [...caseAllow, "memory-lancedb", "custom-context-engine", "codex"]
+            : undefined,
           slots: { memory: "memory-lancedb", contextEngine: "custom-context-engine" },
         },
       };
@@ -661,7 +681,7 @@ describe("harness runtime plugins", () => {
       });
 
       expect(plan.pluginIds).toEqual(expected);
-      expect(plan.config?.plugins?.entries).toBeUndefined();
+      expect(plan.config?.plugins?.entries).toEqual(entries);
       expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
     },
   );
