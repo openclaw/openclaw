@@ -4971,7 +4971,6 @@
 ["src/cli/resume-cli.test.ts","../runtime.js","1fb9b9da05c8627663271eec4e84b5645bda75d3e01498a53736efe3944fffc8",1]
 ["src/cli/resume-cli.test.ts","../tui/gateway-chat.js","0f4a1c1c71b2557d96668c23ec9cd1703b26f85f19df34128686d833b6a606d9",1]
 ["src/cli/resume-cli.test.ts","../tui/tui.js","a75e01f7712393175657c77c8c353206e62326da6b0545caa45646e4d639d965",1]
-["src/cli/root-help-live-config.test.ts","../config/config.js","818c45569ce5f7f162d4804b84b71048ef3fcb3ff535b7c7af672a5c70376103",1]
 ["src/cli/root-help-metadata.test.ts","./startup-metadata.js","5fdf50998e869f172eb21cd2aee5700ae40eb1e723edffceaacca77d5202b045",1]
 ["src/cli/route.test.ts","../commands/agents.commands.list.js","ea4cc66ec36fd9cda94026e525be0c2ab3d7905defc2c3e8266c83e63861c18d",1]
 ["src/cli/route.test.ts","../commands/channels/list.js","01a5c205bb06ca7dffe76db7ff9c1983f49fdcb9a9fb4724594cd28d46c6c87f",1]
