@@ -17,6 +17,7 @@ import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
@@ -100,234 +101,282 @@ export async function appendSessionTurnInWorker(
     custody: custody?.facts,
     relocation: custody?.relocation,
   };
+  // Observable append predicates retain their existing restoration ordering.
+  const prepareColdTranscript =
+    !messages.some((append) => append.shouldAppend) &&
+    (Boolean(sessionTurnMutation) ||
+      messages.some(
+        (append) =>
+          append.workerPreparation ||
+          (isRecord(append.message) &&
+            append.message.role === "user" &&
+            typeof append.message.idempotencyKey === "string"),
+      ));
+  if (prepareColdTranscript) {
+    plan.prepareColdTranscript = true;
+  }
   const outcome = await (async () => {
     const { restoreSessionColdTranscript, SessionColdTurnReboundError } =
       await import("./session-cold-storage.js");
     assertCurrent();
-    try {
-      await restoreSessionColdTranscript(
-        { ...scope, storePath: scope.path },
-        assertCurrent,
-        undefined,
-        options.keyFormat === "agent-qualified"
-          ? {
-              kind: "turn",
-              agentId: scope.agentId,
-              sessionKey: scope.sessionKey,
-              options: {
-                keyFormat: options.keyFormat,
-                expectedSessionId: options.expectedSessionId,
-                selectedSessionId: options.selectedSessionId,
-                selectedLifecycleRevision: options.selectedLifecycleRevision,
-                expectedLifecycleRevision: options.expectedLifecycleRevision,
-                expectedWriterRunId: options.expectedWriterRunId,
-                expectedSessionState: options.expectedSessionState,
-                initialSessionEntry: plan.options.initialSessionEntry,
-              },
-              goalOperation: options.sessionTurnMutation?.operation,
-            }
-          : undefined,
-      );
-    } catch (error) {
-      if (error instanceof SessionColdTurnReboundError) {
-        return { ...error.result, sessionFile: options.sessionFile };
-      }
-      throw error;
-    }
-    return await runSessionEntryWorkerOperation<
-      SessionTurnCommitted,
-      SqliteExpectedSessionTranscriptTurnResult
-    >({
-      database,
-      retainedExecution: execution,
-      agentId: scope.agentId,
-      assertCurrent,
-      candidateKind: "session-turn",
-      onTransactionFacts(facts) {
-        if (isRecord(facts) && facts.kind === "session-turn-fresh") {
-          const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
-          if (!source) {
-            throw new Error("Session turn omitted its fresh-message authority");
-          }
-          source.assertCurrent();
-          if (isRecord(facts.refusedSource) && typeof facts.refusedSource.index === "number") {
-            source.checks[facts.refusedSource.index]?.refuse(
-              // SAFETY: The paired worker read these facts from the current transaction.
-              facts.refusedSource.facts as SessionSourcePredicateFacts,
-            );
-            throw new Error("Session source refusal omitted its prepared assertion");
-          }
-          freshCommitGuards.add(source.assertCurrent);
-          return true;
-        }
-        if (!isRecord(facts) || facts.kind !== "session-turn-custody") {
-          return false;
-        }
-        if (!custody) {
-          throw new Error("Session turn has no pending-input owner");
-        }
-        // SAFETY: The paired worker captures the row and members in its current transaction.
-        custody.assertCurrent(facts.authority as SessionPendingInputAuthorityFacts, assertCurrent);
-        custodyRequired = true;
-        return true;
-      },
-      assertCandidate(candidate) {
-        if (custodyRequired) {
-          custody?.assertCurrent(candidate.authority, assertCurrent);
-        }
-      },
-      async run(worker, commit) {
-        // Selection must precede observable callbacks; ordinary turns validate in COMMIT.
-        if (messages.some((append) => append.shouldAppend)) {
-          const selected = await worker.execute({ type: "session.turn.prepare", input: plan });
-          assertCurrent();
-          if (selected.result) {
-            return selected.result;
-          }
-        }
-        const accepted: SessionTranscriptTurnMessageAppend[] = [];
-        for (const append of messages) {
-          if (!append.shouldAppend || (await append.shouldAppend(context))) {
-            accepted.push(append);
-          }
-          assertCurrent();
-        }
-        plan.options.messages = accepted.map(
-          ({
-            config: _messageConfig,
-            workerPreparation: _preparation,
-            shouldAppend: _shouldAppend,
-            shouldAppendInTransaction: _predicate,
-            prepareMessageAfterIdempotencyCheck: _prepare,
-            beforeFreshMessageCommit: _guard,
-            ...append
-          }) => append,
+    const restore = async () => {
+      try {
+        await restoreSessionColdTranscript(
+          { ...scope, storePath: scope.path },
+          assertCurrent,
+          undefined,
+          options.keyFormat === "agent-qualified"
+            ? {
+                kind: "turn",
+                agentId: scope.agentId,
+                sessionKey: scope.sessionKey,
+                options: {
+                  keyFormat: options.keyFormat,
+                  expectedSessionId: options.expectedSessionId,
+                  selectedSessionId: options.selectedSessionId,
+                  selectedLifecycleRevision: options.selectedLifecycleRevision,
+                  expectedLifecycleRevision: options.expectedLifecycleRevision,
+                  expectedWriterRunId: options.expectedWriterRunId,
+                  expectedSessionState: options.expectedSessionState,
+                  initialSessionEntry: plan.options.initialSessionEntry,
+                },
+                goalOperation: options.sessionTurnMutation?.operation,
+              }
+            : undefined,
         );
-        // Keyed user messages may already own accepted bytes and skip host preparation.
-        const needsPreparation =
-          sessionTurnMutation ||
-          accepted.some(
-            (append) =>
-              append.workerPreparation ||
-              (isRecord(append.message) &&
-                append.message.role === "user" &&
-                typeof append.message.idempotencyKey === "string"),
-          );
-        const preparation = needsPreparation
-          ? await worker.execute({ type: "session.turn.prepare", input: plan })
-          : undefined;
-        assertCurrent();
-        if (preparation?.result) {
-          return preparation.result;
+      } catch (error) {
+        if (error instanceof SessionColdTurnReboundError) {
+          return { ...error.result, sessionFile: options.sessionFile };
         }
-        // Select one adapter for the whole turn before any message preparer can have effects.
-        for (const [index, append] of accepted.entries()) {
-          const hooks = append.workerPreparation;
-          const facts = preparation?.messages[index];
-          if (!facts?.pending && !facts?.existing && hooks?.beforeFreshMessageCommit) {
-            const source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
-            sources[index] = source;
-            if (
-              source.nativeSource ||
-              source.checks.some((check) => check.predicate.source.path !== database.path)
-            ) {
-              assertCurrent();
-              return native(accepted.map(({ shouldAppend: _shouldAppend, ...message }) => message));
+        throw error;
+      }
+      return undefined;
+    };
+    if (!prepareColdTranscript) {
+      const rebound = await restore();
+      if (rebound) {
+        return rebound;
+      }
+    }
+    const run = () =>
+      runSessionEntryWorkerOperation<
+        SessionTurnCommitted,
+        SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" }
+      >({
+        database,
+        retainedExecution: execution,
+        agentId: scope.agentId,
+        assertCurrent,
+        candidateKind: "session-turn",
+        onTransactionFacts(facts) {
+          if (isRecord(facts) && facts.kind === "session-turn-fresh") {
+            const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
+            if (!source) {
+              throw new Error("Session turn omitted its fresh-message authority");
+            }
+            source.assertCurrent();
+            if (isRecord(facts.refusedSource) && typeof facts.refusedSource.index === "number") {
+              source.checks[facts.refusedSource.index]?.refuse(
+                // SAFETY: The paired worker read these facts from the current transaction.
+                facts.refusedSource.facts as SessionSourcePredicateFacts,
+              );
+              throw new Error("Session source refusal omitted its prepared assertion");
+            }
+            freshCommitGuards.add(source.assertCurrent);
+            return true;
+          }
+          if (!isRecord(facts) || facts.kind !== "session-turn-custody") {
+            return false;
+          }
+          if (!custody) {
+            throw new Error("Session turn has no pending-input owner");
+          }
+          custody.assertCurrent(
+            // SAFETY: The paired worker captures the row and members in its current transaction.
+            facts.authority as SessionPendingInputAuthorityFacts,
+            assertCurrent,
+          );
+          custodyRequired = true;
+          return true;
+        },
+        assertCandidate(candidate) {
+          if (custodyRequired) {
+            custody?.assertCurrent(candidate.authority, assertCurrent);
+          }
+        },
+        async run(worker, commit) {
+          // Selection must precede observable callbacks; ordinary turns validate in COMMIT.
+          if (messages.some((append) => append.shouldAppend)) {
+            const selected = await worker.execute({ type: "session.turn.prepare", input: plan });
+            assertCurrent();
+            if (selected.result) {
+              return selected.result;
             }
           }
-        }
-        plan.options.preparedGoalId = preparation?.goalId;
-        for (const [index, append] of plan.options.messages.entries()) {
-          const hooks = accepted[index]!.workerPreparation;
-          const facts = preparation?.messages[index];
-          const config = accepted[index]!.config ?? options.config;
-          const prepare =
-            hooks?.prepareMessageAfterIdempotencyCheckAsync ??
-            hooks?.prepareMessageAfterIdempotencyCheck;
-          let message = prepareSessionTurnGoalMessage(
-            append.message,
-            sessionTurnMutation,
-            preparation?.goalId,
-          );
-          if (!facts?.pending && !facts?.existing && prepare) {
-            if (hooks?.prepareMessageAfterIdempotencyCheckAsync) {
-              append.preparationVersion = preparation?.version;
+          const accepted: SessionTranscriptTurnMessageAppend[] = [];
+          for (const append of messages) {
+            if (!append.shouldAppend || (await append.shouldAppend(context))) {
+              accepted.push(append);
             }
-            message = await prepare(message);
             assertCurrent();
           }
-          if (!facts?.pending && message !== undefined && hooks?.beforeFreshMessageCommit) {
-            append.sources = sources[index]?.checks.map((check) => check.predicate);
-            append.freshGuard = true;
+          plan.options.messages = accepted.map(
+            ({
+              config: _messageConfig,
+              workerPreparation: _preparation,
+              shouldAppend: _shouldAppend,
+              shouldAppendInTransaction: _predicate,
+              prepareMessageAfterIdempotencyCheck: _prepare,
+              beforeFreshMessageCommit: _guard,
+              ...append
+            }) => append,
+          );
+          // Keyed user messages may already own accepted bytes and skip host preparation.
+          const needsPreparation =
+            sessionTurnMutation ||
+            accepted.some(
+              (append) =>
+                append.workerPreparation ||
+                (isRecord(append.message) &&
+                  append.message.role === "user" &&
+                  typeof append.message.idempotencyKey === "string"),
+            );
+          const preparation = needsPreparation
+            ? await worker.execute({ type: "session.turn.prepare", input: plan })
+            : undefined;
+          assertCurrent();
+          if (preparation?.result) {
+            return preparation.result;
           }
-          if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
-            message = redactTranscriptMessageForStorage(message, { config });
+          if (preparation?.coldArchive) {
+            return { kind: "restore-cold-transcript" };
           }
-          plan.options.messages[index] = {
-            ...append,
-            message: prepare ? append.message : message,
-            ...(prepare && !facts?.pending
-              ? { preparation: { prepared: !facts?.existing, expected: facts?.existing, message } }
-              : {}),
-          };
-        }
-        assertCurrent();
-        return commit(() => worker.execute({ type: "session.turn.commit", input: plan }));
-      },
-      onAcknowledged(candidate) {
-        try {
-          if (
-            options.onCommittedSource &&
-            !candidate.result.rejectedReason &&
-            candidate.result.sessionEntry
-          ) {
-            const identity = execution.fileIdentity;
-            if (!identity) {
-              throw new Error("Committed transcript turn omitted its admitted database identity");
+          // Select one adapter for the whole turn before any message preparer can have effects.
+          for (const [index, append] of accepted.entries()) {
+            const hooks = append.workerPreparation;
+            const facts = preparation?.messages[index];
+            if (!facts?.pending && !facts?.existing && hooks?.beforeFreshMessageCommit) {
+              const source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
+              sources[index] = source;
+              if (
+                source.nativeSource ||
+                source.checks.some((check) => check.predicate.source.path !== database.path)
+              ) {
+                assertCurrent();
+                return native(
+                  accepted.map(({ shouldAppend: _shouldAppend, ...message }) => message),
+                );
+              }
             }
-            options.onCommittedSource(
-              {
-                agentId: execution.agentId,
-                path: database.path,
-                databaseIdentity: identity.physicalIdentity,
-                databaseBirthtime: identity.birthtime,
-              },
-              candidate.result.sessionEntry,
+          }
+          plan.options.preparedGoalId = preparation?.goalId;
+          for (const [index, append] of plan.options.messages.entries()) {
+            const hooks = accepted[index]!.workerPreparation;
+            const facts = preparation?.messages[index];
+            const config = accepted[index]!.config ?? options.config;
+            const prepare =
+              hooks?.prepareMessageAfterIdempotencyCheckAsync ??
+              hooks?.prepareMessageAfterIdempotencyCheck;
+            let message = prepareSessionTurnGoalMessage(
+              append.message,
+              sessionTurnMutation,
+              preparation?.goalId,
+            );
+            if (!facts?.pending && !facts?.existing && prepare) {
+              if (hooks?.prepareMessageAfterIdempotencyCheckAsync) {
+                append.preparationVersion = preparation?.version;
+              }
+              message = await prepare(message);
+              assertCurrent();
+            }
+            if (!facts?.pending && message !== undefined && hooks?.beforeFreshMessageCommit) {
+              append.sources = sources[index]?.checks.map((check) => check.predicate);
+              append.freshGuard = true;
+            }
+            if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
+              message = redactTranscriptMessageForStorage(message, { config });
+            }
+            plan.options.messages[index] = {
+              ...append,
+              message: prepare ? append.message : message,
+              ...(prepare && !facts?.pending
+                ? {
+                    preparation: { prepared: !facts?.existing, expected: facts?.existing, message },
+                  }
+                : {}),
+            };
+          }
+          assertCurrent();
+          return commit(() => worker.execute({ type: "session.turn.commit", input: plan }));
+        },
+        onAcknowledged(candidate) {
+          try {
+            if (
+              options.onCommittedSource &&
+              !candidate.result.rejectedReason &&
+              candidate.result.sessionEntry
+            ) {
+              const identity = execution.fileIdentity;
+              if (!identity) {
+                throw new Error("Committed transcript turn omitted its admitted database identity");
+              }
+              options.onCommittedSource(
+                {
+                  agentId: execution.agentId,
+                  path: database.path,
+                  databaseIdentity: identity.physicalIdentity,
+                  databaseBirthtime: identity.birthtime,
+                },
+                candidate.result.sessionEntry,
+              );
+            }
+          } finally {
+            if (candidate.custody) {
+              custody?.publish(candidate.custody);
+            }
+            installCommittedTranscriptMessageSequences(
+              candidate.result.appendedMessages,
+              candidate.sequences,
+            );
+            if (candidate.projectionNeedsReconcile) {
+              startSessionTranscriptIndexReconcile({
+                ...database,
+                preferredSessionId: scope.sessionId,
+              });
+            }
+          }
+        },
+        async onCommitted(candidate, published, identity) {
+          if (published) {
+            publishCommittedSessionIdentity(
+              scope.agentId,
+              identity,
+              published.previous,
+              published.current,
+              published.prepared,
             );
           }
-        } finally {
-          if (candidate.custody) {
-            custody?.publish(candidate.custody);
-          }
-          installCommittedTranscriptMessageSequences(
+          await completeSessionTranscriptCommit(
             candidate.result.appendedMessages,
-            candidate.sequences,
+            options.onMessageCommitted,
           );
-          if (candidate.projectionNeedsReconcile) {
-            startSessionTranscriptIndexReconcile({
-              ...database,
-              preferredSessionId: scope.sessionId,
-            });
-          }
-        }
-      },
-      async onCommitted(candidate, published, identity) {
-        if (published) {
-          publishCommittedSessionIdentity(
-            scope.agentId,
-            identity,
-            published.previous,
-            published.current,
-            published.prepared,
-          );
-        }
-        await completeSessionTranscriptCommit(
-          candidate.result.appendedMessages,
-          options.onMessageCommitted,
-        );
-        return candidate.result;
-      },
-    });
+          return candidate.result;
+        },
+      });
+    for (let restorations = 0; ; restorations++) {
+      const result = await run();
+      if (!("kind" in result)) {
+        return result;
+      }
+      if (restorations === 2) {
+        throw new SessionTranscriptColdError(scope.sessionId);
+      }
+      // The read-only refusal released FIFO; restoration uses its existing guarded writer.
+      const rebound = await restore();
+      if (rebound) {
+        return rebound;
+      }
+    }
   })().then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),

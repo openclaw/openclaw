@@ -555,9 +555,10 @@ describe("existing shared-state schema admission", () => {
             )
             .run(String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
           expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+          // Transactions reuse the warm revision; implicit pins establish a new one.
           expect(
             reads.queries.filter((sql) => /\bconfig_machine_state\b/iu.test(sql)),
-          ).toHaveLength(2);
+          ).toHaveLength(snapshot === "transaction" ? 0 : 1);
         };
         try {
           expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);

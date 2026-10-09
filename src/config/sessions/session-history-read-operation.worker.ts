@@ -216,11 +216,12 @@ async function prepareHistoryRead(
     case "transcript-anchors": {
       const [
         { withOpenClawAgentDatabaseReadOnly },
-        { readSessionTranscriptAnchorFactsInDatabase },
+        { readSessionTranscriptAnchorFactsInDatabase, prepareSessionTranscriptAnchorMessageReader },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly.js"),
         import("./session-transcript-anchor-read.kernel.js"),
       ]);
+      const readMessage = await prepareSessionTranscriptAnchorMessageReader(request.selection);
       return () => {
         assertExistingDatabaseIdentity(
           request.database.path,
@@ -233,6 +234,7 @@ async function prepareHistoryRead(
               database,
               request.resolved,
               request.selection,
+              readMessage,
             ),
           { ...request.database, env: request.resolved.env },
         );

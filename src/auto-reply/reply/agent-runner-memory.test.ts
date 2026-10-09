@@ -886,8 +886,7 @@ describe("runMemoryFlushIfNeeded", () => {
       modelSelectionLocked: true,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "skipped"]);
 
     onCompactionNotice.mockClear();
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
@@ -898,8 +897,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await expect(run({ onCompactionNotice })).rejects.toThrow(
       "Preflight compaction required but failed: no real conversation messages",
     );
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "incomplete"]);
   });
 
   it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
@@ -2183,7 +2181,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("emits preflight compaction notices around a successful budget compaction", async () => {
+  it("reports bounded context when server compaction leaves oversized history", async () => {
     await writeTranscript([
       { type: "message", message: { role: "user", content: "x".repeat(5_000) } },
     ]);
@@ -2209,12 +2207,10 @@ describe("runMemoryFlushIfNeeded", () => {
       onCompactionNotice,
     });
 
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(
-      2,
-      "end",
-      "🧹 Server-side compaction complete (8.6k → 736)",
-    );
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual([
+      "start",
+      "context_bounded",
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

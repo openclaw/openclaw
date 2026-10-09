@@ -219,20 +219,26 @@ export async function runWriteConfigHealth(
       const includeSnapshot = authority
         ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
         : undefined;
-      const includeBoundary =
-        includeSnapshot &&
+      const resolveIncludeBoundary = (
+        snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+      ) =>
         resolveConfigIncludeWriteBoundary({
-          snapshot: includeSnapshot,
+          snapshot,
           nextConfig,
           persistCanonicalAgentRoster: configResultWritePending
             ? ctx.configResult.persistCanonicalAgentRoster
             : undefined,
           explicitSetPaths: ctx.configResult.explicitSetPaths,
         });
+      const includeBoundary = includeSnapshot && resolveIncludeBoundary(includeSnapshot);
       const includeWrite = includeBoundary ? includeSnapshot : undefined;
       let recoveryConfig = ctx.cfg;
-      const persistConfig = (assertOwned?: () => void) =>
-        transformConfigFile({
+      const persistConfig = (assertOwned?: () => void) => {
+        const assertCurrent = () => {
+          authority?.assertCurrent();
+          assertOwned?.();
+        };
+        return transformConfigFile({
           baseHash: hash,
           transform: async (_current, { snapshot }) => {
             assertOwned?.();
@@ -249,17 +255,9 @@ export async function runWriteConfigHealth(
               installedPluginIdRecovery,
               ctx.env ?? process.env,
             );
-            authority?.assertCurrent();
-            assertOwned?.();
+            assertCurrent();
             if (includeBoundary) {
-              const currentBoundary = resolveConfigIncludeWriteBoundary({
-                snapshot,
-                nextConfig,
-                persistCanonicalAgentRoster: configResultWritePending
-                  ? ctx.configResult.persistCanonicalAgentRoster
-                  : undefined,
-                explicitSetPaths: ctx.configResult.explicitSetPaths,
-              });
+              const currentBoundary = resolveIncludeBoundary(snapshot);
               // baseHash fences authored bytes and include targets. Resolved values may
               // legitimately change with the environment while this plan still owns the revision.
               if (!isDeepStrictEqual(currentBoundary, includeBoundary)) {
@@ -275,10 +273,7 @@ export async function runWriteConfigHealth(
               snapshot,
               nextConfig,
               env: ctx.env ?? process.env,
-              assertCurrent: () => {
-                authority?.assertCurrent();
-                assertOwned?.();
-              },
+              assertCurrent,
             });
             for (const change of cronOwnerChanges) {
               ctx.runtime.log(change);
@@ -287,22 +282,17 @@ export async function runWriteConfigHealth(
           },
           afterWrite: { mode: "auto" },
           writeOptions: {
-            assertCurrent: () => {
-              authority?.assertCurrent();
-              assertOwned?.();
-            },
+            assertCurrent,
             ...(installedPluginIdRecovery?.size
               ? {
                   beforeCommit: async () => {
-                    authority?.assertCurrent();
-                    assertOwned?.();
+                    assertCurrent();
                     await assertInstalledPluginIdRecoveryCurrent(
                       recoveryConfig,
                       installedPluginIdRecovery,
                       ctx.env ?? process.env,
                     );
-                    authority?.assertCurrent();
-                    assertOwned?.();
+                    assertCurrent();
                   },
                 }
               : {}),
@@ -323,6 +313,7 @@ export async function runWriteConfigHealth(
               : {}),
           },
         });
+      };
       const writeConfig = async () => {
         if (!installedPluginIdRecovery?.size) {
           return await persistConfig();

@@ -34,23 +34,15 @@ export function normalizeSlackApproverId(value: string | number): string | undef
   return target?.startsWith("team:") ? undefined : target;
 }
 
-function resolveSlackOwnerApprovers(cfg: OpenClawConfig): string[] {
-  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(ownerAllowFrom) || ownerAllowFrom.length === 0) {
-    return [];
-  }
-  return resolveApprovalApprovers({
-    explicit: ownerAllowFrom,
-    normalizeApprover: normalizeSlackApproverId,
-  });
-}
 export function getSlackExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
   const account = resolveSlackAccount(params).config;
+  const ownerAllowFrom = params.cfg.commands?.ownerAllowFrom;
   return resolveApprovalApprovers({
-    explicit: account.execApprovals?.approvers ?? resolveSlackOwnerApprovers(params.cfg),
+    explicit:
+      account.execApprovals?.approvers ?? (Array.isArray(ownerAllowFrom) ? ownerAllowFrom : []),
     normalizeApprover: normalizeSlackApproverId,
   });
 }

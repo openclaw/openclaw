@@ -18,11 +18,15 @@ import type {
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildOpenAIAccountOnlyModels, OPENAI_UNKNOWN_MODEL_COST } from "./account-models.js";
+import {
+  buildOpenAIUncataloguedModel,
+  OPENAI_PRE_GPT5_MODEL_ID_PATTERN,
+  OPENAI_UNKNOWN_MODEL_COST,
+  projectOpenAIAccountModels,
+} from "./account-models.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
@@ -176,25 +180,42 @@ async function buildOpenAILiveProviderConfig(
   const baseUrl =
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
-  const models = fallback.models;
   if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
-  const [
-    { getCachedLiveProviderModelRows, LiveModelCatalogHttpError },
-    { isNonSecretApiKeyMarker },
-  ] = await Promise.all([
-    import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
-    import("openclaw/plugin-sdk/provider-auth"),
-  ]);
+  const [{ buildLiveModelProviderConfig, LiveModelCatalogHttpError }, { isNonSecretApiKeyMarker }] =
+    await Promise.all([
+      import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
+      import("openclaw/plugin-sdk/provider-auth"),
+    ]);
   const rejectionScope =
     params.apiKey && !params.discoveryApiKey && isNonSecretApiKeyMarker(params.apiKey)
       ? "catalog"
       : undefined;
+  const { models, ...providerConfig } = fallback;
+  const catalogModels = [
+    ...models,
+    {
+      id: OPENAI_CHAT_LATEST_MODEL_ID,
+      name: "Chat Latest",
+      reasoning: false,
+      cost: OPENAI_CHAT_LATEST_COST,
+      contextWindow: 400_000,
+      api: "openai-responses",
+      baseUrl,
+      input: ["text", "image"],
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+    } satisfies ModelDefinitionConfig,
+  ];
   try {
-    const rows = await getCachedLiveProviderModelRows({
+    // A successful account catalog is authoritative even when it has no
+    // visible supported models; catalog rows only describe listed ids.
+    const provider = await buildLiveModelProviderConfig({
+      discoveryMode: "strict",
       providerId: PROVIDER_ID,
       endpoint: OPENAI_MODELS_ENDPOINT,
+      providerConfig,
+      models: catalogModels,
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
@@ -202,46 +223,14 @@ async function buildOpenAILiveProviderConfig(
       ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
       auditContext: "openai-model-discovery",
     });
-    const discoveredIds = new Set(
-      rows.flatMap((row) => {
-        const candidate = asOptionalRecord(row);
-        if (candidate?.object !== undefined && candidate.object !== "model") {
-          return [];
-        }
-        const modelId = typeof candidate?.id === "string" ? candidate.id.trim() : "";
-        return modelId ? [modelId] : [];
-      }),
-    );
-    const selectedIds = new Set<string>();
-    const catalogModels = [
-      ...models,
-      {
-        id: OPENAI_CHAT_LATEST_MODEL_ID,
-        name: "Chat Latest",
-        reasoning: false,
-        cost: OPENAI_CHAT_LATEST_COST,
-        contextWindow: 400_000,
-        api: "openai-responses",
-        baseUrl,
-        input: ["text", "image"],
-        maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-      } satisfies ModelDefinitionConfig,
-    ];
-    // A successful account catalog is authoritative even when it has no
-    // visible supported models; static rows cannot grant model access.
     return {
       provider: {
-        ...fallback,
-        models: [
-          ...catalogModels.filter((model) => {
-            if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
-              return false;
-            }
-            selectedIds.add(model.id);
-            return true;
-          }),
-          ...buildOpenAIAccountOnlyModels({ discoveredIds, catalogModels, baseUrl }),
-        ],
+        ...provider,
+        models: projectOpenAIAccountModels({
+          listedModels: provider.models,
+          catalogModels,
+          baseUrl,
+        }),
       },
       outcome: { provider: PROVIDER_ID, status: "ready" },
     };
@@ -654,6 +643,13 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  // Listings hide pre-GPT-5 families; refs selected in config or a session still resolve.
+  if (OPENAI_PRE_GPT5_MODEL_ID_PATTERN.test(modelId)) {
+    return {
+      ...buildOpenAIUncataloguedModel(trimmedModelId, resolveOpenAIDefaultBaseUrl()),
+      provider: PROVIDER_ID,
+    };
+  }
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
     OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||

@@ -46,17 +46,12 @@ export function createSlackProgressRuntime(runtimeParams: {
 }) {
   const { setup, delivery } = runtimeParams;
   const {
-    account,
     cfg,
-    ctx,
     hasSlackCustomIdentity,
-    message,
     prepared,
     replyPlan,
     runtime,
-    slackClient,
     slackIdentity,
-    slackMessageMetadata,
     slackStreaming,
     slackProgressStyle,
     quietProgress,
@@ -64,6 +59,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     useStreaming,
     previewStreamingEnabled,
   } = setup;
+  const { account, ctx, message, slackMessageMetadata } = prepared;
   const draftStream = shouldUseDraftStream
     ? createSlackDraftStream({
         target: prepared.replyTarget,
@@ -144,7 +140,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
   const progressDraftMaxLineChars = resolveChannelProgressDraftMaxLineChars(account.config);
   const progressCard = createSlackDraftProgressCardRuntime({
-    setup: { account, cfg, ctx, prepared, slackClient },
+    setup,
     draftStream,
     enabled: useDraftProgressCard,
     detailed: previewToolProgressEnabled,

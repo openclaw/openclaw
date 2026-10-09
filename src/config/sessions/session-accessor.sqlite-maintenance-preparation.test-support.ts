@@ -50,8 +50,14 @@ export function registerSessionMaintenancePreparationTests() {
         maxEntries: 100,
         pruneAfter: "1h",
       });
+      let assertConsumedPlan: (() => void) | undefined;
+      const consume = vi.fn((_read: unknown, assertCurrent: () => void) => {
+        assertCurrent();
+        assertConsumedPlan = assertCurrent;
+      });
       const result = await runSqliteSessionReclamation({
         forceInProcess: false,
+        consumeReadOnlyMaintenancePlan: consume,
         plan: {
           kind: "maintenance-plan",
           databaseOptions,
@@ -69,6 +75,11 @@ export function registerSessionMaintenancePreparationTests() {
       if (result.kind !== "maintenance-plan") {
         throw new Error("Expected maintenance planning result");
       }
+      expect(consume).toHaveBeenCalledOnce();
+      expect(result.nextAt).toBeGreaterThan(Date.now());
+      expect(() => expectDefined(assertConsumedPlan, "consumed maintenance guard")()).toThrow(
+        "Session maintenance consumption has ended",
+      );
       const database = openOpenClawAgentDatabase(databaseOptions);
       const peer = new (sqlite.requireNodeSqlite().DatabaseSync)(databaseOptions.path);
       try {

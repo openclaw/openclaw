@@ -84,6 +84,14 @@ export async function settleDuplicateSessionSqliteArchives(params: {
     target: SessionSqliteMigrationTargetInput;
     issues: DoctorSessionSqliteIssue[];
   }> = [];
+  const recordFailure = (target: SessionSqliteMigrationTargetInput, message: string) => {
+    failures.push({
+      target,
+      issues: [
+        { code: "historical_transcript_deferred", message: `${message}; original retained.` },
+      ],
+    });
+  };
   const survivors = new Map<string, RecoveryArtifactReference[]>();
   const selected: RecoveryCleanupReport["artifacts"] = [];
   const replacements = new Map<string, RecoveryArtifactReference["move"]>();
@@ -133,15 +141,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
         }
         replacements.set(item.path, survivor[0]!.move);
       } catch (error) {
-        failures.push({
-          target,
-          issues: [
-            {
-              code: "historical_transcript_deferred",
-              message: `${item.path}: ${String(error)}; original retained.`,
-            },
-          ],
-        });
+        recordFailure(target, `${item.path}: ${String(error)}`);
       }
     }
   }
@@ -153,15 +153,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
     } else {
       replacements.delete(archivePath);
       const item = selected.find((candidate) => candidate.path === archivePath)!;
-      failures.push({
-        target: refs[0]!.target,
-        issues: [
-          {
-            code: "historical_transcript_deferred",
-            message: `${archivePath}: ${item.detail ?? item.reason}; original retained.`,
-          },
-        ],
-      });
+      recordFailure(refs[0]!.target, `${archivePath}: ${item.detail ?? item.reason}`);
     }
   }
   return [

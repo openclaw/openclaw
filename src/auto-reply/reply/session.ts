@@ -72,6 +72,7 @@ import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
   normalizeMainKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
@@ -131,6 +132,7 @@ import {
 } from "./session-init-conflict-retry.js";
 import type { SessionInitResult } from "./session-init.types.js";
 import {
+  prepareReplySessionInitialization,
   resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
@@ -146,7 +148,7 @@ import {
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 import { resolveReplySessionRolloverState } from "./session-rollover-state.js";
-import { stripThreadFromSessionRoute, stripThreadId } from "./session-route-reset.js";
+import { withoutThreadDelivery } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
 
@@ -220,17 +222,6 @@ async function resolveInitSessionStateAttemptContext(
   };
 }
 
-function withoutThreadDelivery(entry: SessionEntry | undefined) {
-  if (entry?.delivery?.kind === "internal") {
-    return entry.delivery;
-  }
-  return normalizeSessionDeliveryState({
-    route: stripThreadFromSessionRoute(sessionDeliveryRoute(entry)),
-    context: stripThreadId(deliveryContextFromSession(entry)),
-    origin: stripThreadId(sessionDeliveryOrigin(entry)),
-  });
-}
-
 type ReplySessionPreprocessingState = {
   sessionEntry?: SessionEntry;
   sessionKey: string;
@@ -289,38 +280,10 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     }
   }
   params.signal?.throwIfAborted();
-  const parentSessionKey = normalizeOptionalString(params.ctx.ParentSessionKey);
-  const snapshot = await loadReplySessionInitializationSnapshot(
-    {
-      agentId: attemptContext.agentId,
-      storePath: attemptContext.storePath,
-      sessionKey: attemptContext.sessionKey,
-      relatedSessionKeys: parentSessionKey ? [parentSessionKey] : [],
-    },
-    {
-      reader: resolveInitializationSessionReader(params, attemptContext),
-      assertCurrent: () => params.signal?.throwIfAborted(),
-    },
+  const { snapshot, parentSessionKey } = await prepareReplySessionInitialization(
+    params,
+    attemptContext,
   );
-  const { restoreSessionColdTranscript } =
-    await import("../../config/sessions/session-cold-storage.js");
-  const restoreTargets = [
-    attemptContext.sessionKey,
-    ...(parentSessionKey ? [parentSessionKey] : []),
-  ].map((sessionKey) => ({ sessionKey, sessionId: snapshot.readEntry(sessionKey)?.sessionId }));
-  // Restore before the writer lane: reset hooks and parent forks read synchronously inside it.
-  for (const { sessionKey, sessionId } of restoreTargets) {
-    if (sessionId) {
-      params.signal?.throwIfAborted();
-      await restoreSessionColdTranscript({
-        sessionKey,
-        sessionId,
-        agentId: attemptContext.agentId,
-        storePath: attemptContext.storePath,
-      });
-    }
-  }
-  params.signal?.throwIfAborted();
   // Creation hooks, parent forks, and legacy-main retirement can touch other sessions.
   const storeWriterIdentity =
     snapshot.currentEntry &&
@@ -866,6 +829,7 @@ async function initSessionStateAttemptLocked(
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
+    bindCreation: params.bindSessionCreation,
     ...sessionTarget,
     commitGuard: !entry
       ? () => {
@@ -1035,7 +999,9 @@ async function initSessionStateAttemptLocked(
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
-        sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
+        sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey].map(
+          (requestKey) => toAgentStoreSessionKey({ agentId, requestKey }),
+        ),
         onWarn: (message) => log.warn(message),
         onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
       });

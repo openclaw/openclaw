@@ -77,6 +77,8 @@ export {
 export {
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogGitHubLinker,
+  prepareSessionCatalogSourceActorProjector,
 } from "../gateway/session-catalog-identity.js";
 
 export {

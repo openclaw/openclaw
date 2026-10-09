@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export function installPackageActivationFault({ journal, evidence, cut, terminate }) {
+function installPackageActivationFault({ journal, evidence, cut, terminate }) {
   assert(path.isAbsolute(journal) && path.isAbsolute(evidence));
   assert(["publication-complete", "verification"].includes(cut));
   // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.

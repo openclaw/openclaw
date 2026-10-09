@@ -17,6 +17,7 @@ import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js"
 import type { ClientVoiceSessionSource } from "./client-voice-session-source.js";
 import {
   type ClientVoiceSessionRecord,
+  operationKey,
   readVoiceSessionRecord,
   readVoiceSessionRecordInTransaction,
   writeVoiceSessionRecordInTransaction,
@@ -179,12 +180,6 @@ type MutationDigestSettlement = {
   release: () => void;
 };
 
-type MutationDigestAttempt<TContext> = {
-  controller: AbortController;
-  intent: MutationDigestIntent<TContext>;
-  generation: number;
-};
-
 type MutationDigestOptions<TContext> = {
   attempt: (intent: {
     agentId: string;
@@ -203,15 +198,14 @@ export class ClientVoiceMutationDigestOwner<TContext> {
   private readonly intents = new Map<string, MutationDigestIntent<TContext>>();
   private readonly pendingKeys = new Set<string>();
   private readonly retryAfterActiveKeys = new Set<string>();
-  private readonly activeAttempts = new Map<string, MutationDigestAttempt<TContext>>();
+  private readonly activeAttempts = new Map<string, AbortController>();
   private retainedIdentityBytes = 0;
-  private generation = 0;
   private readonly policy = CLIENT_VOICE_MUTATION_DIGEST_POLICY;
 
   constructor(private readonly options: MutationDigestOptions<TContext>) {}
 
   record(params: { agentId: string; voiceSessionId: string; context: TContext }): void {
-    const key = this.key(params);
+    const key = operationKey(params.agentId, params.voiceSessionId);
     const existing = this.intents.get(key);
     if (existing?.retryBlocked) {
       return;
@@ -250,17 +244,13 @@ export class ClientVoiceMutationDigestOwner<TContext> {
   }
 
   retry(params: { agentId: string; voiceSessionId: string }): void {
-    const key = this.key(params);
+    const key = operationKey(params.agentId, params.voiceSessionId);
     const intent = this.intents.get(key);
     if (!intent || intent.retryBlocked) {
       return;
     }
     intent.queuedSettlement ??= this.options.captureAttempt?.(intent.context);
-    if (this.activeAttempts.has(key)) {
-      this.retryAfterActiveKeys.add(key);
-    } else {
-      this.pendingKeys.add(key);
-    }
+    (this.activeAttempts.has(key) ? this.retryAfterActiveKeys : this.pendingKeys).add(key);
     this.pump();
   }
 
@@ -276,11 +266,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
         }
         intent.context = this.options.updateContext?.(intent.context, context) ?? context;
         intent.queuedSettlement ??= this.options.captureAttempt?.(intent.context);
-        if (this.activeAttempts.has(key)) {
-          this.retryAfterActiveKeys.add(key);
-        } else {
-          this.pendingKeys.add(key);
-        }
+        (this.activeAttempts.has(key) ? this.retryAfterActiveKeys : this.pendingKeys).add(key);
       }
     } finally {
       this.pump();
@@ -303,7 +289,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
 
   clear(): void {
     for (const attempt of this.activeAttempts.values()) {
-      attempt.controller.abort(new Error("voice mutation digest delivery owner reset"));
+      attempt.abort(new Error("voice mutation digest delivery owner reset"));
     }
     for (const intent of this.intents.values()) {
       intent.queuedSettlement?.release();
@@ -311,16 +297,11 @@ export class ClientVoiceMutationDigestOwner<TContext> {
         clearTimeout(intent.failureExpiry);
       }
     }
-    this.generation += 1;
     this.intents.clear();
     this.pendingKeys.clear();
     this.retryAfterActiveKeys.clear();
     this.activeAttempts.clear();
     this.retainedIdentityBytes = 0;
-  }
-
-  private key(params: { agentId: string; voiceSessionId: string }): string {
-    return `${params.agentId}\0${params.voiceSessionId}`;
   }
 
   private deleteIntent(key: string, expected?: MutationDigestIntent<TContext>): void {
@@ -415,11 +396,10 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     runInDetachedAsyncContext(() => {
       const settlement = intent.queuedSettlement;
       delete intent.queuedSettlement;
-      const controller = new AbortController();
-      const attempt = { controller, intent, generation: this.generation };
+      const attempt = new AbortController();
       this.activeAttempts.set(key, attempt);
       const timeout = setTimeout(
-        () => controller.abort(new Error("voice mutation digest delivery abort requested")),
+        () => attempt.abort(new Error("voice mutation digest delivery abort requested")),
         this.policy.attemptAbortAfterMs,
       );
       timeout.unref?.();
@@ -427,7 +407,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
       // that ignores it keeps this exact slot so repeated retries cannot fan out.
       let completion: Promise<boolean>;
       try {
-        const run = () => this.options.attempt({ ...intent, signal: controller.signal });
+        const run = () => this.options.attempt({ ...intent, signal: attempt.signal });
         completion = settlement ? settlement.run(run) : run();
       } catch (error) {
         completion = Promise.reject(error instanceof Error ? error : new Error(String(error)));
@@ -443,7 +423,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
           }
         })
         .catch((error: unknown) => {
-          if (attempt.generation !== this.generation) {
+          if (this.activeAttempts.get(key) !== attempt) {
             return;
           }
           if (hasSqliteWorkerOutcomeUnknown(error)) {
@@ -476,12 +456,10 @@ export class ClientVoiceMutationDigestOwner<TContext> {
         .finally(() => {
           settlement?.release();
           clearTimeout(timeout);
-          if (attempt.generation !== this.generation) {
+          if (this.activeAttempts.get(key) !== attempt) {
             return;
           }
-          if (this.activeAttempts.get(key) === attempt) {
-            this.activeAttempts.delete(key);
-          }
+          this.activeAttempts.delete(key);
           if (intent.expireAfterActive && this.intents.get(key) === intent) {
             this.stopAfterFailure(
               key,
