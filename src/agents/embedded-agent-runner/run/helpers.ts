@@ -1,8 +1,6 @@
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
-import type { ContextWindowInfo } from "../../context-window-guard.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -13,36 +11,6 @@ import {
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
-
-/**
- * Run-level context budget. `resolved-v1` marks a window owned by the selected
- * model's own metadata, which cold session projection may reuse for the same
- * producer tuple. Authored config windows, caller budget caps, and the generic
- * fallback keep the legacy `resolved` marker: an operator can remove that
- * config, and a persisted copy must not outlive it. Windows of a model that
- * declares selectable options stay `resolved` too: they follow the session's
- * window selection, which the producer tuple does not carry.
- */
-export type OuterContextTokenMeta = {
-  contextTokens?: number;
-  contextTokensSource?: "resolved-v1";
-};
-
-export function buildOuterContextTokenMeta(
-  contextTokenBudget: number | undefined,
-  contextWindowInfo: Pick<ContextWindowInfo, "source" | "referenceTokens"> | undefined,
-  runtimeModel: Pick<ProviderRuntimeModel, "contextWindows">,
-): OuterContextTokenMeta {
-  if (contextTokenBudget === undefined) {
-    return {};
-  }
-  // referenceTokens is set only when a caller budget capped the model window.
-  return contextWindowInfo?.source === "model" &&
-    contextWindowInfo.referenceTokens === undefined &&
-    !runtimeModel.contextWindows?.length
-    ? { contextTokens: contextTokenBudget, contextTokensSource: "resolved-v1" }
-    : { contextTokens: contextTokenBudget };
-}
 
 export type RuntimeAuthState = {
   generation: number;
@@ -172,7 +140,7 @@ export function buildErrorAgentMeta(params: {
   model: string;
   credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
-  contextTokensSource?: OuterContextTokenMeta["contextTokensSource"];
+  contextTokensSource?: "resolved-v1";
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: NormalizedUsage | undefined;
   currentAttemptAssistant?: { api?: string; usage?: unknown } | null;

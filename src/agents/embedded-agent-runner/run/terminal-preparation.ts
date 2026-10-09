@@ -23,7 +23,6 @@ import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.j
 import {
   buildUsageAgentMetaFields,
   normalizeAssistantUsageForContext,
-  type OuterContextTokenMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -58,7 +57,7 @@ export function prepareEmbeddedRunTerminal(input: {
   authProfileId?: string;
   sessionIdUsed: string;
   sessionFileUsed?: string;
-  outerContextTokenMeta: OuterContextTokenMeta;
+  outerContextTokenMeta: { contextTokens?: number; contextTokensSource?: "resolved-v1" };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
   contextRecoveryState: EmbeddedRunContextRecoveryState;

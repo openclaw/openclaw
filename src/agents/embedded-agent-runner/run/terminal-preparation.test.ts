@@ -11,9 +11,13 @@ import {
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import type { OuterContextTokenMeta } from "./helpers.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
+import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
+
+type OuterContextTokenMeta = Parameters<
+  typeof prepareEmbeddedRunTerminal
+>[0]["outerContextTokenMeta"];
 
 const payloadMocks = vi.hoisted(() => ({
   buildEmbeddedRunPayloads: vi.fn<typeof buildEmbeddedRunPayloads>(),

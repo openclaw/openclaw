@@ -28,6 +28,12 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
+`/context` and `openclaw sessions list` can reuse the last verified model budget
+when catalog metadata is unavailable and the selected model and runtime still
+match. A qualifying turn refreshes this value. Current model metadata and
+configured limits take precedence; generic fallback windows and removable caps
+are not saved as verified model budgets.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
