@@ -36,6 +36,7 @@ import {
   waitForSessionWorkAdmissionRelease,
   type SessionWorkAdmissionInterrupt,
 } from "./session-work-admission-interruption.js";
+import { createSessionWorkAdmissionQueries } from "./session-work-admission-queries.js";
 
 export {
   cancelSessionWorkAdmissionHandoff,
@@ -53,6 +54,7 @@ type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
+  isSettling?: () => boolean;
 };
 
 type SessionLifecycleMutationOwner = {
@@ -112,6 +114,22 @@ const {
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
   admissionClosures: SESSION_WORK_ADMISSION_CLOSURES,
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
+const {
+  collectSessionWorkAdmissions,
+  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
+  getCompetingSessionWorkAdmissionRelease,
+  getTerminalSessionWorkAdmissionRelease,
+} = createSessionWorkAdmissionQueries<SessionWorkAdmission>(ACTIVE_SESSION_WORK_ADMISSIONS, () =>
+  CURRENT_SESSION_WORK_ADMISSIONS.getStore(),
+);
+export {
+  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
+  getCompetingSessionWorkAdmissionRelease,
+  getTerminalSessionWorkAdmissionRelease,
+};
+
 // Older runtime chunks can create the shared state without this newer index.
 const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
   (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
@@ -415,55 +433,6 @@ export function isCompetingSessionWorkAdmissionActive(
   );
 }
 
-type SessionWorkAdmissionReleaseParams = SessionLifecycleMutationTarget;
-
-function collectSessionWorkAdmissions(
-  identities: Iterable<string>,
-  matches: (admission: SessionWorkAdmission) => boolean,
-): Set<SessionWorkAdmission> {
-  const matching = new Set<SessionWorkAdmission>();
-  for (const identity of identities) {
-    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (matches(admission)) {
-        matching.add(admission);
-      }
-    }
-  }
-  return matching;
-}
-
-/** Completion of the currently active turns that own a session. */
-export function getSessionWorkAdmissionRelease(
-  params: SessionWorkAdmissionReleaseParams,
-): Promise<void> | undefined {
-  const matchingAdmissions = collectSessionWorkAdmissions(
-    normalizeSessionIdentities(params.scope, params.identities),
-    (admission) => admission.phase === "acquired",
-  );
-  if (matchingAdmissions.size === 0) {
-    return undefined;
-  }
-
-  // A gateway turn can adopt an outer reply admission and open its own inner
-  // admission. Self-archive must wait for both owners to release the session.
-  return Promise.all(Array.from(matchingAdmissions, (admission) => admission.released)).then(
-    () => undefined,
-  );
-}
-
-/** Completion of a named owner that is starting or actively working on a session. */
-export function getSessionWorkAdmissionOwnerRelease(
-  params: SessionWorkAdmissionReleaseParams & { owner: symbol },
-): Promise<void> | undefined {
-  const matching = collectSessionWorkAdmissions(
-    normalizeSessionIdentities(params.scope, params.identities),
-    (admission) => admission.owner === params.owner,
-  );
-  return matching.size > 0
-    ? Promise.all(Array.from(matching, (admission) => admission.released)).then(() => undefined)
-    : undefined;
-}
-
 /** Active session identities grouped by their authoritative store/lifecycle scope. */
 export function collectActiveSessionWorkAdmissions(
   owners?: ReadonlySet<object>,
@@ -526,6 +495,8 @@ export async function beginSessionWorkAdmission(params: {
   storeWriterIdentities?: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
+  /** The execution owner has committed its terminal outcome; cleanup still retains this lease. */
+  isSettling?: () => boolean;
   /** Queue behind earlier admissions of the same owner, including pending work. */
   serializeOwner?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
@@ -568,6 +539,7 @@ export async function beginSessionWorkAdmission(params: {
   const admission: SessionWorkAdmission = {
     lifecycleGeneration: getAgentRunLifecycleGeneration(),
     phase: "pending",
+    isSettling: params.isSettling,
     ...(params.owner ? { owner: params.owner } : {}),
     handoffIds: new Set(),
     identities: new Set(identities),

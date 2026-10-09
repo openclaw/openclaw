@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSlackDataVisualizationBlock,
-  canRenderSlackDataVisualization,
   renderSlackDataVisualizationFallbackText,
 } from "./data-visualization.js";
 
@@ -76,24 +75,24 @@ describe("Slack data visualization blocks", () => {
 
   it("rejects values that Slack would reject instead of clipping or changing data", () => {
     expect(
-      canRenderSlackDataVisualization({
+      buildSlackDataVisualizationBlock({
         type: "chart",
         chartType: "pie",
         title: "Invalid",
         segments: [{ label: "Zero", value: 0 }],
       }),
-    ).toBe(false);
+    ).toBeUndefined();
     expect(
-      canRenderSlackDataVisualization({
+      buildSlackDataVisualizationBlock({
         type: "chart",
         chartType: "bar",
         title: "Invalid",
         categories: ["Q1", "Q2"],
         series: [{ name: "Revenue", values: [1] }],
       }),
-    ).toBe(false);
+    ).toBeUndefined();
     expect(
-      canRenderSlackDataVisualization({
+      buildSlackDataVisualizationBlock({
         type: "chart",
         chartType: "area",
         title: "Invalid",
@@ -103,7 +102,7 @@ describe("Slack data visualization blocks", () => {
           values: [index],
         })),
       }),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
   it("orders inbound data by axis categories instead of array position", () => {

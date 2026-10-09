@@ -627,6 +627,13 @@ for channel, availability, and the latest durable update report. Gateway console
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
+With `--no-restart`, state verification blocked by another process is deferred,
+and the installed update is recorded with Gateway readiness unverified. That
+recorded contention also defers Gateway recovery verification. Restart the Gateway through its service
+owner, then run `openclaw update status` and `openclaw doctor`; keep recovery backups
+until verification completes. Other failures keep their recovery diagnostics;
+a genuine database incompatibility still fails.
+
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, activating,
 restarting, verifying, and finished. When output is piped or captured in a log,
@@ -657,7 +664,11 @@ inspect the checkout and recovery report before restarting it.
 For a profile without a runtime database, an older npm target initializes its
 compatible state before the updater records history. The selected release's
 Doctor runs before activation, including when npm's install hooks already created
-the database. Existing databases retain their downgrade protections.
+the database. Existing databases retain their downgrade protections. When the
+updater can read shared state, target-release preflight also checks configured,
+retired, and registered custom agent stores and names every incompatible store
+before changing the installation or stopping the Gateway. State newer than the
+updater can read retains a single install-compatible-build or restore-backup refusal.
 
 If database schema preflight cannot inspect the configured paths because the
 config is invalid, its refusal lists the config file and invalid fields. Run

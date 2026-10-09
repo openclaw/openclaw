@@ -38,7 +38,7 @@ import {
 export type PluginMigrationInspection = {
   requiredPluginIds: readonly string[];
   inspectionRequiredPluginIds: readonly string[];
-  statelessPluginIds: readonly string[];
+  statelessPlugins: readonly { id: string; version?: string }[];
   runtimePluginAliases: readonly string[];
   unavailablePluginIds?: readonly string[];
   replacementPluginIds?: Readonly<Record<string, string>>;
@@ -123,7 +123,7 @@ export async function inspectPluginMigrationAvailability(params: {
           }
           const requiredIds = new Set(requiredPluginIds);
           const inspectionRequiredIds = new Set(inspectionRequiredPluginIds);
-          const statelessPluginIds: string[] = [];
+          const statelessPlugins: { id: string; version?: string }[] = [];
           const unavailablePluginIds: string[] = [];
           const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
           const pending = [...inspectedIds].toSorted().flatMap((pluginId) => {
@@ -156,7 +156,10 @@ export async function inspectPluginMigrationAvailability(params: {
               availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable);
             if (available && plugin && statelessCandidates.has(pluginId)) {
               // Installation-only confirmation reads metadata; it need not activate a channel.
-              statelessPluginIds.push(pluginId);
+              statelessPlugins.push({
+                id: pluginId,
+                version: plugin.packageVersion ?? plugin.version,
+              });
             }
             if (!selected.has(pluginId) || available) {
               return [];
@@ -200,7 +203,7 @@ export async function inspectPluginMigrationAvailability(params: {
               replacementPluginIds[pluginId] = replacementPluginId;
             }
           }
-          const statelessIds = new Set(statelessPluginIds);
+          const statelessIds = new Set(statelessPlugins.map((plugin) => plugin.id));
           const runtimePluginAliases = collectConfiguredRuntimeIds(params.cfg).filter((runtime) => {
             if (
               selected.has(runtime) ||
@@ -218,7 +221,7 @@ export async function inspectPluginMigrationAvailability(params: {
             pending,
             requiredPluginIds: requiredPluginIds.toSorted(),
             inspectionRequiredPluginIds: inspectionRequiredPluginIds.toSorted(),
-            statelessPluginIds,
+            statelessPlugins,
             runtimePluginAliases,
             // The updating parent still owns package availability until convergence resumes.
             ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),

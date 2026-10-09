@@ -16,7 +16,13 @@ const { begin, boundary } = await import("./doctor-maintenance.settlement.test-s
 
 it.each([
   { outcome: "starting", phase: "waiting for Gateway listener", elapsedMs: 60_000, code: 0 },
-  { outcome: "starting", phase: "startup migration", elapsedMs: 300_000, code: 0 },
+  {
+    outcome: "failed",
+    phase: "waiting for Gateway health and identity",
+    elapsedMs: 60_000,
+    code: 0,
+  },
+  { outcome: "starting", phase: "initializing plugins", elapsedMs: 60_000, code: 0 },
   { outcome: "failed", phase: "waiting for managed service", elapsedMs: 60_000, code: 1 },
 ] as const)("doctor --fix exits $code for $phase", async ({ outcome, phase, elapsedMs, code }) => {
   boundary.health.mockResolvedValue({
@@ -24,11 +30,12 @@ it.each([
     healthy: false,
     staleGatewayPids: [],
     runtime:
-      outcome === "starting"
+      code === 0
         ? { status: "running", pid: 4242 }
         : { status: "stopped", state: "failed", lastExitStatus: 1 },
     portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-    waitOutcome: outcome === "starting" ? "still-starting" : "stopped-free",
+    waitOutcome:
+      outcome === "starting" ? "still-starting" : code === 0 ? "timeout" : "stopped-free",
     elapsedMs,
     startupPhase: phase,
   });
@@ -45,10 +52,12 @@ it.each([
     program.parseAsync(["doctor", "--fix", "--non-interactive"], { from: "user" }),
   ).rejects.toMatchObject({ code });
 
-  const warning =
-    "Warning: Doctor repair complete; Gateway is still starting — check `openclaw gateway status` in a minute.";
-  if (outcome === "starting") {
-    expect(maintenance!.warnings).toContain(warning);
+  if (code === 0) {
+    const warning = maintenance!.warnings.join("\n");
+    expect(warning).toContain("Gateway started but readiness was not verified");
+    expect(warning).toContain(phase);
+    expect(warning).toContain("openclaw gateway status --deep");
+    expect(warning).toContain("openclaw gateway diagnostics export");
     expect(maintenance!.failureFacts).toEqual([]);
     expect(boundary.log).toHaveBeenCalledWith(warning);
     expect(runtime.error).not.toHaveBeenCalled();
@@ -56,7 +65,7 @@ it.each([
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Doctor gateway-restoration failed"),
     );
-    expect(maintenance!.warnings).not.toContain(warning);
+    expect(maintenance!.warnings).toEqual([]);
   }
   expect(boundary.log).not.toHaveBeenCalledWith(
     "Gateway restarted and verified after Doctor repair.",

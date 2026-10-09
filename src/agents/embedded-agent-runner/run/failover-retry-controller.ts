@@ -94,6 +94,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   const { runInput, preparedRuntime } = input;
   const { runParams: params, globalLane, agentDir, fallbackConfigured } = runInput;
   const { provider, modelId, profileFailureStore } = preparedRuntime;
+  const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
   let transientRetryCount = 0;
   let outputLimitRetryCount = 0;
@@ -169,6 +170,33 @@ export function createEmbeddedRunFailoverRetryController(input: {
     });
   };
 
+  const advanceRateLimitAuthProfile = async (context: RateLimitAuthProfileContext) => {
+    if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
+      const status = resolveFailoverStatus("rate_limit");
+      log.warn(
+        `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+      );
+      context.logFallbackDecision("fallback_model", { status });
+      throw new FailoverError(
+        "The AI service is temporarily rate-limited. Please try again in a moment.",
+        {
+          reason: "rate_limit",
+          provider: context.failoverProvider,
+          model: context.failoverModel,
+          profileId: preparedRuntime.snapshot().lastProfileId,
+          sessionId: input.getSessionId(),
+          lane: globalLane,
+          status,
+        },
+      );
+    }
+    const rotated = await preparedRuntime.advanceAttemptAuthProfile();
+    if (rotated) {
+      rateLimitProfileRotations += 1;
+    }
+    return rotated;
+  };
+
   return {
     overloadProfileRotationLimit: MAX_OVERLOAD_PROFILE_ROTATIONS,
     get transientRetryCount() {
@@ -185,33 +213,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         transientRetryWindowStartMs = null;
       }
     },
-    advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
-    advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
-      if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
-        const status = resolveFailoverStatus("rate_limit");
-        log.warn(
-          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
-        );
-        context.logFallbackDecision("fallback_model", { status });
-        throw new FailoverError(
-          "The AI service is temporarily rate-limited. Please try again in a moment.",
-          {
-            reason: "rate_limit",
-            provider: context.failoverProvider,
-            model: context.failoverModel,
-            profileId: preparedRuntime.snapshot().lastProfileId,
-            sessionId: input.getSessionId(),
-            lane: globalLane,
-            status,
-          },
-        );
-      }
-      const rotated = await preparedRuntime.advanceAttemptAuthProfile();
-      if (rotated) {
-        rateLimitProfileRotations += 1;
-      }
-      return rotated;
-    },
+    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) =>
+      reason === "rate_limit" ? advanceRateLimitAuthProfile(context) : advanceAttemptAuthProfile(),
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
     recoverThrownHarnessAuthFailure: async (error: unknown): Promise<AuthRetryTrace | null> => {

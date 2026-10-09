@@ -254,6 +254,7 @@ export function createMergeOutcomeFixtureHarness() {
       unavailable: false,
       stale: false,
       drift: false,
+      strictDrift: false,
       crash: "",
       comment: "success",
       admin: false,
@@ -769,7 +770,7 @@ pr_gh_plain() {
 sleep() { if [ "$#" = 1 ] && { [ "$1" = 1 ] || [ "$1" = 2 ]; }; then command node "$FIXTURE_GH" sleep "$1"; else command sleep "$@"; fi; }
 verify_crabbox_admin_merge_bypass() {
   [ "$(command jq -r .admin "$FIXTURE_STATE")" = true ] || return 1
-  command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
+  command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,finalMainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
 }
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
@@ -895,6 +896,7 @@ fi
             ...env,
             FIXTURE_REAL_GH: String(Boolean(state().quotaAt || state().restReadFailure)),
             OPENCLAW_PR_MERGE_METHOD: method,
+            OPENCLAW_PR_STRICT_DRIFT: state().strictDrift ? "1" : "",
           },
           encoding: "utf8",
           timeout: 20_000,

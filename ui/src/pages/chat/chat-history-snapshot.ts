@@ -1,4 +1,5 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
@@ -91,18 +92,9 @@ export function isHistoryCursor(
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
 ): ChatHistoryPagination {
-  const totalMessages = result?.totalMessages;
-  const validTotal =
-    typeof totalMessages === "number" && Number.isSafeInteger(totalMessages) && totalMessages >= 0
-      ? totalMessages
-      : undefined;
-  const nextOffset = result?.nextOffset;
-  if (
-    result?.hasMore === true &&
-    typeof nextOffset === "number" &&
-    Number.isSafeInteger(nextOffset) &&
-    nextOffset > 0
-  ) {
+  const validTotal = asSafeIntegerInRange(result?.totalMessages, { min: 0 });
+  const nextOffset = asSafeIntegerInRange(result?.nextOffset, { min: 1 });
+  if (result?.hasMore === true && nextOffset !== undefined) {
     return {
       hasMore: true,
       nextOffset,
@@ -124,17 +116,13 @@ export function historySessionId(result: ChatHistoryResult): string | null {
 }
 
 function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
-  const totalMessages = pagination.totalMessages;
-  if (
-    typeof totalMessages !== "number" ||
-    !Number.isSafeInteger(totalMessages) ||
-    totalMessages < 0
-  ) {
+  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
+  if (totalMessages === undefined) {
     return null;
   }
   const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
   const start = totalMessages - retainedDepth + 1;
-  return Number.isSafeInteger(start) && start > 0 ? start : null;
+  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
 }
 
 export function reconcileHistoryTail(options: {

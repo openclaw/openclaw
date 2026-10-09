@@ -263,8 +263,9 @@ export async function deleteSessionPlacementDraft(
   requests: SessionPlacementRequests,
   key: string,
   agentId: string,
+  recovered = false,
 ): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, false);
+  return deletePlacementDraft(requests, key, agentId, recovered);
 }
 
 async function deletePlacementDraft(
@@ -298,33 +299,19 @@ async function deletePlacementDraft(
   if (!existing.sessionId) {
     return "placement draft session identity is unavailable";
   }
-  return archiveAndDeleteSessionPlacementDraft(client, {
-    key,
-    agentId,
-    sessionId: existing.sessionId,
-  });
-}
-
-async function archiveAndDeleteSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request">,
-  params: { key: string; agentId: string; sessionId: string },
-): Promise<string | undefined> {
+  const target = { key, agentId, expectedSessionId: existing.sessionId };
   try {
     await client.request("sessions.patch", {
-      key: params.key,
-      agentId: params.agentId,
+      ...target,
       archived: true,
-      expectedSessionId: params.sessionId,
     });
   } catch (error) {
     return formatUiError(error);
   }
   try {
     const deleted = await client.request<{ deleted?: boolean }>("sessions.delete", {
-      key: params.key,
-      agentId: params.agentId,
+      ...target,
       deleteTranscript: true,
-      expectedSessionId: params.sessionId,
       archivedOnly: true,
     });
     if (deleted.deleted !== true) {
@@ -335,24 +322,14 @@ async function archiveAndDeleteSessionPlacementDraft(
     const deleteError = formatUiError(error);
     try {
       await client.request("sessions.patch", {
-        key: params.key,
-        agentId: params.agentId,
+        ...target,
         archived: false,
-        expectedSessionId: params.sessionId,
       });
     } catch (restoreError) {
       return `${deleteError}; restoring the placement draft failed: ${formatUiError(restoreError)}`;
     }
     return deleteError;
   }
-}
-
-export async function deleteRecoveredSessionPlacementDraft(
-  requests: SessionPlacementRequests,
-  key: string,
-  agentId: string,
-): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, true);
 }
 
 export async function startSessionPlacementInitialTurn(
@@ -375,14 +352,16 @@ export async function startSessionPlacementInitialTurn(
   const message = params.message;
   const mentions = params.mentions?.map((mention) => ({ ...mention }));
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
+  const resolvePlacement = (mode: SessionPlacementStartMode, initial?: SessionPlacement) =>
+    resolveActivePlacement(
+      requests,
+      { key: params.key, agentId: params.agentId, mode, initial, cleanupOnCancellation },
+      isCurrent,
+    );
   let resolution: PlacementResolution | undefined;
   let dispatchError = "";
   if (params.mode !== "dispatch") {
-    resolution = await resolveActivePlacement(
-      requests,
-      { key: params.key, agentId: params.agentId, mode: params.mode, cleanupOnCancellation },
-      isCurrent,
-    );
+    resolution = await resolvePlacement(params.mode);
   }
   if (resolution?.status === "dispatch" && !isCurrent()) {
     return cancelSessionPlacement(client, params, cleanupOnCancellation);
@@ -393,17 +372,7 @@ export async function startSessionPlacementInitialTurn(
         "sessions.dispatch",
         sessionPlacementDispatchParams(params),
       );
-      resolution = await resolveActivePlacement(
-        requests,
-        {
-          key: params.key,
-          agentId: params.agentId,
-          initial: dispatched.placement,
-          mode: "recover",
-          cleanupOnCancellation,
-        },
-        isCurrent,
-      );
+      resolution = await resolvePlacement("recover", dispatched.placement);
     } catch (error) {
       dispatchError = formatUiError(error);
       if (!cleanupOnCancellation() && !isCurrent()) {
@@ -412,11 +381,7 @@ export async function startSessionPlacementInitialTurn(
       if (!isAmbiguousDispatchError(error)) {
         return { status: "dispatch-rejected", error: dispatchError };
       }
-      resolution = await resolveActivePlacement(
-        requests,
-        { key: params.key, agentId: params.agentId, mode: "recover", cleanupOnCancellation },
-        isCurrent,
-      );
+      resolution = await resolvePlacement("recover");
     }
   }
   if (!cleanupOnCancellation() && !isCurrent()) {

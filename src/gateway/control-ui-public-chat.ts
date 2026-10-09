@@ -7,13 +7,10 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import {
-  isPublicSessionShareActive,
-  readPublicSessionShare,
-} from "./control-ui-public-session-read.js";
-import {
   PUBLIC_SESSION_ENTRY_SCRIPT,
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
+import { servePublicSessionRepresentation } from "./control-ui-public-session-response.js";
 import {
   buildControlUiSessionEntryUrl,
   parseControlUiSessionReturnPath,
@@ -81,13 +78,17 @@ export async function serveControlUiPublicChat(params: {
     await params.serveApp(entryPath);
     return true;
   }
-  const admitted = gate.admitClient(params.ingress.rateLimit.subject.key);
-  if (admitted.kind === "rate-limited") {
-    res.setHeader("Retry-After", admitted.retryAfterSeconds);
-    return end(429, "Too many public session requests. Please retry later.");
-  }
-  const unavailable = () =>
-    end(
+  const unavailable = (status: 404 | 429 | 503 = 404, retryAfterSeconds = 1) => {
+    if (status !== 404) {
+      res.setHeader("Retry-After", status === 429 ? retryAfterSeconds : "1");
+      return end(
+        status,
+        status === 429
+          ? "Too many public session requests. Please retry later."
+          : "This conversation is temporarily unavailable. Please retry.",
+      );
+    }
+    return end(
       404,
       renderPublicSessionDocument({
         title: "Conversation unavailable",
@@ -100,12 +101,16 @@ export async function serveControlUiPublicChat(params: {
         unavailable: true,
       }),
     );
+  };
+  const admitted = gate.admitClient(params.ingress.rateLimit.subject.key);
+  if (admitted.kind === "rate-limited") {
+    return unavailable(429, admitted.retryAfterSeconds);
+  }
   if (!secureIngress) {
     return unavailable();
   }
   if (!projection) {
-    res.setHeader("Retry-After", "1");
-    return end(503, "This conversation is temporarily unavailable. Please retry.");
+    return unavailable(503);
   }
   try {
     // No authentication happens on this path: all candidates are publication-filtered.
@@ -136,10 +141,11 @@ export async function serveControlUiPublicChat(params: {
       shareId: share.id,
     };
     const offset = Number(offsetText);
-    const result = await gate.run({
-      publicationKey: share.id,
-      sessionKey: selected.key,
-      config,
+    return await servePublicSessionRepresentation({
+      ...params,
+      locator,
+      projection,
+      offset,
       requestKey: JSON.stringify([
         "canonical",
         share.id,
@@ -149,50 +155,17 @@ export async function serveControlUiPublicChat(params: {
         entryUrl,
         clientAuthBasePath,
       ]),
-      work: async () => {
-        const session = await readPublicSessionShare(config, locator, { offset, projection });
-        return session
-          ? renderPublicSessionDocument({
-              ...session,
-              latestUrl: url.pathname,
-              entryUrl,
-              clientAuthBasePath,
-              canonicalUrl: `${origin}${url.pathname}`,
-              cardUrl: `${origin}${basePath}/share/card.png`,
-              isLatest: offset === 0,
-              ...(session.olderOffset !== undefined
-                ? { olderUrl: `${url.pathname}?offset=${session.olderOffset}` }
-                : {}),
-            })
-          : null;
+      document: {
+        latestUrl: url.pathname,
+        entryUrl,
+        clientAuthBasePath,
+        canonicalUrl: `${origin}${url.pathname}`,
+        cardUrl: `${origin}${basePath}/share/card.png`,
       },
-    });
-    if (result.kind === "rate-limited") {
-      res.setHeader("Retry-After", result.retryAfterSeconds);
-      return end(429, "Too many public session requests. Please retry later.");
-    }
-    if (result.kind === "unavailable") {
-      res.setHeader("Retry-After", "1");
-      return end(503, "This conversation is temporarily unavailable. Please retry.");
-    }
-    return await withReadySessionRows(projection, queries, () => {
-      if (!result.value || !isPublicSessionShareActive(config, locator, projection)) {
-        return unavailable();
-      }
-      if (!result.value.isCurrent()) {
-        res.setHeader("Retry-After", "1");
-        return end(503, "This conversation is temporarily unavailable. Please retry.");
-      }
-      res.setHeader("ETag", result.value.etag);
-      if (req.headers["if-none-match"] === result.value.etag) {
-        res.statusCode = 304;
-        res.end();
-        return true as const;
-      }
-      return end(200, result.value.body);
+      olderUrl: (olderOffset) => `${url.pathname}?offset=${olderOffset}`,
+      unavailable,
     });
   } catch {
-    res.setHeader("Retry-After", "1");
-    return end(503, "This conversation is temporarily unavailable. Please retry.");
+    return unavailable(503);
   }
 }

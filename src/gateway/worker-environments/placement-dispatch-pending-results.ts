@@ -28,6 +28,7 @@ import { boundedWorkerError } from "./worker-error.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
@@ -296,11 +297,10 @@ export async function recoverPendingWorkspaceResults(
                 !reclaimResult
               );
             };
-            const currentPreservesEnvironment = () =>
-              canPreserveEnvironment(
-                placements.get(pending.sessionId),
-                placements.getPlacementMove(pending.sessionId) ?? null,
-              );
+            const currentPreservesEnvironment = () => {
+              const current = placements.readCurrentMoveAuthority(pending.sessionId);
+              return canPreserveEnvironment(current.placement, current.move ?? null);
+            };
             const preserveEnvironment = !finishBlockedMove && currentPreservesEnvironment();
             const currentCheck: PlacementTurnClaimCurrentCheck = {
               assertPlacementCurrent(current, move) {
@@ -434,36 +434,14 @@ export async function recoverPendingWorkspaceResults(
               }
               return;
             }
-            const owner = {
-              sessionId: active.sessionId,
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-              placementGeneration: pending.placementGeneration,
-            };
-            const journal = {
-              load: () =>
-                placements.loadWorkspaceReconciliation(owner, undefined, recovery.assertCurrent),
-              begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) => {
-                recovery.assertCurrent();
-                return placements.beginWorkspaceReconciliation(owner, next, recovery.assertCurrent);
-              },
-              commit: async (manifestRef: string) => {
-                assertPreservedEnvironment();
-                await placements.updateWorkspaceBaseManifest(
-                  { claim: turnClaim, manifestRef },
-                  recovery.assertCurrent,
-                  currentCheck,
-                );
-              },
-              abort: () => {
-                recovery.assertCurrent();
-                return placements.abortWorkspaceReconciliation(
-                  owner,
-                  undefined,
-                  recovery.assertCurrent,
-                );
-              },
-            };
+            const { adapter: journal } = createWorkspaceResultJournal({
+              placement: { ...active, generation: pending.placementGeneration },
+              placements,
+              turnClaim,
+              assertCurrent: recovery.assertCurrent,
+              assertCommitCurrent: assertPreservedEnvironment,
+              current: currentCheck,
+            });
             if (stagedResultRef) {
               let ownedStagedResultRef = stagedResultRef;
               // A staged result must never be destroyed by environment lifecycle.

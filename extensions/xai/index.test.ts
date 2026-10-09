@@ -246,7 +246,7 @@ describe("xai provider plugin", () => {
     expect(provider.fetchUsageSnapshot).toEqual(expect.any(Function));
   });
 
-  it("filters the xAI API-key catalog against live model ids", async () => {
+  it("shows every chat model the xAI API-key listing returns", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -256,7 +256,10 @@ describe("xai provider plugin", () => {
           { id: "grok-4.5", object: "model" },
           { id: "grok-4.20-0309-reasoning", object: "model" },
           { id: "grok-4.20-0309-non-reasoning", object: "model" },
-          { id: "not-in-manifest", object: "model" },
+          { id: "grok-5-preview", object: "model" },
+          { id: "grok-4.20-multi-agent-0309", object: "model" },
+          { id: "grok-imagine-image", object: "model" },
+          { id: "grok-imagine-video", object: "model" },
         ],
       }),
       finalUrl: "https://api.x.ai/v1/models",
@@ -269,12 +272,14 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.7");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.6");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-reasoning");
-    expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-non-reasoning");
-    expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "grok-4.20-0309-non-reasoning",
+      "grok-4.20-0309-reasoning",
+      "grok-4.5",
+      "grok-4.6",
+      "grok-4.7",
+      "grok-5-preview",
+    ]);
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
     const init = fetchParams?.init;
@@ -936,6 +941,59 @@ describe("xai provider plugin", () => {
     expect(normalized?.thinkingLevelMap?.xhigh).toBe("xhigh");
     expect(normalized?.compat).toMatchObject({
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+  });
+
+  it("follows the listed reasoning efforts for a Grok model the ID rules do not cover", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiFetch(() =>
+      Response.json({
+        data: [
+          {
+            id: "grok-fixture-fast",
+            api_backend: "responses",
+            supports_reasoning_effort: true,
+            reasoning_efforts: [
+              { id: "xhigh", value: "xhigh" },
+              { id: "high", value: "high", default: true },
+              { id: "medium", value: "medium" },
+              { id: "low", value: "low" },
+            ],
+          },
+        ],
+      }),
+    );
+    const { provider, result } = await runXaiCatalog();
+    const model = result.models.find((entry) => entry.id === "grok-fixture-fast");
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "xai",
+        modelId: "grok-fixture-fast",
+        reasoning: model?.reasoning,
+        compat: model?.compat,
+      }),
+    ).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+      defaultLevel: "high",
+    });
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "grok-fixture-fast",
+      model: { ...model, provider: "xai" },
+    } as never);
+    expect(normalized?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+    // The listing offers no "none", so off is not a selectable effort.
+    expect(normalized?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
     });
   });
 });

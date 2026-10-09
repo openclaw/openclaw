@@ -4,6 +4,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -313,6 +314,14 @@ class SessionsPage extends OpenClawLightDomElement {
     );
   }
 
+  private publishRequestError(scope: SessionsPageRequestScope, error: unknown): "failed" | "stale" {
+    if (!this.isRequestScopeCurrent(scope)) {
+      return "stale";
+    }
+    this.error = formatUiError(error);
+    return "failed";
+  }
+
   private mutationDisabledReason(request: SessionMethodAccessRequest): string | undefined {
     const access = readSessionMethodAccess(this.context?.gateway.snapshot, request);
     return access.allowed ? undefined : access.reason;
@@ -516,10 +525,8 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     // Claim before refreshList publishes. Only this connection's completion may
     // release the slot; the next query is read from page state, never queued here.
-    let start!: (request: Promise<void>) => void;
-    const pending = new Promise<void>((resolve) => {
-      start = resolve;
-    }).finally(() => {
+    const completion = createDeferredCore();
+    const pending = completion.promise.finally(() => {
       if (this.listRequest !== pending) {
         return;
       }
@@ -529,20 +536,13 @@ class SessionsPage extends OpenClawLightDomElement {
     });
     this.listRequest = pending;
     this.refreshing = true;
-    start(binding.sessions.refreshList({ ...binding.query, ...options }));
+    completion.resolve(binding.sessions.refreshList({ ...binding.query, ...options }));
     return pending;
   }
 
   private clearSearchTimer() {
     clearTimeout(this.searchTimer);
     this.searchTimer = undefined;
-  }
-
-  private adoptCurrentListSnapshot() {
-    const binding = this.listBinding;
-    if (binding) {
-      this.applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
-    }
   }
 
   private resetTranscriptSearchState(query: string) {
@@ -575,12 +575,7 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.transcriptSearchTask.run();
   }
 
-  private updateFilters(next: {
-    activeMinutes: string;
-    limit: string;
-    includeGlobal: boolean;
-    includeUnknown: boolean;
-  }) {
+  private updateFilters(next: Parameters<SessionsProps["onFiltersChange"]>[0]) {
     this.activeMinutes = next.activeMinutes;
     this.limit = next.limit;
     this.includeGlobal = next.includeGlobal;
@@ -783,9 +778,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       rows = listed;
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
       return;
     }
     const archivedRows = rows.filter((row) => row.archived === true);
@@ -867,7 +860,10 @@ class SessionsPage extends OpenClawLightDomElement {
     } finally {
       if (this.isRequestScopeCurrent(scope)) {
         this.sessionMutationPending = false;
-        this.adoptCurrentListSnapshot();
+        const binding = this.listBinding;
+        if (binding) {
+          this.applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
+        }
         if (mutationError) {
           this.error = mutationError;
         }
@@ -877,12 +873,6 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private knownCategories(): string[] {
     return sessionCategoryNames(this.result, this.context?.sessions.state.groups ?? []);
-  }
-
-  private setGroupBy(mode: SessionsGroupBy) {
-    this.groupBy = mode;
-    this.page = 0;
-    saveStoredGroupBy(mode);
   }
 
   private async rememberCustomGroup(
@@ -1076,11 +1066,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.selectedSessions = selected;
       return "completed";
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-        return "failed";
-      }
-      return "stale";
+      return this.publishRequestError(scope, error);
     }
   }
 
@@ -1145,9 +1131,7 @@ class SessionsPage extends OpenClawLightDomElement {
         this.error = scope.sessions.state.error;
       }
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
     }
   }
 
@@ -1279,11 +1263,7 @@ class SessionsPage extends OpenClawLightDomElement {
                   await this.refreshSessionList(scope);
                 }
               })
-              .catch((error: unknown) => {
-                if (this.isRequestScopeCurrent(scope)) {
-                  this.error = formatUiError(error);
-                }
-              });
+              .catch((error: unknown) => this.publishRequestError(scope, error));
             break;
           }
           case "toggle-unread":
@@ -1441,15 +1421,13 @@ class SessionsPage extends OpenClawLightDomElement {
           deleteSelectedDisabledReason: this.selectedDeleteDisabledReason(),
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
-            this.activeMinutes = "";
-            this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
-            this.includeGlobal = true;
-            this.includeUnknown = false;
             this.searchQuery = "";
-            this.page = 0;
-            this.selectedSessions = new Map();
-            this.deepLinkSessionKey = null;
-            void this.refreshSessionList();
+            this.updateFilters({
+              activeMinutes: "",
+              limit: String(SESSIONS_PAGE_DEFAULT_LIMIT),
+              includeGlobal: true,
+              includeUnknown: false,
+            });
           },
           onSearchChange: (query) => {
             this.routeDataEnabled = false;
@@ -1474,7 +1452,11 @@ class SessionsPage extends OpenClawLightDomElement {
             this.sortDir = direction;
             this.page = 0;
           },
-          onGroupByChange: (mode) => this.setGroupBy(mode),
+          onGroupByChange: (mode) => {
+            this.groupBy = mode;
+            this.page = 0;
+            saveStoredGroupBy(mode);
+          },
           onAssignCategory: (key, category) => this.assignCategory(key, category),
           onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
           onLoadMore: () => {
@@ -1547,9 +1529,7 @@ class SessionsPage extends OpenClawLightDomElement {
         signal: this.pluginActionLifetime.signal,
       });
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
     }
   }
 }

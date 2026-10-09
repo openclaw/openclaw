@@ -29,7 +29,6 @@ import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
   handleReplyAgentRunError,
-  resolveAdmittedRunSessionFile,
   type RunReplyAgentParams,
   scheduleFollowupDrainAfterReplyOperationClear,
 } from "./agent-runner-core.js";
@@ -45,6 +44,7 @@ import {
 } from "./agent-runner-helpers.js";
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
+import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -64,10 +64,15 @@ import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  captureReplyOperationSessionReader,
+  getReplyOperationSessionReader,
+} from "./reply-run-registry.state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
+import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import {
   isDuplicateRestartRecoverySource,
   retireTerminalRestartRecoverySourceClaim,
@@ -92,7 +97,7 @@ export async function runReplyAgent(
     opts,
     typing,
     sessionEntry,
-    sessionStore,
+    sessionStore: activeSessionStore,
     sessionKey,
     runtimePolicySessionKey,
     storePath,
@@ -120,7 +125,6 @@ export async function runReplyAgent(
     typing.cleanup();
   };
   let activeSessionEntry = sessionEntry;
-  const activeSessionStore = sessionStore;
   const effectiveResetTriggered = resetTriggered === true;
 
   const isHeartbeat = opts?.isHeartbeat === true;
@@ -198,6 +202,7 @@ export async function runReplyAgent(
             (target) => {
               restartRecoveryTarget = target;
             },
+            getReplyOperationSessionReader(providedReplyOperation),
           )) ?? activeSessionEntry)
         : activeSessionEntry;
     assertReadCurrent();
@@ -217,8 +222,7 @@ export async function runReplyAgent(
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
     ) {
       if (!restartRecoveryTarget) {
-        releaseAdmissionTicket();
-        typing.cleanup();
+        releaseUnusedAdmission();
         throw new Error("Restart recovery retirement has no admitted session target");
       }
       const retired = await retireTerminalRestartRecoverySourceClaim({
@@ -296,7 +300,7 @@ export async function runReplyAgent(
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
   const touchActiveSessionEntry = async () => {
-    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
+    if (opts?.internalEventExecution || !activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
     }
     // Keep the in-memory snapshot aligned with the pending-reset write boundary.
@@ -470,41 +474,29 @@ export async function runReplyAgent(
     );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
-  const replyMediaContext = createReplyMediaContext({
-    cfg,
-    agentId: followupRun.run.agentId,
-    sessionKey,
-    workspaceDir: followupRun.run.workspaceDir,
-    mediaNormalizationOwner: followupRun.run.mediaNormalizationOwner,
-    messageProvider: followupRun.run.messageProvider,
-    accountId: followupRun.originatingAccountId ?? followupRun.run.agentAccountId,
-    groupId: followupRun.run.groupId,
-    groupChannel: followupRun.run.groupChannel,
-    groupSpace: followupRun.run.groupSpace,
-    requesterSenderId: followupRun.run.senderId,
-    requesterSenderName: followupRun.run.senderName,
-    requesterSenderUsername: followupRun.run.senderUsername,
-    requesterSenderE164: followupRun.run.senderE164,
-  });
+  const replyMediaContext = createReplyMediaContext(
+    buildReplyMediaContextParams(followupRun, sessionKey, cfg),
+  );
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-  const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
-    ? async (phase: CompactionNoticePhase, text?: string) => {
-        if (!opts?.onBlockReply) {
-          return;
-        }
-        const noticePayload = createCompactionNoticePayload({
-          phase,
-          text,
-          currentMessageId: compactionNoticeMessageId,
-          applyReplyToMode,
-        });
-        try {
-          await opts.onBlockReply(noticePayload);
-        } catch (err) {
-          logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
-        }
-      }
-    : undefined;
+  const sendDirectCompactionNotice = async (phase: CompactionNoticePhase, text?: string) => {
+    if (
+      !opts?.onBlockReply ||
+      (phase !== "context_bounded" && !shouldNotifyUserAboutCompaction(cfg))
+    ) {
+      return;
+    }
+    const noticePayload = createCompactionNoticePayload({
+      phase,
+      text,
+      currentMessageId: compactionNoticeMessageId,
+      applyReplyToMode,
+    });
+    try {
+      await opts.onBlockReply(noticePayload);
+    } catch (err) {
+      logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
+    }
+  };
   const blockReplyPipeline =
     blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
       ? createBlockReplyPipeline({
@@ -536,6 +528,7 @@ export async function runReplyAgent(
     sessionKey: replySessionKey,
   });
   let replyOperation: ReplyOperation;
+  let callerOwnedReplyOperation = providedReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
     if (replyOperationRunState) {
@@ -591,10 +584,7 @@ export async function runReplyAgent(
         if (admission.sessionEntry && activeSessionStore && replySessionKey) {
           activeSessionStore[replySessionKey] = admission.sessionEntry;
         }
-        const admittedSessionFile = resolveAdmittedRunSessionFile({
-          sessionFile: undefined,
-          sessionKey: replySessionKey,
-        });
+        const admittedSessionFile = normalizeOptionalString(replySessionKey);
         if (admittedSessionFile) {
           followupRun.run.sessionFile = admittedSessionFile;
         }
@@ -644,7 +634,16 @@ export async function runReplyAgent(
     storePath,
   });
   try {
-    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    if (!providedReplyOperation && opts?.onReplyOperationOwned?.(replyOperation) === true) {
+      callerOwnedReplyOperation = replyOperation;
+    }
+    await replyOperation.bindToolAuthoritySnapshotAsync(
+      prepareReplyToolAuthority(
+        followupRun,
+        undefined,
+        captureReplyOperationSessionReader(replyOperation),
+      ),
+    );
     return await executePreparedReplyAgentRun({
       ...params,
       activeSessionStore,
@@ -701,7 +700,7 @@ export async function runReplyAgent(
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
       isHeartbeat,
-      providedReplyOperation,
+      providedReplyOperation: callerOwnedReplyOperation,
       queueKey,
       replyOperation,
       runFollowupTurn,

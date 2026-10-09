@@ -3,9 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as harnessRecovery from "../../agents/agent-harness-completion-recovery.js";
 import { commitMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import { settleDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
@@ -18,6 +22,42 @@ vi.mock(
   "../../agents/main-session-recovery/main-session-recovery-owner-release.js",
   () => recoveryMocks,
 );
+// mock-isolation: Fixture seed writes must not schedule retention requests into this census.
+vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
+  kickSessionEntryMaintenanceAfterWrite() {},
+}));
+
+function observePatchCommands(beforeCommit?: () => void) {
+  const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  const commands: string[] = [];
+  const observer = vi
+    .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+    .mockImplementation((...args) => {
+      const owner = capture(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, run, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              run({
+                execute: (command, commandOptions) => {
+                  commands.push(command.type);
+                  if (command.type === "session.entry.patch.commit") {
+                    beforeCommit?.();
+                  }
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      };
+    });
+  return { commands, restore: () => observer.mockRestore() };
+}
 
 describe("pending-final delivery completion", () => {
   let tmpDir: string;
@@ -91,6 +131,13 @@ describe("pending-final delivery completion", () => {
       sessionKey,
       storePath,
     });
+    recoveryMocks.scheduleMainSessionRecoveryPendingTarget.mockClear();
+    const completed = loadSessionEntry({ sessionKey, storePath });
+    await expect(settlePendingFinalDelivery(completion, "delivered")).resolves.toEqual({
+      state: "delivered",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(completed);
+    expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
     await expect(
       commitMainSessionRecovery({
         command: {
@@ -106,7 +153,7 @@ describe("pending-final delivery completion", () => {
   });
 
   it("records queue custody without waking recovery", async () => {
-    await expect(settlePendingFinalDelivery(completion, "queued")).resolves.toEqual({
+    await expect(settlePendingFinalDelivery(completion, "queued", ["prepared"])).resolves.toEqual({
       state: "queued",
     });
 
@@ -117,6 +164,65 @@ describe("pending-final delivery completion", () => {
       },
     });
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+  });
+
+  it("settles current foreign rows in one request without claiming stale queue custody", async () => {
+    const scope = { sessionKey, storePath };
+    const original = loadSessionEntry(scope)!;
+    const pending = original.pendingFinalDelivery!;
+    let changeBeforeCommit: (() => void) | undefined;
+    const observed = observePatchCommands(() => {
+      const change = changeBeforeCommit;
+      changeBeforeCommit = undefined;
+      change?.();
+    });
+    try {
+      for (const change of [
+        { label: "foreign metadata" },
+        { sessionId: "replacement" },
+        { pendingFinalDelivery: { ...pending, intentId: "replacement-intent" } },
+        {
+          pendingFinalDelivery: {
+            ...pending,
+            deliveries: [{ id: completion.deliveryId, state: "queued" as const }],
+          },
+        },
+        {
+          pendingFinalDelivery: {
+            ...pending,
+            deliveries: [{ id: "replacement-delivery", state: "prepared" as const }],
+          },
+        },
+      ]) {
+        replaceSessionEntrySync(scope, original);
+        let foreign: InternalSessionEntry | undefined;
+        changeBeforeCommit = () => {
+          replaceSessionEntrySync(scope, { ...original, ...change });
+          foreign = loadSessionEntry(scope);
+        };
+        observed.commands.length = 0;
+        await expect(
+          settlePendingFinalDelivery(completion, "queued", ["prepared"]),
+        ).resolves.toEqual({
+          state: "label" in change ? "queued" : "stale",
+        });
+        expect(observed.commands).toEqual(["session.entry.patch.commit"]);
+        if ("label" in change) {
+          expect(loadSessionEntry(scope)).toMatchObject({
+            label: "foreign metadata",
+            mainRestartRecovery: { revision: 2 },
+            pendingFinalDelivery: {
+              deliveries: [{ id: completion.deliveryId, state: "queued" }],
+            },
+          });
+        } else {
+          expect(loadSessionEntry(scope)).toEqual(foreign);
+        }
+      }
+      expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+    } finally {
+      observed.restore();
+    }
   });
 
   const noticeContext = { channel: "telegram", to: "chat-1", accountId: "default" };
@@ -131,6 +237,77 @@ describe("pending-final delivery completion", () => {
       },
     );
   }
+
+  it("retains host claim validation and records its identified completion through prepare and CAS", async () => {
+    await installContextOnPendingFinal();
+    const scope = { sessionKey, storePath };
+    const initial = loadSessionEntry(scope);
+    const claim: HarnessCompletionRecovery = {
+      taskId: "child-session",
+      taskRunId: "child-run",
+      taskStatus: "succeeded",
+      sourceRunId: "announce:child-run",
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      sessionId: completion.sessionId,
+    };
+    const ownedCompletion = {
+      ...completion,
+      agentId: "main",
+      sessionWriterDeliveryAuthority: {
+        agentId: "main",
+        expectedSessionId: completion.sessionId,
+        sessionKey,
+        storePath,
+        harnessCompletion: claim,
+      },
+    };
+    const owed = vi
+      .spyOn(harnessRecovery, "getOwedHarnessCompletionTask")
+      .mockReturnValue(undefined);
+    const observed = observePatchCommands();
+    try {
+      await expect(
+        settlePendingFinalDelivery({ ...ownedCompletion, intentId: "different" }, "delivered"),
+      ).resolves.toEqual({ state: "stale" });
+      expect(owed).not.toHaveBeenCalled();
+      await expect(settlePendingFinalDelivery(ownedCompletion, "delivered")).resolves.toEqual({
+        state: "stale",
+      });
+      expect(owed).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(scope)).toEqual(initial);
+      expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+
+      owed.mockReturnValue(claim);
+      observed.commands.length = 0;
+      await expect(
+        settlePendingFinalDelivery(ownedCompletion, "delivered", ["prepared"], {
+          identifiedResult: { channel: "telegram", messageId: "platform-final" },
+        }),
+      ).resolves.toEqual({ state: "delivered" });
+      expect(observed.commands).toEqual([
+        "session.entry.patch.prepare",
+        "session.entry.patch.commit",
+      ]);
+      expect(owed).toHaveBeenLastCalledWith(claim, expect.objectContaining(initial!));
+      expect(loadSessionEntry(scope)).toMatchObject({
+        pendingFinalDelivery: { deliveries: [{ id: completion.deliveryId, state: "delivered" }] },
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            harnessCompletion: claim,
+            durableFinalReceipt: {
+              intentId: completion.intentId,
+              deliveryId: completion.deliveryId,
+              platformMessageId: "platform-final",
+            },
+          },
+        ],
+      });
+    } finally {
+      observed.restore();
+      owed.mockRestore();
+    }
+  });
 
   it("owes a notice when claimed custody is affirmed unknown", async () => {
     await installContextOnPendingFinal();

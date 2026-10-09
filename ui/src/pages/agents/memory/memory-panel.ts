@@ -56,27 +56,6 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
-function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
-  const payload = asOptionalObjectRecord(value);
-  const content =
-    typeof payload?.content === "string" && payload.content.length > 0
-      ? payload.content
-      : t("dreaming.wiki.noContent");
-  const updatedAt = normalizeOptionalString(payload?.updatedAt);
-  const totalLines =
-    typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
-      ? Math.max(0, Math.floor(payload.totalLines))
-      : undefined;
-  return {
-    title: normalizeOptionalString(payload?.title) ?? lookup,
-    path: normalizeOptionalString(payload?.path) ?? lookup,
-    content,
-    ...(totalLines === undefined ? {} : { totalLines }),
-    ...(payload?.truncated === true ? { truncated: true } : {}),
-    ...(updatedAt ? { updatedAt } : {}),
-  };
-}
-
 class AgentMemoryPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -172,7 +151,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       this.dreaming.hello = snapshot.hello;
     }
     if (snapshot.phase === "connected" && this.selectedAgentId && replaceState) {
-      void this.loadAll();
+      void this.loadResources();
     }
     this.requestUpdate();
   }
@@ -187,7 +166,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     this.resetTransientState();
     this.dreaming = this.createGatewayState();
     if (agentId && this.dreaming.connected) {
-      void this.loadAll();
+      void this.loadResources();
     }
   }
 
@@ -229,9 +208,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     return this.runDreamingTask((current) => runDreamDiaryAction(current, method));
   }
 
-  private async loadAll(refreshConfig = false) {
+  private async loadResources(
+    resource: DreamingResourceKey | "all" = "all",
+    refreshConfig = resource !== "all",
+  ) {
     const scope = this.captureTaskScope();
-    if (!scope || !scope.state.client || !scope.state.connected || !scope.state.selectedAgentId) {
+    if (
+      !scope?.state.selectedAgentId ||
+      (resource === "all" && (!scope.state.client || !scope.state.connected))
+    ) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
@@ -240,11 +225,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return;
     }
     this.syncConfigSnapshot();
-    await Promise.all(
-      (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map((key) =>
-        this.runDreamingTask((current) => loadDreamingResource(current, key), scope),
-      ),
-    );
+    if (resource === "all") {
+      await Promise.all(
+        (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map(
+          (key) => this.runDreamingTask((current) => loadDreamingResource(current, key), scope),
+        ),
+      );
+    } else {
+      await this.runDreamingTask((current) => loadDreamingResource(current, resource), scope);
+    }
   }
 
   private setEnabled(enabled: boolean) {
@@ -329,7 +318,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     if (!scope || !client || !scope.state.connected || !agentId) {
       return null;
     }
-    const payload = await client.request("wiki.get", {
+    const response = await client.request("wiki.get", {
       lookup,
       fromLine: 1,
       lineCount: 5000,
@@ -338,21 +327,24 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     if (!this.isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
       return null;
     }
-    return readWikiPagePreview(payload, lookup);
-  }
-
-  private async refreshWikiData(key: DreamingResourceKey) {
-    const scope = this.captureTaskScope();
-    if (!scope?.state.selectedAgentId) {
-      return;
-    }
-    const runtimeConfig = this.context.runtimeConfig;
-    await runtimeConfig.refresh();
-    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
-      return;
-    }
-    this.syncConfigSnapshot();
-    await this.runDreamingTask((current) => loadDreamingResource(current, key), scope);
+    const payload = asOptionalObjectRecord(response);
+    const content =
+      typeof payload?.content === "string" && payload.content.length > 0
+        ? payload.content
+        : t("dreaming.wiki.noContent");
+    const updatedAt = normalizeOptionalString(payload?.updatedAt);
+    const totalLines =
+      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
+        ? Math.max(0, Math.floor(payload.totalLines))
+        : undefined;
+    return {
+      title: normalizeOptionalString(payload?.title) ?? lookup,
+      path: normalizeOptionalString(payload?.path) ?? lookup,
+      content,
+      ...(totalLines === undefined ? {} : { totalLines }),
+      ...(payload?.truncated === true ? { truncated: true } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
+    };
   }
 
   override render() {
@@ -380,7 +372,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             <button
               class="btn btn--subtle btn--sm"
               ?disabled=${loading || dreaming.dreamDiaryLoading}
-              @click=${() => void this.loadAll(true)}
+              @click=${() => void this.loadResources("all", true)}
             >
               ${refreshLoading ? t("dreaming.header.refreshing") : t("dreaming.header.refresh")}
             </button>
@@ -449,8 +441,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         wikiOverview: dreaming.wikiOverview,
         onRefreshDiary: () =>
           void this.runDreamingTask((current) => loadDreamingResource(current, "dreamDiary")),
-        onRefreshImports: () => void this.refreshWikiData("wikiImportInsights"),
-        onRefreshWikiOverview: () => void this.refreshWikiData("wikiOverview"),
+        onRefreshImports: () => void this.loadResources("wikiImportInsights"),
+        onRefreshWikiOverview: () => void this.loadResources("wikiOverview"),
         onOpenConfig: () => void this.context.runtimeConfig.openFile(),
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
         onBackfillDiary: () => void this.runDiaryAction("doctor.memory.backfillDreamDiary"),

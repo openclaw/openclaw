@@ -126,6 +126,14 @@ export function renderNewSessionPlaceControls({
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
     : t("newSession.gateway");
+  const selectCloudOption = (kind: "os" | "machine", id: string) =>
+    place.cloudMachines[kind === "os" ? "selectOs" : "select"](
+      place.cloudProfileId,
+      id,
+      cloudProfiles,
+      submitting || pendingPlacement,
+      requestUpdate,
+    );
   return html`${
     nativeTerminal
       ? renderNewSessionTerminalHost({
@@ -161,22 +169,8 @@ export function renderNewSessionPlaceControls({
             }
             place.selectCloudProfile(profileId);
           },
-          onSelectCloudOs: (osId) =>
-            place.cloudMachines.selectOs(
-              place.cloudProfileId,
-              osId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onSelectCloudMachine: (machineId) =>
-            place.cloudMachines.select(
-              place.cloudProfileId,
-              machineId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
+          onSelectCloudOs: (osId) => selectCloudOption("os", osId),
+          onSelectCloudMachine: (machineId) => selectCloudOption("machine", machineId),
           onConnectMachine,
           onManageCloudWorkers: () => {
             browser.close();

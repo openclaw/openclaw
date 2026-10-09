@@ -12,6 +12,7 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { AgentDatabaseAdmissionError } from "../../../state/agent-database-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
@@ -206,7 +207,7 @@ export function createSubagentRegistryRestorer(config: {
         }
       });
     const cfg = getRuntimeConfig();
-    const transferFailures = await settleRestoredRequesterTurns({
+    const activationFailures = await settleRestoredRequesterTurns({
       cfg,
       runs,
       stateContext,
@@ -216,15 +217,26 @@ export function createSubagentRegistryRestorer(config: {
     });
     assertCurrent();
     if (!runsResumed) {
-      await resumeRestoredRuns(cfg, assertCurrent);
-      assertCurrent();
-      // Requester transfer precedes interruption settlement; ordinary wake retries
-      // and cleanup retain their scheduled maintenance pass.
-      await config.recoverInterruptedRuns();
-      assertCurrent();
-      runsResumed = true;
+      try {
+        await resumeRestoredRuns(cfg, assertCurrent);
+        assertCurrent();
+        // Requester transfer precedes interruption settlement; ordinary wake retries
+        // and cleanup retain their scheduled maintenance pass.
+        await config.recoverInterruptedRuns();
+        assertCurrent();
+        runsResumed = true;
+      } catch (error) {
+        if (
+          !(error instanceof AgentDatabaseAdmissionError) ||
+          error.refusal.code !== "agent-database-inspection-pending"
+        ) {
+          throw error;
+        }
+        assertCurrent();
+        activationFailures.push(error);
+      }
     }
-    if (transferFailures.length > 0) {
+    if (activationFailures.length > 0) {
       scheduleRestoreRetry(retryDelayMs, async () => {
         try {
           assertCurrent();
@@ -240,7 +252,15 @@ export function createSubagentRegistryRestorer(config: {
           warn("failed to activate restored requester transfers", { error });
         }
       });
-      throw transferFailures[0];
+      for (const failure of activationFailures) {
+        if (
+          !(failure instanceof AgentDatabaseAdmissionError) ||
+          failure.refusal.code !== "agent-database-inspection-pending"
+        ) {
+          throw failure;
+        }
+      }
+      return;
     }
     activated = true;
   }
@@ -257,25 +277,49 @@ export function createSubagentRegistryRestorer(config: {
     startSweeper();
     // Resume only this captured owner set; registration may change the live map while we yield.
     const capturedRuns = [...runs];
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const assertReadCurrent = () => {
+      assertCurrent();
+      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+        throw new Error("Restored subagent read lost its Gateway lifecycle");
+      }
+    };
     let visited = 0;
-    for (const [runId, snapshot] of capturedRuns) {
+    captured: for (const [runId, snapshot] of capturedRuns) {
       if (++visited % 128 === 0) {
         await yieldToEventLoop();
         assertCurrent();
       }
-      const entry = getCurrentSubagentRunOwner(runs, snapshot);
-      if (!entry) {
-        continue;
+      let selectedOwner = getCurrentSubagentRunOwner(runs, snapshot);
+      let sessionEntry;
+      while (selectedOwner && selectedOwner.runId === runId) {
+        // Restart recovery retains exclusive custody of these source rows.
+        if (
+          selectedOwner.execution.restartRecovery ||
+          selectedOwner.killIntent ||
+          selectedOwner.killReconciliation
+        ) {
+          continue captured;
+        }
+        const selected = selectedOwner;
+        assertReadCurrent();
+        sessionEntry = await loadSubagentSessionEntry({
+          childSessionKey: selected.childSessionKey,
+          childAgentId: selected.childAgentId,
+          assertCurrent: assertReadCurrent,
+        });
+        assertReadCurrent();
+        selectedOwner = getCurrentSubagentRunOwner(runs, snapshot);
+        if (selectedOwner === selected) {
+          break;
+        }
       }
-      // Restart recovery exclusively owns receipt-bearing source rows until it
-      // remaps or terminalizes them. Generic resume would wait on an obsolete run.
-      if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
+      const entry = selectedOwner;
+      if (!entry || entry.runId !== runId) {
         continue;
       }
       if (entry.collect && entry.execution.status === "queued") {
-        const cleanupSessionEntry = loadSubagentSessionEntry({
-          childSessionKey: entry.childSessionKey,
-        });
+        const cleanupSessionEntry = sessionEntry;
         const launch = entry.queuedLaunch;
         if (!launch) {
           const cleanupLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -419,9 +463,6 @@ export function createSubagentRegistryRestorer(config: {
         );
         continue;
       }
-      const sessionEntry = loadSubagentSessionEntry({
-        childSessionKey: entry.childSessionKey,
-      });
       // Orphan recovery owns aborted sessions and exact still-running retired
       // executions. Completed sessions must resume normal settlement and delivery.
       if (
@@ -619,6 +660,7 @@ export function createSubagentRegistryRestorer(config: {
                 gatewayBinding: { resolveGatewayContext: getEntryGatewayContextResolver(entry) },
                 isCurrent: ownsCleanup,
                 childSessionKey: entry.childSessionKey,
+                childAgentId: entry.childAgentId,
                 expectedSessionId,
                 expectedLifecycleRevision,
                 onError: (cleanupError) => {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import {
   prepareAcpSessionMutation,
@@ -7,10 +8,15 @@ import {
 } from "../acp/runtime/session-meta-worker-mutation.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import type { IncognitoHistoryTarget } from "../config/sessions/session-incognito-history-contract.js";
+import type {
+  IncognitoHistoryOperations,
+  IncognitoHistoryTarget,
+} from "../config/sessions/session-incognito-history-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
+import { readProcessHeldCliHistory } from "../gateway/cli-session-history.process-held.js";
 import { readChatHistoryDelta } from "../gateway/server-methods/chat-history-delta.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
+import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
 import {
   readSessionHistorySnapshotAsync,
   SessionHistorySseState,
@@ -20,7 +26,9 @@ import {
   readSessionConversationBindingAsync,
 } from "../gateway/session-transcript-readers.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export type HistoryWiringFixture = {
@@ -36,8 +44,86 @@ export type HistoryWiringFixture = {
 export function registerIncognitoHistoryVisibilityTests(fixture: HistoryWiringFixture) {
   const { authority, create, append, targetInput } = fixture;
 
+  it("cancels a worker host history read before the held actor FIFO resumes", async ({
+    signal,
+  }) => {
+    const { actor } = fixture;
+    const selected = await create("cancelled-host-history");
+    const scope = { ...targetInput(selected), agentId: actor.agentId, storePath: actor.path };
+    const history = createIncognitoSessionHistoryReader({
+      actor,
+      authority,
+      target: scope,
+      subagentCoordination: { isSubagentSession: () => false, isSubagentRunMessage: () => false },
+      resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" as const }),
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const held = runOpenClawAgentWorkerWrite(
+      { target: actor.identity, assertCurrent: () => actor.assertReadable() },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    await entered.promise;
+    const requested = createDeferredCore();
+    const hostRead = createDeferredCore<unknown>();
+    const execute = actor.sessions.history;
+    const observed = vi
+      .spyOn(actor.sessions, "history")
+      .mockImplementation(
+        <Key extends keyof IncognitoHistoryOperations>(
+          grant: IncognitoSessionAuthority,
+          command: { type: Key; input: IncognitoHistoryOperations[Key]["input"] },
+          requestSignal?: AbortSignal,
+          onRead?: (value: IncognitoHistoryOperations[Key]["output"]) => void,
+        ) => {
+          const pending = execute(grant, command, requestSignal, onRead);
+          hostRead.resolve(pending);
+          requested.resolve();
+          return pending;
+        },
+      );
+    const controller = new AbortController();
+    const reading = history.consume(scope, () =>
+      readProcessHeldCliHistory(
+        {
+          entry: selected.entry,
+          provider: undefined,
+          sessionId: scope.sessionId,
+          storePath: scope.storePath,
+          sessionAgentId: scope.agentId,
+          canonicalKey: scope.sessionKey,
+          max: 1,
+          maxHistoryBytes: 4096,
+          effectiveMaxChars: 1000,
+          offset: undefined,
+          messageId: undefined,
+        },
+        controller.signal,
+        history,
+      ),
+    );
+    void reading.catch(hostRead.reject);
+    const reason = new Error("Worker callback deadline expired");
+    const rejected = expect(reading).rejects.toThrow(reason.message);
+    const hostRejected = expect(hostRead.promise).rejects.toThrow(reason.message);
+    try {
+      await awaitGateBeforeSettlement(requested.promise, reading, "History skipped its host read");
+      controller.abort(reason);
+      await withinTest(hostRejected, signal);
+      await rejected;
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, reading, rejected, hostRead.promise, hostRejected]);
+      observed.mockRestore();
+    }
+    await expect(history.readers.readSessionMessageCountAsync(scope)).resolves.toBe(0);
+  });
+
   it.each(["native", "acp"] as const)(
-    "captures %s child visibility for pages, deltas and SSE without an injected resolver",
+    "captures %s child visibility for pages, worker callbacks, deltas and SSE without an injected resolver",
     async (kind) => {
       const { actor, env } = fixture;
       const selected = await create(`visibility-${kind}`);
@@ -69,7 +155,20 @@ export function registerIncognitoHistoryVisibilityTests(fixture: HistoryWiringFi
           }),
         });
       }
-      await append(selected, "visible seed");
+      const seed = await actor.sessions.transcript(authority, {
+        type: "session.message.append",
+        input: {
+          ...targetInput(selected),
+          fence: { expectedLifecycleRevision: selected.entry.lifecycleRevision },
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "visible seed" }],
+            timestamp: 10_000,
+            __openclaw: { runId: `visibility-visible-${kind}` },
+          },
+        },
+      });
+      assert(seed.ok);
       const runId = `visibility-run-${kind}`;
       const scope = {
         ...targetInput(selected),
@@ -78,25 +177,6 @@ export function registerIncognitoHistoryVisibilityTests(fixture: HistoryWiringFi
         sessionEntry: selected.entry,
         env,
       };
-      const hiddenInput = await actor.sessions.transcript(authority, {
-        type: "session.message.append",
-        input: {
-          ...targetInput(selected),
-          fence: { expectedLifecycleRevision: selected.entry.lifecycleRevision },
-          message: {
-            role: "user",
-            content: "private coordination",
-            timestamp: 10_001,
-            idempotencyKey: `${runId}:user`,
-            provenance: {
-              kind: "inter_session",
-              sourceTool: "sessions_send",
-              sourceSessionKey: childKey,
-            },
-          },
-        },
-      });
-      assert(hiddenInput.ok);
       await withIncognitoSessionActor(actor, async () => {
         const history = captureIncognitoSessionHistoryReader(scope);
         assert(history);
@@ -113,6 +193,30 @@ export function registerIncognitoHistoryVisibilityTests(fixture: HistoryWiringFi
           offset: undefined,
           messageId: undefined,
         };
+        const processHeld = await history.consume(scope, () =>
+          readProcessHeldCliHistory(request, undefined, history),
+        );
+        expect(processHeld.messages).toMatchObject([{ content: [{ text: "visible seed" }] }]);
+        expect(processHeld.messages).toHaveLength(1);
+        const hiddenInput = await actor.sessions.transcript(authority, {
+          type: "session.message.append",
+          input: {
+            ...targetInput(selected),
+            fence: { expectedLifecycleRevision: selected.entry.lifecycleRevision },
+            message: {
+              role: "user",
+              content: "private coordination",
+              timestamp: 10_001,
+              idempotencyKey: `${runId}:user`,
+              provenance: {
+                kind: "inter_session",
+                sourceTool: "sessions_send",
+                sourceSessionKey: childKey,
+              },
+            },
+          },
+        });
+        assert(hiddenInput.ok);
         const page = await readChatHistoryPage(request);
         expect(page.messages).toMatchObject([{ content: [{ text: "visible seed" }] }]);
         expect(page.messages).toHaveLength(1);

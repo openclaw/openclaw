@@ -76,9 +76,9 @@ export async function createBotHandlerWithOptions(options: {
       },
     } as Parameters<typeof createTelegramBotRef>[0]["runtime"],
   });
-  const handler = onSpyRef.mock.calls.find((call) => call[0] === "message")?.[1] as (
-    ctx: Record<string, unknown>,
-  ) => Promise<void>;
+  const handler = onSpyRef.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes("message") : filter === "message",
+  )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
   expect(handler).toBeDefined();
   return { handler, replySpy: replySpyRef, runtimeError };
 }

@@ -77,10 +77,17 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteLockAccessorContext,
 } from "./session-accessor.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
+import { assertLegacyTranscriptPreparation } from "./session-transcript-preparation.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -332,7 +339,7 @@ export function appendTranscriptEventSnapshotSync(
   view?: TranscriptWriteViewGuard,
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
-  return runTranscriptWriteSnapshotSync(
+  return runTranscriptWriteSnapshotSync<TranscriptEventAppendResult>(
     scope,
     (database, resolved) => {
       const resolvedEvent = resolveTranscriptEventAppendParent(
@@ -380,7 +387,10 @@ export async function appendTranscriptMessage<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  return await withTranscriptWriteLock(scope, (transcript) => transcript.appendMessage(options));
+  assertLegacyTranscriptPreparation(scope, options);
+  return await withTranscriptWriteSequence(scope, (transcript) =>
+    transcript.appendMessage(options),
+  );
 }
 
 /** Appends one transcript message synchronously for sync session runtimes. */
@@ -406,7 +416,7 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
   const snapshot = runTranscriptWriteSnapshotSync(
     scope,
     (database, resolved) => {
-      const result = appendTranscriptMessageInTransaction(
+      const committed = appendTranscriptMessageInTransaction(
         database,
         resolved,
         workerOptions?.messageAlreadyRedacted
@@ -415,16 +425,22 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
         preparedMessage,
         workerOptions,
       );
-      return {
-        result,
-        visibleTailEntryId: result
-          ? readTranscriptVisibleTailEntryIdInTransaction(
-              database,
-              resolved.sessionId,
-              result.messageId,
-            )
-          : null,
-      };
+      const result = committed?.result;
+      return retainTranscriptAppendPostimage(
+        {
+          result,
+          visibleTailEntryId:
+            committed?.visibleTailEntryId ??
+            (result
+              ? readTranscriptVisibleTailEntryIdInTransaction(
+                  database,
+                  resolved.sessionId,
+                  result.messageId,
+                )
+              : null),
+        },
+        readTranscriptAppendPostimage(committed),
+      );
     },
     undefined,
     options.expectedMutationAt,
@@ -455,6 +471,36 @@ export async function withTranscriptWriteLock<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
+  assertLegacyTranscriptPreparation(scope);
+  return withHostTranscriptWriteLock(scope, run);
+}
+
+/** Actor sequences retain the captured owner; unbound callers use the existing host route. */
+export async function withTranscriptWriteSequence<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+): Promise<T> {
+  const actor = captureIncognitoSessionOperation(scope);
+  if (!actor) {
+    return withHostTranscriptWriteLock(scope, run);
+  }
+  const resolved = resolveSqliteTranscriptScope({ ...scope, storePath: actor.actor.path });
+  const target = captureSessionTranscriptTargetBinding({
+    ...scope,
+    agentId: resolved.agentId,
+    sessionId: resolved.sessionId,
+    sessionKey: resolved.sessionKey,
+    storePath: actor.actor.path,
+  });
+  const { withIncognitoTranscriptWriteSequence } =
+    await import("./session-incognito-transcript-sequence.js");
+  return withIncognitoTranscriptWriteSequence(target, actor, run);
+}
+
+async function withHostTranscriptWriteLock<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+): Promise<T> {
   const fenced = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fenced);
   if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) {
@@ -467,9 +513,10 @@ export async function withTranscriptWriteLock<T>(
   if (current.key !== identity.key || current.birthtime !== identity.birthtime) {
     throw new Error("Transcript lock changed its physical store");
   }
+  // Physical admission uses captured.path; writer authority retains the captured selector.
   return withWorkerTranscriptWriteLock(
     { ...fenced, ...captured, storePath: captured.path },
-    fenced,
+    { ...fenced, ...captured, storePath: captured.ownerStorePath ?? captured.path },
     run,
     runNativeTranscriptWriteLock,
   );
@@ -541,9 +588,11 @@ async function runNativeTranscriptWriteLock<T>(
           transcriptSnapshot = { kind: "current", rows: nextSnapshot };
         },
         appendMessage: async (requested) => {
-          const prepare = requested.prepareMessageAfterIdempotencyCheckAsync
-            ? await prepareNativeLockedAppend(scope, requested)
-            : undefined;
+          assertLegacyTranscriptPreparation(fencedScope, requested);
+          const prepare =
+            requested.prepareMessageAfterIdempotencyCheckAsync || requested.preparation
+              ? await prepareNativeLockedAppend(scope, requested)
+              : undefined;
           let result: TranscriptMessageAppendResult<unknown> | undefined;
           const snapshotState = transcriptSnapshot;
           let nextSnapshotState = snapshotState;
@@ -559,7 +608,11 @@ async function runNativeTranscriptWriteLock<T>(
                       snapshotState.rows,
                     )
                   : false;
-              result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
+              result = appendTranscriptMessageInTransaction(
+                writeDatabase,
+                resolved,
+                options,
+              )?.result;
               if (snapshotState?.kind === "current") {
                 nextSnapshotState = snapshotStillCurrent
                   ? {
@@ -578,9 +631,11 @@ async function runNativeTranscriptWriteLock<T>(
           return result as TranscriptMessageAppendResult<typeof requested.message> | undefined;
         },
         appendMessageWithMessageSequence: async (requested) => {
-          const prepare = requested.prepareMessageAfterIdempotencyCheckAsync
-            ? await prepareNativeLockedAppend(scope, requested)
-            : undefined;
+          assertLegacyTranscriptPreparation(fencedScope, requested);
+          const prepare =
+            requested.prepareMessageAfterIdempotencyCheckAsync || requested.preparation
+              ? await prepareNativeLockedAppend(scope, requested)
+              : undefined;
           let result: TranscriptMessageAppendResult<unknown> | undefined;
           let lifecycleRevision: string | undefined;
           let messageSeq: number | undefined;
@@ -592,12 +647,18 @@ async function runNativeTranscriptWriteLock<T>(
                 fencedScope,
               )?.lifecycleRevision;
               const options = prepare?.(writeDatabase) ?? requested;
-              result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
+              const appended = appendTranscriptMessageInTransaction(
+                writeDatabase,
+                resolved,
+                options,
+              );
+              result = appended?.result;
               if (result) {
                 rememberCommittedTranscriptMessageSequencesInTransaction(
                   writeDatabase,
                   resolved.sessionId,
                   [result],
+                  readTranscriptAppendPostimage(appended),
                 );
                 messageSeq = readCommittedTranscriptMessageSequence(result);
               }

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -12,10 +14,10 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveFollowupCurrentMessageId,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
 } from "./agent-runner-utils.js";
@@ -82,13 +84,6 @@ type FollowupAdmissionResult =
       operation?: ReplyOperation;
     };
 
-function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
-  return queued.run.inputProvenance?.kind === "internal_system" &&
-    queued.run.inputProvenance.sourceTool === "restart-sentinel"
-    ? queued.originatingReplyToId
-    : queued.messageId;
-}
-
 function isSameSessionGeneration(
   left: SessionEntry | undefined,
   right: SessionEntry | undefined,
@@ -125,9 +120,7 @@ export async function admitFollowupTurn(params: {
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
   const resolveRunSessionFile = (source: FollowupRun["run"]) =>
-    resolveAdmittedRunSessionFile({
-      sessionKey: replySessionKey,
-    }) ?? source.sessionFile;
+    normalizeOptionalString(replySessionKey) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
@@ -319,10 +312,11 @@ export async function admitFollowupTurn(params: {
       | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
-      turn.sendPolicy === "allow" &&
-      queued.currentInboundEventKind !== "room_event" &&
-      shouldNotifyUserAboutCompaction(config)
+      turn.sendPolicy === "allow" && queued.currentInboundEventKind !== "room_event"
         ? async (phase: CompactionNoticePhase, text?: string) => {
+            if (phase !== "context_bounded" && !shouldNotifyUserAboutCompaction(config)) {
+              return;
+            }
             if (phase !== "start") {
               pendingTerminalCompactionNotice = { phase, text };
               return;
@@ -352,6 +346,7 @@ export async function admitFollowupTurn(params: {
     const preflightEntry = session.current();
     try {
       activeEntry = await runSessionCompactionIfNeeded({
+        replyOperation: operation,
         cfg: config,
         followupRun: turn.queued,
         pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
@@ -425,9 +420,11 @@ export async function admitFollowupTurn(params: {
         turn.queued.run.verboseLevelOverride ??
         session.current()?.verboseLevel ??
         turn.queued.run.verboseLevel;
-      const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
-        includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
-      });
+      const text =
+        renderAgentHarnessPreflightUserMessage(error) ??
+        buildPreflightCompactionFailureText(formatErrorMessage(error), {
+          includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
+        });
       if (!text) {
         turn.preflightError = error;
       } else {

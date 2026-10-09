@@ -339,16 +339,8 @@ function buildUsageMosaicStats(sessions: UsageSessionEntry[], timeZone: "local" 
     hasData = true;
   }
 
-  const weekdayLabels = [
-    t("usage.mosaic.sun"),
-    t("usage.mosaic.mon"),
-    t("usage.mosaic.tue"),
-    t("usage.mosaic.wed"),
-    t("usage.mosaic.thu"),
-    t("usage.mosaic.fri"),
-    t("usage.mosaic.sat"),
-  ].map((label, index) => ({
-    label,
+  const weekdayLabels = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].map((day, index) => ({
+    label: t(`usage.mosaic.${day}`),
     tokens: weekdayTotals[index] ?? 0,
   }));
 
@@ -467,13 +459,6 @@ function renderUsageMosaic(
       </div>
     `,
   );
-}
-
-function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
-  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
-  const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
-  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function parseIsoDayIndex(dateStr: string): number | null {
@@ -596,7 +581,6 @@ export {
   formatUsageCost,
   formatDayLabel,
   formatFullDate,
-  formatIsoDate,
   formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,

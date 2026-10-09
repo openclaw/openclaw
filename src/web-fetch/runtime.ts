@@ -54,7 +54,6 @@ function hasEntryCredential(
   });
 }
 
-/** Reports whether a web_fetch provider has usable credentials. */
 export function isWebFetchProviderConfigured(params: {
   provider: Pick<
     PluginWebFetchProviderEntry,
@@ -69,7 +68,6 @@ export function isWebFetchProviderConfigured(params: {
   return hasEntryCredential(params.provider, params.config);
 }
 
-/** Lists web_fetch providers available to runtime selection. */
 export function listWebFetchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebFetchProviderEntry[] {
@@ -142,7 +140,6 @@ function resolveWebFetchProvidersForOptions(
   return providers;
 }
 
-/** Resolves the executable web_fetch provider tool definition. */
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {

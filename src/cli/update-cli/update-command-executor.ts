@@ -5,8 +5,9 @@ import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
-  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
+  type createManagedHandoffLeaseStore,
   type ManagedHandoffLease,
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
@@ -276,15 +277,24 @@ export async function withUpdateCommandExecutor<T>(
                 : undefined);
             databasePath = existingIdentity?.databasePath ?? databasePath;
             const initialDatabasePath = databasePath;
-            const openStore = (identity: typeof existingIdentity, originalUpdateKey?: string) =>
-              createManagedHandoffLeaseStore({
+            const openStore = async (
+              identity: typeof existingIdentity,
+              originalUpdateKey?: string,
+            ) => {
+              const prepared = await prepareManagedHandoffLeaseStore({
                 databasePath: identity?.databasePath ?? initialDatabasePath,
                 serviceManagerEnv: resolveServiceManagerEnv(),
                 existingIdentity: identity,
                 originalUpdateKey,
                 onProcessIdentityWarning: identityWarnings.warn,
               });
-            store = openStore(
+              activation.assertCurrent();
+              if (!active) {
+                throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
+              }
+              return prepared;
+            };
+            store = await openStore(
               existingIdentity,
               !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
             );
@@ -349,7 +359,7 @@ export async function withUpdateCommandExecutor<T>(
               if (acquired.originalDatabaseIdentity) {
                 existingIdentity = acquired.originalDatabaseIdentity;
                 databasePath = existingIdentity.databasePath;
-                store = openStore(existingIdentity);
+                store = await openStore(existingIdentity);
               }
             }
             serviceKey = distinctServiceKey;
@@ -369,7 +379,7 @@ export async function withUpdateCommandExecutor<T>(
             // Switch the live owner too: capture, later child admission and final
             // release must not recreate a database lost after initial admission.
             databasePath = authority.databasePath;
-            store = openStore(authority);
+            store = await openStore(authority);
             readConnections.use(store.retainReadConnection());
             if (
               borrowed &&
@@ -406,14 +416,12 @@ export async function withUpdateCommandExecutor<T>(
                 }
                 retireFence();
                 children.close();
-                if (serviceLease) {
-                  if (!store.release(serviceLease)) {
-                    throw new UpdateCommandRecoveryPendingError(
-                      "Preflight service owner release failed.",
-                    );
-                  }
-                  serviceLease = undefined;
+                if (serviceLease && !store.release(serviceLease)) {
+                  throw new UpdateCommandRecoveryPendingError(
+                    "Preflight service owner release failed.",
+                  );
                 }
+                serviceLease = undefined;
                 if (lease.version === 1 || !store.release(lease)) {
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }

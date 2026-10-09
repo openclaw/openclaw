@@ -28,6 +28,10 @@ export type StepFactory = (
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
 
+export function createGitStepFactory(root: string, step: StepFactory) {
+  return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
+}
+
 export function resolveTagFetchRef(candidate: string): string | null {
   const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
   return ref.startsWith("refs/tags/") ? ref : null;

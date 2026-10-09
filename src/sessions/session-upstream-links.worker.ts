@@ -11,7 +11,7 @@ import {
 import { isSessionStateUpstreamCurrentInDatabase } from "./session-state-events.kernel.js";
 import {
   deleteSessionUpstreamLinkInDatabase,
-  rowToSessionUpstreamLink,
+  readSessionUpstreamLinkInDatabase,
   sessionUpstreamLinkSourceMatches,
   upsertSessionUpstreamLinkInDatabase,
 } from "./session-upstream-links.kernel.js";
@@ -31,16 +31,11 @@ export function executeSessionUpstreamCommand(
         if (!source) {
           return;
         }
-        const row = executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "session_upstream_links">>(db)
-            .selectFrom("session_upstream_links")
-            .selectAll()
-            .where("session_key", "=", source.sessionKey)
-            .where("agent_id", "=", source.agentId),
-        ).rows[0];
         if (
-          !sessionUpstreamLinkSourceMatches(row ? rowToSessionUpstreamLink(row) : undefined, source)
+          !sessionUpstreamLinkSourceMatches(
+            readSessionUpstreamLinkInDatabase(db, source.sessionKey, source.agentId),
+            source,
+          )
         ) {
           throw new Error("Session upstream source changed during initialization");
         }

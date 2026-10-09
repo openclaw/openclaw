@@ -175,9 +175,10 @@ describe("agent RPC real delegated-authority effects", () => {
     }
   });
 
-  it.for(["revoked", "accepted custody", "replaced after reset"] as const)(
+  it.for(["revoked", "accepted custody", "ordinary raw input", "replaced after reset"] as const)(
     "real pending-input transaction: %s",
     async (mode, { signal }) => {
+      const observationMode = mode === "ordinary raw input" ? "live" : mode;
       const f = await fixture();
       const execution = await holdExecution(signal);
       const entered = createDeferred();
@@ -218,7 +219,7 @@ describe("agent RPC real delegated-authority effects", () => {
               ? "/reset do not persist this suffix"
               : "real pending-input custody proof",
         };
-        request = f.dispatch(params);
+        request = f.dispatch(params, mode === "ordinary raw input" ? null : f.owner);
         await reach(entered.promise, request);
         expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
         const beforeInput = sessionAccessor.loadTranscriptEventsSync(f.scope);
@@ -241,7 +242,7 @@ describe("agent RPC real delegated-authority effects", () => {
         release.resolve();
         const result = await request;
         observe("pending-input", {
-          mode,
+          mode: observationMode,
           inputRecorded,
           ...(await f.effects()),
           ...rpcObservation(result),
@@ -262,11 +263,17 @@ describe("agent RPC real delegated-authority effects", () => {
             total: 1,
             items: [{ state: "queued", runId: f.runId, message: { content: params.message } }],
           });
-          f.owner.revoke();
+          if (mode === "accepted custody") {
+            f.owner.revoke();
+          }
           expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
           const recorder = prepared.userTurn.recorder!;
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
-          observe("accepted-custody", { mode, ...(await f.effects()), ...rpcObservation(result) });
+          observe("accepted-custody", {
+            mode: observationMode,
+            ...(await f.effects()),
+            ...rpcObservation(result),
+          });
           expect(persisted?.appended).toBe(true);
           expect(persisted?.message.content).toBe(params.message);
           expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
@@ -278,9 +285,12 @@ describe("agent RPC real delegated-authority effects", () => {
               }),
             ]),
           );
-          const retry = await f.dispatch(params, await f.freshCaller());
+          const retry = await f.dispatch(
+            params,
+            mode === "ordinary raw input" ? null : await f.freshCaller(),
+          );
           observe("pending-retry", {
-            mode,
+            mode: observationMode,
             ...(await f.effects()),
             ...rpcObservation(retry),
             executionCalls: execution.observer.mock.calls.length,
@@ -291,7 +301,10 @@ describe("agent RPC real delegated-authority effects", () => {
             payload: { runId: f.runId, status: "in_flight" },
           });
           expect(execution.observer).toHaveBeenCalledOnce();
-          expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
+          if (mode === "accepted custody") {
+            expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
+          }
+          expect(agentCommandMock).not.toHaveBeenCalled();
         }
       } finally {
         release.resolve();
@@ -503,52 +516,6 @@ describe("agent RPC real delegated-authority effects", () => {
       }
     },
   );
-
-  it("admits ordinary raw agent input without a runtime identity", async ({ signal }) => {
-    const f = await fixture();
-    const execution = await holdExecution(signal);
-    try {
-      const params = { message: "ordinary raw RPC compatibility input" };
-      // null omits the private runtime identity, without injecting a liveness guard.
-      const response = await f.dispatch(params, null);
-      observe("ordinary-admission", {
-        ...rpcObservation(response),
-        ...(await f.effects()),
-        executionCalls: execution.observer.mock.calls.length,
-      });
-      expect(response).toMatchObject({ ok: true, payload: { status: "accepted" } });
-      const prepared = await execution.entered;
-      expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
-      expect(await listSessionPendingInputs(f.scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "queued", runId: f.runId, message: { content: params.message } }],
-      });
-      const recorder = prepared.userTurn.recorder!;
-      const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
-      expect(persisted?.appended).toBe(true);
-      expect(persisted?.message.content).toBe(params.message);
-      expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
-      expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({ content: params.message }),
-          }),
-        ]),
-      );
-      const retry = await f.dispatch(params, null);
-      expect(retry).toMatchObject({
-        ok: true,
-        meta: { cached: true },
-        payload: { runId: f.runId, status: "in_flight" },
-      });
-      expect(execution.observer).toHaveBeenCalledOnce();
-      expect(agentCommandMock).not.toHaveBeenCalled();
-    } finally {
-      await execution.cleanup();
-      await f.cleanup();
-    }
-  });
 
   it.for(["bare", "with suffix"] as const)(
     "finishes adopted existing reset after parent closure: %s",

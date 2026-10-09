@@ -1,5 +1,21 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+export function hashFile(filename, chunkBytes) {
+  const hash = createHash("sha256");
+  const descriptor = fs.openSync(filename, "r");
+  try {
+    const buffer = Buffer.alloc(chunkBytes);
+    let size;
+    while ((size = fs.readSync(descriptor, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, size));
+    }
+    return hash.digest("hex");
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
 
 export function childOf(root, file) {
   const relative = path.relative(root, file);

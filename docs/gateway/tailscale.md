@@ -130,6 +130,7 @@ This compatibility path does not grant managed Tailscale semantics. `gateway.aut
 - Tailscale Serve/Funnel requires the `tailscale` CLI installed and logged in.
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password`, to avoid public exposure.
 - OpenClaw holds Serve/Funnel as a foreground Tailscale claim. Gateway startup succeeds only after the claim is active, and stopping or losing the Gateway releases it automatically.
+- Stopping during startup also releases the claim before readiness. If Tailscale requires `sudo -n`, cleanup uses `sudo -n /bin/kill` for the process group OpenClaw started. Give the Gateway user Tailscale operator access with `sudo tailscale set --operator=$USER` to avoid requiring privileged startup and cleanup.
 - With managed ingress enabled, startup can adopt a predecessor background HTTPS root route on its managed port. It adopts the route when the target is exactly `http://127.0.0.1:<configured-gateway-port>`, or the equivalent `localhost` URL with an optional trailing slash. Startup then replaces the route with the dedicated managed listener and logs the adoption. Routes to other targets, or roots sharing their port with other handlers or hostnames, remain untouched. Startup reports the conflicting HTTPS port and recovery guidance. Doctor leaves externally managed configuration unchanged.
 - Named Tailscale Services are not supported by managed ingress because Tailscale requires them to run as persistent background routes. Existing `gateway.tailscale.serviceName` installs must run `openclaw doctor --fix`. Doctor disables managed ingress and removes the key. Inspect the retained Service route, clear it with `tailscale serve clear <service-name>`, then enable device Serve with `gateway.tailscale.mode: "serve"` if desired.
 - Older releases could advertise an externally configured default HTTPS Serve route that targeted a `gateway.bind: "lan"` listener. That route does not automatically gain trusted ingress provenance. Run `openclaw doctor` to inspect it. Doctor leaves the configuration unchanged, because it cannot prove who owns the route. The route may belong to the current Tailscale hostname and be stale from an older OpenClaw release. If you confirm that, remove only its root handler with `tailscale serve --yes --https=443 --set-path=/ off` or `tailscale funnel --yes --https=443 --set-path=/ off`. Then configure `gateway.bind: "loopback"` plus `gateway.tailscale.mode: "serve"` manually, and restart the Gateway. If another service must retain ownership, leave managed Tailscale ingress off and use the explicit `trustedProxies` compatibility path above.
@@ -153,13 +154,14 @@ This compatibility path does not grant managed Tailscale semantics. `gateway.aut
 ## Recover an orphaned foreground claim
 
 Older Gateways could leave a foreground Tailscale claim running after a forced
-shutdown. Updating prevents new orphans but does not remove existing claims.
+shutdown or an interrupted sudo-backed start. Updating fixes cleanup for new
+claims but does not automatically remove existing claims with unproven ownership.
 
 If startup reports an occupied HTTPS port, run `tailscale serve status --json`.
 Check `Foreground` for the reported session, hostname, path, and proxy target.
 On macOS or Linux, inspect candidate CLI processes with
 `ps -axo pid,ppid,args | grep '[t]ailscale'`. Confirm which process created that
-route before stopping it with `kill -TERM <confirmed-pid>`. Tailscale status does
+route before stopping it with `kill -TERM <confirmed-pid>` (or `sudo kill -TERM <confirmed-pid>` for a root process). Tailscale status does
 not report the claimant PID. A backend listener PID or an orphaned parent alone
 does not prove ownership. If another application owns the claim, leave it alone
 and keep OpenClaw managed ingress off until you resolve the conflict.

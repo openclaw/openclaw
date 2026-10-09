@@ -55,6 +55,7 @@ import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
+import { appendOllamaResponseText } from "./stream-commentary.js";
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
@@ -225,16 +226,6 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   ) {
     options.top_p = 1;
   }
-}
-
-function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
-  const params = model.params;
-  const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
-  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl));
-  if (think !== undefined) {
-    requestParams.think = think;
-  }
-  return Object.keys(requestParams).length > 0 ? requestParams : undefined;
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
@@ -644,6 +635,7 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+  const stopReason = resolveOllamaStopReason(response);
   const thinking =
     modelInfo.reasoning === false
       ? ""
@@ -659,9 +651,7 @@ export function buildAssistantMessage(
           modelId: modelInfo.id,
           text: rawText,
         });
-  if (text) {
-    content.push({ type: "text", text });
-  }
+  appendOllamaResponseText(content, text, stopReason);
 
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
@@ -693,7 +683,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: resolveOllamaStopReason(response),
+    stopReason,
     usage: {
       ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),
@@ -858,6 +848,10 @@ function createRawOllamaStreamFn(
                 baseUrl,
                 modelId: model.id,
               });
+        // Direct completions skip the agent wrapper; configured thinking still wins over off.
+        const think =
+          resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl)) ??
+          (options?.reasoning === "off" ? false : undefined);
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
@@ -866,7 +860,8 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model, baseUrl),
+          ...pickOllamaParams(model.params, OLLAMA_TOP_LEVEL_PARAM_KEYS),
+          ...(think !== undefined ? { think } : {}),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 

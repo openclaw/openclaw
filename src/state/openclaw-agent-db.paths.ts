@@ -83,6 +83,25 @@ export function isIncognitoOpenClawAgentSqlitePath(
   );
 }
 
+/** An explicit sentinel names its physical root; ambient state cannot redirect it. */
+export function resolveExplicitIncognitoAgentSqliteTarget(
+  pathname: string | undefined,
+  options: { agentId?: string; env?: NodeJS.ProcessEnv } = {},
+): { agentId: string; env: NodeJS.ProcessEnv; path: string } | undefined {
+  if (!pathname || path.basename(pathname) !== INCOGNITO_AGENT_SQLITE_BASENAME) {
+    return undefined;
+  }
+  const resolved = path.resolve(pathname);
+  const agentId = normalizeAgentId(
+    options.agentId ?? path.basename(path.dirname(path.dirname(resolved))),
+  );
+  const env = options.env ?? { OPENCLAW_STATE_DIR: path.resolve(resolved, "../../../..") };
+  if (!isIncognitoOpenClawAgentSqlitePath(resolved, { agentId, env })) {
+    throw new Error("Explicit incognito database target does not match its agent and state root");
+  }
+  return { agentId, env, path: resolved };
+}
+
 type AgentDatabasePathIdentity = { lexicalPath: string } & (
   | { realPath: string; device: bigint; inode: bigint }
   | {

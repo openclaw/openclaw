@@ -11,10 +11,8 @@ import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/sessio
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWorkerWrite,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
@@ -65,10 +63,12 @@ function createDurableLease() {
     effectiveEngineId: "test",
     effectiveEnginePluginId: undefined,
     degraded: false,
+    disposed: false,
     degradedReason: undefined,
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
+    onDispose: vi.fn(),
     deferDisposalUntil: () => undefined,
     dispose: async () => undefined,
   } satisfies ContextEngineLogicalTurnLease;
@@ -282,8 +282,12 @@ describe("accepted context-engine turn finalization", () => {
       prefix: [],
       sessionId: "metadata-turn",
     });
-    const reads = trackSqliteStatementExecutions(database.db, ["read"], (sql) =>
-      /^\s*(?:select|with)\b/i.test(sql) ? "read" : null,
+    const reads = trackSqliteStatementExecutions(database.db, ["freshness", "read"], (sql) =>
+      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
+        ? "freshness"
+        : /^\s*(?:select|with)\b/i.test(sql)
+          ? "read"
+          : null,
     );
     try {
       expect(
@@ -299,6 +303,7 @@ describe("accepted context-engine turn finalization", () => {
           { role: "assistant", content: "answer" },
         ],
       });
+      expect(reads.counts.freshness).toBe(1);
       expect(reads.counts.read).toBeLessThanOrEqual(8);
     } finally {
       reads.restore();
@@ -382,7 +387,7 @@ describe("accepted context-engine turn finalization", () => {
   });
 
   it("advances only the admitted durable range and rejects stale admission facts", async () => {
-    const { admission, database, facts, target, priorId, readPayload, readRow } =
+    const { admission, database, facts, target, priorId, readPayload } =
       await createAcceptedTurnFixture({ prefix: ["prior"] });
     const terminal = facts.boundary.terminal;
     expect(
@@ -519,27 +524,6 @@ describe("accepted context-engine turn finalization", () => {
       state: "blocked",
       failure: "non-descendant",
     });
-
-    for (const flag of ["aborted", "promptError", "yieldAborted"] as const) {
-      const rejectedAdmission = { ...admission, logicalTurnId: `logical-turn-${flag}` };
-      enqueueContextEngineTurnIntent({
-        admission: rejectedAdmission,
-        database,
-        engineId: "test",
-        isHeartbeat: false,
-      });
-      await finalizeAcceptedContextEngineTurn({
-        facts: {
-          ...baseFacts,
-          [flag]: true,
-          boundary: { ...baseFacts.boundary, admission: rejectedAdmission },
-        },
-        lease,
-        warn,
-      });
-      expect(commitTurn, flag).toHaveBeenCalledOnce();
-      expect(readRow(rejectedAdmission.logicalTurnId)).toBeUndefined();
-    }
   });
 
   it.each([

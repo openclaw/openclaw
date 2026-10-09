@@ -154,6 +154,20 @@ export async function recoverEmbeddedRunOverflow(
   const preflightRecovery = input.attempt.preflightRecovery;
   const requiresTranscriptContinuation =
     preflightRecovery?.source === "mid-turn" || !isCurrentAttemptReplaySafe(input.attempt);
+  // Compaction cannot shrink pending input; rewriting history cannot make this retry fit.
+  if (
+    !requiresTranscriptContinuation &&
+    (input.state.compactionRequestBudget?.pendingTokens ?? 0) >= contextTokenBudget
+  ) {
+    return {
+      action: "surface",
+      kind: "context_overflow",
+      errorText,
+      userText:
+        "This message exceeds the model's context window on its own. Send a smaller message or use a larger-context model." +
+        renderRecoverySideEffectCaution(input.attempt),
+    };
+  }
   const retryCurrentTranscript = (): EmbeddedRunOverflowRecoveryOutcome => {
     if (requiresTranscriptContinuation) {
       input.prepareCurrentTranscriptRetry();

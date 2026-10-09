@@ -22,24 +22,23 @@ type FetchMinimaxUsageOptions = {
 const DEFAULT_MINIMAX_USAGE_ORIGIN = "https://api.minimaxi.com";
 const MINIMAX_USAGE_PATH = "/v1/token_plan/remains";
 
-const RESET_KEYS = [
+function snakeAndCamelFields(...names: string[]): string[] {
+  return names.flatMap((name) => {
+    const camel = name.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+    return camel === name ? [name] : [name, camel];
+  });
+}
+
+const RESET_KEYS = snakeAndCamelFields(
   "reset_at",
-  "resetAt",
   "reset_time",
-  "resetTime",
   "next_reset_at",
-  "nextResetAt",
   "next_reset_time",
-  "nextResetTime",
   "expires_at",
-  "expiresAt",
   "expire_at",
-  "expireAt",
   "end_time",
-  "endTime",
   "window_end",
-  "windowEnd",
-] as const;
+);
 
 const PERCENT_KEYS = [
   "used_percent",
@@ -57,86 +56,53 @@ const PERCENT_KEYS = [
 // dedicated remaining-percent fields as their authoritative values.
 const REMAINING_PERCENT_KEYS = ["usage_percent", "usagePercent"] as const;
 
-const CURRENT_INTERVAL_TOTAL_KEYS = [
-  "current_interval_total_count",
-  "currentIntervalTotalCount",
-] as const;
-const CURRENT_INTERVAL_REMAINING_KEYS = [
-  "current_interval_usage_count",
-  "currentIntervalUsageCount",
-] as const;
-const CURRENT_INTERVAL_REMAINING_PERCENT_KEYS = [
+const CURRENT_INTERVAL_TOTAL_KEYS = snakeAndCamelFields("current_interval_total_count");
+const CURRENT_INTERVAL_REMAINING_KEYS = snakeAndCamelFields("current_interval_usage_count");
+const CURRENT_INTERVAL_REMAINING_PERCENT_KEYS = snakeAndCamelFields(
   "current_interval_remaining_percent",
-  "currentIntervalRemainingPercent",
-] as const;
-const CURRENT_INTERVAL_STATUS_KEYS = ["current_interval_status", "currentIntervalStatus"] as const;
-const CURRENT_WEEKLY_TOTAL_KEYS = [
-  "current_weekly_total_count",
-  "currentWeeklyTotalCount",
-] as const;
-const CURRENT_WEEKLY_REMAINING_KEYS = [
-  "current_weekly_usage_count",
-  "currentWeeklyUsageCount",
-] as const;
-const CURRENT_WEEKLY_REMAINING_PERCENT_KEYS = [
+);
+const CURRENT_INTERVAL_STATUS_KEYS = snakeAndCamelFields("current_interval_status");
+const CURRENT_WEEKLY_TOTAL_KEYS = snakeAndCamelFields("current_weekly_total_count");
+const CURRENT_WEEKLY_REMAINING_KEYS = snakeAndCamelFields("current_weekly_usage_count");
+const CURRENT_WEEKLY_REMAINING_PERCENT_KEYS = snakeAndCamelFields(
   "current_weekly_remaining_percent",
-  "currentWeeklyRemainingPercent",
-] as const;
-const CURRENT_WEEKLY_STATUS_KEYS = ["current_weekly_status", "currentWeeklyStatus"] as const;
+);
+const CURRENT_WEEKLY_STATUS_KEYS = snakeAndCamelFields("current_weekly_status");
 const MODEL_REMAINING_PERCENT_KEYS = [
   ...CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
   ...CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
 ] as const;
 
-const USED_KEYS = [
+const USED_KEYS = snakeAndCamelFields(
   "used",
   "usage",
   "used_amount",
-  "usedAmount",
   "used_tokens",
-  "usedTokens",
   "used_quota",
-  "usedQuota",
   "used_times",
-  "usedTimes",
   "prompt_used",
-  "promptUsed",
   "used_prompt",
-  "usedPrompt",
   "prompts_used",
-  "promptsUsed",
   "consumed",
-] as const;
+);
 
 const TOTAL_KEYS = [
-  "total",
-  "total_amount",
-  "totalAmount",
-  "total_tokens",
-  "totalTokens",
-  "total_quota",
-  "totalQuota",
-  "total_times",
-  "totalTimes",
-  "prompt_total",
-  "promptTotal",
-  "total_prompt",
-  "totalPrompt",
-  "prompt_limit",
-  "promptLimit",
-  "limit_prompt",
-  "limitPrompt",
-  "prompts_total",
-  "promptsTotal",
-  "total_prompts",
-  "totalPrompts",
+  ...snakeAndCamelFields(
+    "total",
+    "total_amount",
+    "total_tokens",
+    "total_quota",
+    "total_times",
+    "prompt_total",
+    "total_prompt",
+    "prompt_limit",
+    "limit_prompt",
+    "prompts_total",
+    "total_prompts",
+  ),
   ...CURRENT_INTERVAL_TOTAL_KEYS,
   ...CURRENT_WEEKLY_TOTAL_KEYS,
-  "limit",
-  "quota",
-  "quota_limit",
-  "quotaLimit",
-  "max",
+  ...snakeAndCamelFields("limit", "quota", "quota_limit", "max"),
 ] as const;
 
 const REMAINING_KEYS = [
@@ -154,20 +120,15 @@ const REMAINING_KEYS = [
   "remain_times",
   "remainingTimes",
   "remaining_times",
-  "prompt_remain",
-  "promptRemain",
-  "remain_prompt",
-  "remainPrompt",
-  "prompt_remaining",
-  "promptRemaining",
-  "remaining_prompt",
-  "remainingPrompt",
-  "prompts_remaining",
-  "promptsRemaining",
-  "prompt_left",
-  "promptLeft",
-  "prompts_left",
-  "promptsLeft",
+  ...snakeAndCamelFields(
+    "prompt_remain",
+    "remain_prompt",
+    "prompt_remaining",
+    "remaining_prompt",
+    "prompts_remaining",
+    "prompt_left",
+    "prompts_left",
+  ),
   "left",
   // MiniMax usage endpoints misname these: values are remaining quota, not consumed.
   // See https://github.com/MiniMax-AI/MiniMax-M2/issues/99
@@ -177,25 +138,17 @@ const REMAINING_KEYS = [
 
 const PLAN_KEYS = ["plan", "plan_name", "planName", "product", "tier"] as const;
 
-const WINDOW_HOUR_KEYS = [
-  "window_hours",
-  "windowHours",
-  "duration_hours",
-  "durationHours",
-  "hours",
-] as const;
+const WINDOW_HOUR_KEYS = snakeAndCamelFields("window_hours", "duration_hours", "hours");
 
-const WINDOW_MINUTE_KEYS = [
-  "window_minutes",
-  "windowMinutes",
-  "duration_minutes",
-  "durationMinutes",
-  "minutes",
-] as const;
+const WINDOW_MINUTE_KEYS = snakeAndCamelFields("window_minutes", "duration_minutes", "minutes");
 
-function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+function pickNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  parse = parseFiniteNumber,
+): number | undefined {
   for (const key of keys) {
-    const parsed = parseFiniteNumber(record[key]);
+    const parsed = parse(record[key]);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -358,16 +311,6 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   );
 }
 
-function pickEpoch(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const parsed = parseEpoch(record[key]);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
 function deriveMinimaxModelWindows(record: Record<string, unknown>): {
   recognized: boolean;
   windows: UsageWindow[];
@@ -380,7 +323,7 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
       remaining: CURRENT_INTERVAL_REMAINING_KEYS,
       remainingPercent: CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
       status: CURRENT_INTERVAL_STATUS_KEYS,
-      reset: ["end_time", "endTime"],
+      reset: snakeAndCamelFields("end_time"),
     },
     {
       label: "Week",
@@ -388,7 +331,7 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
       remaining: CURRENT_WEEKLY_REMAINING_KEYS,
       remainingPercent: CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
       status: CURRENT_WEEKLY_STATUS_KEYS,
-      reset: ["weekly_end_time", "weeklyEndTime"],
+      reset: snakeAndCamelFields("weekly_end_time"),
     },
   ]) {
     const remainingPercent = pickNumber(record, window.remainingPercent);
@@ -412,7 +355,7 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
     windows.push({
       label: window.label ?? deriveWindowLabel(record),
       usedPercent,
-      resetAt: pickEpoch(record, window.reset),
+      resetAt: pickNumber(record, window.reset, parseEpoch),
     });
   }
   return { recognized, windows };
@@ -492,7 +435,9 @@ export async function fetchMinimaxUsage(
       return buildUsageErrorSnapshot("minimax", "Unsupported response shape");
     }
 
-    const resetAt = pickEpoch(usageRecord, RESET_KEYS) ?? pickEpoch(payload, RESET_KEYS);
+    const resetAt =
+      pickNumber(usageRecord, RESET_KEYS, parseEpoch) ??
+      pickNumber(payload, RESET_KEYS, parseEpoch);
     windows = [
       {
         label: deriveWindowLabel(usageRecord),

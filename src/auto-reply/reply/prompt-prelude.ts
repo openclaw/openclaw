@@ -172,7 +172,7 @@ export function buildReplyPromptEnvelopeBase(
       }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
+      : effectiveBaseBody;
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext
@@ -233,18 +233,14 @@ export function buildReplyPromptEnvelope(
         sourceContext.map((text) => ({ kind: "conversation-data", text })),
       )
     : base.currentInboundContext;
+  const annotateBody = (body: string) =>
+    annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
     mediaNote,
     inboundMediaIndexes: generatedMedia.mediaIndexes,
     ...(media.length > 0 ? { media } : {}),
-    prefixedCommandBody: annotateInterSessionPromptText(
-      prependMediaNote(params.prefixedBody ?? base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
-    queuedBody: annotateInterSessionPromptText(
-      prependMediaNote(base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
+    prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
+    queuedBody: annotateBody(base.effectiveBaseBody),
     transcriptCommandBody,
     ...base,
     currentInboundContext,

@@ -245,12 +245,15 @@ describe("models list published transport", () => {
         providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
       });
       await list({ refresh, json: true });
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Model discovery authentication was rejected for signed-out. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+      );
       if (refreshFailed) {
-        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect(runtime.error).toHaveBeenCalledWith(
           "Model discovery could not refresh all providers. Showing the available published model list.",
         );
       } else {
-        expect(runtime.error).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledTimes(1);
       }
       expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
       expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
@@ -260,6 +263,82 @@ describe("models list published transport", () => {
       );
     },
   );
+
+  it.each([
+    { json: true, plain: false },
+    { json: false, plain: true },
+    { json: false, plain: false },
+  ])("reports rejected discovery with empty provider inventory for %j", async (output) => {
+    const outcome = { provider: "xai", profileId: "xai:work", status: "auth-rejected" };
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [],
+      providerOutcomes: [outcome],
+    });
+
+    await list({ provider: "xai", agent: "work", ...output });
+
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    if (output.json) {
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        { count: 0, models: [], providerOutcomes: [outcome] },
+        2,
+      );
+    } else if (output.plain) {
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.writeStdout).not.toHaveBeenCalled();
+    } else {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith("No models found.");
+    }
+  });
+
+  it("preserves model rows and public discovery facts without printing raw provider errors", async () => {
+    const providerOutcomes = [
+      { provider: "catalog-provider", status: "ready" },
+      { provider: "xai", status: "auth-rejected", profileId: "xai:work" },
+      { provider: "offline", status: "unavailable" },
+    ];
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      providerOutcomes: providerOutcomes.map((outcome) => ({
+        ...outcome,
+        message: "synthetic-private-provider-response",
+      })),
+    });
+
+    await list({ json: true });
+
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        count: 1,
+        models: [expect.objectContaining({ key: "catalog-provider/Reader", available: true })],
+        providerOutcomes,
+      }),
+      2,
+    );
+    expect(runtime.error).toHaveBeenCalledTimes(2);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Model discovery is unavailable for offline. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.",
+    );
+    expect(JSON.stringify(runtime.error.mock.calls)).not.toContain("synthetic-private");
+  });
+
+  it("sanitizes provider and profile labels in discovery warnings", async () => {
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model],
+      providerOutcomes: [
+        { provider: "\u001b[31mxai\u001b[0m", profileId: "work\nnext", status: "auth-rejected" },
+      ],
+    });
+
+    await list({ plain: true });
+
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile work\\nnext). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
+  });
 
   it.each([false, true])(
     "uses the standalone owner only with no selected Gateway, refresh=%s",

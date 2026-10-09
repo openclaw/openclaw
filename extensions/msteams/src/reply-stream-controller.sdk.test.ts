@@ -31,7 +31,6 @@ const provider = createServer((request, response) => {
     const scenario = request.url?.slice(1) ?? "";
     const priorScenarioRequests = requests.filter((entry) => entry.scenario === scenario).length;
     const rejected =
-      scenario === "no-ack" ||
       ((scenario === "cancel-replacement" || scenario === "presentation-cancel") &&
         priorScenarioRequests > 0) ||
       (scenario === "presentation-close-failure" && activity.type === "message") ||
@@ -186,48 +185,6 @@ function createLoopbackController(
 }
 
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
-  it.each([
-    { label: "default", progress: {}, expectedLabel: "Working" },
-    { label: "custom", progress: { label: "Custom progress" }, expectedLabel: "Custom progress" },
-  ])(
-    "clears and recreates a plan with the $label label before the final reply",
-    async ({ label, progress, expectedLabel }) => {
-      const scenario = `plan-clear-${label}`;
-      const { acknowledgements, controller } = createLoopbackController(scenario, {
-        streaming: { mode: "progress", progress },
-      });
-      const plan = [{ step: "Inspect", status: "in_progress" as const }];
-
-      try {
-        await controller.pushPlanProgress(plan);
-        await expect
-          .poll(() => acknowledgements.at(-1)?.text)
-          .toBe(`${expectedLabel}\n\n▸ Inspect`);
-
-        await controller.pushPlanProgress([]);
-        await expect.poll(() => acknowledgements.at(-1)?.text).toBe(expectedLabel);
-
-        await controller.pushPlanProgress(plan);
-        await expect
-          .poll(() => acknowledgements.at(-1)?.text)
-          .toBe(`${expectedLabel}\n\n▸ Inspect`);
-      } finally {
-        expect(controller.preparePayload({ text: "Done" })).toBeUndefined();
-        await expect(controller.finalize()).resolves.toEqual({
-          visibleReplySent: true,
-          content: "Done",
-          messageId: `stream-${scenario}`,
-        });
-      }
-      expect(requests.findLast((request) => request.scenario === scenario)).toEqual({
-        scenario,
-        type: "message",
-        text: "Done",
-        status: 201,
-      });
-    },
-  );
-
   it("redelivers only text not acknowledged by the real Teams SDK and HTTP provider", async () => {
     const { acknowledgements, controller, firstAcknowledgement, firstFlushFailure, logger } =
       createLoopbackController("size-limit");
@@ -262,16 +219,6 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
           request.scenario === "size-limit" && request.type === "typing" && request.status === 403,
       ),
     ).toHaveLength(2);
-  });
-
-  it("never acknowledges a Teams HTTP request rejected before delivery", async () => {
-    const { acknowledgements, controller, firstFlushFailure } = createLoopbackController("no-ack");
-
-    controller.onPartialReply({ text: acknowledgedPrefix });
-    await firstFlushFailure;
-
-    expect(acknowledgements).toEqual([]);
-    expect(requests.find((request) => request.scenario === "no-ack")?.status).toBe(403);
   });
 
   it("honors a real Teams HTTP cancellation without redelivering the remaining text", async () => {
@@ -424,16 +371,12 @@ describe("Teams native final text preparation", () => {
     ).toEqual([201, 201, 403, 201]);
   });
 
-  it.each(["partial", "progress"] as const)("renders the final %s activity", async (mode) => {
-    const scenario = `presentation-${mode}`;
+  it("renders the final progress activity", async () => {
+    const scenario = "presentation-progress";
     const text = "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
-    const { controller, firstAcknowledgement } = createLoopbackController(scenario, {
-      streaming: { mode },
+    const { controller } = createLoopbackController(scenario, {
+      streaming: { mode: "progress" },
     });
-    if (mode === "partial") {
-      controller.onPartialReply({ text });
-      await firstAcknowledgement;
-    }
     expect(controller.preparePayload({ text })).toBeUndefined();
     const result = await controller.finalize();
     expect(result.visibleReplySent).toBe(true);

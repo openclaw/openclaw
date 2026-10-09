@@ -393,25 +393,21 @@ export async function runClawsAddCommand(
     }
   }
 
-  if (plan.blockers.length > 0) {
+  if (opts.dryRun || plan.blockers.length > 0) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
       logClawExperimentalWarning(runtime);
+      if (plan.blockers.length === 0) {
+        runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
+      }
       logClawAddPlanSummary(plan, runtime);
-      runtime.error(formatClawDiagnostics(plan.blockers));
+      if (plan.blockers.length > 0) {
+        runtime.error(formatClawDiagnostics(plan.blockers));
+      }
     }
-    runtime.exit(1);
-    return;
-  }
-
-  if (opts.dryRun) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, plan);
-    } else {
-      logClawExperimentalWarning(runtime);
-      runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
-      logClawAddPlanSummary(plan, runtime);
+    if (plan.blockers.length > 0) {
+      runtime.exit(1);
     }
     return;
   }

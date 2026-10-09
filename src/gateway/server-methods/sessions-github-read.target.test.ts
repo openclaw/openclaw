@@ -9,6 +9,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import * as availability from "../github-publication-availability.js";
+import { prepareGitHubPublicationTarget } from "../github-publication-target.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
   publisher,
@@ -75,6 +76,93 @@ async function registerWorktree(origin?: string) {
 }
 
 describe("registered guest publication target discovery", () => {
+  it("reuses positive target discovery for 15 seconds while publication still checks live Git", async () => {
+    await withReadFixture(async (fixture) => {
+      const worktree = await registerWorktree("https://github.com/example/project.git");
+      const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const options = () => fixture.invoke("sessions.github.options", { sessionKey });
+      for (let index = 0; index < 2; index++) {
+        expect(await options()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ shared: publisher }),
+        );
+      }
+      expect(lookup).toHaveBeenCalledOnce();
+      expect(
+        (
+          await runGit(worktree.path, [
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.test/replacement.git",
+          ])
+        ).code,
+      ).toBe(0);
+      now += 14_999;
+      expect(await options()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ shared: publisher }),
+      );
+      expect(lookup).toHaveBeenCalledOnce();
+      await expect(
+        prepareGitHubPublicationTarget({
+          worktree,
+          identity: {
+            source: publisher.source,
+            account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
+            env: {},
+          },
+          assertCurrent: () => {},
+        }),
+      ).rejects.toThrow("GitHub publication workspace repository changed.");
+      now += 1;
+      expect(await options()).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "GitHub publication workspace repository changed." }),
+      );
+    }, guest);
+  });
+
+  it("invalidates cached discovery on registry revisions and checks the current connection on hits", async () => {
+    await withReadFixture(async (fixture) => {
+      const worktree = await registerWorktree("https://github.com/example/project.git");
+      const options = () => fixture.invoke("sessions.github.options", { sessionKey });
+      expect(await options()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ shared: publisher }),
+      );
+      // Restoring the same fields must not resurrect facts from the retired registry revision.
+      for (const repoFingerprint of ["replacement-fingerprint", worktree.repoFingerprint]) {
+        await updateRegistryWorktree(process.env, worktree.id, {
+          repositoryIdentity: { repoRoot: worktree.repoRoot, repoFingerprint },
+        });
+      }
+      const lookup = vi
+        .spyOn(managedWorktrees, "resolveRepositoryIdentity")
+        .mockRejectedValueOnce(new Error("Repository read unavailable"));
+      expect(await options()).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "Repository read unavailable" }),
+      );
+      expect(await options()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ shared: publisher }),
+      );
+      expect(lookup).toHaveBeenCalledTimes(2);
+      fixture.disconnect();
+      expect(await options()).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
+      expect(lookup).toHaveBeenCalledTimes(2);
+    }, guest);
+  });
+
   it.each([undefined, "https://example.test/project.git"])(
     "keeps receipts for unsupported origin %s and rejects stale or failed repository reads",
     async (origin) => {

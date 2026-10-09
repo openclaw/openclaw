@@ -167,6 +167,7 @@ suite.define(() => {
       const page = await context.newPage();
       try {
         const gateway = await installMockGateway(page, {
+          awaitInitialRoster: !suspending,
           gatewaySuspensionPhase: suspending ? "draining" : "accepting",
           methodResponses: {
             "sessions.list": {

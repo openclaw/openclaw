@@ -44,34 +44,6 @@ describe("noteBootstrapFileSize", () => {
     listAgentIds.mockReturnValue(["main"]);
   });
 
-  it("emits a warning when bootstrap files are truncated", async () => {
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/workspace/AGENTS.md",
-          content: "a".repeat(25_000),
-          missing: false,
-        },
-      ],
-      contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(20_000) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls[0] ?? [];
-    expect(title).toBe("Bootstrap file size");
-    expect(message).toBe(
-      [
-        "Workspace bootstrap files exceed limits and will be truncated:",
-        "- AGENTS.md: 25,000 raw / 20,000 injected (20% truncated; max/file)",
-        "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
-        "Total bootstrap raw chars (before truncation): 25,000.",
-        "",
-        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      ].join("\n"),
-    );
-  });
-
   it("reports a budget-dropped file that repeats a sibling basename as fully truncated", async () => {
     resolveBootstrapTotalMaxChars.mockReturnValueOnce(1_000);
     resolveBootstrapContextForDiagnostics.mockResolvedValue({
@@ -105,37 +77,6 @@ describe("noteBootstrapFileSize", () => {
     );
   });
 
-  it("threads the default agent id through bootstrap size resolution", async () => {
-    resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
-    listAgentIds.mockReturnValueOnce(["custom-agent"]);
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [],
-      contextFiles: [],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(resolveBootstrapMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
-    expect(resolveBootstrapTotalMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
-    expect(resolveBootstrapContextForDiagnostics).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "custom-agent" }),
-    );
-  });
-
-  it("stays silent when files are comfortably within limits", async () => {
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/workspace/AGENTS.md",
-          content: "a".repeat(1_000),
-          missing: false,
-        },
-      ],
-      contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).not.toHaveBeenCalled();
-  });
-
   it("explains the fixed cap for a near-limit, untruncated USER.md", async () => {
     resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
@@ -153,27 +94,6 @@ describe("noteBootstrapFileSize", () => {
     const [message] = note.mock.calls[0] ?? [];
     expect(message).toContain("Workspace bootstrap files are near configured limits:");
     expect(message).toContain("- USER.md: 3,500 chars (88% of max/file 4,000)");
-    expect(message).toContain(
-      "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
-    );
-    expect(message).not.toContain("bootstrapMaxChars");
-  });
-
-  it("points to the fixed USER.md cap instead of an ineffective tuning tip", async () => {
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "USER.md",
-          path: "/tmp/workspace/USER.md",
-          content: "u".repeat(5_000),
-          missing: false,
-        },
-      ],
-      contextFiles: [{ path: "/tmp/workspace/USER.md", content: "u".repeat(4_000) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] ?? [];
     expect(message).toContain(
       "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
     );

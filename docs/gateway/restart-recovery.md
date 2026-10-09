@@ -144,6 +144,10 @@ own active chat runs and queued turns, and waits on the process-wide pending-rep
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
 
+When Gateway connection shutdown begins, session observer event subscriptions
+stop before the observer closes. Accepted observer work still settles, while
+chat events and terminal session writes continue through their own drain.
+
 If database closure refuses a follow-up drain, the drain parks its queued input
 instead of retrying against the closing owner. A fresh drain request can resume
 it after database admission reopens; durable input recovery owns restart replay.
@@ -685,6 +689,12 @@ and worker pressure. Once execution starts, the normal main lane owns concurrenc
 a long recovered turn does not hold a separate startup slot. Deferred database
 admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
+
+Recovery follows retained transcript-window ownership when a session moves to a
+new key or rotates its session ID. Claim validation and cleanup read only those
+candidate sessions, so stale recovery claims do not load unrelated saved prompts
+while interactive session changes wait. Claim authority, retry budgets, stored
+data, and upgrade behavior are unchanged.
 
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking

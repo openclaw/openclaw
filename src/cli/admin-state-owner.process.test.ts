@@ -23,14 +23,20 @@ import {
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
 } from "../infra/exec-approvals.js";
-import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
+import {
+  acquireGatewayLock,
+  resolveGatewayLockPaths,
+  type GatewayLockHandle,
+} from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import {
   readChannelPairingStateSnapshot,
   writeChannelPairingStateSnapshot,
 } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { writeAdminStateOwnerObservationPreload } from "./admin-state-owner.observation.test-support.js";
 import { adminStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
@@ -110,6 +116,11 @@ describe("administrative CLI state owner routing", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
     };
+    const preloadPath = await writeAdminStateOwnerObservationPreload(
+      root,
+      resolveGatewayLockPaths(env).ownerLockPath,
+    );
+    Object.assign(env, sqliteWorkerPreloadEnv(preloadPath));
     const cfg = {
       gateway: {
         mode: "local" as const,
@@ -232,12 +243,15 @@ describe("administrative CLI state owner routing", () => {
       ],
     });
     await updateExecApprovals({
-      update: () => ({
-        version: 1,
-        agents: {
-          "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+      update: {
+        kind: "replace",
+        file: {
+          version: 1,
+          agents: {
+            "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+          },
         },
-      }),
+      },
     });
     if (scenario === "offline") {
       await closeOpenClawStateDatabaseAsync();
@@ -261,6 +275,7 @@ describe("administrative CLI state owner routing", () => {
     expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
     if (scenario === "offline") {
       expect(observation.adminSql).toBeGreaterThan(0);
+      expect(observation.workerSql).toBeGreaterThan(0);
       expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
       expect(methods).toEqual([]);
     } else {

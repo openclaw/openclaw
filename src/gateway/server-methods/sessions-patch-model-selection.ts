@@ -381,13 +381,9 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     } catch (error) {
       return errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error));
     }
-    const selectionError = params.validateModelSelection?.();
-    if (selectionError) {
-      return selectionError;
-    }
-    const environmentError = validateEnvironment?.();
-    if (environmentError) {
-      return environmentError;
+    const policyError = params.validateModelSelection?.() || validateEnvironment?.();
+    if (policyError) {
+      return policyError;
     }
     const message =
       validateRuntime?.() ??

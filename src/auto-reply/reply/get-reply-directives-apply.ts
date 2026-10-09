@@ -52,10 +52,10 @@ function formatModelOverrideResetEvent(params: {
 }): string {
   if (params.reason === "temporarily-unavailable") {
     // Non-destructive: the pin is preserved and comes back once the catalog reloads.
-    if (params.rejectedRef) {
-      return `Model override ${params.rejectedRef} is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
-    }
-    return `Your pinned model override is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
+    const subject = params.rejectedRef
+      ? `Model override ${params.rejectedRef}`
+      : "Your pinned model override";
+    return `${subject} is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
   }
   if (params.reason === "stale") {
     if (params.rejectedRef) {
@@ -155,9 +155,7 @@ export async function applyInlineDirectiveOverrides(params: {
     return { kind: "reply", reply: { text, isError: true }, preRunRejection: code };
   };
   const requesterProfileId = readSessionInputProfileId(ctx);
-  let { directives } = params;
-  let { provider, model } = params;
-  let { contextTokens } = params;
+  let { directives, provider, model, contextTokens } = params;
   let directiveAck: ReplyPayload | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
 
@@ -396,14 +394,11 @@ export async function applyInlineDirectiveOverrides(params: {
         if (applied.status === "rejected" || applied.status === "conflict") {
           return directiveRejection(`model-selection-${applied.status}`, applied.message);
         }
-        const label = `${modelSelection.provider}/${modelSelection.model}`;
-        const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
         // Model change first, then the thinking remap it triggered: the remap is a
         // consequence of the model switch, so the cause is announced before the effect.
         const parts = [
           formatModelSelectionScopeAck({
-            isDefault: modelSelection.isDefault,
-            label: labelWithAlias,
+            selection: modelSelection,
             configuredDefaultUpdate: applied.configuredDefaultUpdate,
             ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           }),
@@ -456,14 +451,14 @@ export async function applyInlineDirectiveOverrides(params: {
       });
     }
     typing.cleanup();
-    if (statusReply?.text && directiveReply?.text) {
-      return {
-        kind: "reply",
-        reply: { text: `${directiveReply.text}\n${statusReply.text}` },
-        preRunRejection,
-      };
-    }
-    return { kind: "reply", reply: statusReply ?? directiveReply, preRunRejection };
+    return {
+      kind: "reply",
+      reply:
+        statusReply?.text && directiveReply?.text
+          ? { text: `${directiveReply.text}\n${statusReply.text}` }
+          : (statusReply ?? directiveReply),
+      preRunRejection,
+    };
   }
 
   if (hasAnyDirective && command.isAuthorizedSender) {

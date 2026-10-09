@@ -9,17 +9,12 @@ import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyExecApprovalEvidence } from "./policy-state-types.js";
 
 export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprovalEvidence[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed) || parsed.version !== 1) {
+  const parsed = parseExecApprovalsFile(raw);
+  if (!parsed.ok) {
     return [];
   }
   const evidence: PolicyExecApprovalEvidence[] = [];
-  const defaults = asNonArrayRecord(parsed.defaults);
+  const defaults = asNonArrayRecord(parsed.value.defaults);
   evidence.push(
     execApprovalPostureEvidence(
       "defaults",
@@ -30,7 +25,7 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
   );
 
   // Snapshot admission leaves legacy agent and allowlist migration to Doctor.
-  for (const [agentId, value] of Object.entries(asNonArrayRecord(parsed.agents)).toSorted(
+  for (const [agentId, value] of Object.entries(asNonArrayRecord(parsed.value.agents)).toSorted(
     ([a], [b]) => a.localeCompare(b),
   )) {
     if (!isRecord(value)) {
@@ -66,6 +61,25 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
     }
   }
   return evidence;
+}
+
+export function parseExecApprovalsFile(
+  raw: string,
+):
+  | { readonly ok: true; readonly value: Record<string, unknown> }
+  | { readonly ok: false; readonly message: string } {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || value.version !== 1) {
+      return { ok: false, message: "unsupported exec approvals version" };
+    }
+    return { ok: true, value };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 function execApprovalPostureEvidence(

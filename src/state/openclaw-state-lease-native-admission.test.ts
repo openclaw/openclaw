@@ -51,6 +51,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("keeps a lease with a worker expiry 30 days ahead alive", async () => {
+  fixture.expiresAt = Date.now() + 30 * 24 * 60 * 60_000;
+  await withOpenClawStateLease(
+    {
+      scope: "projects.checkout",
+      key: "synthetic-clock-skew",
+      database: { scope: "shared" },
+      leaseMs: 1_000,
+      waitMs: 0,
+    },
+    async (lease) => {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(lease.signal.aborted).toBe(false);
+      lease.assertOwned();
+    },
+  );
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it.each(["live", "expired", "renewed"] as const)(
   "admits the next effect only while the original native lease is %s",
   async (state) => {

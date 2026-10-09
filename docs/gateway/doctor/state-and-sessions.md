@@ -26,7 +26,7 @@ auth health, sandbox images, and plugin installs.
 
     The JSON plugin index at `plugins/installs.json` is retired. Doctor leaves it unchanged and directs operators to run `openclaw doctor --fix` on `2026.9.5` with a pre-update backup. Updates also check this original file before stopping the running Gateway. Current SQLite plugin indexes and install records remain supported.
 
-    Legacy Skill Workshop proposal imports, skill relocation, and collection-backup repair belong to Doctor, including the repair pass during `openclaw update`. Normal Gateway and local CLI startup leave those artifacts untouched and do not discover Workshop backup roots or scan proposals for repair. Run `openclaw doctor --fix` or `openclaw doctor --yes` against the same state and config to complete a legacy Workshop migration. Plain Doctor can report remaining Workshop artifacts with repair guidance.
+    Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 
     A rewritten or truncated legacy audit raw archive does not stop Doctor or update finalization. Doctor quarantines it beside itself, preserves the sanitized archive and existing SQLite records, and reports the quarantined path once. Later repairs continue. See [legacy audit recovery](/cli/update/repair-and-recovery#skipped-legacy-audit-recovery) for retained backups and recovery limits.
 
@@ -120,8 +120,10 @@ auth health, sandbox images, and plugin installs.
     owner before removing that marker, preserving the job's definition and runtime
     state. Unresolved historical jobs also require Doctor before updates or removal,
     and the current system agent does not gain management access to them. Operator
-    inspection remains available. Current configurations without a legacy marker keep their dynamic
-    system-agent selection.
+    inspection remains available. For a legacy `agents.list` without a default
+    marker, Doctor pins historical ownerless jobs to the first agent in the list
+    before converting the roster. Current keyed `agents.entries` configurations
+    without a legacy marker keep their dynamic system-agent selection.
 
     Missing interval anchors are repaired by Doctor. Runtime scheduling can
     calculate the next run without writing an anchor into an old definition.

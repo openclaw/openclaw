@@ -54,7 +54,10 @@ const event = {
   data: { phase: "error", startedAt: 1_000, endedAt: 2_000, error },
 };
 
-async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
+async function seed(
+  assistantBranch?: "active" | "inactive" | "other-run" | "commentary" | "success",
+) {
+  const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1_000,
@@ -89,9 +92,25 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
             parentId: "user-turn",
             message: {
               role: "assistant",
-              content: [],
-              stopReason: "error",
-              errorMessage: "Provider failed",
+              content: hasPriorOutput
+                ? [
+                    {
+                      type: "text",
+                      text: "Running it now.",
+                      ...(assistantBranch === "commentary"
+                        ? {
+                            textSignature: JSON.stringify({
+                              v: 1,
+                              id: "commentary",
+                              phase: "commentary",
+                            }),
+                          }
+                        : {}),
+                    },
+                  ]
+                : [],
+              stopReason: hasPriorOutput ? "stop" : "error",
+              errorMessage: hasPriorOutput ? undefined : "Provider failed",
               __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
             },
           },
@@ -293,7 +312,7 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it.each(["active", "inactive", "other-run"] as const)(
+  it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
     "checks assistant output on the %s branch for this run",
     async (branch) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
