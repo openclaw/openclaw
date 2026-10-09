@@ -88,17 +88,18 @@ function installCommittedState(
 }
 
 /** Use the same phase ordering for an already committed worker receipt. */
-export function publishSqliteCommittedState(publication: SqliteCommittedPublication): void {
+export function publishSqliteCommittedState(
+  publication: SqliteCommittedPublication | readonly SqliteCommittedPublication[],
+): void {
+  const publications = "installFacts" in publication ? [publication] : publication;
   installCommittedState(
-    [
-      {
-        commit: publication.installFacts,
-        prepareObservers: publication.installProjection,
-        invalidate: publication.invalidate,
-        rollback: () => {},
-      },
-    ],
-    [publication.notify],
+    publications.map((entry) => ({
+      commit: entry.installFacts,
+      prepareObservers: entry.installProjection,
+      invalidate: entry.invalidate,
+      rollback: () => {},
+    })),
+    publications.map((entry) => entry.notify),
   );
 }
 

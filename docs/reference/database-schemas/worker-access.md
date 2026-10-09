@@ -206,6 +206,42 @@ synchronous compatibility paths; receipt publication does not migrate their SQL
 to a worker. There is no schema, stored-byte, retention, durability, permission,
 or update-format change.
 
+### Approval, placement, and workspace receipts
+
+Managed approval and exec writers capture exact row postimages and deletion
+facts in their mutation statements. Approval expiry and corrupt-row repair are
+writers too. Effective exec policy and usage accounting remain separate domains:
+recording a use does not advertise a new policy. Existing cron grant and
+resolution receipts retain their settlement meaning alongside those facts.
+
+Environment receipts replace each affected environment's complete environment,
+credential, and attachment tuple, including explicit absence. Placement receipts
+retain exact turn, tool, pending-result, and journal-presence facts through the
+existing authority owner. Committed facts install when native commit evidence
+arrives, before the ordinary reply; the writer queue still owns accepted work
+until settlement. A lost reply never triggers mutation replay.
+
+Workspace setup, aliases, attestation sets, local and repository workspaces, and
+node prepared-workspace lifecycle operations publish through their existing
+native or worker kernels. Deletion remains a tombstone, and newer native changes
+supersede delayed worker postimages. All domains in a compound receipt install
+before public observers. Nested rollback discards tentative facts; a confirmed
+rollback preserves the previous committed projection. Missing accepted receipts,
+unknown settlement, or failed installation invalidate the affected domain.
+
+This coverage applies to the named managed writers. Standing-grant generation
+companions, cascade child identities, and cron-specific worker transport of grant
+revocations remain incomplete. Move error/cancellation paths retain explicit
+invalidation instead of claiming a complete move postimage. Raw handles,
+unmanaged trigger or cascade effects, and offline Doctor relocation/import also
+remain outside this coverage. Final exec, node-dispatch, placement, and workspace authority guards
+remain in place. Receipt publication grants no permission and no cross-store
+exclusion. The Gateway owns runtime writes; other processes use its APIs or write
+only while it is stopped. No runtime freshness probes are added.
+
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+Released synchronous methods still commit and install their facts before returning.
+
 ### Foreign observation and recertification
 
 The shared-state current-reader owner retains one unpinned probe connection per

@@ -45,6 +45,10 @@ import {
   ExecApprovalsMigrationRequiredError,
 } from "./exec-approvals-migration-gate.js";
 import type { ExecApprovalsUpdate as ExecApprovalsMutation } from "./exec-approvals-mutation.kernel.js";
+import {
+  execApprovalsPublication,
+  withExecApprovalsPublication,
+} from "./exec-approvals-publication.js";
 import type { RemovedExecApprovalPolicies } from "./exec-approvals-retirement.worker.js";
 import {
   snapshotFromExecApprovalsDatabase,
@@ -261,7 +265,7 @@ async function mutateExecPolicy<Key extends keyof PolicyMutationOperations>(
   try {
     return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(captured), {
       assertCurrent: assertPreparationCurrent,
-      createAdmission(operation) {
+      createAdmission: withExecApprovalsPublication((operation, onCommitAdmitted) => {
         let transaction = false;
         let staged: unknown;
         let release: (() => void) | undefined;
@@ -289,6 +293,9 @@ async function mutateExecPolicy<Key extends keyof PolicyMutationOperations>(
           if (!grant()) {
             throw new Error("Exec policy mutation lost admission");
           }
+          if (request.stage === "commit") {
+            onCommitAdmitted();
+          }
         });
         publicationSettled = operation.settled.then((settlement) => {
           const receipt = admission.committed?.facts;
@@ -302,7 +309,7 @@ async function mutateExecPolicy<Key extends keyof PolicyMutationOperations>(
         });
         void publicationSettled.catch(() => undefined);
         return { admission, nativeLocations: [context.admission.databasePath] };
-      },
+      }, context),
     });
   } finally {
     await publicationSettled;
@@ -431,9 +438,19 @@ function enqueueExecAuthorization(
       },
       {
         assertCurrent: assertBatchCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertBatchCurrent, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: withExecApprovalsPublication(
+          (operation, onCommitAdmitted) =>
+            createSqliteWorkerWriteAdmission(
+              (request) => {
+                assertBatchCurrent();
+                if (request.stage === "commit") {
+                  onCommitAdmitted();
+                }
+              },
+              [context.admission.databasePath],
+            )(operation),
+          context,
+        ),
       },
     ).then(
       (settlements) => settlements.forEach((settle) => settle()),
@@ -461,6 +478,7 @@ export async function withAgentExecApprovalsRemoved<T>(
     let committed = false;
     let uncertain = false;
     let releasePublication: (() => void) | undefined;
+    let publication: ReturnType<typeof execApprovalsPublication.begin> | undefined;
     try {
       return await authority.runWithWorker(
         (scope, guard) => {
@@ -475,6 +493,10 @@ export async function withAgentExecApprovalsRemoved<T>(
         },
         {
           onAdmission(request, identityKey) {
+            publication ??= execApprovalsPublication.begin({
+              identity: identityKey,
+              assertCurrent: authority.assertCurrentHost,
+            });
             if (request.stage !== "commit") {
               return;
             }
@@ -511,6 +533,7 @@ export async function withAgentExecApprovalsRemoved<T>(
               throw new Error("Exec approval retirement receipt differs from its command");
             }
             committed = true;
+            publication?.committed(facts.execFacts);
           },
         },
       );
@@ -526,6 +549,7 @@ export async function withAgentExecApprovalsRemoved<T>(
       }
       throw error;
     } finally {
+      publication?.finish(committed && !uncertain);
       if (!uncertain) {
         releasePublication?.();
       }
