@@ -334,7 +334,6 @@ export async function loadAgentCompoundOperations() {
   const turn = await import("../config/sessions/session-turn.worker.js");
   const reset = await import("../config/sessions/session-reset.worker.js");
   const lifecycle = await import("../config/sessions/session-lifecycle-projection.worker.js");
-  const purge = await import("../config/sessions/session-agent-purge.worker.js");
   const predicates = await import("../config/sessions/session-turn-predicate.js");
   await predicates.prepareSessionTurnPredicates();
   return {
@@ -342,6 +341,12 @@ export async function loadAgentCompoundOperations() {
     "session.turn.commit": turn.commitSessionTurn,
     "session.lifecycle.reset": reset.commitSessionReset,
     "session.lifecycle.project": lifecycle.commitSessionLifecycleProjection,
+  } satisfies Handlers;
+}
+
+export async function loadAgentPurgeOperations() {
+  const purge = await import("../config/sessions/session-agent-purge.worker.js");
+  return {
     "session.agentPurge.prepare": purge.prepareSessionAgentPurge,
     "session.agentPurge.commit": purge.commitSessionAgentPurge,
   } satisfies Handlers;
@@ -670,6 +675,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentPurgeOperations>> &
     Awaited<ReturnType<typeof loadAgentMaintenanceFinalizationOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
     Awaited<ReturnType<typeof loadAgentMessageCutOperations>> &
