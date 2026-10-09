@@ -5,12 +5,12 @@ import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionEditorAttachment
 import ai.openclaw.app.chat.VOICE_NOTE_MIME_TYPE
 import ai.openclaw.app.chat.VoiceNoteRecording
+import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicLong
 
 /** Attachment staged in a composer until the next chat.send call. */
 data class PendingAttachment(
@@ -27,7 +27,7 @@ internal data class ChatComposerAttachmentMigration(
   val omittedCount: Int,
 )
 
-/** ViewModel-owned heap state; attachment payloads are too large for Android saved state. */
+/** Heap storage accessed under ChatComposerStateStore's lock; payloads stay out of saved state. */
 internal class ChatComposerAttachmentStore(
   private val maxTotalAttachmentCount: Int = CHAT_COMPOSER_MAX_TOTAL_ATTACHMENTS,
   private val maxTotalBase64Chars: Long = CHAT_COMPOSER_MAX_TOTAL_BASE64_CHARS,
@@ -37,48 +37,37 @@ internal class ChatComposerAttachmentStore(
     require(maxTotalAttachmentCount >= 0 && maxTotalBase64Chars >= 0 && maxTotalDecodedBytes >= 0)
   }
 
-  private val lock = Any()
-  private val importSequence = AtomicLong()
-  private val importOwners = mutableMapOf<Long, ChatComposerOwner>()
+  private var importSequence = 0L
+  private val importOwners = mutableStateMapOf<Long, ChatComposerOwner>()
   private val _attachments = MutableStateFlow<Map<ChatComposerOwner, List<PendingAttachment>>>(emptyMap())
   val attachments: StateFlow<Map<ChatComposerOwner, List<PendingAttachment>>> = _attachments.asStateFlow()
-
-  fun add(
-    owner: ChatComposerOwner,
-    candidates: List<PendingAttachment>,
-  ): Int =
-    synchronized(lock) {
-      addLocked(owner, candidates)
-    }
 
   fun replace(
     owner: ChatComposerOwner,
     candidates: List<PendingAttachment>,
-  ): Int =
-    synchronized(lock) {
-      val admission = admitWithAggregateLimit(owner = owner, current = emptyList(), candidates = candidates)
-      replaceLocked(owner, admission.accepted)
-      admission.omittedCount
-    }
+  ): Int {
+    val admission = admitWithAggregateLimit(owner = owner, current = emptyList(), candidates = candidates)
+    replaceLocked(owner, admission.accepted)
+    return admission.omittedCount
+  }
 
-  fun beginImport(owner: ChatComposerOwner): Long =
-    synchronized(lock) {
-      importSequence.incrementAndGet().also { importOwners[it] = owner }
-    }
+  fun beginImport(owner: ChatComposerOwner): Long = (++importSequence).also { importOwners[it] = owner }
+
+  fun hasPendingImport(owner: ChatComposerOwner): Boolean = importOwners.containsValue(owner)
 
   fun completeImport(
     id: Long,
     candidates: List<PendingAttachment>,
-  ): Pair<ChatComposerOwner, Int>? =
-    synchronized(lock) {
-      val owner = importOwners.remove(id) ?: return@synchronized null
-      owner to addLocked(owner, candidates)
-    }
+  ): Pair<ChatComposerOwner, Int>? {
+    val owner = importOwners[id] ?: return null
+    val result = owner to add(owner, candidates)
+    // Publish the payload before releasing the observable Send gate.
+    importOwners.remove(id)
+    return result
+  }
 
   fun cancelImport(id: Long) {
-    synchronized(lock) {
-      importOwners.remove(id)
-    }
+    importOwners.remove(id)
   }
 
   fun remove(
@@ -86,42 +75,29 @@ internal class ChatComposerAttachmentStore(
     ids: Set<String>,
   ) {
     if (ids.isEmpty()) return
-    synchronized(lock) {
-      replaceLocked(owner, _attachments.value[owner].orEmpty().filterNot { it.id in ids })
-    }
+    replaceLocked(owner, _attachments.value[owner].orEmpty().filterNot { it.id in ids })
   }
 
   fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
-    synchronized(lock) {
-      importOwners.entries.removeAll { matches(it.value) }
-      _attachments.value = _attachments.value.filterKeys { !matches(it) }
-    }
-  }
-
-  fun migrate(
-    from: ChatComposerOwner,
-    to: ChatComposerOwner,
-  ): Int {
-    if (from == to) return 0
-    return synchronized(lock) { migrateLocked(from = from, to = to) }
+    importOwners.entries.removeAll { matches(it.value) }
+    _attachments.value = _attachments.value.filterKeys { !matches(it) }
   }
 
   /** Resolves every parked alias and in-flight import, not only the visible composer. */
   fun migrateMatching(
     to: ChatComposerOwner,
     mainSessionKey: String,
-  ): ChatComposerAttachmentMigration =
-    synchronized(lock) {
-      val sources =
-        (_attachments.value.keys + importOwners.values)
-          .filterTo(linkedSetOf()) { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
-      val omitted = sources.sumOf { source -> migrateLocked(from = source, to = to) }
-      ChatComposerAttachmentMigration(sources = sources, omittedCount = omitted)
-    }
+  ): ChatComposerAttachmentMigration {
+    val sources =
+      (_attachments.value.keys + importOwners.values)
+        .filterTo(linkedSetOf()) { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
+    val omitted = sources.sumOf { source -> migrateLocked(from = source, to = to) }
+    return ChatComposerAttachmentMigration(sources = sources, omittedCount = omitted)
+  }
 
-  fun get(owner: ChatComposerOwner): List<PendingAttachment> = synchronized(lock) { _attachments.value[owner].orEmpty() }
+  fun get(owner: ChatComposerOwner): List<PendingAttachment> = _attachments.value[owner].orEmpty()
 
-  private fun addLocked(
+  fun add(
     owner: ChatComposerOwner,
     candidates: List<PendingAttachment>,
   ): Int {

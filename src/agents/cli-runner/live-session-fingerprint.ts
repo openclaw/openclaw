@@ -23,10 +23,15 @@ export function buildCliLiveSessionFingerprint(params: {
           resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({
             name: skill.name,
             description: skill.description,
+            contentHash: skill.contentHash,
             filePath: skill.filePath,
             sourceInfo: skill.sourceInfo,
           })),
-          version: skillSnapshot.version,
+          // Shipped Plugin SDK callers may omit prepared content identities; retain their version
+          // contract. Loaded snapshots use content identity, not watcher invalidation epochs.
+          version: skillSnapshot.resolvedSkills?.every((skill) => Boolean(skill.contentHash))
+            ? undefined
+            : skillSnapshot.version,
         }),
       )
     : undefined;
@@ -78,6 +83,7 @@ export function buildCliLiveSessionFingerprint(params: {
       model: context.normalizedModel,
       // A warm process fixes its prompt at initialization; changed bytes require restart.
       systemPromptHash: sha256Hex(context.systemPrompt),
+      agentAccountId: context.params.agentAccountId,
       authProfileIdHash: context.effectiveAuthProfileId
         ? sha256Hex(context.effectiveAuthProfileId)
         : undefined,

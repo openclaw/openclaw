@@ -1,14 +1,17 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { writePackageDistInventoryForPublish } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { completePendingPackageLifecycle } from "../../src/infra/package-lifecycle.js";
 import { collectGitRuntimeErrors } from "../../src/infra/update-git-runtime.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
@@ -24,8 +27,8 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     join(root, "dist/build-info.json"),
     JSON.stringify({ commit: packageCommit, version: "2026.8.1" }),
   );
-  execFileSync(process.execPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
-  execFileSync(process.execPath, [
+  execFileSync(testNodeExecPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
+  execFileSync(testNodeExecPath, [
     "scripts/e2e/lib/update-channel-switch/assertions.mjs",
     "prepare-git-fixture",
     root,
@@ -35,6 +38,8 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     "node-version.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
   ]) {
     copyFileSync(file, join(root, file));
@@ -62,6 +67,11 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
   const home = tempDirs.make("update-channel-lifecycle-home-");
   execFileSync("git", ["clone", "--quiet", root, preflight]);
   for (const checkout of [preflight, root]) {
+    await withDistArtifactOwnership(checkout, async () => {
+      expect(
+        execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
+      ).toBe("");
+    });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).not.toEqual([]);
     execSync(manifest.scripts.build, { cwd: checkout });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
@@ -70,7 +80,7 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
       await completePendingPackageLifecycle({
         packageRoot: checkout,
         runScript: ({ relativePath }) => {
-          execFileSync(process.execPath, [join(checkout, relativePath)], {
+          execFileSync(testNodeExecPath, [join(checkout, relativePath)], {
             cwd: checkout,
             env: {
               ...process.env,
@@ -96,4 +106,32 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
       execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
     ).toBe("");
   }
+});
+
+it("rejects retained runtime staging at the channel update success boundary", () => {
+  const root = tempDirs.make("update-channel-staging-cleanup-");
+  const assertCleanup = () =>
+    spawnSync(
+      testNodeExecPath,
+      [
+        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+        "assert-runtime-staging-clean",
+        root,
+      ],
+      { encoding: "utf8" },
+    );
+  writeFileSync(join(root, "operator-update-notes.tmp"), "unrelated input");
+  expect(assertCleanup().status).toBe(0);
+  const staging = join(
+    root,
+    "packages",
+    "nested",
+    "node_modules.openclaw-update-00000000-0000-4000-8000-000000000000.tmp",
+  );
+  mkdirSync(staging, { recursive: true });
+  writeFileSync(join(staging, "previous"), "recoverable original");
+  const result = assertCleanup();
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("successful update retained runtime staging entries");
+  expect(readFileSync(join(staging, "previous"), "utf8")).toBe("recoverable original");
 });

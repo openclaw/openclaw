@@ -9,23 +9,15 @@ import {
 } from "openclaw/plugin-sdk/claude-model-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { CLAUDE_CLI_OFF_THINKING_PROFILE, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
-import {
-  applyAnthropicConfigDefaults,
-  normalizeAnthropicProviderConfigForProvider,
-} from "./config-defaults.js";
+import { normalizeAnthropicProviderConfigForProvider } from "./config-defaults.js";
+export { applyAnthropicConfigDefaults as applyConfigDefaults } from "./config-defaults.js";
+
+export const normalizeConfig = normalizeAnthropicProviderConfigForProvider<ModelProviderConfig>;
+
+export { resolveFastModeSupport } from "./fast-mode-policy.js";
 
 /** Profile ids that native Claude auth has retired from OpenClaw ownership. */
 export const deprecatedProfileIds = [CLAUDE_CLI_PROFILE_ID] as const;
-
-/** Normalize Anthropic provider config without importing runtime registration. */
-export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
-  return normalizeAnthropicProviderConfigForProvider(params);
-}
-
-/** Apply Anthropic config defaults through the provider-policy seam. */
-export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConfigDefaults>[0]) {
-  return applyAnthropicConfigDefaults(params);
-}
 
 /** Resolve Claude thinking profile for Anthropic or Claude CLI providers. */
 export function resolveThinkingProfile(params: {
@@ -37,13 +29,11 @@ export function resolveThinkingProfile(params: {
     id: params.modelId,
     params: params.params,
   });
-  switch (params.provider.trim().toLowerCase()) {
+  const provider = params.provider.trim().toLowerCase();
+  switch (provider) {
     case "anthropic":
-      return resolveClaudeThinkingProfile(contractModelId, undefined, {
-        includeNativeMax: true,
-      });
     case "claude-cli":
-      if (resolveClaudeMythos5ModelIdentity({ id: contractModelId })) {
+      if (provider === "claude-cli" && resolveClaudeMythos5ModelIdentity({ id: contractModelId })) {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
       // Claude Code exposes Fable's native effort ladder. Keep subscription-

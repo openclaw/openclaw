@@ -1,34 +1,56 @@
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability } from "./index.ts";
 import { fetchPagedSessionRows } from "./paged-session-rows.ts";
+import type { SessionListSnapshot } from "./session-capability.ts";
 
 // Matches the Gateway default and covers the default 50-child Swarm roster.
 // Custom larger groups keep paging through the bounded retry loop below.
 const CHILD_SESSION_LIST_PAGE_SIZE = 100;
 
+export function childSessionListQuery(parentKey: string, pageSize = CHILD_SESSION_LIST_PAGE_SIZE) {
+  return {
+    spawnedBy: parentKey,
+    limit: pageSize,
+    includeGlobal: false,
+    includeUnknown: false,
+    configuredAgentsOnly: true,
+  };
+}
+
 export async function fetchChildSessionRows(params: {
-  sessions: SessionCapability;
+  sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
   isCurrent: () => boolean;
-  pageSize?: number;
+  initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const pageSize = params.pageSize ?? CHILD_SESSION_LIST_PAGE_SIZE;
+  const query = childSessionListQuery(params.parentKey);
+  let pagination: SessionListSnapshot["pagination"];
+  const readResult = () => {
+    const snapshot = params.sessions.listSnapshot(query);
+    if (snapshot.error) {
+      throw new Error(snapshot.error);
+    }
+    pagination = snapshot.pagination;
+    return snapshot.result;
+  };
+  if (params.initialResult) {
+    // Observation callbacks run before their first read settles. Join that
+    // owner before appending; a concurrent append does not queue another page.
+    await params.sessions.refreshList(query);
+  }
   return fetchPagedSessionRows({
-    list: (offset) =>
-      params.sessions.list({
-        spawnedBy: params.parentKey,
-        ...(offset > 0 ? { offset } : {}),
-        limit: pageSize,
-        includeGlobal: false,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      }),
+    list: async (offset) => {
+      await params.sessions.refreshList({
+        ...query,
+        ...(offset > 0 ? { offset, append: true } : {}),
+      });
+      return readResult();
+    },
+    initialResult: params.initialResult ? readResult() : undefined,
+    resultKind: "window",
+    windowPagination: () => pagination,
     isCurrent: params.isCurrent,
     missingResultError: "child session list returned no result",
-    mapPageRows: (rows) => {
-      const runtimeSampledAt = Date.now();
-      // Keep each server page's lifecycle sample coherent across sibling rows.
-      return rows.map((row) => ({ ...row, runtimeSampledAt }));
-    },
+    incompletePaginationError: "The child session list kept changing. Try again.",
   });
 }

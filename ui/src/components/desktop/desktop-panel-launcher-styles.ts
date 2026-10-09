@@ -8,7 +8,8 @@ export const desktopPanelLauncherStyles = css`
     gap: 3px;
   }
   .desktop-app-button,
-  .desktop-toolbar-action {
+  .desktop-toolbar-action,
+  .desktop-toolbar-mode {
     display: inline-flex;
     align-items: center;
     gap: 5px;

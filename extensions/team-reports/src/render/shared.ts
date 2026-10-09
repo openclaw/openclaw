@@ -1,23 +1,15 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GithubCounts, GithubItemKind, PersonReport } from "../types.js";
 
-export function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
+export function metric(label: string, value: string | number, detail = "", trend = ""): string {
+  return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}${trend}</span></div>`;
 }
 
-export function renderAvatar(login: string, display: string, size: "xs" | "md" | "xl"): string {
+export function renderAvatar(
+  login: string,
+  display: string,
+  size: "xs" | "sm" | "md" | "xl",
+): string {
   const words = (display.trim() || login).split(/\s+/);
   const initials = (
     words.length > 1
@@ -26,7 +18,7 @@ export function renderAvatar(login: string, display: string, size: "xs" | "md" |
           .slice(0, 2)
           .join("")
   ).toUpperCase();
-  const pixels = { xs: 20, md: 40, xl: 72 }[size];
+  const pixels = { xs: 20, sm: 36, md: 40, xl: 72 }[size];
   const image = /^[A-Za-z0-9-]{1,39}$/.test(login)
     ? `<img src="https://avatars.githubusercontent.com/${escapeHtml(login)}?s=${pixels}" width="${pixels}" height="${pixels}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
     : "";
@@ -34,15 +26,13 @@ export function renderAvatar(login: string, display: string, size: "xs" | "md" |
 }
 
 export function safeExternalUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    if ((url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password) {
-      return url.href;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
+  const url = URL.parse(value);
+  return url &&
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    !url.username &&
+    !url.password
+    ? url.href
+    : undefined;
 }
 
 export const ITEM_LABELS: Record<GithubItemKind, string> = {

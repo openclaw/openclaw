@@ -1,6 +1,7 @@
 // Verifies compaction token planning strips private/non-model fields first.
 import { serializeConversation, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   buildOversizedFallbackPlan,
   estimateMessagesTokens,
@@ -27,13 +28,18 @@ describe("compaction token accounting sanitization", () => {
         role: "custom",
         customType: "openclaw.runtime-context",
         content: "internal",
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
         timestamp: 2,
       } as AgentMessage,
       {
-        role: "user",
-        content: "next",
-        timestamp: 3,
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "private context opted out of provider replay",
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: false },
+        display: false,
+        timestamp: 2,
       },
+      makeUserMessage("next", 3),
     ];
 
     const sanitized = projectCompactionMessagesForPlanning(messages);

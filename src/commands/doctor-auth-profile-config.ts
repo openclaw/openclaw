@@ -1,63 +1,33 @@
 /** Protects active auth profile metadata while doctor repairs broader config state. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeLowercaseStringOrEmpty as normalizeProviderId,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
-const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
-  "api_key",
-  "aws-sdk",
-  "oauth",
-  "token",
-]);
-
-type AuthProfileConfigProtectionResult = {
-  config: OpenClawConfig;
-  repairs: string[];
-  warnings: string[];
-};
-
-function normalizeProviderId(value: unknown): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
-
-function normalizeProfileId(value: unknown): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
 function normalizeMode(value: unknown): AuthProfileConfig["mode"] | null {
-  return typeof value === "string" && AUTH_PROFILE_MODES.has(value as AuthProfileConfig["mode"])
-    ? (value as AuthProfileConfig["mode"])
-    : null;
-}
-
-function extractProviderFromModelRef(value: string): string | null {
-  const { model } = splitTrailingAuthProfile(value);
-  const slash = model.indexOf("/");
-  if (slash <= 0) {
-    return null;
+  switch (value) {
+    case "api_key":
+    case "aws-sdk":
+    case "oauth":
+    case "token":
+      return value;
+    default:
+      return null;
   }
-  return normalizeProviderId(model.slice(0, slash)) || null;
 }
 
-function extractProviderFromProfileId(profileId: string): string | null {
-  const colon = profileId.indexOf(":");
-  if (colon <= 0) {
-    return null;
-  }
-  return normalizeProviderId(profileId.slice(0, colon)) || null;
+function extractProviderPrefix(value: string, separator: ":" | "/"): string | null {
+  const index = value.indexOf(separator);
+  return index > 0 ? normalizeProviderId(value.slice(0, index)) || null : null;
 }
 
-function collectActiveAuthHints(config: OpenClawConfig): {
-  activeProviders: Set<string>;
-  explicitProfileIds: Set<string>;
-  explicitProfileProviders: Map<string, Set<string>>;
-} {
+function collectActiveAuthHints(config: OpenClawConfig) {
   const activeProviders = new Set<string>();
   const explicitProfileIds = new Set<string>();
   const explicitProfileProviders = new Map<string, Set<string>>();
@@ -72,8 +42,8 @@ function collectActiveAuthHints(config: OpenClawConfig): {
   }
 
   for (const { value } of collectConfiguredModelRefs(config)) {
-    const { profile } = splitTrailingAuthProfile(value);
-    const provider = extractProviderFromModelRef(value);
+    const { model, profile } = splitTrailingAuthProfile(value);
+    const provider = extractProviderPrefix(model, "/");
     if (profile) {
       explicitProfileIds.add(profile);
       if (provider) {
@@ -95,7 +65,7 @@ function collectActiveAuthHints(config: OpenClawConfig): {
       continue;
     }
     for (const profileId of profileIds) {
-      const normalized = normalizeProfileId(profileId);
+      const normalized = normalizeOptionalString(profileId);
       if (normalized) {
         explicitProfileIds.add(normalized);
       }
@@ -123,7 +93,7 @@ function buildProfileMetadata(params: {
   const provider =
     normalizeProviderId(after.provider) ||
     normalizeProviderId(before.provider) ||
-    extractProviderFromProfileId(params.profileId) ||
+    extractProviderPrefix(params.profileId, ":") ||
     normalizeProviderId(params.providerHint);
   if (!provider) {
     return null;
@@ -142,7 +112,9 @@ function buildProfileMetadata(params: {
   return repaired;
 }
 
-function ensureAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileConfig> {
+export function ensureConfigAuthProfiles(
+  config: OpenClawConfig,
+): Record<string, AuthProfileConfig> {
   const root = config as Record<string, unknown>;
   const auth: Record<string, unknown> = isRecord(root.auth) ? root.auth : {};
   if (root.auth !== auth) {
@@ -163,7 +135,7 @@ function ensureAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileC
 export function protectActiveAuthProfileConfig(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
-}): AuthProfileConfigProtectionResult {
+}) {
   const { activeProviders, explicitProfileIds, explicitProfileProviders } = collectActiveAuthHints(
     params.before,
   );
@@ -189,7 +161,7 @@ export function protectActiveAuthProfileConfig(params: {
     const provider =
       normalizeProviderId(afterProfileRecord?.provider) ||
       normalizeProviderId(beforeProfileRecord?.provider) ||
-      extractProviderFromProfileId(profileId);
+      extractProviderPrefix(profileId, ":");
     const protectsActiveProvider = provider !== null && activeProviders.has(provider);
     const protectsExplicitProfile = explicitProfileIds.has(profileId);
     if (!protectsActiveProvider && !protectsExplicitProfile) {
@@ -211,7 +183,7 @@ export function protectActiveAuthProfileConfig(params: {
       );
       continue;
     }
-    const profiles = ensureAuthProfiles(config);
+    const profiles = ensureConfigAuthProfiles(config);
     profiles[profileId] = repaired;
     repairs.push(
       `Repaired auth.profiles.${profileId} metadata for active ${repaired.provider} auth.`,
@@ -219,4 +191,27 @@ export function protectActiveAuthProfileConfig(params: {
   }
 
   return { config, repairs, warnings };
+}
+
+export function stripImportedConfigAuthProfileCredentials(
+  cfg: OpenClawConfig,
+  store: AuthProfileStore,
+): boolean {
+  const profiles = ensureConfigAuthProfiles(cfg);
+  let changed = false;
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    const current = profiles[profileId];
+    if (!current) {
+      continue;
+    }
+    const metadata: AuthProfileConfig = {
+      provider: current.provider || credential.provider,
+      mode: credential.type,
+      ...(current.email ? { email: current.email } : {}),
+      ...(current.displayName ? { displayName: current.displayName } : {}),
+    };
+    profiles[profileId] = metadata;
+    changed = true;
+  }
+  return changed;
 }

@@ -115,6 +115,8 @@ export const SessionGitHubPublicationResultSchema = Type.Union([
 export const SessionGitHubOptionsParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  // Narrows shared receipt recovery to the original invocation after a lost acknowledgement.
+  idempotencyKey: Type.Optional(NonEmptyString),
 });
 export const SessionGitHubStatusParamsSchema = closedObject({
   sessionKey: NonEmptyString,
@@ -152,6 +154,7 @@ export const SessionGitHubOptionsResultSchema = closedObject({
   personal: Type.Union([PersonalGitHubStatusSchema, Type.Null()]),
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
   pendingPersonal: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
+  latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
 });
 
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;

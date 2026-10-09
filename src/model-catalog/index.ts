@@ -1,6 +1,7 @@
 // Public model-catalog facade. Keep exports here curated so callers use the
 // normalized planning APIs instead of reaching into catalog internals.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import {
   planManifestModelCatalogRows,
   type ManifestModelCatalogRowSelection,
@@ -18,6 +19,8 @@ export function planEffectiveModelCatalogRows(params: {
 }) {
   return planManifestModelCatalogRows({
     registry: params.registry,
+    includeProvider: (provider, plugin) =>
+      isProviderCatalogSourceAllowed({ provider, plugin, config: params.config }),
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
     ...(params.providerFilters ? { providerFilters: params.providerFilters } : {}),
     ...(params.mergeKeyFilter ? { mergeKeyFilter: params.mergeKeyFilter } : {}),

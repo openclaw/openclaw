@@ -12,13 +12,12 @@ describe("config draft revision ownership", () => {
     { start: "raw", revert: "raw", next: "form", saved: true },
     { start: "raw", revert: "raw", next: "raw", saved: true },
     { start: "form", revert: "raw", next: "form", saved: true },
-    { start: "raw", revert: "reset", next: "form", saved: true },
     { start: "raw", revert: "discard", next: "form", saved: true },
     { start: "raw", revert: "raw", next: "none", saved: true },
     { start: "raw", revert: "none", next: "form", saved: false },
     { start: "form", revert: "form", next: "form", saved: false },
   ] as const)(
-    "preserves external changes after $start editing, $revert revert and $next editing",
+    "config.set preserves external changes after $start editing, $revert revert and $next editing",
     async ({ start, revert, next, saved }) => {
       vi.useFakeTimers();
       let storedRaw = '{"count":1,"note":"original"}\n';
@@ -34,7 +33,7 @@ describe("config draft revision ownership", () => {
           }
           storedRaw = submission.raw;
           hash = "revision-saved";
-          return { hash };
+          return { config: JSON.parse(storedRaw), hash };
         }
         return {};
       });
@@ -61,8 +60,6 @@ describe("config draft revision ownership", () => {
           runtimeConfig.setRaw(originalRaw);
         } else if (revert === "form") {
           runtimeConfig.patchForm(["count"], 1);
-        } else if (revert === "reset") {
-          runtimeConfig.resetDraft();
         } else if (revert === "discard") {
           await runtimeConfig.discardDraft();
         }

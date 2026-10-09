@@ -60,18 +60,9 @@ async function selectAccountChoice<T extends { id: string; label: string; hint?:
   return selected;
 }
 
-async function answerAccountStep(
-  step: WizardStep,
-  signal: AbortSignal,
-  runtime: RuntimeEnv,
-): Promise<unknown> {
+async function answerAccountStep(step: WizardStep, signal: AbortSignal): Promise<unknown> {
   const prompter = createClackPrompter(process.stderr, signal);
   signal.throwIfAborted();
-  if (step.externalUrl) {
-    runtime.error(`Open this URL to continue:\n${sanitizeTerminalText(step.externalUrl)}`);
-    await openUrl(step.externalUrl);
-    signal.throwIfAborted();
-  }
   const message = sanitizeTerminalText(step.message ?? step.title ?? "Continue");
   const options =
     step.options?.map((option) => ({
@@ -150,6 +141,7 @@ async function connectAccount(
       }
     | undefined;
   let displayedProgress: string | undefined;
+  let openedExternalUrl: string | undefined;
   const retirePrompt = async () => {
     active?.controller.abort();
     await active?.answer;
@@ -167,6 +159,13 @@ async function connectAccount(
       if (active?.id !== step?.id) {
         await retirePrompt();
       }
+      signal.throwIfAborted();
+      if (step?.externalUrl && step.externalUrl !== openedExternalUrl) {
+        runtime.error(`Open this URL to continue:\n${sanitizeTerminalText(step.externalUrl)}`);
+        await openUrl(step.externalUrl);
+        signal.throwIfAborted();
+        openedExternalUrl = step.externalUrl;
+      }
       if (step?.type === "progress" || (step?.type === "action" && step.executor !== "client")) {
         if (displayedProgress !== step.id) {
           runtime.error(sanitizeTerminalText(step.message ?? step.title ?? "Working…"));
@@ -177,11 +176,7 @@ async function connectAccount(
         active = {
           id: step.id,
           controller,
-          answer: answerAccountStep(
-            step,
-            AbortSignal.any([signal, controller.signal]),
-            runtime,
-          ).then(
+          answer: answerAccountStep(step, AbortSignal.any([signal, controller.signal])).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
           ),
@@ -364,8 +359,9 @@ export async function modelsAccountsLoginCommand(
   }
 }
 
-export async function modelsAccountsUseCommand(
-  options: ModelsAccountsOptions & { authProfileId: string },
+export async function modelsAccountsUpdateDefaultCommand(
+  options: ModelsAccountsOptions &
+    ({ action: "use"; authProfileId: string } | { action: "clear-default"; provider: string }),
   runtime: RuntimeEnv,
 ): Promise<void> {
   await withModelsAccountsGateway(
@@ -374,42 +370,25 @@ export async function modelsAccountsUseCommand(
     runtime,
     async ({ client, signal, profile }) => {
       const profileId = profile.id;
-      const result = await client.request<UsersSelectModelAccountResult>(
-        "users.selectModelAccount",
-        { profileId, authProfileId: options.authProfileId },
+      const result = await client.request<
+        UsersSelectModelAccountResult | UsersUnlinkAuthProfileResult
+      >(
+        options.action === "use" ? "users.selectModelAccount" : "users.unlinkAuthProfile",
+        {
+          profileId,
+          ...(options.action === "use"
+            ? { authProfileId: options.authProfileId }
+            : { provider: options.provider }),
+        },
         { signal },
       );
       if (options.json) {
         writeRuntimeJson(runtime, { profileId, ...result });
       } else {
         runtime.log(
-          `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
-        );
-      }
-    },
-  );
-}
-
-export async function modelsAccountsClearDefaultCommand(
-  options: ModelsAccountsOptions & { provider: string },
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await withModelsAccountsGateway(
-    options,
-    "write",
-    runtime,
-    async ({ client, signal, profile }) => {
-      const profileId = profile.id;
-      const result = await client.request<UsersUnlinkAuthProfileResult>(
-        "users.unlinkAuthProfile",
-        { profileId, provider: options.provider },
-        { signal },
-      );
-      if (options.json) {
-        writeRuntimeJson(runtime, { profileId, ...result });
-      } else {
-        runtime.log(
-          `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
+          options.action === "use"
+            ? `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`
+            : `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
         );
       }
     },

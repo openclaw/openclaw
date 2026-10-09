@@ -45,6 +45,9 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    The server URL prompt also accepts host shorthand such as `localhost:1234`.
+    Invalid URLs stay in the prompt so you can correct them before model discovery.
+
     On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
     default or configured LM Studio host. An existing LLM is offered automatically
     only when LM Studio reports tool training and at least 16K of effective
@@ -97,6 +100,10 @@ servers; omit it for unauthenticated servers and OpenClaw stores a local non-sec
 This writes `models.providers.lmstudio` and sets the default model to `lmstudio/<custom-model-id>`.
 Providing an API key also writes the `lmstudio:default` auth profile.
 
+Add `--json` for a machine-readable result. Connection, HTTP, and model-selection
+failures return a JSON error with the same recovery guidance as human output and
+exit nonzero without applying the proposed provider configuration.
+
 Interactive setup can additionally prompt for a preferred load context length and applies it across
 the discovered models it saves to config.
 
@@ -118,6 +125,11 @@ model compat metadata. Some LM Studio builds advertise a binary UI option (`allo
 "on"]`) while rejecting those literal values on `/v1/chat/completions`; OpenClaw normalizes that
 binary shape to the six-level scale before sending requests, including for older saved config that
 still has `off`/`on` reasoning maps.
+
+For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
+advertised canonical effort, regardless of option order. For example, `off`, `low`, `medium`
+maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
+configuration; rerun LM Studio setup to regenerate them from current server metadata.
 
 ### Explicit configuration
 
@@ -145,6 +157,18 @@ still has `off`/`on` reasoning maps.
   },
 }
 ```
+
+### Model instances and context
+
+With preload enabled, OpenClaw routes chat requests to a loaded instance with
+enough context for the selected model budget. A newly loaded instance is addressed by the
+identifier returned by LM Studio. Your configured model reference and conversation model identity
+keep the canonical model key.
+
+With preload enabled, embedding requests also check that their model is loaded and route to the
+instance prepared for the configured context length. This avoids truncating input through a smaller
+loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
+loading is disabled. Embedding model and cache identity keep the canonical model key.
 
 ### Disabling preload
 

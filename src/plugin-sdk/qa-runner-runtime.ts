@@ -1,10 +1,7 @@
-// QA runner runtime helpers expose plugin QA scenarios through the CLI command surface.
 import type { Command } from "commander";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import {
-  loadBundledPluginManifestRegistry,
-  loadPluginManifestRegistryCore,
-} from "../plugins/manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync,
@@ -27,6 +24,7 @@ type QaRunnerTransportPolicy = {
 
 type QaRunnerAdapterOptions = {
   explicitScenarioSelection?: boolean;
+  agentE2e?: boolean;
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
@@ -44,6 +42,7 @@ type QaRunnerMessageRecorder = {
 
 type QaRunnerCredentialLease<TPayload> = {
   credentialId?: string;
+  assertHealthy?: () => void;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
   kind: string;
@@ -58,6 +57,8 @@ type QaRunnerCredentialLease<TPayload> = {
 
 type QaRunnerCredentialLeaseOptions<TPayload> = {
   kind: string;
+  cwd?: string;
+  signal?: AbortSignal;
   parsePayload: (payload: unknown) => TPayload;
   resolveEnvPayload: () => TPayload;
   role?: string;
@@ -116,6 +117,14 @@ type QaRunnerTransportFlowPreparationInput = {
   timeoutMs: number;
 };
 
+export type QaRunnerTransportArtifacts = {
+  artifacts: readonly {
+    kind: "channel-capability-matrix" | "channel-driver-smoke";
+    path: string;
+  }[];
+  reportNotes?: readonly string[];
+};
+
 type QaRunnerTransportAdapterDefinition = {
   id: string;
   label: string;
@@ -123,6 +132,12 @@ type QaRunnerTransportAdapterDefinition = {
   requiredPluginIds: readonly string[];
   supportedActions: readonly ("delete" | "edit" | "react" | "thread-create")[];
   assertTransportHealthy?: () => void;
+  /**
+   * Resolve (do not reject) with a terminal failure to abort active flow admission.
+   * The adapter still settles owned requests during cleanup. Omission leaves
+   * explicit health checks and scenario deadlines in effect.
+   */
+  whenUnhealthy?: Promise<Error>;
   describeTransportState?: () => string;
   resetTransport?: () => void | Promise<void>;
   sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
@@ -155,16 +170,21 @@ type QaRunnerTransportAdapterDefinition = {
     timeoutMs?: number;
     pollIntervalMs?: number;
   }) => Promise<void>;
-  buildAgentDelivery: (params: { target: string }) => {
+  buildAgentDelivery: (params: { target: string; threadId?: string }) => {
     channel: string;
     to?: string;
     replyChannel: string;
     replyTo: string;
+    threadId?: string;
   };
   createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
+  createRuntimePreloads?: () => readonly string[];
   prepareFlow?: (
     input: QaRunnerTransportFlowPreparationInput,
   ) => Promise<Record<string, unknown> | void>;
+  captureArtifacts?: (params: {
+    outputDir: string;
+  }) => Promise<QaRunnerTransportArtifacts | undefined>;
   handleAction: (params: {
     action: "delete" | "edit" | "react" | "thread-create";
     args: Record<string, unknown>;
@@ -179,7 +199,19 @@ type QaRunnerTransportAdapterDefinition = {
     concurrency: number;
     isolatedWorkers?: boolean;
   }) => string[];
+  /** Stop new actions before Gateway shutdown; retain the lease and ownership of pending writes. */
   cleanup?: () => Promise<void>;
+  /**
+   * Host-final-teardown hook after confirmed Gateway stop, before temporary-file removal.
+   * A successful capture runs once per Gateway lifetime. Throwing retains runtime
+   * evidence and reports teardown failure; post-stop adapter cleanup still runs.
+   * Omission means no adapter-specific snapshot, not a request to retain scratch state.
+   */
+  captureBeforeGatewayCleanup?: () => Promise<void>;
+  /**
+   * Settle fixture cleanup and release the lease after confirmed Gateway stop.
+   * Not called when process shutdown is unconfirmed; errors join the teardown result.
+   */
   cleanupAfterGatewayStop?: () => Promise<void>;
 };
 
@@ -209,6 +241,8 @@ export type QaRunnerCliRegistration = {
 
 /** Normalized options passed from live-transport QA CLIs into lane runners. */
 export type LiveTransportQaCommandOptions = {
+  channelDriver?: string;
+  concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: string;
@@ -241,22 +275,15 @@ export type LiveTransportQaSuiteCommandOptions = {
   }) => string[];
 };
 
-type LiveTransportQaCommanderOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
+type LiveTransportQaCommanderOptions = Omit<
+  LiveTransportQaCommandOptions,
+  "primaryModel" | "alternateModel" | "scenarioIds" | "fastMode" | "sutAccountId"
+> & {
   model?: string;
   altModel?: string;
   scenario?: string[];
-  listScenarios?: boolean;
   fast?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
   sutAccount?: string;
-  credentialFile?: string;
-  credentialSource?: string;
-  credentialRole?: string;
 };
 
 /** Commander registration hook for one live-transport QA subcommand. */
@@ -271,12 +298,22 @@ export type LiveTransportQaCredentialCliOptions = {
 /** Declarative command metadata and runner used to install a live-transport QA CLI. */
 export type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
+  concurrency?: {
+    help: string;
+    parse: (value: string) => number;
+  };
   credentialFileHelp?: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   defaultProviderMode: string;
   description: string;
   providerModeHelp: string;
+  /** When set, registers `--list-scenarios` with this help text. */
   listScenariosHelp?: string;
+  /**
+   * Preserve the standard command payload shape when selection flags are inactive.
+   * Specialized registrations may leave this false to preserve their legacy option shape.
+   */
+  normalizeInactiveSelectionOptions?: boolean;
   outputDirHelp: string;
   profileHelp?: string;
   failFastHelp?: string;
@@ -303,8 +340,13 @@ function collectLiveTransportQaStringOption(value: string, previous: string[]) {
 
 function mapLiveTransportQaCommanderOptions(
   opts: LiveTransportQaCommanderOptions,
+  normalizeInactiveSelectionOptions: boolean,
 ): LiveTransportQaCommandOptions {
   return {
+    ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
+    ...(!normalizeInactiveSelectionOptions || opts.concurrency !== undefined
+      ? { concurrency: opts.concurrency }
+      : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -315,19 +357,19 @@ function mapLiveTransportQaCommanderOptions(
     failFast: opts.failFast,
     profile: opts.profile,
     scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios,
+    listScenarios: normalizeInactiveSelectionOptions
+      ? opts.listScenarios || undefined
+      : opts.listScenarios,
     sutAccountId: opts.sutAccount,
-    credentialFile: opts.credentialFile,
+    ...(!normalizeInactiveSelectionOptions || opts.credentialFile
+      ? { credentialFile: opts.credentialFile }
+      : {}),
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };
 }
-
 function registerLiveTransportQaCli(
-  params: LiveTransportQaCliRegistrationOptions & {
-    qa: Command;
-    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-  },
+  params: LiveTransportQaCliRegistrationOptions & { qa: Command },
 ) {
   const command = params.qa
     .command(params.commandName)
@@ -339,6 +381,10 @@ function registerLiveTransportQaCli(
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
     .option("--fast", "Enable provider fast mode where supported");
+
+  if (params.concurrency) {
+    command.option("--concurrency <count>", params.concurrency.help, params.concurrency.parse);
+  }
 
   if (params.allowFailuresHelp) {
     command.option("--allow-failures", params.allowFailuresHelp, false);
@@ -374,7 +420,13 @@ function registerLiveTransportQaCli(
   }
 
   command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    await params.run(mapLiveTransportQaCommanderOptions(opts));
+    // The collector drops blanks; explicit selection must not broaden into a default run.
+    if (command.getOptionValueSource("scenario") === "cli" && opts.scenario?.length === 0) {
+      throw new Error("--scenario must name at least one non-empty scenario id.");
+    }
+    await params.run(
+      mapLiveTransportQaCommanderOptions(opts, params.normalizeInactiveSelectionOptions === true),
+    );
   });
 }
 
@@ -397,9 +449,6 @@ export function createLiveTransportQaCliRegistration(
 type QaRunnerSurface = {
   qaRunnerCliRegistrations?: readonly QaRunnerCliRegistration[];
 };
-
-const QA_RUNNER_API_ARTIFACT_BASENAME = "qa-runner-api.js";
-const LEGACY_QA_RUNNER_API_ARTIFACT_BASENAME = "runtime-api.js";
 
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
@@ -435,17 +484,6 @@ export type QaRunnerCliContribution =
       status: "blocked";
     };
 
-function isMissingQaRuntimeError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    error.message.includes("qa-lab") &&
-    (error.message.includes("runtime-api.js") ||
-      error.message.startsWith("Unable to open bundled plugin public surface "))
-  );
-}
-
 /** Load the private QA Lab runtime facade used by QA runner commands. */
 export function loadQaRuntimeModule(): QaRuntimeSurface {
   const env = resolvePrivateQaBundledPluginsEnv();
@@ -473,7 +511,12 @@ export function isQaRuntimeAvailable(): boolean {
     loadQaRuntimeModule();
     return true;
   } catch (error) {
-    if (isMissingQaRuntimeError(error)) {
+    if (
+      error instanceof Error &&
+      error.message.includes("qa-lab") &&
+      (error.message.includes("runtime-api.js") ||
+        error.message.startsWith("Unable to open bundled plugin public surface "))
+    ) {
       return false;
     }
     throw error;
@@ -485,9 +528,7 @@ export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuit
   return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
 }
 
-function listDeclaredQaRunnerPlugins(
-  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaBundledPluginsEnv(),
-): Array<
+function listDeclaredQaRunnerPlugins(env: NodeJS.ProcessEnv | undefined): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
@@ -505,13 +546,9 @@ function listDeclaredQaRunnerPlugins(
         qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
       } => Array.isArray(plugin.qaRunners) && plugin.qaRunners.length > 0,
     )
-    .toSorted((left, right) => {
-      const idCompare = left.id.localeCompare(right.id);
-      if (idCompare !== 0) {
-        return idCompare;
-      }
-      return left.rootDir.localeCompare(right.rootDir);
-    });
+    .toSorted(
+      (left, right) => left.id.localeCompare(right.id) || left.rootDir.localeCompare(right.rootDir),
+    );
 }
 
 function indexRuntimeRegistrations(
@@ -534,49 +571,21 @@ function indexRuntimeRegistrations(
   return registrationByCommandName;
 }
 
-function loadQaRunnerSurface(
-  plugin: PluginManifestRecord,
-  env?: NodeJS.ProcessEnv,
-): QaRunnerSurface | null {
-  if (plugin.origin === "bundled") {
-    return loadBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
-      dirName: plugin.id,
-      artifactBasename: QA_RUNNER_API_ARTIFACT_BASENAME,
-      ...(env ? { env } : {}),
-    });
-  }
-  try {
-    return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
-      dirName: plugin.id,
-      artifactBasename: QA_RUNNER_API_ARTIFACT_BASENAME,
-      ...(env ? { env } : {}),
-    });
-  } catch (error) {
-    if (
-      !(error instanceof Error) ||
-      error.message !==
-        `Unable to resolve bundled plugin public surface ${plugin.id}/${QA_RUNNER_API_ARTIFACT_BASENAME}`
-    ) {
-      throw error;
-    }
-  }
-
-  // qaRunners shipped through runtime-api.js in v2026.6.9. Keep activated
-  // installed plugins working until the 2026-10-01 removal review.
-  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<QaRunnerSurface>({
-    dirName: plugin.id,
-    artifactBasename: LEGACY_QA_RUNNER_API_ARTIFACT_BASENAME,
-    ...(env ? { env } : {}),
-  });
-}
-
 /** List QA runner CLI contributions declared by manifests and backed by runtime registrations. */
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
   const env = resolvePrivateQaBundledPluginsEnv();
   const contributions = new Map<string, QaRunnerCliContribution>();
 
   for (const plugin of listDeclaredQaRunnerPlugins(env)) {
-    const runnerSurface = loadQaRunnerSurface(plugin, env);
+    const loadSurface =
+      plugin.origin === "bundled"
+        ? loadBundledPluginPublicSurfaceModuleSync
+        : tryLoadActivatedBundledPluginPublicSurfaceModuleSync;
+    const runnerSurface = loadSurface<QaRunnerSurface>({
+      dirName: plugin.id,
+      artifactBasename: "qa-runner-api.js",
+      ...(env ? { env } : {}),
+    });
     const runtimeRegistrationByCommandName = runnerSurface
       ? indexRuntimeRegistrations(plugin.id, runnerSurface)
       : null;

@@ -1,8 +1,13 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  normalizeOpenAIServiceTier,
+  supportsOpenAIResponsesFastMode,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
+  ProviderFastModePolicyContext,
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
@@ -26,7 +31,27 @@ import {
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+
+export { resolveModelAuthPolicy } from "./model-auth-policy.js";
+
+export function resolveServiceTiers(
+  ctx: ProviderFastModePolicyContext,
+): readonly string[] | undefined {
+  return ctx.runtimeId === "openclaw" ? resolveOpenAIModelServiceTiers(ctx) : undefined;
+}
+
+export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
+  if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
+    return undefined;
+  }
+  return (
+    (resolveOpenAIModelServiceTiers(ctx)?.includes("priority") ?? true) &&
+    normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
+    supportsOpenAIResponsesFastMode(ctx)
+  );
+}
 
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_COMPLETIONS_API = "openai-completions";
@@ -124,12 +149,27 @@ export function projectRealtimeVoicePublicProjection(ctx: {
   config: Record<string, unknown>;
 }): {
   config: Record<string, unknown>;
-  clientHints?: { modelSource: "gateway"; gatewayRelaySupported: false };
+  clientHints?: { modelSource?: "gateway"; gatewayRelaySupported: boolean };
 } {
   const model = normalizeOptionalString(ctx.config.model) ?? ctx.providerConfig.model;
   const modelId = typeof model === "string" ? model : undefined;
-  if (!isOpenAIGptLiveModel(modelId) || isSupportedOpenAIGptLiveModel(modelId)) {
+  if (!isOpenAIGptLiveModel(modelId)) {
     return { config: ctx.config };
+  }
+  if (isSupportedOpenAIGptLiveModel(modelId)) {
+    // Advertise model/transport support, not credential readiness. Session creation
+    // still resolves the selected agent's auth and validates the relay launch.
+    return {
+      config: ctx.config,
+      // GPT-Live owns delegation; forced consult and Azure configs require native Talk.
+      clientHints: {
+        gatewayRelaySupported:
+          ctx.config.consultRouting !== "force-agent-consult" &&
+          !normalizeOptionalString(ctx.providerConfig.baseUrl) &&
+          !normalizeOptionalString(ctx.providerConfig.azureEndpoint) &&
+          !normalizeOptionalString(ctx.providerConfig.azureDeployment),
+      },
+    };
   }
   const { model: _model, ...publicConfig } = ctx.config;
   return {
@@ -166,24 +206,8 @@ function resolveOpenAIEnvironmentBaseUrl(
   return (context.env ?? process.env).OPENAI_BASE_URL;
 }
 
-function isHttpBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string") {
-    return false;
-  }
-  try {
-    return new URL(baseUrl.trim()).protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
-function codexCanReproduceRoute(
-  candidate: ProviderModelRouteCandidate,
-  sourceBaseUrl: unknown = candidate.baseUrl,
-): boolean {
-  // Official HTTP ChatGPT input normalizes to the native HTTPS candidate. Retain the source
-  // protocol here so normalization cannot silently make an unreproducible route Codex-compatible.
-  if (isHttpBaseUrl(sourceBaseUrl) || candidate.requestTransportOverrides === "present") {
+function codexCanReproduceRoute(candidate: ProviderModelRouteCandidate): boolean {
+  if (candidate.requestTransportOverrides === "present") {
     return false;
   }
   const endpointKind = classifyOpenAIBaseUrl(candidate.baseUrl);
@@ -193,38 +217,31 @@ function codexCanReproduceRoute(
   );
 }
 
-function withRuntimePolicy(
-  candidate: ProviderModelRouteCandidate,
-  sourceBaseUrl: unknown = candidate.baseUrl,
-): ProviderModelRouteCandidate {
+function withRuntimePolicy(candidate: ProviderModelRouteCandidate): ProviderModelRouteCandidate {
   return {
     ...candidate,
     runtimePolicy: {
-      compatibleIds: codexCanReproduceRoute(candidate, sourceBaseUrl)
-        ? CODEX_RUNTIME_COMPATIBLE_IDS
+      compatibleIds: codexCanReproduceRoute(candidate)
+        ? candidate.authRequirement === "api-key"
+          ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
+          : CODEX_RUNTIME_COMPATIBLE_IDS
         : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
     },
   };
 }
 
-function defaultRuntimeIdForRoute(
-  candidate: ProviderModelRouteCandidate,
-  sourceBaseUrl: unknown = candidate.baseUrl,
-): string {
-  return codexCanReproduceRoute(candidate, sourceBaseUrl)
-    ? CODEX_AGENT_RUNTIME_ID
-    : OPENAI_AGENT_RUNTIME_ID;
+function defaultRuntimeIdForRoute(candidate: ProviderModelRouteCandidate): string {
+  return codexCanReproduceRoute(candidate) ? CODEX_AGENT_RUNTIME_ID : OPENAI_AGENT_RUNTIME_ID;
 }
 
 function route(
   candidate: ProviderModelRouteCandidate,
-  sourceBaseUrl?: unknown,
 ): ProviderModelRouteResolution & { kind: "routes" } {
-  const compatibleCandidate = withRuntimePolicy(candidate, sourceBaseUrl);
+  const compatibleCandidate = candidate.runtimePolicy ? candidate : withRuntimePolicy(candidate);
   return {
     kind: "routes",
     routes: [compatibleCandidate],
-    defaultRuntimeId: defaultRuntimeIdForRoute(compatibleCandidate, sourceBaseUrl),
+    defaultRuntimeId: defaultRuntimeIdForRoute(compatibleCandidate),
   };
 }
 
@@ -262,27 +279,20 @@ function resolveSingleObservedModelRoute(
   // Model facts override provider facts field-by-field, which override the environment.
   // Observed rows are atomic fallback only; custom bases may inherit a lower
   // authored adapter without combining contradictory official transports.
-  if (modelApi !== undefined || modelBaseUrl !== undefined) {
+  const hasModelRoute = modelApi !== undefined || modelBaseUrl !== undefined;
+  if (hasModelRoute || providerApi !== undefined || providerBaseUrl !== undefined) {
     configuredRoute = true;
-    effectiveApi = modelApi ?? providerApi;
-    effectiveBaseUrl = modelBaseUrl;
-    if (modelBaseUrl === undefined) {
-      const lowerBaseUrl = providerBaseUrl ?? environmentBaseUrl;
+    effectiveApi = hasModelRoute ? (modelApi ?? providerApi) : providerApi;
+    effectiveBaseUrl = hasModelRoute ? modelBaseUrl : providerBaseUrl;
+    if (effectiveBaseUrl === undefined) {
+      const lowerBaseUrl = hasModelRoute
+        ? (providerBaseUrl ?? environmentBaseUrl)
+        : environmentBaseUrl;
       const lowerEndpointKind = classifyOpenAIBaseUrl(lowerBaseUrl);
       effectiveBaseUrl =
         lowerEndpointKind === "custom" || lowerEndpointKind === "invalid"
           ? lowerBaseUrl
           : undefined;
-    }
-  } else if (providerApi !== undefined || providerBaseUrl !== undefined) {
-    configuredRoute = true;
-    effectiveApi = providerApi;
-    effectiveBaseUrl = providerBaseUrl;
-    if (providerBaseUrl === undefined) {
-      const environmentEndpointKind = classifyOpenAIBaseUrl(environmentBaseUrl);
-      if (environmentEndpointKind === "custom" || environmentEndpointKind === "invalid") {
-        effectiveBaseUrl = environmentBaseUrl;
-      }
     }
   } else if (environmentBaseUrl !== undefined) {
     configuredRoute = true;
@@ -337,15 +347,12 @@ function resolveSingleObservedModelRoute(
     }
     const customAuthRequirement =
       customApi.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API ? "subscription" : "api-key";
-    return route(
-      {
-        api: customApi,
-        baseUrl: concreteBaseUrl(effectiveBaseUrl, OPENAI_API_BASE_URL),
-        authRequirement: customAuthRequirement,
-        requestTransportOverrides,
-      },
-      effectiveBaseUrl,
-    );
+    return route({
+      api: customApi,
+      baseUrl: concreteBaseUrl(effectiveBaseUrl, OPENAI_API_BASE_URL),
+      authRequirement: customAuthRequirement,
+      requestTransportOverrides,
+    });
   }
 
   if (
@@ -373,54 +380,46 @@ function resolveSingleObservedModelRoute(
   }
 
   const modelId = normalizeOpenAIModelRouteId(context.modelId);
-  const sourceBaseUrl = effectiveBaseUrl;
-  // An authored Completions adapter is a concrete transport contract, not an
-  // alias for Responses. Codex does not execute that adapter, so preserve it
-  // and let the OpenClaw runtime own the request.
+  // Retain Completions for API-key callers; older configs also used this
+  // adapter while Codex selected subscription credentials independently.
   const platformApi =
     configuredRoute && effectiveApi === OPENAI_COMPLETIONS_API
       ? OPENAI_COMPLETIONS_API
       : OPENAI_RESPONSES_API;
-  const platformRoute = withRuntimePolicy(
-    {
-      api: platformApi,
-      baseUrl:
-        classifyOpenAIBaseUrl(sourceBaseUrl) === "platform" && isHttpBaseUrl(sourceBaseUrl)
-          ? concreteBaseUrl(sourceBaseUrl, OPENAI_API_BASE_URL)
-          : OPENAI_API_BASE_URL,
-      authRequirement: "api-key",
-      requestTransportOverrides,
-    },
-    sourceBaseUrl,
-  );
-  const chatGPTRoute = withRuntimePolicy(
-    {
-      api: OPENAI_CHATGPT_RESPONSES_API,
-      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-      authRequirement: "subscription",
-      requestTransportOverrides,
-    },
-    sourceBaseUrl,
-  );
+  const platformRoute = withRuntimePolicy({
+    api: platformApi,
+    baseUrl: OPENAI_API_BASE_URL,
+    authRequirement: "api-key",
+    requestTransportOverrides,
+  });
+  const chatGPTRoute = withRuntimePolicy({
+    api: OPENAI_CHATGPT_RESPONSES_API,
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+    authRequirement: "subscription",
+    requestTransportOverrides,
+  });
   const platformOnly = isOpenAIPlatformOnlyRouteModelId(modelId);
   const subscriptionOnly = isOpenAISubscriptionOnlyRouteModelId(modelId);
   const dualRoute = isOpenAIDualRouteModelId(modelId);
+
+  const legacyCompletionsDefault =
+    effectiveApi === OPENAI_COMPLETIONS_API && requestTransportOverrides === "none";
+  if (dualRoute && (!configuredRoute || legacyCompletionsDefault)) {
+    return {
+      kind: "routes",
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute),
+      routes: [platformRoute, chatGPTRoute],
+    };
+  }
 
   // Observed catalog transport is not authored route intent. Known model
   // contracts stay stable regardless of which official sibling row was seen.
   if (!configuredRoute) {
     if (subscriptionOnly) {
-      return route(chatGPTRoute, sourceBaseUrl);
+      return route(chatGPTRoute);
     }
     if (platformOnly) {
-      return route(platformRoute, sourceBaseUrl);
-    }
-    if (dualRoute) {
-      return {
-        kind: "routes",
-        defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
-        routes: [platformRoute, chatGPTRoute],
-      };
+      return route(platformRoute);
     }
   }
 
@@ -432,7 +431,7 @@ function resolveSingleObservedModelRoute(
         message: `${modelId} is available only through OpenAI Platform API-key authentication.`,
       };
     }
-    return route(chatGPTRoute, sourceBaseUrl);
+    return route(chatGPTRoute);
   }
 
   if (subscriptionOnly) {
@@ -450,7 +449,7 @@ function resolveSingleObservedModelRoute(
         requestTransportOverrides === "present" ? OPENAI_AGENT_RUNTIME_ID : CODEX_AGENT_RUNTIME_ID,
     };
   }
-  return route(platformRoute, sourceBaseUrl);
+  return route(platformRoute);
 }
 
 function hasAuthoredRouteFacts(context: ProviderResolveModelRoutesContext): boolean {
@@ -521,12 +520,11 @@ function ambiguousObservedRouteGroup(
   return { kind: "incompatible", code: "ambiguous-openai-route-group", message };
 }
 
-function resolveAuthoredObservedFallback(observedRoutes: readonly ProviderModelRouteSource[]):
+function resolveAuthoredObservedFallback(
+  observedRoutes: readonly ProviderModelRouteSource[],
+):
   | { kind: "observed"; route?: ProviderModelRouteSource }
-  | {
-      kind: "incompatible";
-      resolution: Extract<ProviderModelRouteResolution, { kind: "incompatible" }>;
-    } {
+  | Extract<ProviderModelRouteResolution, { kind: "incompatible" }> {
   const platformApis = new Set<ModelApi>();
   for (const observed of observedRoutes) {
     const api = normalizeOptionalRouteApi(observed.api);
@@ -536,29 +534,23 @@ function resolveAuthoredObservedFallback(observedRoutes: readonly ProviderModelR
     if (api !== OPENAI_RESPONSES_API && api !== OPENAI_COMPLETIONS_API) {
       return {
         kind: "incompatible",
-        resolution: {
-          kind: "incompatible",
-          code: "unsupported-custom-openai-api",
-          message: `${api} is not an OpenAI-compatible model adapter.`,
-        },
+        code: "unsupported-custom-openai-api",
+        message: `${api} is not an OpenAI-compatible model adapter.`,
       };
     }
     platformApis.add(api);
   }
   if (platformApis.size > 1) {
-    return {
-      kind: "incompatible",
-      resolution: ambiguousObservedRouteGroup(
-        "Observed OpenAI routes disagree on the Platform adapter for an authored endpoint.",
-      ),
-    };
+    return ambiguousObservedRouteGroup(
+      "Observed OpenAI routes disagree on the Platform adapter for an authored endpoint.",
+    );
   }
   const api = [...platformApis][0];
   return { kind: "observed", ...(api ? { route: { api } } : {}) };
 }
 
 /** Resolves every physical row for one logical OpenAI model in provider order. */
-export function resolveModelRoutes(
+function resolveModelRouteCandidates(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution {
   const observedRoutes = (context.observedRoutes ?? []).filter(
@@ -568,7 +560,7 @@ export function resolveModelRoutes(
     if (authoredRouteNeedsObservedPlatformApi(context)) {
       const fallback = resolveAuthoredObservedFallback(observedRoutes);
       if (fallback.kind === "incompatible") {
-        return fallback.resolution;
+        return fallback;
       }
       return resolveSingleObservedModelRoute({ ...context, observed: fallback.route });
     }
@@ -623,6 +615,47 @@ export function resolveModelRoutes(
   };
 }
 
+/** Apply billing intent independently of which runtimes can execute each candidate. */
+export function resolveModelRoutes(
+  context: ProviderResolveModelRoutesContext,
+): ProviderModelRouteResolution {
+  const resolution = resolveModelRouteCandidates(context);
+  if (resolution.kind !== "routes" || resolution.routes.length < 2) {
+    return resolution;
+  }
+  const intent = context.routeIntent;
+  const requirement = intent?.authRequirement;
+  if (requirement && intent.source === "explicit") {
+    const selected = resolution.routes.find(
+      (candidate) => candidate.authRequirement === requirement,
+    );
+    if (selected) {
+      return route(selected);
+    }
+  }
+  const explicitRuntimeId =
+    intent?.source === "explicit" ? intent.runtimeId?.trim().toLowerCase() : undefined;
+  if (explicitRuntimeId) {
+    const compatible = resolution.routes.filter((candidate) =>
+      candidate.runtimePolicy?.compatibleIds.includes(explicitRuntimeId),
+    );
+    const [first, ...rest] = compatible;
+    if (first && compatible.length < resolution.routes.length) {
+      return {
+        kind: "routes",
+        routes: [first, ...rest],
+        defaultRuntimeId: explicitRuntimeId,
+      };
+    }
+  }
+  const preferredAuthRequirement =
+    requirement ?? (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
+  return {
+    ...resolution,
+    preferredAuthRequirement,
+  };
+}
+
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
   return params.providerConfig;
 }
@@ -635,8 +668,11 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
         params.agentRuntime,
         params.compat,
         params.api,
+        params.thinkingLevelMap,
       );
     default:
       return null;
   }
 }
+
+export { resolveNativeWebSearch } from "./native-web-search-policy.js";

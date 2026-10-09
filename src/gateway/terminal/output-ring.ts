@@ -19,6 +19,7 @@ export class TerminalOutputRing extends BoundedBuffer<string> {
   }
 
   snapshot(): string {
+    // Evicted slots are cleared, so joining with no separator skips that prefix without a copy.
     return this.values.join("");
   }
 }

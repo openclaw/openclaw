@@ -1,4 +1,5 @@
 // Control UI tests cover Worktrees mutation failures through the rendered settings page.
+import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -26,6 +27,56 @@ const restorableWorktree = {
 };
 
 suite.define(() => {
+  it("uses the remote default until a base branch is explicitly selected", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspace: "/synthetic/repo",
+        workspaceGit: true,
+        methodResponses: {
+          "worktrees.list": { worktrees: [] },
+          "worktrees.branches": {
+            branches: [{ name: "main", kind: "local" }],
+            defaultBranch: "main",
+            headBranch: "old-feature",
+          },
+          "worktrees.create": { ...restorableWorktree, removedAt: undefined },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/worktrees`);
+      await page.getByRole("button", { name: "New worktree", exact: true }).click();
+      await gateway.waitForRequest("worktrees.branches");
+      const base = page.getByLabel("Base branch", { exact: true });
+      await page
+        .locator('#worktrees-create-branches option[value="main"]')
+        .waitFor({ state: "attached" });
+      await page.screenshot({ path: path.join(suite.artifactDir, "default-base.png") });
+      expect(await base.inputValue()).toBe("");
+      await page.getByRole("button", { name: "Create", exact: true }).click();
+      expect((await gateway.waitForRequest("worktrees.create")).params).toEqual({
+        repoRoot: "/synthetic/repo",
+      });
+
+      await page.getByRole("button", { name: "New worktree", exact: true }).click();
+      await base.fill("main");
+      await page.getByRole("button", { name: "Create", exact: true }).click();
+      await base.waitFor({ state: "hidden" });
+      expect(await gateway.getRequests("worktrees.create")).toHaveLength(2);
+      expect((await gateway.getRequests("worktrees.create"))[1]?.params).toEqual({
+        repoRoot: "/synthetic/repo",
+        baseRef: "main",
+      });
+
+      await page.getByRole("button", { name: "New worktree", exact: true }).click();
+      await base.fill("");
+      await page.getByRole("button", { name: "Create", exact: true }).click();
+      await base.waitFor({ state: "hidden" });
+      expect(await gateway.getRequests("worktrees.create")).toHaveLength(3);
+      expect((await gateway.getRequests("worktrees.create"))[2]?.params).toEqual({
+        repoRoot: "/synthetic/repo",
+      });
+    });
+  });
+
   it("keeps a restore failure visible after the automatic list refresh succeeds", async () => {
     await suite.withPage(undefined, async ({ page }) => {
       const gateway = await installMockGateway(page, {

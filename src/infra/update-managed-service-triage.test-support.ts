@@ -5,28 +5,69 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
-import { vi } from "vitest";
+import { afterAll, beforeAll, vi } from "vitest";
+import type { FixtureAcquisitionRollback } from "../../test/helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { resolveSystemdUnitPath } from "../daemon/systemd-service-files.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { cleanupTriageBoundary } from "./triage-boundary-cleanup.test-support.js";
+import {
+  triageLeaseFixtureLifetime,
+  triageRuntimePreloadEnv,
+} from "./triage-lease-fixture.test-support.js";
 import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
 } from "./triage-runtime.test-support.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "./update-managed-service-handoff-database.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
-export function triageRuntimeNodeOptions(): string {
-  // Prepared JavaScript does not need a source loader in every fixing descendant.
-  return resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).pathname.endsWith(".ts")
-    ? `--import ${path.resolve("scripts/tsx.mjs")}`
-    : "";
+const testNodeExecPath = resolveTestNodeExecPath();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+// Readers may inspect either unit while another native controller publishes its state.
+const nativeStatePublisher = `function publishState(file, value) {
+  const temporary = file + "." + process.pid + ".tmp";
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file);
+}`;
+
+export function createTriageBoundary(
+  mode: "startup" | "update" = "startup",
+  fault?: "scope" | "placement" | "unit",
+  maintenance?: "active" | "inactive",
+  beforeStart?: (root: string, env: NodeJS.ProcessEnv) => Promise<void>,
+  switchRoot?: true | string,
+) {
+  return triageLeaseFixtureLifetime.acquire((rejectAfterCleanup) =>
+    acquireTriageBoundary(rejectAfterCleanup, mode, fault, maintenance, beforeStart, switchRoot),
+  );
 }
 
-export async function createTriageBoundary(
+async function acquireTriageBoundary(
+  rejectAfterCleanup: FixtureAcquisitionRollback,
   mode: "startup" | "update" = "startup",
   fault?: "scope" | "placement" | "unit",
   maintenance?: "active" | "inactive",
@@ -39,8 +80,7 @@ export async function createTriageBoundary(
     // No actor exists yet if the package's fallible source closure cannot be staged.
     runtimeFiles = stageManagedHandoffRuntime(root);
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
+    return rejectAfterCleanup(error, () => fs.rm(root, { recursive: true, force: true }));
   }
   const installRoot = switchRoot ? path.join(root, "package") : root;
   const candidateRoot = switchRoot === true ? path.join(root, "checkout") : switchRoot || root;
@@ -64,8 +104,9 @@ export async function createTriageBoundary(
   // The installed candidate can be ESM; native command fixtures remain CommonJS.
   await fs.writeFile(path.join(bin, "package.json"), '{"type":"commonjs"}');
   await fs.mkdir(path.join(root, "members"));
-  await fs.mkdir(path.join(root, "controllers"));
-  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+  const groups = path.join(root, "groups");
+  await fs.mkdir(groups);
+  const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
   const parentExit = new Promise((resolve) => {
@@ -80,21 +121,19 @@ export async function createTriageBoundary(
     scopeFile,
     JSON.stringify({ name: mode === "startup" ? scope : updateScope, active: true }),
   );
+  const receiptClient = fixtureReceiptClientSource(receipts.endpoint);
   const common = `const fs = require('node:fs');
+${receiptClient.replace('import { createConnection as connectFixtureReceipts } from "node:net";', 'const { createConnection: connectFixtureReceipts } = require("node:net");')}
+${nativeStatePublisher}
 const root = ${JSON.stringify(root)};
 const scopeFile = ${JSON.stringify(scopeFile)};
 const primaryFile = ${JSON.stringify(primaryFile)};
-if (/systemctl$|systemd-run$|launchctl$/.test(process.argv[1] || '')) {
-  const controller = root + '/controllers/' + process.pid;
-  fs.writeFileSync(controller, '');
-  process.once('exit', () => fs.rmSync(controller, {force:true}));
-}
-const event = (kind, data = {}) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify({kind, pid:process.pid, handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null, sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null, ...data})+'\\n');
+const event = (kind, data = {}) => { fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify({kind, pid:process.pid, handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null, sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null, ...data})+'\\n'); sendReceipt(root, kind); };
 `;
   // HOME does not fence macOS's gui/UID namespace if a service mock misses.
   await fs.writeFile(
     path.join(bin, "launchctl"),
-    `#!${process.execPath}\n` +
+    `#!${testNodeExecPath}\n` +
       common +
       "event('unexpected-native', {command:'launchctl'}); process.exitCode=97;\n",
     { mode: 0o700 },
@@ -108,6 +147,23 @@ const read = fs.readFileSync;
 const native = /systemctl$|systemd-run$|launchctl$/.test(process.argv[1] || '');
 if (/maintenance.mjs$/.test(process.argv[1] || '')) event('maintenance-phase', {phase:'preload',ppid:process.ppid,sequence:0,elapsedMs:0});
 if (!native) fs.writeFileSync(root + '/members/' + process.pid, String(process.pid));
+if (!native) {
+  const childProcess = require('node:child_process'), originalSpawn = childProcess.spawn;
+  childProcess.spawn = function(command, args, options) {
+    if (!options?.detached) return originalSpawn.apply(this, arguments);
+    // Claim before spawn. An open descriptor publishes into the sealed registry
+    // even if cleanup closes admission while this native spawn returns.
+    const receipt = fs.openSync(root + '/groups/' + require('node:crypto').randomUUID(), 'wx');
+    try {
+      const child = originalSpawn.apply(this, arguments);
+      fs.writeSync(receipt, String(child.pid ?? 0));
+      return child;
+    } finally {
+      fs.closeSync(receipt);
+    }
+  };
+  require('node:module').syncBuiltinESMExports();
+}
 fs.readFileSync = function(file, ...args) {
   if (typeof file === 'string' && /^\\/proc\\/(self|[0-9]+)\\/cgroup$/.test(file)) {
     const scope = JSON.parse(read(scopeFile, 'utf8'));
@@ -119,15 +175,26 @@ fs.readFileSync = function(file, ...args) {
   );
   await fs.writeFile(
     path.join(bin, "systemctl"),
-    `#!${process.execPath}\n` +
+    `#!${testNodeExecPath}\n` +
       common +
       `
 const args = process.argv.slice(2);
+if (args.length === 2 && args[0] === '--system' && args[1] === 'is-system-running') {
+  event('system-manager-probe', {state:'running'});
+  process.stdout.write('running\\n');
+  return;
+}
 const action = args.find(x => ['show','start','stop','restart','reset-failed'].includes(x));
+if (!action) {
+  event('unexpected-native', {command:'systemctl',args});
+  console.error('Unexpected synthetic systemctl invocation: '+JSON.stringify(args));
+  process.exitCode=97;
+  return;
+}
 const name = args[args.indexOf(action)+1];
 const scope = JSON.parse(fs.readFileSync(scopeFile,'utf8'));
 let primary = JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-event(action, {name});
+event(action ?? 'probe', {name, args});
 if (action === 'show') {
   // A stopped scope retains its cgroup until its registered processes have exited.
   const populated = !scope.active && name.endsWith('.scope') && fs.readdirSync(root+'/members').some(member => {
@@ -151,10 +218,10 @@ if (action === 'show') {
   event('restart-preserved', {scope:scope.name});
 } else if (action === 'stop') {
   if (!name.endsWith('.scope')) {
-    primary.active = false; fs.writeFileSync(primaryFile,JSON.stringify(primary));
+    primary.active = false; publishState(primaryFile,primary);
   }
   if (name.endsWith('.scope') || scope.name.startsWith('openclaw-triage-')) {
-    scope.active=false; fs.writeFileSync(scopeFile,JSON.stringify(scope));
+    scope.active=false; publishState(scopeFile,scope);
     event('scope-stopped');
     for (const member of fs.readdirSync(root+'/members')) {
       try { process.kill(Number(member), 'SIGTERM'); } catch {}
@@ -166,12 +233,12 @@ if (action === 'show') {
   );
   await fs.writeFile(
     path.join(bin, "systemd-run"),
-    `#!${process.execPath}\n` +
+    `#!${testNodeExecPath}\n` +
       common +
       `
 const args=process.argv.slice(2), index=args.findIndex(x=>!x.startsWith('--'));
 const name=args.find(x=>x.startsWith('--unit=')).slice(7);
-fs.writeFileSync(scopeFile,JSON.stringify({name,active:true}));
+publishState(scopeFile,{name,active:true});
 event('attached', {name});
 process.execve(args[index],args.slice(index),process.env);
 `,
@@ -195,7 +262,8 @@ import { buildCliRespawnPlan } from ${JSON.stringify(resolveRuntimeWorkerUrl(tri
 if (buildCliRespawnPlan()) throw new Error('Installed child would respawn and lose its IPC claim');
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-const event=(kind,data={})=>fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({kind,pid:process.pid,handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null,sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null,...data})+'\\n');
+${receiptClient}
+const event=(kind,data={})=>{fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({kind,pid:process.pid,handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null,sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null,...data})+'\\n');sendReceipt(${JSON.stringify(root)},kind);};
 const admission=await acceptTriageContinuation();
 if (!admission) throw new Error('No live triage admission');
 event('fixer', {failure:admission.failure});
@@ -209,7 +277,7 @@ if (${Boolean(maintenance)}) {
   const exit=await new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
   event('maintenance-exit',exit);
 }
-const branch=spawn(process.execPath,['-e',${JSON.stringify(common + "event('descendant', {stateDir:process.env.OPENCLAW_STATE_DIR, workspace:process.env.OPENCLAW_WORKSPACE_DIR, shell:process.env.OPENCLAW_SHELL, compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}); const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'});
+const branch=spawn(process.execPath,['-e',${JSON.stringify(common + "event('descendant', {stateDir:process.env.OPENCLAW_STATE_DIR, workspace:process.env.OPENCLAW_WORKSPACE_DIR, shell:process.env.OPENCLAW_SHELL, compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}); const {spawn}=require('node:child_process'); spawn(process.execPath,['-e'," + JSON.stringify(common + "event('family-ready'); setInterval(()=>{},1000)") + "],{stdio:'ignore'}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'});
 event('branch',{child:branch.pid});
 admission.signal.addEventListener('abort',()=>{event('cancelled');void admission.finish("uncertain");process.exitCode=1;});
 await new Promise(resolve=>admission.signal.addEventListener('abort',resolve,{once:true}));
@@ -243,6 +311,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
   );
   const log = path.join(root, "handoff.log");
   const databasePath = resolveManagedUpdateLeaseDatabasePath();
+  const updateLeaseDatabaseIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
   const paramsFile = path.join(root, "handoff.json");
   const helperFile = path.join(root, "handoff.cjs");
   await fs.writeFile(helperFile, await stagedHandoffScript(root));
@@ -252,6 +323,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     OPENCLAW_HOME: "",
     OPENCLAW_PROFILE: "default",
     OPENCLAW_SUPERVISOR_MODE: "",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "auto",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_WORKSPACE_DIR: path.join(stateDir, "workspace"),
@@ -261,10 +333,10 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: metaPath,
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
     TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-    NODE_OPTIONS: [triageRuntimeNodeOptions(), `--require ${preload}`].filter(Boolean).join(" "),
+    ...withRuntimePreload(triageRuntimePreloadEnv(), preload),
   };
   const commandArgv = [
-    process.execPath,
+    testNodeExecPath,
     mode === "startup" ? candidate : updater,
     mode === "startup" ? "triage" : "update",
   ];
@@ -280,6 +352,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     commandArgv[0] = startup.command;
   }
   const env = startup?.env ?? childEnv;
+  const handoffTimeoutMs = 30_000;
   await fs.writeFile(
     paramsFile,
     JSON.stringify({
@@ -289,12 +362,14 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       }),
       nodeExecArgv,
+      runtimeArgs: [],
       action: mode === "startup" ? "triage" : "update",
       failure: mode === "startup" ? { ...failure, kind: "gateway-startup" } : undefined,
       parentPid,
       parentStartIdentity: String(getFileLockProcessStartTime(parentPid)),
-      parentExitTimeoutMs: 30_000,
-      parentExitDeadlineAt: Date.now() + 30_000,
+      parentExitTimeoutMs: handoffTimeoutMs,
+      parentExitDeadlineAt: Date.now() + handoffTimeoutMs,
+      recoveryTimeoutMs: handoffTimeoutMs,
       cwd: root,
       commandArgv,
       commandLabel: "synthetic",
@@ -303,7 +378,8 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       metaPath,
       stateDatabasePath: path.join(root, "state.sqlite"),
       nodeSqliteLocation: path.join(root, "state.sqlite"),
-      updateLeaseDatabasePath: databasePath,
+      updateLeaseDatabasePath: updateLeaseDatabaseIdentity.databasePath,
+      updateLeaseDatabaseIdentity,
       updateLeaseKey: installRoot,
       updateLeaseOwner: root,
       sensitivePaths: runtimeFiles,
@@ -316,13 +392,15 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     await beforeStart?.(root, env);
   } catch (error) {
     // The caller cannot register cleanup until this fixture returns.
-    parent.kill("SIGKILL");
-    await parentExit;
-    await fs.rm(root, { recursive: true, force: true });
-    throw error;
+    return rejectAfterCleanup(error, async () => {
+      parent.kill("SIGKILL");
+      await parentExit;
+      await fs.rm(root, { recursive: true, force: true });
+    });
   }
-  const helper = spawn(process.execPath, [helperFile, paramsFile], {
+  const helper = spawn(testNodeExecPath, [helperFile, paramsFile], {
     env,
+    detached: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
   let output = "",
@@ -362,6 +440,32 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
+  const waitForEvent = (kind: string, signal: AbortSignal, allowAfterExit = false) =>
+    withinTest(
+      (async () => {
+        const recorded = () =>
+          readEvents().then((entries) => entries.some((event) => event.kind === kind));
+        if (await recorded()) {
+          return;
+        }
+        const received = receipts.waitFor(root, kind);
+        // Separate receipt and exit pipes are unordered. Events are appended before
+        // reporting or exiting, so the durable record decides when exit wins the race.
+        await (allowAfterExit
+          ? received
+          : Promise.race([
+              received,
+              exit.then(async () => {
+                if (!(await recorded())) {
+                  throw new Error(
+                    `Handoff exited before ${kind}: ${await fs.readFile(log, "utf8").catch(() => stderr)}; Events: ${JSON.stringify(await readEvents())}`,
+                  );
+                }
+              }),
+            ]));
+      })(),
+      signal,
+    );
   return {
     root,
     installRoot,
@@ -381,6 +485,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     helper,
     parent,
     exit,
+    waitForEvent,
+    waitForBranch: (signal: AbortSignal) =>
+      Promise.all([waitForEvent("branch", signal), waitForEvent("family-ready", signal)]),
     readEvents,
     output: () => output,
     stderr: () => stderr,
@@ -414,7 +521,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     replay: async () => {
       // Replay a stale claim with prepared code, not a missing-module failure after cleanup.
       stageManagedHandoffRuntime(root);
-      const child = spawn(process.execPath, [helperFile, paramsFile], {
+      const child = spawn(testNodeExecPath, [helperFile, paramsFile], {
         env,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -462,40 +569,17 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         })),
       ),
     cleanup: async () => {
-      for (const pid of await fs.readdir(path.join(root, "members"))) {
-        try {
-          process.kill(Number(pid), "SIGKILL");
-        } catch {}
-      }
-      for (const child of [helper, parent]) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-      }
-      await Promise.all([exit, parentExit]);
-      // Native control children are outside the synthetic scope they stop.
-      await vi.waitFor(
-        async () => {
-          const controllers = await fs.readdir(path.join(root, "controllers"));
-          if (controllers.some((pid) => isPidAlive(Number(pid)))) {
-            throw new Error("native fixture controllers are still running");
-          }
-        },
-        { timeout: 5000, interval: 20 },
-      );
-      lines.close();
-      const finalEvents = await readEvents();
-      const db = new DatabaseSync(databasePath);
-      try {
-        setSqliteBusyTimeout(db, 5000);
-        db.prepare("DELETE FROM managed_update_handoffs WHERE owner = ?").run(root);
-      } finally {
-        db.close();
-      }
-      await fs.rm(root, { recursive: true, force: true });
-      if (finalEvents.some((event) => event.kind === "unexpected-native")) {
-        throw new Error("Triage fixture attempted an unexpected native service command");
-      }
+      await cleanupTriageBoundary({
+        root,
+        groups,
+        helper,
+        parent,
+        exit,
+        parentExit,
+        lines,
+        readEvents,
+        databasePath,
+      });
     },
   };
 }
@@ -550,6 +634,13 @@ async function writeTriageMaintenanceProbe(params: {
   events: string;
 }): Promise<string> {
   const { root, primaryFile, unit, events } = params;
+  // Container-aware Doctor also checks the installation reported by the native fixture.
+  const unitPath = resolveSystemdUnitPath({ HOME: root, OPENCLAW_SYSTEMD_UNIT: unit });
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await fs.writeFile(
+    unitPath,
+    `[Service]\nExecStart=${testNodeExecPath} ${root}/dist/index.js gateway run\n`,
+  );
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "index.js"), "");
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -562,6 +653,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { mock } from 'node:test';
 const root=${JSON.stringify(root)}, primaryFile=${JSON.stringify(primaryFile)};
+${nativeStatePublisher}
 const event=(kind,data={})=>fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({kind,pid:process.pid,...data})+'\\n');
 const started=performance.now(); let sequence=0;
 const phase=(phase,data={})=>event('maintenance-phase',{phase,ppid:process.ppid,sequence:++sequence,elapsedMs:performance.now()-started,...data});
@@ -586,7 +678,7 @@ const service={
   readRuntime:async()=>{
     phase('readRuntime');
     const primary=JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-    return {status:primary.active?'running':'stopped',pid:primary.active?primary.pid:undefined};
+    return {status:primary.active?'running':'stopped',pid:primary.active?primary.pid:undefined,systemd:{managerUid:2001}};
   },
   stop:()=>native('stop'),
   restart:()=>native('restart'),
@@ -602,7 +694,7 @@ const {maybeStopManagedServiceBeforeMutableUpdate}=await import(${JSON.stringify
 phase('update-import-end');
 if(process.argv[2]==='inactive'){
   const primary=JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-  fs.writeFileSync(primaryFile,JSON.stringify({...primary,active:false}));
+  publishState(primaryFile,{...primary,active:false});
   // Exercise Linux's inactive-unit policy on macOS too. No PID/native probes
   // are needed on the corrected inactive branch; this is not native proof.
   Object.defineProperty(process,'platform',{value:'linux'});

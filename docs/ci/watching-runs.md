@@ -23,10 +23,12 @@ binary. `OPENCLAW_GH_BIN` is an explicit operator-owned override for supporting
 callers; choose it only when its authentication and protections are appropriate.
 PATH-based read helpers, including this watcher, ignore that override.
 Authoritative REST reads request revalidation with `Cache-Control: max-age=0`
-and supply concrete repository paths. Writer identity comes from the authenticated
-GraphQL viewer, not a relay's REST caller profile.
+and supply concrete repository paths. The watcher resolves its repository once,
+then revalidates mutable PR state on each read. Writer identity uses authenticated
+REST `GET /user --include`; included headers preserve the native writer route
+instead of accepting a relay's caller profile.
 
-Before entering a PR worktree, `scripts/pr` checks that viewer with one request.
+Before entering a PR worktree, `scripts/pr` checks that writer with one request.
 Rate-limit failures stop the operation before fetch or merge side effects and
 report only safe metadata from that same response: HTTP status, quota resource,
 remaining quota, limit, UTC reset time, and retry delay when available.
@@ -35,9 +37,9 @@ when that budget is exhausted. A future primary reset is not the unblock time fo
 a secondary throttle with quota remaining. Without a usable retry delay or an
 exhausted budget's reset, wait at least 60 seconds. A zero remaining balance alone
 does not attribute an HTTP 200 failure to rate limiting: malformed or missing
-viewer data and unrelated errors still fail, with exhaustion reported separately.
+identity data and unrelated errors still fail, with exhaustion reported separately.
 An unknown reset is reported as unknown; a separate pooled REST quota is not
-evidence about the failed viewer request. Refreshing credentials does not restore
+evidence about the failed identity request. Refreshing credentials does not restore
 quota. Only missing or rejected authentication suggests manually configuring or
 refreshing the intended active credential; forbidden, server, transport, and
 malformed responses remain blocking failures without login advice. The preflight
@@ -63,6 +65,64 @@ missing records are read under the watcher deadline, followed by a fresh PR and
 rollup observation before deciding. Each poll reads at most 32 missing run records;
 excess references stay pending and resume from the cache on the next poll. Known
 missing or foreign associations remain blocking, as do independent failed checks.
+
+`STATUS` lines report progress. In rollup mode, `rollup` is the effective check
+verdict and `github_rollup` is GitHub's raw aggregate. Superseded checks can leave
+`github_rollup=FAILURE` while `rollup=pending` or `rollup=green`. A green rollup
+still waits for the attached CI run to succeed. Terminal `GREEN` exits 0,
+`FAILING` exits 15, and `TIMEOUT` exits 16. Rollup timeouts include the last raw
+aggregate and pending count; `ci-run` timeouts identify that completion mode
+because it does not inspect the rollup.
+
+Ordinary active CI polls fetch the aggregate and global counts without loading
+check nodes or older-run metadata. `github_pending` reports those raw pending
+counts, including superseded checks and `Auto response`; unavailable counts show
+`unknown` and never establish completion. Failure analysis and pending checks
+after CI succeeds still collect complete details, reporting the effective
+`pending` and `superseded` counts. Before returning `GREEN`, the watcher rechecks
+the PR lifecycle and head; a summary success also requires the aggregate to remain
+successful after observing the attached run.
+
+After a poll needs detailed failure analysis, the next poll can request details
+directly instead of first repeating the summary query. This remembers only the
+query shape: every poll still collects fresh evidence, and reads made during
+history or queued-job reconciliation still require a new observation. Incomplete
+detailed responses remain blocking and are retried; missing contexts cannot be
+treated as an empty successful set.
+
+If the primary GraphQL budget is exhausted, the watcher switches to REST for the
+rest of that invocation. It collects check runs, latest status contexts, and
+workflow identities with complete, bounded pagination, then revalidates the PR.
+REST uses more requests and response data; the normal path retains the compact
+GraphQL query. In REST mode the raw aggregate and counts are derived from the
+collected checks. Missing or ambiguous workflow identity never permits dropping
+a check, and GitHub's check-suite limit cannot silently turn a partial list green.
+When those collected rows show a failure, REST adds workflow identity to that
+same observation instead of downloading the check and status pages again.
+Secondary throttling, authentication failures, malformed responses, and transport
+errors do not trigger this fallback or change the CLI's authentication route.
+
+Native immediate squash landing can also use REST after primary GraphQL
+exhaustion. This requires explicit evidence that classic branch protection is
+absent, effective rules do not require a merge queue, required checks match their
+configured publishers, the authenticated writer has repository admin access to
+read that policy, and the exact PR head is eligible to merge. Queue, auto,
+admin-bypass, or unverifiable policy states remain blocking. The selected transport is
+recorded before dispatch; an uncertain merge request is reconciled through the
+existing retained outcome instead of retried through another API.
+Because REST has no GitHub squash-message preview, its default message uses the
+current PR description and verified source credit. An explicit `--body-file`
+continues to supply the reviewed message, with required human credit preserved.
+Publishing an unsigned prepared commit through GitHub's `createCommitOnBranch`
+still requires GraphQL; the existing Git transport for verified signed commits
+is unchanged. A failed or uncertain publication never triggers another mutation
+through the fallback.
+
+An HTTP 407 proxy-authentication refusal exits immediately with
+`PROXY-AUTH-FAILED` and exit code 2. Retrying the same command cannot renew its
+proxy access. Start a new watcher from an active authenticated run, or repair the
+configured proxy authentication before retrying. Other transient transport failures
+retain the bounded retry behavior.
 
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after
@@ -102,7 +162,14 @@ regular UTF-8 file before verification. Empty files are valid. It preserves
 operator-provided text and trailers, appending any missing co-authors from the
 current GitHub preview and reviewed source commits. This option requires squash
 and a non-queue PR; all review, CI, exact-head, and admission checks still apply.
-Without the option, the existing GitHub preview behavior is unchanged.
+Without the option, the wrapper composes the message from the GitHub preview:
+it keeps credit backed by a non-merge PR commit author or a reviewed source
+trailer, appends human `Co-authored-by` trailers from the PR's commits that the
+preview omitted, and drops machine credit (Claude, Codex, Cursor, Copilot, Amp,
+Trae, and GitHub App `[bot]` accounts) wherever GitHub replayed it, including
+inside per-commit bullets. A reviewed body that still contains machine credit
+is rejected, and a merge-queue PR whose preview needs such edits stops before
+admission.
 
 `merge-recover` accepts the same option after its required outcome ID and
 `--confirmed-operator-recovery`. Repeating `merge-run` with a retained outcome

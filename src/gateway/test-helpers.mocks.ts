@@ -281,7 +281,8 @@ vi.mock("../status/summary.js", () => ({
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,
   agentCommandFromGatewayIngress: agentCommandMock,
-  agentCommandFromIngress: agentCommandMock,
+  agentCommandFromIngress: (...args: Parameters<typeof agentCommandMock>) =>
+    agentCommandMock(...args),
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
@@ -303,15 +304,6 @@ vi.mock("/src/auto-reply/dispatch.js", async () => {
   );
   return createDispatchInboundMessageMockExports(actual);
 });
-vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-}));
-
-vi.mock("/src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-}));
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
@@ -329,7 +321,7 @@ vi.mock("../cli/deps.js", async () => {
     ...actual,
     createDefaultDeps: () => ({
       ...base,
-      sendMessageWhatsApp: (...args: unknown[]) =>
+      whatsapp: (...args: unknown[]) =>
         (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
   };

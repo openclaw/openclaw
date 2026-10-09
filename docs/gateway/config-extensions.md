@@ -13,18 +13,18 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 ## MCP
 
-OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
-`show`, `set`, and `unset` commands manage this block without connecting to the
-target server during config edits.
+OpenClaw-managed MCP server definitions live under `mcp.servers` for embedded
+OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
+`unset` manage this block without connecting to the servers. The Fetch example
+requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```json5
 {
   mcp: {
     servers: {
       docs: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-fetch"],
+        command: "uvx",
+        args: ["mcp-server-fetch"],
       },
       remote: {
         url: "https://example.com/mcp",
@@ -65,7 +65,7 @@ target server during config edits.
   `openclaw doctor --fix` normalize into the canonical `transport` field.
 - `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
   while excluding it from embedded OpenClaw MCP discovery and tool projection.
-- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds.
+- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds.
 - `mcp.servers.<name>.connectionTimeoutMs`: per-server connection timeout in milliseconds.
 - `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
   adapters that can choose whether to issue parallel MCP tool calls.
@@ -174,7 +174,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 - `limits.maxCandidatesPerRoot`, `limits.maxSkillsLoadedPerSource`, `limits.maxSkillsInPrompt`, `limits.maxSkillsPromptChars`, `limits.maxSkillFileBytes`: bound skill discovery and the model-facing skills prompt.
-- Skill Workshop autonomy/approval settings (`workshop.autonomous.mode`, `workshop.approvalPolicy`, `workshop.maxPending`, `workshop.maxSkillBytes`) are documented in [Skills configuration](/tools/skills-config).
+- Skill Workshop settings (`workshop.autonomous.mode`, `workshop.maxSkillBytes`) are documented in [Skills configuration](/tools/skills-config).
 
 ---
 
@@ -205,12 +205,12 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
 - Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
-- With the default hybrid reload mode, ordinary plugin policy and entry changes hot-reload the plugin runtime. Plugin code, metadata, and discovery-root changes require a Gateway restart; active plugins can also declare restart-triggering config prefixes.
+- With the default hybrid reload mode, ordinary plugin policy, entry, and discovery-path changes hot-reload the plugin runtime. Entry config changes replace the affected instance. Use `openclaw plugins reload <id>` after source or manifest edits; active plugins can still declare restart-triggering config prefixes. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
-- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
+- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`. It also grants the bounded, invocation-scoped `session_end` ended-transcript reader; metadata-only `session_end` handlers remain registerable without the grant.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
@@ -373,6 +373,6 @@ See [Plugins](/tools/plugin).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.
 - Capability URLs are bound to the active node WS session and expire quickly. IP-based fallback is not used.
-- Changes require a gateway restart.
+- `host.enabled` hot-applies through the Canvas plugin in the default hybrid reload mode. The `OPENCLAW_SKIP_CANVAS_HOST` environment override still requires a Gateway restart.
 
 ---

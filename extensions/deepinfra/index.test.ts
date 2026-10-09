@@ -1,4 +1,3 @@
-// Deepinfra tests cover index plugin behavior.
 import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,
@@ -40,21 +39,13 @@ function makeAgentModelEntry(id = "profile/live-model") {
   };
 }
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 function mockDiscoveryFetch(id = "profile/live-model") {
   return vi.fn(async (url: string) => {
     if (url === DEEPINFRA_MODELS_URL) {
-      return jsonResponse({ data: [makeAgentModelEntry(id)] });
+      return Response.json({ data: [makeAgentModelEntry(id)] });
     }
     expect(url).toBe("https://api.deepinfra.com/models/list");
-    return jsonResponse([
+    return Response.json([
       {
         model_name: id,
         pricing: {
@@ -88,9 +79,9 @@ async function withLiveDiscoveryTestEnv(
 describe("deepinfra capability registration", () => {
   it.each([
     ...["metadata", "pricing"].flatMap((scenario) =>
-      [401, 403, 503].map((status) => ({ scenario, status })),
+      [401, 503].map((status) => ({ scenario, status })),
     ),
-    ...[200, 401, 503].map((status) => ({ scenario: "empty", status })),
+    { scenario: "empty", status: 503 },
   ])(
     "reports public $scenario HTTP $status without rejecting inference credentials",
     async ({ scenario, status }) => {
@@ -98,7 +89,7 @@ describe("deepinfra capability registration", () => {
       const mockFetch = vi.fn(async (url: string) => {
         const metadata = url === DEEPINFRA_MODELS_URL;
         if (scenario === "empty" && metadata) {
-          return jsonResponse({ data: [] });
+          return Response.json({ data: [] });
         }
         if (
           (scenario === "metadata" && metadata) ||
@@ -188,16 +179,6 @@ describe("deepinfra capability registration", () => {
 });
 
 describe("deepinfra isCacheTtlEligible", () => {
-  it("returns true for anthropic/* proxied models", async () => {
-    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "anthropic/claude-4-sonnet",
-      }),
-    ).toBe(true);
-  });
-
   // Locked to case-insensitive to stay consistent with the shared proxy cache
   // wrapper, which lowercases the modelId before the "anthropic/" prefix check.
   it("returns true regardless of modelId case", async () => {

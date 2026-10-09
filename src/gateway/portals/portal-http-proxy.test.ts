@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import { mockIpv4OnlyLocalhostLookup } from "../../../test/helpers/loopback-dns.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { getFreePort } from "../../test-utils/ports.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import type { PortalTarget } from "./portal-http-proxy.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
 
@@ -26,6 +26,7 @@ let targetPort = 0;
 let targetHandler: (req: IncomingMessage, res: ServerResponse) => void;
 let targetWebSocketPath: string | undefined;
 let targetWebSocketCookie: string | undefined;
+let targetWebSocketHeaders: IncomingMessage["headers"] | undefined;
 let targetWebSocketSetCookie: string | undefined;
 const targetServer = createServer((req, res) => targetHandler(req, res));
 const targetWss = new WebSocketServer({ server: targetServer });
@@ -37,6 +38,7 @@ beforeAll(async () => {
   targetWss.on("connection", (socket, req) => {
     targetWebSocketPath = req.url;
     targetWebSocketCookie = req.headers.cookie;
+    targetWebSocketHeaders = req.headers;
     socket.on("message", (data) => socket.send(data));
   });
   targetWss.on("headers", (headers) => {
@@ -70,6 +72,7 @@ afterEach(async () => {
   temporaryTargetServers.clear();
   targetWebSocketPath = undefined;
   targetWebSocketCookie = undefined;
+  targetWebSocketHeaders = undefined;
   targetWebSocketSetCookie = undefined;
 });
 
@@ -166,6 +169,40 @@ async function httpCall(params: {
   });
 }
 
+async function readUpgradeRejection(params: {
+  port: number;
+  host?: string;
+}): Promise<{ status: number; body: string; elapsedMs: number }> {
+  const started = Date.now();
+  const socket = net.connect({ host: "127.0.0.1", port: params.port });
+  await once(socket, "connect");
+  socket.write(
+    [
+      "GET / HTTP/1.1",
+      `Host: ${params.host ?? `127.0.0.1:${params.port}`}`,
+      "Connection: Upgrade",
+      "Upgrade: websocket",
+      "Sec-WebSocket-Version: 13",
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+      "",
+      "",
+    ].join("\r\n"),
+  );
+  const chunks: Buffer[] = [];
+  socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+  await Promise.race([once(socket, "close"), once(socket, "end")]);
+  socket.destroy();
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const separator = raw.indexOf("\r\n\r\n");
+  const head = separator >= 0 ? raw.slice(0, separator) : raw;
+  const body = (separator >= 0 ? raw.slice(separator + 4) : "").replace(/\r\n$/u, "");
+  return {
+    status: Number(head.split(" ")[1]),
+    body,
+    elapsedMs: Date.now() - started,
+  };
+}
+
 function storeCookies(jar: Map<string, string>, cookies: readonly string[] | undefined): void {
   for (const cookie of cookies ?? []) {
     const pair = cookie.split(";", 1)[0];
@@ -249,6 +286,11 @@ describe("portal HTTP proxy", () => {
     expect(unauthorized.body).toContain("This portal is private");
     expect(unauthorized.body).not.toContain(portal.tokenQuery);
 
+    const unauthorizedUpgrade = await readUpgradeRejection({ port: portal.listenPort });
+    expect(unauthorizedUpgrade.status).toBe(401);
+    expect(unauthorizedUpgrade.body).toBe("Unauthorized");
+    expect(unauthorizedUpgrade.elapsedMs).toBeLessThan(2000);
+
     const authorized = await httpCall({
       port: portal.listenPort,
       path: `/preview?x=1&${portal.tokenQuery}`,
@@ -268,6 +310,75 @@ describe("portal HTTP proxy", () => {
     });
     expect(cookieOnly).toMatchObject({ status: 200, body: "proxied" });
     expect(targetPaths).toEqual(["/preview?x=1", "/cookie?y=2"]);
+  });
+
+  it("flushes HTTP 404 on an unknown portal ingress upgrade instead of hanging", async () => {
+    const service = createGatewayPortalService({
+      httpBindHosts: ["127.0.0.1"],
+      httpServers: [],
+      ingress: { domain: "previews.example.net", port: 0 },
+    });
+    services.add(service);
+    const portal = await service.open({ targetPort, title: "App" });
+    const rejected = await readUpgradeRejection({
+      port: portal.listenPort,
+      host: "missing.previews.example.net",
+    });
+    expect(rejected.status).toBe(404);
+    expect(rejected.body).toBe("Unknown portal");
+    expect(rejected.elapsedMs).toBeLessThan(2000);
+  });
+
+  it("destroys the unauthorized upgrade server socket after flushing 401 while the client is still open", async () => {
+    const httpServers: Server[] = [];
+    const service = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers });
+    services.add(service);
+    const portal = await service.open({ targetPort, title: "App" });
+    const listener = httpServers[0];
+    if (!listener) {
+      throw new Error("expected the portal HTTP listener");
+    }
+    let serverSocket: Duplex | undefined;
+    listener.prependOnceListener("upgrade", (_req, socket) => {
+      serverSocket = socket;
+    });
+    const client = net.connect({ host: "127.0.0.1", port: portal.listenPort });
+    client.on("error", () => {});
+    await once(client, "connect");
+    const started = Date.now();
+    client.write(
+      [
+        "GET / HTTP/1.1",
+        `Host: 127.0.0.1:${portal.listenPort}`,
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    const chunks: Buffer[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("unauthorized upgrade timed out")), 2000);
+      client.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+        if (Buffer.concat(chunks).includes("\r\n\r\n")) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    const raw = Buffer.concat(chunks).toString("utf8");
+    expect(raw).toContain("HTTP/1.1 401 Unauthorized");
+    expect(raw).toContain("Unauthorized");
+    expect(client.destroyed).toBe(false);
+    await expect.poll(() => serverSocket?.destroyed === true).toBe(true);
+    expect(client.destroyed).toBe(false);
+    console.log(
+      `[portal unauthorized upgrade teardown] server_destroyed_before_client=true elapsed_ms=${Date.now() - started}`,
+    );
+    client.destroy();
   });
 
   it("keeps concurrent portal HTTP sessions authorized in A-B-A order", async () => {
@@ -310,6 +421,7 @@ describe("portal HTTP proxy", () => {
   });
 
   it("streams HTTP requests and responses with rewritten safe headers", async () => {
+    let receivedHeaders: IncomingMessage["headers"] | undefined;
     let received:
       | {
           host?: string;
@@ -320,6 +432,7 @@ describe("portal HTTP proxy", () => {
         }
       | undefined;
     targetHandler = (req, res) => {
+      receivedHeaders = req.headers;
       received = {
         host: req.headers.host,
         cookie: req.headers.cookie,
@@ -344,6 +457,13 @@ describe("portal HTTP proxy", () => {
         Cookie: `openclaw_plugin_tab=secret; ${portalAuthCookie(portal)}`,
         Connection: "keep-alive, x-remove-me",
         "X-Remove-Me": "remove",
+        "Tailscale-User-Login": "private@example.test",
+        Forwarded: "host=forged.example;proto=https",
+        "X-Forwarded-Port": "444",
+        "X-Real-IP": "192.0.2.1",
+        "Cf-Access-Jwt-Assertion": "synthetic-edge-assertion",
+        "Cf-Access-Client-Secret": "synthetic-edge-secret",
+        Authorization: "Bearer synthetic-app-token",
       },
     });
 
@@ -355,9 +475,21 @@ describe("portal HTTP proxy", () => {
     expect(received).toMatchObject({
       host: `localhost:${targetPort}`,
       proto: "http",
-      forwardedHost: "portal.example:9999",
+      forwardedHost: new URL(portal.publicUrl).host,
     });
     expect(received?.cookie).toBeUndefined();
+    expect(receivedHeaders?.authorization).toBe("Bearer synthetic-app-token");
+    for (const name of [
+      "cf-access-jwt-assertion",
+      "cf-access-client-secret",
+      "tailscale-user-login",
+      "forwarded",
+      "x-forwarded-port",
+      "x-real-ip",
+      "x-remove-me",
+    ]) {
+      expect(receivedHeaders?.[name]).toBeUndefined();
+    }
     expect(received?.forwardedFor).toMatch(/127\.0\.0\.1|::ffff:127\.0\.0\.1/u);
   });
 
@@ -459,6 +591,36 @@ describe("portal HTTP proxy", () => {
     await browserCall(jar, { port: portalB.listenPort });
 
     expect(receivedCookiesB).toEqual([undefined, undefined, "session=portal-b"]);
+  });
+
+  it.each(["localhost", "127.0.0.1", "[::1]"])(
+    "keeps absolute %s app redirects on the published portal origin",
+    async (host) => {
+      targetHandler = (_req, res) => {
+        res.writeHead(302, { Location: `http://${host}:${targetPort}/nested/page?q=1#section` });
+        res.end();
+      };
+      const portal = await portalService().open({ targetPort });
+      const response = await httpCall({ port: portal.listenPort, path: `/?${portal.tokenQuery}` });
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toBe(
+        new URL("/nested/page?q=1#section", portal.publicUrl).href,
+      );
+    },
+  );
+
+  it.each([
+    "/nested/page?q=1",
+    "https://accounts.example.test/login",
+    "//accounts.example.test/login",
+  ])("preserves intentional redirect %s", async (location) => {
+    targetHandler = (_req, res) => {
+      res.writeHead(302, { Location: location });
+      res.end();
+    };
+    const portal = await portalService().open({ targetPort });
+    const response = await httpCall({ port: portal.listenPort, path: `/?${portal.tokenQuery}` });
+    expect(response.headers.location).toBe(location);
   });
 
   it("forces no-referrer and never forwards a token-bearing referrer", async () => {
@@ -815,17 +977,18 @@ describe("portal HTTP proxy", () => {
   it("reaches IPv6-only targets through the localhost dual-stack dial", async () => {
     mockIpv4OnlyLocalhostLookup();
     // Node >=17 dev servers (Vite, Next.js) often bind ::1 only on "localhost".
-    // Probe IPv4 so localhost cannot reach the shared IPv4 fixture on the same port.
-    const v6Port = await getFreePort();
+    // Keep the IPv4 endpoint unclaimed by sibling fixtures while only IPv6 is bound.
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    const v6Port = claim.port;
     const v6Target = createServer((req, res) => {
       res.statusCode = 200;
       res.end("v6 proxied");
     });
-    await new Promise<void>((resolve, reject) => {
-      v6Target.once("error", reject);
-      v6Target.listen(v6Port, "::1", () => resolve());
-    });
     try {
+      await new Promise<void>((resolve, reject) => {
+        v6Target.once("error", reject);
+        v6Target.listen(v6Port, "::1", () => resolve());
+      });
       const portal = await portalService().open({ targetPort: v6Port });
       const result = await httpCall({
         port: portal.listenPort,
@@ -836,6 +999,7 @@ describe("portal HTTP proxy", () => {
       await new Promise<void>((resolve) => {
         v6Target.close(() => resolve());
       });
+      await claim.release();
     }
   });
 
@@ -846,7 +1010,24 @@ describe("portal HTTP proxy", () => {
     let upgradeCookies: string[] | undefined;
     const ws = new WebSocket(
       `ws://127.0.0.1:${portal.listenPort}/hmr?channel=dev&${portal.tokenQuery}`,
-      { headers: { Cookie: "openclaw_plugin_tab=secret" } },
+      {
+        headers: {
+          Cookie: "openclaw_plugin_tab=secret",
+          "Tailscale-User-Login": "private@example.test",
+          "X-Forwarded-Host": "forged.example",
+          "X-Forwarded-Proto": "https",
+          Forwarded: "host=forged.example",
+          "Cf-Access-Jwt-Assertion": "synthetic-edge-assertion",
+          "Cf-Access-Authenticated-User-Email": "private@example.test",
+          Authorization: "Bearer synthetic-app-token",
+          "X-Remove-Me": "remove",
+        },
+        finishRequest: (req) => {
+          // ws installs its own Connection header after user headers.
+          req.setHeader("Connection", "Upgrade, x-remove-me");
+          req.end();
+        },
+      },
     );
     ws.once("upgrade", (response) => {
       upgradeCookies = response.headers["set-cookie"];
@@ -862,6 +1043,18 @@ describe("portal HTTP proxy", () => {
     expect(await echoed).toBe("hot reload");
     expect(targetWebSocketPath).toBe("/hmr?channel=dev");
     expect(targetWebSocketCookie).toBeUndefined();
+    expect(targetWebSocketHeaders?.["x-forwarded-host"]).toBe(new URL(portal.publicUrl).host);
+    expect(targetWebSocketHeaders?.["x-forwarded-proto"]).toBe("http");
+    expect(targetWebSocketHeaders?.authorization).toBe("Bearer synthetic-app-token");
+    for (const name of [
+      "tailscale-user-login",
+      "forwarded",
+      "x-remove-me",
+      "cf-access-jwt-assertion",
+      "cf-access-authenticated-user-email",
+    ]) {
+      expect(targetWebSocketHeaders?.[name]).toBeUndefined();
+    }
     expect(upgradeCookies).toHaveLength(1);
     expect(upgradeCookies?.[0]).toMatch(
       /^oc_portal_[a-f0-9]{32}_socket=ready; Path=\/; HttpOnly$/u,

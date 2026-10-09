@@ -5,6 +5,8 @@ import type {
   ExecAuthorizationCandidate,
   ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
+import type { SystemRunMutableFileBinding } from "./system-run-approval-binding.js";
 
 type AuthorizedShellRenderMode = "safeBins" | "enforced";
 
@@ -27,10 +29,6 @@ function renderBareShellToken(value: string): string {
   return value.length > 0 && SHELL_BARE_TOKEN_PATTERN.test(value)
     ? value
     : shellEscapeSingleArg(value);
-}
-
-function renderSourcePreservingArgv(argv: readonly string[]): string {
-  return argv.map((token) => renderBareShellToken(token)).join(" ");
 }
 
 function hasUnquotedShellExpansionSource(value: string): boolean {
@@ -125,23 +123,6 @@ function sourceStepSlice(params: {
   return params.candidate.sourceStep.text.slice(relativeStart, relativeEnd);
 }
 
-function shouldRewriteCandidate(params: {
-  mode: AuthorizedShellRenderMode;
-  satisfiedBy: ExecSegmentSatisfiedBy | undefined;
-}): boolean {
-  if (params.mode === "enforced") {
-    // Safe builtins (cd, :, true, false, pwd, test) are handled by the shell itself, not by an
-    // external executable. Rewriting them to a resolved path (e.g. /usr/bin/cd) is semantically
-    // wrong and does not strengthen PATH-shadowing protection, so enforced mode leaves them as-is.
-    return params.satisfiedBy !== "safeBuiltins";
-  }
-  return params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
-}
-
-function hasDispatchWrapper(segment: ExecAuthorizationCandidate["sourceSegment"]): boolean {
-  return (segment.resolution?.wrapperChain?.length ?? 0) > 0;
-}
-
 function replacementForCandidate(params: {
   command: string;
   candidate: ExecAuthorizationCandidate;
@@ -151,7 +132,12 @@ function replacementForCandidate(params: {
   if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
     return { ok: false, reason: "shell expansion in enforced arguments" };
   }
-  if (!shouldRewriteCandidate({ mode: params.mode, satisfiedBy: params.satisfiedBy })) {
+  // Shell builtins must stay in the shell; rewriting them to paths changes their semantics.
+  const shouldRewrite =
+    params.mode === "enforced"
+      ? params.satisfiedBy !== "safeBuiltins"
+      : params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
+  if (!shouldRewrite) {
     return null;
   }
   const plannedArgv = resolvePlannedSegmentArgv(params.candidate.sourceSegment);
@@ -164,7 +150,7 @@ function replacementForCandidate(params: {
   if (params.mode === "enforced" && params.candidate.transport.kind === "shell-wrapper") {
     return { ok: false, reason: "shell quoting required in wrapper payload" };
   }
-  if (hasDispatchWrapper(params.candidate.sourceSegment)) {
+  if (params.candidate.sourceSegment.resolution?.wrapperChain?.length) {
     const spanResult = validateSpan({
       command: params.command,
       span: params.candidate.sourceStep.span,
@@ -176,7 +162,7 @@ function replacementForCandidate(params: {
     return {
       startIndex: params.candidate.sourceStep.span.startIndex,
       endIndex: params.candidate.sourceStep.span.endIndex,
-      text: renderSourcePreservingArgv(plannedArgv),
+      text: plannedArgv.map(renderBareShellToken).join(" "),
     };
   }
   const executable = plannedArgv[0];
@@ -207,31 +193,6 @@ function replacementForCandidate(params: {
     endIndex: params.candidate.sourceStep.executableSpan.endIndex,
     text: renderedExecutable,
   };
-}
-
-function collectCandidateReplacements(params: {
-  command: string;
-  candidates: readonly ExecAuthorizationCandidate[];
-  mode: AuthorizedShellRenderMode;
-  segmentSatisfiedBy: readonly ExecSegmentSatisfiedBy[];
-}): AuthorizedShellRenderResult | SourceReplacement[] {
-  const replacements: SourceReplacement[] = [];
-  for (const [index, candidate] of params.candidates.entries()) {
-    const replacement = replacementForCandidate({
-      command: params.command,
-      candidate,
-      mode: params.mode,
-      satisfiedBy: params.segmentSatisfiedBy[index],
-    });
-    if (!replacement) {
-      continue;
-    }
-    if ("ok" in replacement) {
-      return replacement;
-    }
-    replacements.push(replacement);
-  }
-  return replacements;
 }
 
 function applyReplacements(params: {
@@ -275,17 +236,114 @@ export function buildAuthorizedShellCommandFromPlan(params: {
     return { ok: false, reason: "segment metadata mismatch" };
   }
 
-  const replacements = collectCandidateReplacements({
-    command: params.plan.originalCommand,
-    candidates,
-    mode: params.mode,
-    segmentSatisfiedBy,
-  });
-  if ("ok" in replacements) {
-    return replacements;
+  const replacements: SourceReplacement[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const replacement = replacementForCandidate({
+      command: params.plan.originalCommand,
+      candidate,
+      mode: params.mode,
+      satisfiedBy: segmentSatisfiedBy[index],
+    });
+    if (!replacement) {
+      continue;
+    }
+    if ("ok" in replacement) {
+      return replacement;
+    }
+    replacements.push(replacement);
   }
   return applyReplacements({
     command: params.plan.originalCommand,
     replacements,
   });
+}
+
+/** Pins reviewed dispatches while retaining argument expansion and wrapper semantics. */
+export function buildReviewedShellCommandFromPlan(params: {
+  plan: ExecAuthorizationPlan;
+  binding: SystemRunMutableFileBinding;
+  segmentSatisfiedBy?: readonly ExecSegmentSatisfiedBy[];
+}): AuthorizedShellRenderResult {
+  if (!params.plan.ok) {
+    return { ok: false, reason: params.plan.reason };
+  }
+  if (params.plan.dialect !== "posix-shell") {
+    return { ok: false, reason: "unsupported command dialect" };
+  }
+  const candidates = params.plan.groups.flatMap((group) => group.candidates);
+  if (params.segmentSatisfiedBy && params.segmentSatisfiedBy.length !== candidates.length) {
+    return { ok: false, reason: "segment metadata mismatch" };
+  }
+  const replacements: SourceReplacement[] = [];
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    if (params.segmentSatisfiedBy?.[candidateIndex] === "safeBuiltins") {
+      continue;
+    }
+    const { sourceSegment: segment, sourceStep: step } = candidate;
+    const sourceArgv = segment.sourceArgv ?? segment.argv;
+    const { dispatchChain } = resolveExecWrapperTrustPlan(sourceArgv);
+    if (
+      candidate.transport.kind !== "direct" ||
+      segment.resolution?.policyBlocked ||
+      !dispatchChain
+    ) {
+      return { ok: false, reason: "dispatch chain cannot be rendered" };
+    }
+    if (
+      step.argvSpans?.length !== sourceArgv.length ||
+      step.argv.length !== sourceArgv.length ||
+      !step.argv.every((token, index) => token === sourceArgv[index])
+    ) {
+      return { ok: false, reason: "argument source spans unavailable" };
+    }
+    const stepSpanResult = validateSpan({
+      command: params.plan.originalCommand,
+      span: step.span,
+      expectedText: step.text,
+    });
+    if (!stepSpanResult.ok) {
+      return stepSpanResult;
+    }
+    for (const [index, argv] of dispatchChain.entries()) {
+      const argvIndex = sourceArgv.length - argv.length;
+      const span = step.argvSpans[argvIndex];
+      if (
+        !span ||
+        !argv.every((token, offset) => token === sourceArgv[argvIndex + offset]) ||
+        span.startIndex < step.span.startIndex ||
+        span.endIndex > step.span.endIndex
+      ) {
+        return { ok: false, reason: "dispatch source span mismatch" };
+      }
+      const operandArgv = index === dispatchChain.length - 1 ? segment.argv : argv.slice(0, 1);
+      const operand = params.binding.operands.find(
+        (entry) =>
+          entry.executable === true &&
+          entry.snapshot.argvIndex === 0 &&
+          entry.argv.length === operandArgv.length &&
+          entry.argv.every((token, offset) => token === operandArgv[offset]),
+      );
+      if (!operand?.executable || !operand.invocationPath.startsWith("/")) {
+        return { ok: false, reason: "bound executable unavailable" };
+      }
+      const spanResult = validateSpan({
+        command: params.plan.originalCommand,
+        span,
+        expectedText: sourceStepSlice({ candidate, span }),
+      });
+      if (!spanResult.ok) {
+        return spanResult;
+      }
+      replacements.push({
+        startIndex: span.startIndex,
+        endIndex: span.endIndex,
+        // Quote even ordinary paths: aliases can themselves be named absolute paths.
+        text: shellEscapeSingleArg(operand.invocationPath),
+      });
+    }
+  }
+  if (replacements.length === 0) {
+    return { ok: false, reason: "no dispatches to render" };
+  }
+  return applyReplacements({ command: params.plan.originalCommand, replacements });
 }

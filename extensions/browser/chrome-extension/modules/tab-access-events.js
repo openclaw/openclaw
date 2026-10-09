@@ -99,7 +99,7 @@ export function registerTabAccessEvents({
     const generation = attachments.get(tabId);
     const pendingAttach = generation?.pending;
     if (policy.observeTabUpdate(tabId, changeInfo, tab)) {
-      const renewed = policy.renewTabAccess(tabId, generation?.epoch, tab);
+      const renewed = policy.renewTabAccess(tabId, generation?.epoch, tab, changeInfo);
       if (renewed && generation) {
         generation.epoch = renewed;
       }

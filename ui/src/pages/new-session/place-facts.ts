@@ -1,7 +1,11 @@
 import { t } from "../../i18n/index.ts";
-import { formatDurationCompact, formatRelativeTimestamp } from "../../lib/format.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import type { DraftEnvironment } from "./discovery.ts";
+
+registerNewSessionSetupEnglish();
 
 export const MAX_PLACE_MENU_FACTS = 4;
 const CAPABILITY_FACT_KEYS = {
@@ -13,6 +17,18 @@ const CAPABILITY_FACT_KEYS = {
   microphone: "newSession.capabilityVoice",
   voice: "newSession.capabilityVoice",
 } as const;
+
+export function environmentIssueFact(
+  environment: DraftEnvironment | undefined,
+): string | undefined {
+  const update = environment?.issues?.find((issue) => issue.code === "update-required");
+  return update
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: update.updateCommand,
+        restartCommand: update.headlessReconnectCommand,
+      })
+    : environment?.issues?.find((issue) => issue.code === "worker-host-unavailable")?.message;
+}
 
 function environmentLifecycleFact(params: {
   environment: DraftEnvironment | undefined;
@@ -42,29 +58,18 @@ export function environmentMenuFacts(
   environment: DraftEnvironment | undefined,
   options: { connected?: boolean; nowMs?: number } = {},
 ): string[] {
-  const updateIssue = environment?.issues?.find((issue) => issue.code === "update-required");
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,
     nowMs: options.nowMs ?? Date.now(),
   });
-  const priorityFact = updateIssue
-    ? t("newSession.nodeUpdateRequired", {
-        updateCommand: updateIssue.updateCommand,
-        restartCommand: updateIssue.headlessReconnectCommand,
-      })
-    : lifecycle;
+  const priorityFact = environmentIssueFact(environment) ?? lifecycle;
   const facts = priorityFact ? [priorityFact] : [];
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));
   }
-  for (const capability of environment?.capabilities ?? []) {
-    const family = capability.split(".", 1)[0]?.toLowerCase();
-    const key = family
-      ? CAPABILITY_FACT_KEYS[family as keyof typeof CAPABILITY_FACT_KEYS]
-      : undefined;
-    const fact = key ? t(key) : undefined;
-    if (fact && !facts.includes(fact)) {
+  for (const fact of environmentCapabilityLabels(environment?.capabilities)) {
+    if (!facts.includes(fact)) {
       facts.push(fact);
     }
     if (facts.length >= MAX_PLACE_MENU_FACTS) {
@@ -72,4 +77,16 @@ export function environmentMenuFacts(
     }
   }
   return facts;
+}
+
+export function environmentCapabilityLabels(capabilities: readonly string[] = []): string[] {
+  return [
+    ...new Set(
+      capabilities.flatMap((capability) => {
+        const family = capability.split(".", 1)[0]?.toLowerCase();
+        const key = Object.entries(CAPABILITY_FACT_KEYS).find(([name]) => name === family)?.[1];
+        return key ? [t(key)] : [];
+      }),
+    ),
+  ];
 }

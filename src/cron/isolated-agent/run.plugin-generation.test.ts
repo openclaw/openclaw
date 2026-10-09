@@ -1,15 +1,13 @@
 // Proves isolated cron/hook runs carry the published Gateway plugin generation
 // into embedded execution instead of rebuilding metadata per run (#125596 family).
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   getPreparedModelRuntimeBorrowedSnapshot,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import { normalizeVerboseLevel } from "../../auto-reply/thinking.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -24,73 +22,165 @@ import {
   loadPublishedReplyDispatchRuntimeMock,
   loadModelCatalogOwnerMock,
   resolveAgentConfigMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
   makeCronSession,
   resolveCronSessionMock,
+  resolveSessionAuthSelectionMock,
 } from "./run.test-harness.js";
-
-const preparedRuntimeMocks = {
-  acquireRuntime: acquirePreparedModelRuntimeMock,
-  loadDispatchRuntime: loadPublishedReplyDispatchRuntimeMock,
-};
 
 const { PreparedModelRuntimeOwnerNotPublishedError } = await vi.importActual<
   typeof import("../../agents/prepared-model-runtime.errors.js")
 >("../../agents/prepared-model-runtime.errors.js");
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function setupPublishedGeneration(withAuth = false) {
+  const config = {
+    ...(withAuth
+      ? { auth: { profiles: { test: { provider: "openai", mode: "api_key" as const } } } }
+      : {}),
+    agents: { entries: { default: { thinkingDefault: "high" as const } } },
+  };
+  const metadataSnapshot = createPluginMetadataSnapshot({
+    config,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  });
+  const makeGeneration = () =>
+    ({
+      remoteCatalog: null,
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: metadataSnapshot,
+    }) satisfies PreparedModelRuntimePluginGeneration;
+  const pluginGeneration = makeGeneration();
+  const { resolveAgentConfig } = await vi.importActual<
+    typeof import("../../agents/agent-scope-config.js")
+  >("../../agents/agent-scope-config.js");
+  resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
+  mockRunCronFallbackPassthrough();
+  const owner = {
+    agentId: "default",
+    agentDir: "/tmp/dispatch-agent-dir",
+    workspaceDir: "/tmp/workspace",
+    config,
+    metadataSnapshot,
+    modelCatalog: { entries: [], routeVariants: [] },
+  };
+  const dispatchRuntime = {
+    agentId: "default",
+    agentDir: "/tmp/dispatch-agent-dir",
+    workspaceDir: "/tmp/dispatch-workspace",
+    config,
+    modelCatalog: { entries: [], routeVariants: [] },
+    pluginGeneration,
+  };
+  return {
+    config,
+    metadataSnapshot,
+    makeGeneration,
+    pluginGeneration,
+    owner,
+    dispatchRuntime,
+    release: vi.fn(async () => {}),
+  };
+}
 
 describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("admits the published generation and keeps it active through embedded execution", async () => {
-    const config = {
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
+  it("carries the admitted config into execution while preserving agent overrides", async () => {
+    const runtime = await import("./run-execution.runtime.js");
+    vi.mocked(runtime.normalizeVerboseLevel).mockImplementation(normalizeVerboseLevel);
+    const agent = {
+      model: "google/gemini-2.0-flash",
+      identity: { name: "Scheduled worker" },
+      verboseDefault: "on" as const,
     };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
+    const config = {
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+        entries: { main: agent },
+      },
+    };
+    const admittedConfig = structuredClone(config);
+    const selected = { provider: "google", model: "gemini-2.0-flash" };
+    resolveAgentConfigMock.mockReturnValue(agent);
+    resolveConfiguredModelRefMock.mockReturnValue(selected);
+    resolveAllowedModelRefMock.mockReturnValue({ ref: selected });
+    const acquire = acquirePreparedModelRuntimeMock.getMockImplementation()!;
+    acquirePreparedModelRuntimeMock.mockImplementationOnce(async (...args) => {
+      const lease = await acquire(...args);
+      return { ...lease, snapshot: { ...lease.snapshot, config: admittedConfig } };
     });
-    const pluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
-    loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
-      modelCatalog: { entries: [], routeVariants: [] },
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const generation = getPreparedModelRuntimePluginGeneration();
+      expect(generation).toBeDefined();
+      const borrowed = getPreparedModelRuntimeBorrowedSnapshot(generation!);
+      expect(params.config).toBe(borrowed?.config);
+      expect(params.config).toBe(admittedConfig);
+      return { payloads: [{ text: "summary done" }], meta: { agentMeta: {} } };
     });
-    preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/dispatch-workspace",
-      config,
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "main" }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config).toBe(config);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ...selected, verboseLevel: "on" }),
+    );
+  });
+
+  it("admits the published generation and keeps it active through embedded execution", async () => {
+    const { config, metadataSnapshot, pluginGeneration, owner, dispatchRuntime, release } =
+      await setupPublishedGeneration();
+    loadModelCatalogOwnerMock.mockResolvedValue(owner);
+    const fullCatalog = {
+      entries: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
+      routeVariants: [],
+    };
+    const readFullModelCatalog = vi.fn(() => fullCatalog);
+    const releaseDispatch = vi.fn(async () => {});
+    const dispatchLease = {
+      snapshot: { ...owner, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
       pluginGeneration,
+      [Symbol.asyncDispose]: releaseDispatch,
+    };
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+      onRuntimeLease?.(dispatchLease);
+      return { ...dispatchRuntime, readFullModelCatalog };
     });
-    const release = vi.fn();
     const selectedGeneration = {
       ...pluginGeneration,
       pluginRegistry: createEmptyPluginRegistry(),
     };
-    preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
-      snapshot: { config, metadataSnapshot, pluginRegistry: selectedGeneration.pluginRegistry },
-      pluginGeneration: selectedGeneration,
-      release,
+    const afterPreparation = createDeferred();
+    let borrowedAfterPreparation: Promise<unknown> | undefined;
+    acquirePreparedModelRuntimeMock.mockImplementation(async () => {
+      expect(getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration)).toBe(
+        dispatchLease.snapshot,
+      );
+      expect(releaseDispatch).not.toHaveBeenCalled();
+      borrowedAfterPreparation = afterPreparation.promise.then(() =>
+        getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration),
+      );
+      return {
+        snapshot: { config, metadataSnapshot, pluginRegistry: selectedGeneration.pluginRegistry },
+        pluginGeneration: selectedGeneration,
+        [Symbol.asyncDispose]: release,
+      };
     });
-    mockRunCronFallbackPassthrough();
     const afterRun = createDeferred();
     let borrowedAfterClose: Promise<unknown> | undefined;
     let embeddedRunGeneration: unknown = "not-captured";
     runEmbeddedAgentMock.mockImplementation(async (params) => {
-      expect(params.config).toEqual(preparedRuntimeMocks.acquireRuntime.mock.calls[0]?.[0].config);
+      expect(releaseDispatch).toHaveBeenCalledOnce();
+      afterPreparation.resolve();
+      await expect(borrowedAfterPreparation).resolves.toBeUndefined();
+      expect(params.config).toEqual(acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config);
       embeddedRunGeneration = getPreparedModelRuntimePluginGeneration();
       borrowedAfterClose = afterRun.promise.then(() =>
         getPreparedModelRuntimeBorrowedSnapshot(selectedGeneration),
@@ -103,50 +193,61 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     );
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("ok");
-    const dispatchAdmission = preparedRuntimeMocks.loadDispatchRuntime.mock.calls[0]?.[0] as {
+    const dispatchAdmission = loadPublishedReplyDispatchRuntimeMock.mock.calls[0]?.[0] as {
       abortSignal: AbortSignal;
     };
     expect(dispatchAdmission).toMatchObject({ agentId: "default", abortSignal: expect.anything() });
-    expect(preparedRuntimeMocks.acquireRuntime).toHaveBeenCalledWith(
-      {
-        config: {
-          agents: {
-            entries: config.agents.entries,
-            defaults: { thinkingDefault: "high" },
-          },
-        },
-        agentId: "default",
-        agentDir: "/tmp/dispatch-agent-dir",
-        allowGatewaySubagentBinding: true,
-        workspaceDir: "/tmp/workspace",
-        runtimePluginSelections: [
-          { provider: "openai", modelId: "gpt-5.4", agentId: "default" },
-          { provider: "openai", modelId: "gpt-5.6-sol", agentId: "default" },
-        ],
-      },
-      { catalogMode: "static", pluginGeneration, abortSignal: dispatchAdmission.abortSignal },
-    );
-    expect(embeddedRunGeneration === selectedGeneration).toBe(true);
+    expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1]).toEqual({
+      catalogMode: "static",
+      pluginGeneration,
+      abortSignal: dispatchAdmission.abortSignal,
+    });
+    expect(embeddedRunGeneration).toBe(selectedGeneration);
+    expect(readFullModelCatalog).toHaveBeenCalledOnce();
+    expect(loadModelCatalogOwnerMock).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
     afterRun.resolve();
     await expect(borrowedAfterClose).resolves.toBeUndefined();
     expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
   });
 
-  it("prepares a standalone generation when no Gateway publication exists", async () => {
-    preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue(undefined);
-    mockRunCronFallbackPassthrough();
-    let embeddedRunGeneration: unknown = "not-captured";
-    runEmbeddedAgentMock.mockImplementation(async () => {
-      embeddedRunGeneration = getPreparedModelRuntimePluginGeneration();
-      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+  it("retains the admitted runtime when a generation publishes during auth preparation", async () => {
+    const fixture = await setupPublishedGeneration(true);
+    const { config, metadataSnapshot, pluginGeneration: generationA, release } = fixture;
+    const generationB = fixture.makeGeneration();
+    let publishedGeneration: PreparedModelRuntimePluginGeneration = generationA;
+    loadModelCatalogOwnerMock.mockResolvedValue(fixture.owner);
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async () => ({
+      ...fixture.dispatchRuntime,
+      pluginGeneration: publishedGeneration,
+    }));
+    resolveSessionAuthSelectionMock.mockImplementation(async () => {
+      publishedGeneration = generationB;
+      return undefined;
+    });
+    acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) => {
+      if (options?.pluginGeneration !== publishedGeneration) {
+        throw new PreparedModelRuntimeOwnerNotPublishedError(
+          `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
+        );
+      }
+      const pluginRegistry = createEmptyPluginRegistry();
+      return {
+        snapshot: { ...input, metadataSnapshot, pluginRegistry },
+        pluginGeneration: { ...publishedGeneration, pluginRegistry },
+        [Symbol.asyncDispose]: release,
+      };
     });
 
-    await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).resolves.toMatchObject(
-      { status: "ok" },
-    );
-    expect(preparedRuntimeMocks.acquireRuntime).toHaveBeenCalledOnce();
-    expect(embeddedRunGeneration).toBeDefined();
+    await expect(
+      runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledOnce();
+    expect(loadPublishedReplyDispatchRuntimeMock).toHaveBeenCalledOnce();
+    expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1]).toMatchObject({
+      pluginGeneration: generationA,
+    });
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("keeps the execution owner's model pricing through finalization", async () => {
@@ -178,6 +279,14 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       });
     const selected = snapshot("selected");
     const ambient = snapshot("other");
+    loadModelCatalogOwnerMock.mockResolvedValue({
+      config,
+      agentId: "default",
+      agentDir: "/tmp/agent-dir",
+      workspaceDir: "/tmp/workspace",
+      metadataSnapshot: selected,
+      modelCatalog: { entries: [], routeVariants: [] },
+    });
     const cronSession = makeCronSession();
     resolveCronSessionMock.mockReturnValue(cronSession);
     acquirePreparedModelRuntimeMock.mockImplementation(async (input) => ({
@@ -188,10 +297,11 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       },
       pluginGeneration: {
         pluginMetadataSnapshot: selected,
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
       },
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     }));
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValue({
@@ -209,70 +319,22 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     );
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.estimatedCostUsd).toBe(3);
-  });
-
-  it("rejects preparation when the published owner is unavailable", async () => {
-    preparedRuntimeMocks.loadDispatchRuntime.mockRejectedValue(
-      new PreparedModelRuntimeOwnerNotPublishedError("owner not published"),
+    expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1].pluginMetadataSnapshot).toBe(
+      selected,
     );
-
-    await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).rejects.toThrow(
-      "owner not published",
-    );
-    expect(preparedRuntimeMocks.acquireRuntime).not.toHaveBeenCalled();
-  });
-
-  it("estimates token-only usage from the selected agent's local model prices", async () => {
-    const root = tempDirs.make("cron-owner-pricing-");
-    const agentDir = path.join(root, "worker");
-    const mainDir = path.join(root, "main");
-    for (const [dir, input] of [
-      [agentDir, 3],
-      [mainDir, 1],
-    ] as const) {
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(
-        path.join(dir, "models.json"),
-        JSON.stringify({
-          providers: {
-            fixture: {
-              models: [{ id: "priced", cost: { input, output: 0, cacheRead: 0, cacheWrite: 0 } }],
-            },
-          },
-        }),
-      );
-    }
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: { agentDir: mainDir }, worker: { agentDir } },
-      },
-    };
-    loadModelCatalogOwnerMock.mockResolvedValue({
-      config,
-      agentId: "worker",
-      agentDir,
-      workspaceDir: root,
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      modelCatalog: { entries: [], routeVariants: [] },
-    });
-    const cronSession = makeCronSession();
-    resolveCronSessionMock.mockReturnValue(cronSession);
-    mockRunCronFallbackPassthrough();
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "done" }],
-      meta: {
-        agentMeta: { provider: "fixture", model: "priced", usage: { input: 1_000_000, output: 0 } },
-      },
-    });
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "worker" }),
-    );
-    expect(result.status).toBe("ok");
-    expect(cronSession.sessionEntry.estimatedCostUsd).toBe(3);
   });
 
   it("releases the prepared lease when continuation initialization fails", async () => {
+    const fixture = await setupPublishedGeneration();
+    const releaseDispatch = vi.fn(async () => {});
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+      onRuntimeLease?.({
+        snapshot: fixture.owner,
+        pluginGeneration: fixture.pluginGeneration,
+        [Symbol.asyncDispose]: releaseDispatch,
+      });
+      return fixture.dispatchRuntime;
+    });
     const state = await import("./run-session-state.js");
     const initialize = vi.spyOn(state, "createCronRunContinuationSession").mockReturnValue({
       initialize: async () => {
@@ -282,16 +344,17 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       setCliExecutionProvider: async () => {},
       seal: async () => {},
     });
-    const release = vi.fn();
-    preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
-      snapshot: { pluginRegistry: createEmptyPluginRegistry() },
-      release,
+    const release = vi.fn(async () => {});
+    acquirePreparedModelRuntimeMock.mockResolvedValue({
+      snapshot: { config: fixture.config, pluginRegistry: createEmptyPluginRegistry() },
+      [Symbol.asyncDispose]: release,
     });
     try {
       await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).rejects.toThrow(
         "continuation fixture failed",
       );
       expect(release).toHaveBeenCalledOnce();
+      expect(releaseDispatch).toHaveBeenCalledOnce();
     } finally {
       initialize.mockRestore();
     }

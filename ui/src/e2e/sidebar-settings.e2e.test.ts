@@ -4,6 +4,7 @@ import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
@@ -16,7 +17,7 @@ const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocke
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
-    {
+    compactCronJobFixture({
       id: "failed-settings-transition",
       name: "Failed settings transition",
       enabled: true,
@@ -27,7 +28,7 @@ const FAILED_CRON_RESPONSE = {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "test" },
       state: { lastRunStatus: "error", lastError: "Provider request failed" },
-    },
+    }),
   ],
   snapshotRevision: "settings-transition-attention",
   total: 1,
@@ -59,6 +60,7 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.setFixedTime(Date.now());
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
       methodResponses: {
         "cron.list": FAILED_CRON_RESPONSE,
         "models.authStatus": MISSING_AUTH_RESPONSE,
@@ -142,7 +144,7 @@ suite.define(() => {
     }
   });
 
-  it("refreshes stale auth attention after returning while the first auth read is pending", async () => {
+  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -167,6 +169,10 @@ suite.define(() => {
         }
       });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
+      for (let index = 0; index < 20; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      }
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
       await gateway.deferNext("models.authStatus");
       await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
       await gateway.waitForRequest("models.authStatus", { after: 1 });
@@ -190,6 +196,8 @@ suite.define(() => {
       }
       await gateway.setMethodResponse("models.authStatus", MISSING_AUTH_RESPONSE);
       await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await authWarning.waitFor({ state: "visible" });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
     } finally {
@@ -268,21 +276,24 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await page.keyboard.press("Control+Shift+,");
-      const { sidebar } = await waitForControlUiSettingsTakeover(page);
-      const picker = page.locator("#settings-font-chat");
-      await picker.click();
-      const selected = picker.locator("wa-option:state(selected)");
+      await waitForControlUiSettingsTakeover(page);
+      const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
+      await picker.locator(".picker-select__trigger").click();
+      const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
-      const selectedValue = await selected.getAttribute("value");
+      const selectedValue = await selected.getAttribute("data-value");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      expect(await selected.getAttribute("value")).toBe(selectedValue);
+      await expect
+        .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
+        .toBe("false");
+      expect(await selected.getAttribute("data-value")).toBe(selectedValue);
       expect(
-        await picker.locator('input[role="combobox"]').evaluate((input) => input.matches(":focus")),
+        await picker
+          .locator(".picker-select__trigger")
+          .evaluate((input) => input.matches(":focus")),
       ).toBe(true);
-      await sidebar.locator(".settings-sidebar__item").first().focus();
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     } finally {
@@ -378,8 +389,8 @@ suite.define(() => {
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
-      await page.getByLabel("Gateway Token", { exact: true }).fill("replacement-owner-token");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
+      await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -455,7 +466,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps Gateway access fields editable by their visible labels", async () => {
+  it("keeps Gateway connection fields editable by their visible labels", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -470,50 +481,48 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
 
-      const gatewayUrl = page.getByLabel("WebSocket URL", { exact: true });
-      const gatewayToken = page.getByLabel("Gateway Token", { exact: true });
-      const password = page.getByLabel("Password (not stored)", { exact: true });
-      const sessionKey = page.getByLabel("Default Session Key", { exact: true });
+      const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
+      const credential = page.getByLabel("Gateway secret", { exact: true });
+      const sessionKey = page.getByLabel("Default session", { exact: true });
 
-      for (const input of [gatewayUrl, gatewayToken, password, sessionKey]) {
+      for (const input of [gatewayUrl, credential, sessionKey]) {
         await input.waitFor({ state: "visible" });
         expect(await input.isEditable()).toBe(true);
       }
 
       await gatewayUrl.fill("ws://gateway.example.test:18789");
-      await gatewayToken.fill("browser-proof-token");
-      await password.fill("browser-proof-password");
+      await credential.fill("browser-proof-secret");
       await sessionKey.fill("browser-proof-session");
 
       expect(await gatewayUrl.inputValue()).toBe("ws://gateway.example.test:18789");
-      expect(await gatewayToken.inputValue()).toBe("browser-proof-token");
-      expect(await password.inputValue()).toBe("browser-proof-password");
+      expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await sessionKey.inputValue()).toBe("browser-proof-session");
 
-      await page.getByRole("button", { name: "Toggle password visibility", exact: true }).click();
-      expect(await password.getAttribute("type")).toBe("text");
-      expect(await password.inputValue()).toBe("browser-proof-password");
-      expect(await password.isEditable()).toBe(true);
+      await page.getByRole("button", { name: "Toggle secret visibility", exact: true }).click();
+      expect(await credential.getAttribute("type")).toBe("text");
+      expect(await credential.inputValue()).toBe("browser-proof-secret");
+      expect(await credential.isEditable()).toBe(true);
 
       await gateway.waitForRequest("system.info");
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
-      await page.getByRole("button", { name: "Toggle token visibility", exact: true }).click();
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
-      expect(await gatewayToken.getAttribute("type")).toBe("password");
-      expect(await password.getAttribute("type")).toBe("password");
+      await expect.poll(() => credential.getAttribute("type")).toBe("password");
+      expect(await notice.count()).toBe(0);
+      for (const input of [gatewayUrl, credential, sessionKey]) {
+        expect(await input.isEditable()).toBe(true);
+      }
+      expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
-      await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
+      expect(await credential.getAttribute("type")).toBe("password");
 
       for (const [input, value] of [
         [gatewayUrl, "ws://gateway.example.test:18789"],
-        [gatewayToken, "browser-proof-token"],
-        [password, "browser-proof-password"],
+        [credential, "browser-proof-secret"],
         [sessionKey, "browser-proof-session"],
       ] as const) {
         expect(await input.inputValue()).toBe(value);

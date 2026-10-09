@@ -37,7 +37,7 @@ Details: [Plugins](/tools/plugin)
 4. Finish setup in OpenClaw. Synology Chat appears in the same channel setup list in both flows:
    - Guided: `openclaw onboard` or `openclaw channels add`
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url> --webhook-url <public-outgoing-webhook-url>`
-5. Restart the Gateway and send a DM to the Synology Chat bot.
+5. Check `openclaw channels status --probe`, then send a DM to the Synology Chat bot. Start the Gateway if it is offline; config changes follow [hot reload](/gateway/configuration/hot-reload).
 
 Webhook auth details:
 
@@ -90,7 +90,7 @@ For the default account, you can use env vars:
 
 Config values override env vars.
 
-`SYNOLOGY_CHAT_INCOMING_URL` and `SYNOLOGY_NAS_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security#workspace-env-files).
+`SYNOLOGY_CHAT_INCOMING_URL` and `SYNOLOGY_NAS_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security/secrets-and-storage#workspace-env-files).
 
 ## DM policy and access control
 
@@ -200,5 +200,5 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 
 - [Channels Overview](/channels) — all supported channels
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

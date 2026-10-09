@@ -2,8 +2,13 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isSafeToRetrySendError, isTelegramBadRequestError } from "./network-errors.js";
+import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 
 // A missing chat/thread invalidates the route for every remaining chunk.
 // Draining would only repeat the same bad target instead of preserving content.
@@ -15,22 +20,62 @@ export function mergeTelegramPartialDeliveryError(
   error: unknown,
   priorDeliveryResult: PartialDeliveryResult,
 ): ReturnType<typeof createChannelPartialDeliveryError> {
-  if (!isChannelPartialDeliveryError(error)) {
-    return createChannelPartialDeliveryError(error, priorDeliveryResult);
-  }
-  const currentDeliveryResult = error.deliveryResult;
+  const currentDeliveryResult = isChannelPartialDeliveryError(error)
+    ? error.deliveryResult
+    : undefined;
   const messageIds = [
-    ...new Set([
-      ...(priorDeliveryResult.messageIds ?? []),
-      ...(currentDeliveryResult.messageIds ?? []),
-    ]),
+    ...new Set(
+      [priorDeliveryResult, currentDeliveryResult].flatMap((result) =>
+        (result?.messageIds ?? []).concat(
+          result?.receipt ? listMessageReceiptPlatformIds(result.receipt) : [],
+        ),
+      ),
+    ),
   ];
+  let receipt = currentDeliveryResult?.receipt ?? priorDeliveryResult.receipt;
+  if (priorDeliveryResult.receipt && currentDeliveryResult?.receipt) {
+    receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        { receipt: priorDeliveryResult.receipt },
+        { receipt: currentDeliveryResult.receipt },
+      ],
+    });
+    // A per-message observer receipt can overlap a whole accepted album.
+    // Keep every physical part once, with the observer's actual placement metadata.
+    const parts = new Map<string, (typeof receipt.parts)[number]>();
+    for (const part of receipt.parts) {
+      parts.set(part.platformMessageId, { ...parts.get(part.platformMessageId), ...part });
+    }
+    receipt.parts = [...parts.values()];
+    for (const [index, part] of receipt.parts.entries()) {
+      part.index = index;
+    }
+  }
   return createChannelPartialDeliveryError(error, {
     ...priorDeliveryResult,
     ...currentDeliveryResult,
-    ...(messageIds.length > 0 ? { messageIds } : {}),
+    ...((currentDeliveryResult ? messageIds.length > 0 : receipt) ? { messageIds } : {}),
+    ...(receipt ? { receipt } : {}),
     visibleReplySent: true,
   });
+}
+
+export async function failPromptContextSequence(
+  sequence: TelegramPromptContextProjectionSequence,
+  error: unknown,
+): Promise<never> {
+  try {
+    await sequence.fail();
+  } catch (projectionError) {
+    const failure = new AggregateError(
+      [error, projectionError],
+      "Telegram delivery and prompt context cleanup failed",
+    );
+    throw isChannelPartialDeliveryError(error)
+      ? mergeTelegramPartialDeliveryError(failure, error.deliveryResult)
+      : failure;
+  }
+  throw error;
 }
 
 export function isTelegramSkippableChunkSendError(error: unknown): boolean {

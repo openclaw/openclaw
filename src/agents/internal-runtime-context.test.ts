@@ -12,7 +12,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-  OPENCLAW_RUNTIME_EVENT_HEADER,
   relocateCurrentRuntimeContextCarrierToTail,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
@@ -21,10 +20,20 @@ import {
 const LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 
-type TestMessage = { role: string; content: string; customType?: string };
+type TestMessage = {
+  role: string;
+  content: string;
+  customType?: string;
+  details?: { source: string };
+};
 
 function carrier(content = "runtime ctx"): TestMessage {
-  return { role: "custom", customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, content };
+  return {
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    content,
+    details: { source: "openclaw-runtime-context" },
+  };
 }
 function user(content: string): TestMessage {
   return { role: "user", content };
@@ -45,6 +54,36 @@ function createDeterministicRng(seed: number): () => number {
 }
 
 describe("internal runtime context codec", () => {
+  it("strips the current delimiter-free carrier without matching inline mentions", () => {
+    expect(
+      stripInternalRuntimeContext(
+        "Visible intro\n\nOpenClaw runtime context:\nprivate current-turn facts\nEnd OpenClaw runtime context.\n\nVisible outro",
+      ),
+    ).toBe("Visible intro\n\nVisible outro");
+    expect(
+      stripInternalRuntimeContext("The phrase OpenClaw runtime context: is ordinary text."),
+    ).toBe("The phrase OpenClaw runtime context: is ordinary text.");
+  });
+
+  it("strips every current carrier block from one response", () => {
+    const block = "OpenClaw runtime context:\nprivate facts\nEnd OpenClaw runtime context.";
+    expect(
+      stripInternalRuntimeContext(`Visible before\n\n${block}\n\n${block}\n\nVisible after`),
+    ).toBe("Visible before\n\nVisible after");
+  });
+
+  it("holds a partial current carrier header during streaming", () => {
+    expect(stripInternalRuntimeContext("Visible\nOpenClaw runtime cont", { streaming: true })).toBe(
+      "Visible",
+    );
+  });
+
+  it("strips an unfinished current carrier from previews and final output", () => {
+    const text = "OpenClaw runtime context:\nThis phrase is part of the answer.";
+    expect(stripInternalRuntimeContext(text)).toBe("");
+    expect(stripInternalRuntimeContext(text, { streaming: true })).toBe("");
+  });
+
   it("strips a marked internal runtime block and preserves surrounding text", () => {
     const input = [
       "Visible intro",
@@ -92,6 +131,21 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe("Visible intro");
   });
 
+  it("withholds trailing marker prefixes only in cumulative previews", () => {
+    for (const marker of [INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END]) {
+      for (let length = 1; length < marker.length; length += 1) {
+        const prefix = marker.slice(0, length);
+        expect(stripInternalRuntimeContext(`Visible\n  ${prefix}`, { streaming: true })).toBe(
+          "Visible",
+        );
+        expect(stripInternalRuntimeContext(prefix)).toBe(prefix);
+      }
+    }
+    expect(stripInternalRuntimeContext("Visible\n<ordinary", { streaming: true })).toBe(
+      "Visible\n<ordinary",
+    );
+  });
+
   it("detects canonical runtime context and ignores inline marker mentions", () => {
     expect(
       hasInternalRuntimeContext(
@@ -111,7 +165,7 @@ describe("internal runtime context codec", () => {
       "previous current turn",
       "OpenClaw runtime context for the immediately preceding user message.",
     ],
-    ["runtime event", OPENCLAW_RUNTIME_EVENT_HEADER],
+    ["runtime event", "OpenClaw runtime event."],
   ])("detects and strips the %s prompt preface", (_name, header) => {
     const preface = [header, OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n");
     const input = [
@@ -143,6 +197,17 @@ describe("internal runtime context codec", () => {
       ...(delimiters
         ? [INTERNAL_RUNTIME_CONTEXT_BEGIN, "private metadata", INTERNAL_RUNTIME_CONTEXT_END, ""]
         : []),
+      "Visible reply",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
+  it("strips a whitespace-wrapped runtime event preface", () => {
+    const input = [
+      "OpenClaw\n runtime event.",
+      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+      "",
       "Visible reply",
     ].join("\n");
 

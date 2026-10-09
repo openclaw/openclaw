@@ -1,6 +1,7 @@
 // Control UI tests cover the agents overview context display.
 import { render } from "lit";
-import { expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { MultiSelect } from "../../components/multi-select.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { renderAgents } from "./view.ts";
@@ -73,7 +74,7 @@ it.each(["overview", "channels", "cron"] as const)(
         },
         config: {
           ...props.config,
-          form: {
+          configForm: {
             agents: {
               defaults: {
                 workspace: "/tmp/agents",
@@ -112,12 +113,14 @@ it.each([
     renderAgents({
       ...props,
       access: { ...props.access, canUpdateIdentity },
-      identitySaving,
+      overview: { ...props.overview, identitySaving },
     }),
     container,
   );
 
-  const save = container.querySelector<HTMLButtonElement>(".agent-identity-editor__actions button");
+  const save = container.querySelector<HTMLButtonElement>(
+    ".agent-identity-editor__actions button.primary",
+  );
   expect(save?.textContent?.trim()).toBe(text);
   expect(save?.disabled).toBe(true);
 });
@@ -128,16 +131,17 @@ it("shows inherited skills in the Agent Context overview", () => {
     renderAgents(
       createProps({
         config: {
-          form: {
+          configForm: {
             agents: {
               defaults: { skills: ["github", "weather"] },
               entries: { beta: {} },
             },
           },
-          loading: false,
-          saving: false,
-          dirty: false,
-          error: null,
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: false,
+          lastError: null,
         },
       }),
     ),
@@ -148,4 +152,124 @@ it("shows inherited skills in the Agent Context overview", () => {
     (term) => term.textContent?.trim() === "Skills Filter",
   )?.nextElementSibling;
   expect(skillsFilterRow?.textContent?.trim()).toBe("2 selected");
+});
+
+describe("fallback field", () => {
+  const primary = "openai/gpt-5.4";
+  const existingFallback = "anthropic/claude-sonnet-4-6";
+  const catalog = [
+    { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+    { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
+  ] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
+
+  function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
+    const container = document.createElement("div");
+    const onModelFallbacksChange = vi.fn();
+    render(
+      renderAgents(
+        createProps({
+          config: {
+            configForm: {
+              agents: {
+                defaults: { model: { primary, fallbacks: [existingFallback] } },
+                entries: { alpha: {}, beta: {} },
+              },
+            },
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
+          },
+          ...overrides,
+          overview: {
+            ...createProps().overview,
+            modelCatalog: catalog,
+            ...overrides.overview,
+            onModelFallbacksChange,
+          },
+        }),
+      ),
+      container,
+    );
+    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
+    if (!field) {
+      throw new Error("fallback field missing");
+    }
+    return { field, onModelFallbacksChange };
+  }
+
+  it("hands the field the effective chain, the catalog, and the primary to exclude", () => {
+    const { field } = renderFallbacks();
+
+    expect(field.value).toEqual([existingFallback]);
+    expect(field.isExcluded(primary)).toBe(true);
+    expect(field.options.map((option) => option.value)).toEqual(
+      expect.arrayContaining([primary, existingFallback, "google/gemini-3-pro"]),
+    );
+    expect(field.allowCustom).toBe(true);
+    expect(field.disabled).toBe(false);
+  });
+
+  it("stages the field's next chain for the selected agent", () => {
+    const { field, onModelFallbacksChange } = renderFallbacks();
+
+    field.onChange([existingFallback, "google/gemini-3-pro"]);
+
+    expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
+      existingFallback,
+      "google/gemini-3-pro",
+    ]);
+  });
+
+  it("excludes a profile-qualified primary alias while retaining case-distinct model choices", () => {
+    const primaryAlias = "fast@work";
+    const target = "custom/model-a";
+    const caseDistinct = "custom/Model-A";
+    const { field } = renderFallbacks({
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
+      },
+      config: {
+        configForm: {
+          agents: {
+            defaults: {
+              model: { primary: primaryAlias },
+              models: { [target]: { alias: "fast" } },
+            },
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+        configSnapshot: null,
+        configLoading: false,
+        configSaving: false,
+        configFormDirty: false,
+        lastError: null,
+      },
+      overview: {
+        ...createProps().overview,
+        modelCatalog: [
+          { provider: "custom", id: "model-a", name: "Lowercase model" },
+          { provider: "custom", id: "Model-A", name: "Uppercase model" },
+        ],
+      },
+    });
+
+    expect(field.isExcluded("FAST")).toBe(true);
+    expect(field.isExcluded(`${target}@other`)).toBe(false);
+    expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
+      expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
+    ]);
+  });
+
+  it("disables the field without config write access", () => {
+    const access = { ...createProps().access, canUpdateConfig: false };
+    const { field } = renderFallbacks({ access });
+
+    expect(field.disabled).toBe(true);
+  });
 });

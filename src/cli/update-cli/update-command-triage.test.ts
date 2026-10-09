@@ -7,7 +7,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,6 +21,10 @@ const runInteractiveUpdateFailureAction = vi.hoisted(() =>
 );
 
 vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction }));
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: async () => true,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -103,6 +107,32 @@ it.each<{
       },
     },
     allowed: false,
+  },
+  {
+    name: "verified rollback",
+    result: {
+      reason: "restart-unhealthy",
+      recovery: {
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        version: "2026.9.1",
+        service: "healthy",
+      },
+    },
+    allowed: false,
+  },
+  {
+    name: "restored generation still unverified",
+    result: {
+      reason: "restart-unhealthy",
+      recovery: {
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        version: "2026.9.1",
+        service: "failed",
+      },
+    },
+    allowed: true,
   },
 ])("keeps automatic admission within update ownership: $name", (trial) => {
   const context = resolveAutomaticUpdateTriage({ ...failedUpdate, ...trial.result }, undefined, {
@@ -289,7 +319,16 @@ describe("update failure triage boundary", () => {
           result: {
             reason: result.reason,
             recovery: result.recovery,
-            steps: gateway === "preserve" ? [{ stderrTail: "ENOSPC" }] : [],
+            steps:
+              gateway === "preserve"
+                ? [{ stderrTail: "ENOSPC" }]
+                : [
+                    {
+                      name: "update",
+                      exitCode: null,
+                      failureFacts: [{ check: "update", code: "restart-unhealthy" }],
+                    },
+                  ],
           },
         },
       });
@@ -300,29 +339,37 @@ describe("update failure triage boundary", () => {
     },
   );
 
-  it("keeps --yes non-interactive and preserves an unexpected updater exception", async () => {
-    const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
-    const failure = new Error("Package verification failed unexpectedly");
-    target.failureResult = {
-      ...failedUpdate,
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    };
+  it.each([
+    { yes: true, terminal: true },
+    { yes: false, terminal: false },
+  ])(
+    "preserves non-interactive updater failures (yes=$yes, terminal=$terminal)",
+    async ({ yes, terminal }) => {
+      const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
+      const failure = new Error("Package verification failed unexpectedly");
+      target.failureResult = {
+        ...failedUpdate,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      };
 
-    await expect(
-      withUpdateFailureTriage({ yes: true }, target, async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
+      await withTriageTerminal(terminal, async () => {
+        await expect(
+          withUpdateFailureTriage({ yes }, target, async () => {
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+      });
 
-    const receipt = await readReceipt(target);
-    expect(receipt.args).toContain("--non-interactive");
-    expect(receipt.failure).toMatchObject({
-      error: failure.message,
-      result: { recovery: { serviceRestartSafe: false } },
-    });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
-  });
+      const receipt = await readReceipt(target);
+      expect(receipt.args).toContain("--non-interactive");
+      expect(receipt.failure).toMatchObject({
+        error: failure.message,
+        result: { recovery: { serviceRestartSafe: false } },
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["reported", "unexpected"] as const)(
     "exports the final managed %s failure after cleanup without launching triage",
@@ -339,11 +386,15 @@ describe("update failure triage boundary", () => {
       const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
       const failure =
         kind === "reported" ? new UpdateCommandFailure(result, 1, detail) : new Error(detail);
+      const observedResult = failure instanceof UpdateCommandFailure ? failure.result : result;
       const completion = withUpdateFailureTriage({ json: true }, targetWithResult, async () => {
         try {
           throw failure;
         } finally {
-          result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+          observedResult.recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+          };
           await fs.writeFile(path.join(target.root, "released"), "done");
         }
       });
@@ -441,26 +492,7 @@ describe("update failure triage boundary", () => {
     expect(attemptIds[0]).not.toBe(attemptIds[1]);
   });
 
-  it("passes the admitted run identity to interactive reporting", async () => {
-    const target = await createInstalledTriage();
-    const runId = "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3";
-    const opts = { json: false, run: { runId, env: target.env } };
-    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
-
-    await withTriageTerminal(true, async () => {
-      await expect(
-        withUpdateFailureTriage(opts, target, async () => {
-          throw new UpdateCommandFailure(failedUpdate);
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-    });
-
-    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ attemptId: runId }),
-    );
-  });
-
-  it("keeps reporting in the admitted run's state scope", async () => {
+  it("keeps reporting in the admitted run's identity and state scope", async () => {
     const target = await createInstalledTriage();
     const env = { ...target.env, OPENCLAW_STATE_DIR: path.join(target.root, "admitted-state") };
     const opts = { run: { runId: "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3", env } };
@@ -475,7 +507,7 @@ describe("update failure triage boundary", () => {
     });
 
     expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ env }),
+      expect.objectContaining({ attemptId: opts.run.runId, env }),
     );
   });
 
@@ -597,6 +629,7 @@ describe("update failure triage boundary", () => {
             path.join(bin, "claude"),
             `#!${process.execPath}\n` +
               `const fs = require("node:fs");\n` +
+              `if (process.argv.includes("--help")) { process.stdout.write("--safe-mode\\n"); process.exit(0); }\n` +
               `fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
               `  cwd: fs.realpathSync(process.cwd()),\n` +
               `  home: process.env.HOME,\n` +
@@ -607,7 +640,7 @@ describe("update failure triage boundary", () => {
               `  nodeOptions: process.env.NODE_OPTIONS,\n` +
               `  updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,\n` +
               `  released: fs.existsSync(${JSON.stringify(releasedPath)}),\n` +
-              `  prompt: process.argv[2],\n` +
+              `  prompt: process.argv.at(-1),\n` +
               `}) + "\\n");\n` +
               `process.exitCode = ${agentExitCode};\n`,
             { mode: 0o700 },

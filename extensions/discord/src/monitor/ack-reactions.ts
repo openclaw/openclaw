@@ -1,4 +1,3 @@
-// Discord plugin module implements ack reactions behavior.
 import {
   createStatusReactionController,
   logAckFailure,
@@ -18,10 +17,7 @@ export function createDiscordAckReactionContext(params: {
 }): DiscordReactionRuntimeContext {
   return {
     rest: params.rest,
-    ...createDiscordRuntimeAccountContext({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
+    ...createDiscordRuntimeAccountContext(params),
   };
 }
 

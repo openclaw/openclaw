@@ -2,7 +2,6 @@ import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ModelProvidersData } from "./load.ts";
 
 export type ModelProvidersRouteData = {
@@ -15,15 +14,25 @@ export type ModelProvidersRouteData = {
   client: ApplicationContext["gateway"]["snapshot"]["client"];
   /** Concrete agent whose credential store populated the auth snapshot. */
   agentId: string | null;
+  selectionIntentRevision: number;
+  /** An explicit connection entry from a saved setup link. */
+  connect?: boolean;
+  provider?: string;
 };
 
 async function loadModelProvidersRouteData(
-  context: ApplicationContext,
+  context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
+  const search = new URLSearchParams(options.location.search);
+  const connect = search.get("connect") === "1";
+  const provider = search.get("provider")?.trim() ?? "";
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
-  let agentId = context.agentSelection.state.selectedId;
+  const selection = context.settingsAgentSelection;
+  const selectionIntentRevision = selection.intentRevision;
+  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
+  let agentId = selection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
   // Both awaits can outlive the route or its Gateway/agent owner. Metadata-only
@@ -35,31 +44,36 @@ async function loadModelProvidersRouteData(
       current.phase === "connected" &&
       current.client === gatewaySnapshot.client &&
       current.hello === gatewaySnapshot.hello &&
-      context.agentSelection.state.selectedId === agentId
+      selection.intentRevision === selectionIntentRevision &&
+      selection.state.selectedId === agentId
     );
   };
-  if (!client || !isCurrent()) {
-    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
-  }
-  if (!agentId) {
-    const roster = await context.agents.ensureList();
-    // The roster may initialize selection; never adopt an unrelated user switch.
-    agentId = roster ? normalizeAgentId(roster.defaultId) : null;
-  }
-  if (!agentId || !isCurrent()) {
-    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
+  if (client && isCurrent()) {
+    if (!agentId) {
+      await context.agents.ensureList();
+      // The selection owner validates pending cold-link intent against the roster.
+      agentId = selection.state.selectedId;
+    }
+    if (agentId && isCurrent()) {
+      return {
+        ...owner,
+        data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
+        client,
+        agentId,
+      };
+    }
   }
   return {
-    gateway,
-    gatewaySnapshot,
-    data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
-    client,
+    ...owner,
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
     agentId,
   };
 }
 
 export const page = definePage({
   ...routePageSpec("model-providers"),
+  loaderDeps: (_context, location) => location.search,
   loader: loadModelProvidersRouteData,
   component: () =>
     import("./model-providers-page.ts").then(() => ({

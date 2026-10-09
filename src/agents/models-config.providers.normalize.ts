@@ -1,19 +1,13 @@
-/**
- * Normalizes configured provider model rows for runtime/discovery use.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { mergeModelCost } from "../config/model-cost.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin,
+} from "../plugins/provider-runtime.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import {
-  createConfiguredProviderCatalogModelIdNormalizer,
-  type ModelManifestNormalizationContext,
-} from "./model-ref-shared.js";
-import {
-  normalizeProviderSpecificConfig,
-  resolveProviderConfigApiKeyResolver,
-} from "./models-config.providers.policy.js";
+import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secret-helpers.js";
 import {
   normalizeConfiguredProviderApiKey,
@@ -28,116 +22,6 @@ import {
 } from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
-type ProviderModelConfig = NonNullable<
-  NonNullable<ModelsConfig["providers"]>[string]["models"]
->[number];
-
-function getProviderModelId(model: ProviderModelConfig): string | undefined {
-  return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
-}
-
-function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
-  const cost = model.cost;
-  if (
-    !cost ||
-    (["input", "output", "cacheRead", "cacheWrite"] as const).every(
-      (key) => cost[key] !== undefined,
-    )
-  ) {
-    return model;
-  }
-  return {
-    ...model,
-    cost: {
-      ...model.cost,
-      input: cost.input ?? 0,
-      output: cost.output ?? 0,
-      cacheRead: cost.cacheRead ?? 0,
-      cacheWrite: cost.cacheWrite ?? 0,
-    },
-  };
-}
-
-function mergeNormalizedProviderModel(
-  existing: ProviderModelConfig,
-  incoming: ProviderModelConfig,
-): ProviderModelConfig {
-  const cost = mergeModelCost(incoming.cost, existing.cost);
-  return { ...incoming, ...existing, ...(cost ? { cost } : {}) };
-}
-
-function normalizeProviderModelsForConfig(
-  providerKey: string,
-  provider: ProviderConfig,
-  options: ModelManifestNormalizationContext = {},
-  completeCatalogCosts = false,
-): ProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return provider;
-  }
-
-  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
-  let mutated = false;
-  const nextModels: ProviderModelConfig[] = [];
-  const seenById = new Map<string, number>();
-  for (const model of provider.models) {
-    const rawId = getProviderModelId(model);
-    const normalizedId = rawId ? normalizeModelId(providerKey, rawId) : rawId;
-    const normalizedModel =
-      normalizedId && normalizedId !== rawId ? { ...model, id: normalizedId } : model;
-    if (normalizedModel !== model) {
-      mutated = true;
-    }
-    const id = getProviderModelId(normalizedModel);
-    if (id) {
-      const existingIndex = seenById.get(id);
-      if (existingIndex !== undefined) {
-        mutated = true;
-        const existing = nextModels.at(existingIndex);
-        if (existing) {
-          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, normalizedModel);
-        }
-        continue;
-      }
-      seenById.set(id, nextModels.length);
-    }
-    nextModels.push(normalizedModel);
-  }
-
-  if (completeCatalogCosts) {
-    for (const [index, model] of nextModels.entries()) {
-      const normalized = normalizeModelCostForCatalog(model);
-      if (normalized !== model) {
-        nextModels[index] = normalized;
-        mutated = true;
-      }
-    }
-  }
-
-  return mutated ? { ...provider, models: nextModels } : provider;
-}
-
-export function normalizeProviderCatalogModelsForConfig(
-  providers: ModelsConfig["providers"],
-  options: ModelManifestNormalizationContext = {},
-): ModelsConfig["providers"] {
-  if (!providers) {
-    return providers;
-  }
-
-  let mutated = false;
-  const next: Record<string, ProviderConfig> = {};
-  for (const [providerKey, provider] of Object.entries(providers)) {
-    // Complete the publication schema after duplicate rows merge, or synthetic
-    // zeroes can mask explicit cache prices supplied by a later row.
-    const normalized = normalizeProviderModelsForConfig(providerKey, provider, options, true);
-    mutated ||= normalized !== provider;
-    next[providerKey] = normalized;
-  }
-
-  return mutated ? next : providers;
-}
-
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
@@ -145,7 +29,6 @@ export function normalizeProviders(params: {
   secretDefaults?: SecretDefaults;
   sourceConfigForSecrets?: OpenClawConfig;
   secretRefManagedProviders?: Set<string>;
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ModelsConfig["providers"] {
   const { providers } = params;
@@ -201,7 +84,7 @@ export function normalizeProviders(params: {
       sourceProvider?.providerConfig.apiKey !== undefined
         ? {
             config: params.sourceConfigForSecrets,
-            path: `models.providers.${sourceProvider.providerKey}.apiKey`,
+            path: `${appendConfigPathSegment("models.providers", sourceProvider.providerKey)}.apiKey`,
             value: sourceProvider.providerConfig.apiKey,
             defaults: params.sourceConfigForSecrets?.secrets?.defaults,
           }
@@ -211,7 +94,6 @@ export function normalizeProviders(params: {
       sourceInput,
       provider: normalizedProvider,
       secretDefaults: params.secretDefaults,
-      profileApiKey: undefined,
       secretRefManagedProviders: params.secretRefManagedProviders,
     });
 
@@ -229,13 +111,10 @@ export function normalizeProviders(params: {
     const needsProfileApiKey =
       Array.isArray(normalizedProvider.models) &&
       normalizedProvider.models.length > 0 &&
-      !(
-        (typeof normalizedProvider.apiKey === "string" && normalizedProvider.apiKey.trim()) ||
-        normalizedProvider.apiKey
-      );
+      !normalizedProvider.apiKey;
     const profileApiKey = needsProfileApiKey ? resolveProfileApiKey(normalizedKey) : undefined;
-    const providerApiKeyResolver = needsProfileApiKey
-      ? resolveProviderConfigApiKeyResolver(normalizedKey, undefined, params.manifestRegistry)
+    const runtimeProviderKey = needsProfileApiKey
+      ? resolveProviderPluginLookupKey(normalizedKey).trim()
       : undefined;
     normalizedProvider = resolveMissingProviderApiKey({
       providerKey: normalizedKey,
@@ -243,18 +122,24 @@ export function normalizeProviders(params: {
       env,
       profileApiKey,
       secretRefManagedProviders: params.secretRefManagedProviders,
-      providerApiKeyResolver,
+      providerApiKeyResolver:
+        runtimeProviderKey !== undefined
+          ? (providerEnv) =>
+              resolveProviderConfigApiKeyWithPlugin({
+                provider: runtimeProviderKey,
+                ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+                context: { provider: normalizedKey, env: providerEnv },
+              })
+          : undefined,
     });
 
-    normalizedProvider = normalizeProviderSpecificConfig(
-      normalizedKey,
-      normalizedProvider,
-      params.manifestRegistry,
-    );
+    normalizedProvider =
+      normalizeProviderConfigWithPlugin({
+        provider: resolveProviderPluginLookupKey(normalizedKey, normalizedProvider),
+        ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+        context: { provider: normalizedKey, providerConfig: normalizedProvider },
+      }) ?? normalizedProvider;
 
-    normalizedProvider = normalizeProviderModelsForConfig(normalizedKey, normalizedProvider, {
-      manifestPlugins: params.manifestPlugins,
-    });
     mutated ||= normalizedProvider !== provider;
 
     const existing = next[normalizedKey];

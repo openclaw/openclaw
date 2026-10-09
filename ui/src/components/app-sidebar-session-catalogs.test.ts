@@ -4,11 +4,13 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
+import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   findCatalogSessionHovercardRow,
   formatSidebarTimestamp,
-  visibleCatalogHosts,
+  projectSidebarSessionCatalogs,
 } from "./app-sidebar-session-catalogs.ts";
 
 describe("formatSidebarTimestamp", () => {
@@ -134,7 +136,13 @@ describe("findCatalogSessionHovercardRow", () => {
   });
 });
 
-describe("visibleCatalogHosts", () => {
+describe("projectSidebarSessionCatalogs", () => {
+  const catalog = (hosts: SessionCatalogHost[]): SessionCatalog => ({
+    id: "codex",
+    label: "Codex",
+    capabilities: { continueSession: true, archive: false },
+    hosts,
+  });
   const session = (threadId: string, name: string) => ({
     threadId,
     name,
@@ -143,6 +151,62 @@ describe("visibleCatalogHosts", () => {
     canContinue: true,
     canArchive: false,
   });
+
+  it.each([
+    ["active", 100, ["native"]],
+    ["active", 200, ["native", "adopted"]],
+    ["all", 100, ["native", "adopted"]],
+  ] as const)(
+    "applies shared %s visibility at %i to adopted rows only",
+    (statusFilter, now, expected) => {
+      const row: GatewaySessionRow = {
+        key: "agent:main:adopted",
+        kind: "direct",
+        snoozedUntil: 200,
+      };
+      const hosts: SessionCatalogHost[] = [
+        {
+          hostId: "gateway:local",
+          label: "Gateway",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            session("native", "Native"),
+            { ...session("adopted", "Adopted"), sessionKey: row.key },
+          ],
+        },
+      ];
+      const visibility = projectSidebarArchiveVisibility({
+        sessionData: {
+          sessionsAgentId: "main",
+          sessionsResult: null,
+          sessionResultsByAgent: {},
+          childSessionRowsByParent: {},
+          loadedChildSessionKeys: new Set(),
+          loadingChildSessionKeys: new Set(),
+          childSessionErrorsByParent: new Map(),
+        },
+        selectedAgentId: "main",
+        statusFilter,
+        now,
+        deletionState: () => undefined,
+        archiveVisibility: () => undefined,
+      });
+      const projected = projectSidebarSessionCatalogs(
+        [catalog(hosts)],
+        null,
+        [row],
+        visibility.isSessionHidden,
+      );
+      expect(
+        projected.flatMap((entry) =>
+          entry.visibleHosts.flatMap((host) =>
+            host.sessions.map((threadRow) => threadRow.threadId),
+          ),
+        ),
+      ).toEqual(expected);
+    },
+  );
 
   it("removes empty hosts", () => {
     const hosts: SessionCatalogHost[] = [
@@ -162,7 +226,9 @@ describe("visibleCatalogHosts", () => {
       },
     ];
 
-    expect(visibleCatalogHosts(hosts)).toEqual([hosts[0]]);
+    expect(projectSidebarSessionCatalogs([catalog(hosts)], null, [])).toEqual([
+      { ...catalog(hosts), visibleHosts: [hosts[0]] },
+    ]);
   });
 
   it("filters sessions by effective owner without inferring host identity", () => {
@@ -185,8 +251,8 @@ describe("visibleCatalogHosts", () => {
       },
     ];
 
-    expect(visibleCatalogHosts(hosts, "operator:mine")).toEqual([
-      { ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] },
+    expect(projectSidebarSessionCatalogs([catalog(hosts)], "operator:mine", [])).toEqual([
+      { ...catalog(hosts), visibleHosts: [{ ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] }] },
     ]);
   });
 
@@ -209,7 +275,14 @@ describe("visibleCatalogHosts", () => {
     ];
 
     expect(
-      visibleCatalogHosts(hosts, "operator:owner", new Map([[adoptedKey, "operator:owner"]])),
-    ).toEqual(hosts);
+      projectSidebarSessionCatalogs([catalog(hosts)], "operator:owner", [
+        {
+          key: adoptedKey,
+          kind: "direct",
+          updatedAt: 1,
+          owner: { actor: { type: "human", id: "operator:owner" } },
+        },
+      ]),
+    ).toEqual([{ ...catalog(hosts), visibleHosts: hosts }]);
   });
 });

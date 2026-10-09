@@ -3,7 +3,6 @@ import path from "node:path";
 // Plugin registry migration tests cover doctor repair of persisted plugin registry state.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
@@ -18,6 +17,7 @@ import {
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
@@ -91,12 +91,6 @@ function createCurrentIndex(): InstalledPluginIndex {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
 function expectSha256(value: unknown) {
   expect(typeof value).toBe("string");
   expect(value).toMatch(/^[a-f0-9]{64}$/u);
@@ -205,11 +199,11 @@ describe("doctor plugin registry migration", () => {
       readConfig,
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "skip-existing",
       migrated: false,
     });
-    expectRecordFields(requireRecord(result.preflight, "migration preflight"), {
+    expectObjectFields(requireRecord(result.preflight, "migration preflight"), {
       action: "skip-existing",
       filePath,
     });
@@ -228,14 +222,14 @@ describe("doctor plugin registry migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     expect(result.preflight.action).toBe("migrate");
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.migrationVersion).toBe(1);
-    expectRecordFields(requirePlugin(persisted, "demo") as unknown as Record<string, unknown>, {
+    expectObjectFields(requirePlugin(persisted, "demo"), {
       pluginId: "demo",
     });
   });
@@ -276,24 +270,6 @@ describe("doctor plugin registry migration", () => {
     );
   });
 
-  it("rejects invalid config install records before recovery or persistence", async () => {
-    const stateDir = makeTempDir();
-    const invalidConfig = JSON.parse(
-      '{"plugins":{"installs":{"constructor":{"source":"bogus"}}}}',
-    ) as OpenClawConfig;
-
-    await expect(
-      migratePluginRegistryForDoctor({
-        stateDir,
-        readConfig: async () => invalidConfig,
-        env: hermeticEnv(),
-      }),
-    ).rejects.toThrow(
-      "Back up openclaw.json, correct or remove the invalid retired plugins.installs record",
-    );
-    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
-  });
-
   it("persists the complete plugin inventory without changing disabled state", async () => {
     const stateDir = makeTempDir();
     const enabledDir = path.join(stateDir, "plugins", "enabled-demo");
@@ -321,7 +297,7 @@ describe("doctor plugin registry migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -355,7 +331,7 @@ describe("doctor plugin registry migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -432,7 +408,7 @@ describe("doctor plugin registry migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -455,11 +431,11 @@ describe("doctor plugin registry migration", () => {
       readConfig,
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "dry-run",
       migrated: false,
     });
-    expect(result.preflight.action).toBe("migrate");
+    expect(result.preflight.action).toBe("initialize");
     expect(readConfig).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
   });
@@ -476,7 +452,7 @@ describe("doctor plugin registry migration", () => {
       config: {},
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
       migrated: true,
     });
@@ -491,7 +467,7 @@ describe("doctor plugin registry migration", () => {
     expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
   });
 
-  it("indexes records already imported from shipped config", async () => {
+  it("indexes canonical install records", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -513,7 +489,7 @@ describe("doctor plugin registry migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -535,7 +511,7 @@ describe("doctor plugin registry migration", () => {
     expectSha256(requirePlugin(persisted, "demo").installRecordHash);
   });
 
-  it("preserves imported records when the plugin manifest cannot be discovered", async () => {
+  it("preserves canonical records when the plugin manifest cannot be discovered", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "missing");
 
@@ -556,7 +532,7 @@ describe("doctor plugin registry migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);

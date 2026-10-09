@@ -8,12 +8,9 @@ import {
   appendSessionTranscriptReport,
   bindSessionTranscriptStoreScope,
   isSessionTranscriptProjectionUnavailableError,
-  loadSessionEntry,
   loadTranscriptEvents,
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
-  readTranscriptRawDelta,
-  readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
@@ -24,20 +21,34 @@ import {
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
-import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
+import { normalizeRawDeltaLimits } from "../config/sessions/session-accessor.sqlite-raw-delta-read.js";
+import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
+import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
+import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
+import {
+  resolveMirroredTranscriptText,
+  type SessionTranscriptDeliveryMirror,
+} from "../config/sessions/transcript-mirror.js";
 import {
   selectVisibleTranscriptEventEntries,
   selectVisibleTranscriptEvents,
 } from "../config/sessions/transcript-visible-events.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type {
   LatestAssistantTranscriptText,
   SessionTranscriptAppendResult,
   SessionTranscriptAssistantMessage,
-  SessionTranscriptDeliveryMirror,
   SessionTranscriptUpdateMode,
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
@@ -58,6 +69,17 @@ export type {
   TranscriptTurnAdmission,
 } from "../config/sessions/session-accessor.js";
 export { hasPromptImageInput } from "../media/prompt-image-input.js";
+export {
+  readSessionTranscriptCatalogPage,
+  readSessionTranscriptCatalogTitle,
+  type SessionTranscriptCatalogPage,
+} from "../gateway/session-transcript-catalog.js";
+export {
+  createSessionCatalogGitHubLinker,
+  createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogGitHubLinker,
+  prepareSessionCatalogSourceActorProjector,
+} from "../gateway/session-catalog-identity.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -73,6 +95,18 @@ export type {
   SessionTranscriptReadParams,
 };
 
+/** Compose prepared owner assertions; unprepared SDK callbacks retain native transaction visibility. */
+export function composeSessionTranscriptWriteAssertion(
+  sources: readonly (SessionSourceAssertion | undefined)[],
+  check?: (assertSources: () => void) => void,
+): SessionSourceAssertion {
+  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
+    // A plugin's wrapper remains opaque even when all of its children are prepared.
+    hasOpaqueCheck: check !== undefined,
+    preparedCheck: (assertSources) => assertSources(),
+  });
+}
+
 export type SessionTranscriptEvent = unknown;
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
@@ -87,16 +121,13 @@ export async function appendSessionYieldContext(
 ): Promise<void> {
   const { message, assertCurrent, config, ...scope } = params;
   assertCurrent();
-  const result = await appendSessionTranscriptReport(
-    bindSessionTranscriptStoreScope(scope, config),
-    {
+  const target = bindSessionTranscriptStoreScope(scope, config);
+  const result = await withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
+    appendSessionTranscriptReport(target, {
       kind: "custom",
       customTypes: [],
-      selectReport: () => {
-        assertCurrent();
-        return buildSessionsYieldContextMessage(message);
-      },
-    },
+      selectReport: () => buildSessionsYieldContextMessage(message),
+    }),
   );
   if (!result.ok) {
     throw new Error(`Could not persist sessions_yield context: ${result.error.code}`);
@@ -198,7 +229,7 @@ export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
 
 export type SessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
-    options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
@@ -232,11 +263,10 @@ export async function resolveSessionTranscriptIdentity(
 export async function resolveSessionTranscriptTarget(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptTarget> {
-  const target = await resolveSessionTranscriptRuntimeTarget(params);
-  return projectPublicTarget({
-    ...target,
+  return {
+    ...(await resolveSessionTranscriptIdentity(params)),
     targetKind: "runtime-session",
-  });
+  };
 }
 
 /**
@@ -253,11 +283,15 @@ export async function readSessionTranscriptRawDelta(
   params: SessionTranscriptRawDeltaParams,
 ): Promise<SessionTranscriptRawDeltaResult> {
   const { cursor, maxBytes, maxEvents, ...target } = params;
-  return readTranscriptRawDelta(bindSessionTranscriptStoreScope(target), {
-    ...(cursor !== undefined ? { cursor } : {}),
-    ...(maxBytes !== undefined ? { maxBytes } : {}),
-    ...(maxEvents !== undefined ? { maxEvents } : {}),
-  });
+  const scope = bindSessionTranscriptStoreScope(target);
+  normalizeRawDeltaLimits({ maxBytes, maxEvents });
+  return withSessionTranscriptDeltaReader(scope, (reader) =>
+    reader.raw({
+      ...(cursor !== undefined ? { cursor } : {}),
+      ...(maxBytes !== undefined ? { maxBytes } : {}),
+      ...(maxEvents !== undefined ? { maxEvents } : {}),
+    }),
+  );
 }
 
 /** Reads one bounded active-path page that resumes appends and resets after discontinuities. */
@@ -265,13 +299,17 @@ export async function readSessionTranscriptVisibleMessageDelta(
   params: SessionTranscriptVisibleMessageDeltaParams,
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
   const { cursor, maxBytes, maxMessages, ...target } = params;
-  let result: ReturnType<typeof readVisibleMessageDelta>;
+  const scope = bindSessionTranscriptStoreScope(target);
+  normalizeVisibleDeltaLimits({ maxBytes, maxMessages });
+  let result: import("../config/sessions/session-accessor.sqlite-contract.js").SessionTranscriptVisibleMessageDeltaResult;
   try {
-    result = readVisibleMessageDelta(bindSessionTranscriptStoreScope(target), {
-      ...(cursor !== undefined ? { cursor } : {}),
-      ...(maxBytes !== undefined ? { maxBytes } : {}),
-      ...(maxMessages !== undefined ? { maxMessages } : {}),
-    });
+    result = await withSessionTranscriptDeltaReader(scope, (reader) =>
+      reader.visible({
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+        ...(maxMessages !== undefined ? { maxMessages } : {}),
+      }),
+    );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return { kind: "unavailable", reason: "projection_rebuilding" };
@@ -284,13 +322,7 @@ export async function readSessionTranscriptVisibleMessageDelta(
   const { events, ...page } = result;
   return {
     ...page,
-    entries: events.flatMap((entry) =>
-      projectVisibleMessageEntry({
-        event: entry.event,
-        parentId: entry.parentId,
-        seq: entry.seq,
-      }),
-    ),
+    entries: events.flatMap(projectVisibleMessageEntry),
   };
 }
 
@@ -314,7 +346,10 @@ export async function readVisibleSessionTranscriptMessageEntries(
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  return readLatestTranscriptAssistantText(bindSessionTranscriptStoreScope(params));
+  const scope = bindSessionTranscriptStoreScope(params);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  return readRestoredSessionTranscript(scope, () => readLatestTranscriptAssistantText(scope));
 }
 
 /**
@@ -331,7 +366,7 @@ export async function appendAssistantMirrorMessageByIdentity(
   if (!text) {
     return { ok: false, reason: "empty message" };
   }
-  const message = createAssistantMirrorMessage({
+  let message = createAssistantMirrorMessage({
     ...(params.deliveryMirror !== undefined ? { deliveryMirror: params.deliveryMirror } : {}),
     ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
     text,
@@ -339,7 +374,7 @@ export async function appendAssistantMirrorMessageByIdentity(
   const scope = bindSessionTranscriptStoreScope(params, params.config);
   return await withTranscriptWriteLock(scope, async (locked) => {
     params.signal?.throwIfAborted();
-    const currentEntry = loadSessionEntry(scope);
+    const currentEntry = await readSessionEntryReadOnlyInWorker(scope);
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }
@@ -360,6 +395,51 @@ export async function appendAssistantMirrorMessageByIdentity(
         messageId: latestEquivalentAssistantId,
       };
     }
+    if (params.deliveryMirror?.kind === "channel-final" && params.idempotencyKey) {
+      const key = params.idempotencyKey.trim();
+      const facts = await locked.readMessageFacts({ idempotencyKeys: [key] });
+      let sourceAssistantMessageId: string | undefined;
+      if (facts.existingIdempotencyKeys.has(key)) {
+        // Keep the writer's original correlation while normal append still checks the payload.
+        const stored = facts.messagesByIdempotencyKey.get(key);
+        const marker = isRecord(stored) ? stored.openclawDeliveryMirror : undefined;
+        if (isRecord(marker) && typeof marker.sourceAssistantMessageId === "string") {
+          sourceAssistantMessageId = marker.sourceAssistantMessageId;
+        }
+      } else {
+        let events: readonly SessionTranscriptEvent[];
+        try {
+          const latest = await prepareSessionTranscriptHydration({
+            ...scope,
+            agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+            sessionId: currentEntry.sessionId,
+          }).readLatestActiveMessage();
+          events = latest ? [latest.event] : [];
+        } catch (error) {
+          if (!isSessionTranscriptProjectionUnavailableError(error)) {
+            throw error;
+          }
+          events = selectVisibleTranscriptEvents(await locked.readEvents());
+        }
+        sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(
+          events,
+          message,
+          params.config,
+          true,
+        );
+      }
+      const correlatedMessage = {
+        ...message,
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          ...(params.deliveryMirror.sourceMessageId !== undefined
+            ? { sourceMessageId: params.deliveryMirror.sourceMessageId }
+            : {}),
+          ...(sourceAssistantMessageId !== undefined ? { sourceAssistantMessageId } : {}),
+        },
+      };
+      message = correlatedMessage;
+    }
     params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({
       ...(params.config !== undefined ? { config: params.config } : {}),
@@ -371,7 +451,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     }
     if (params.updateMode !== "none" && appendResult.appended) {
       params.signal?.throwIfAborted();
-      await publishTranscriptUpdate(scope, {
+      await locked.publishUpdate({
         messageId: appendResult.messageId,
       });
     }
@@ -398,7 +478,14 @@ export async function appendSessionTranscriptMessageByIdentity<TMessage>(
 
 /** Appends one message while preserving distinct suppression and session-rebind outcomes. */
 export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
-  params: SessionTranscriptAppendMessageParams<TMessage>,
+  params: SessionTranscriptAppendMessageParams<TMessage> & {
+    runId?: string;
+    updateMode?: SessionTranscriptUpdateMode;
+    /** @deprecated Use prepareMessageAfterIdempotencyCheckAsync for preparation outside the transaction. */
+    prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+    /** Awaited after duplicate detection; undefined suppresses a fresh append. */
+    prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
+  },
 ): Promise<SessionTranscriptStrictMessageAppendResult<TMessage>> {
   const expectedSessionId = params.sessionId?.trim();
   if (!expectedSessionId) {
@@ -408,6 +495,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
     ...(params.config ? { config: params.config } : {}),
     ...(params.cwd ? { cwd: params.cwd } : {}),
     expectedSessionId,
+    runId: params.runId,
     messages: [
       {
         ...(params.eventId !== undefined ? { eventId: params.eventId } : {}),
@@ -423,12 +511,28 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
                 params.prepareMessageAfterIdempotencyCheck?.(message as TMessage),
             }
           : {}),
+        ...(params.prepareMessageAfterIdempotencyCheckAsync || params.beforeFreshMessageCommit
+          ? {
+              workerPreparation: {
+                ...(params.prepareMessageAfterIdempotencyCheckAsync
+                  ? {
+                      prepareMessageAfterIdempotencyCheckAsync: (message: unknown) =>
+                        // SAFETY: Preparation receives this caller's supplied message.
+                        params.prepareMessageAfterIdempotencyCheckAsync!(message as TMessage),
+                    }
+                  : {}),
+                beforeFreshMessageCommit: captureExternalSessionCommitGuard(
+                  params.beforeFreshMessageCommit,
+                ),
+              },
+            }
+          : {}),
         ...(params.useRawWhenLinear !== undefined
           ? { useRawWhenLinear: params.useRawWhenLinear }
           : {}),
       },
     ],
-    updateMode: "none",
+    updateMode: params.updateMode ?? "none",
   });
   if (turn.rejectedReason) {
     return { kind: "rejected", reason: turn.rejectedReason };
@@ -449,6 +553,9 @@ export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
 
 /**
  * Publishes a transcript update by scoped transcript target.
+ * `update.assistantItemIds` retires exact native display occurrences only after
+ * their row commits. It is internal provenance, not terminal/run authorization,
+ * and must be omitted for independently owned commentary and async rows.
  */
 export async function publishSessionTranscriptUpdateByIdentity(
   params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },
@@ -489,7 +596,19 @@ function createAssistantMirrorMessage(params: {
     stopReason: "stop",
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
+    ...(params.deliveryMirror
+      ? {
+          openclawDeliveryMirror: {
+            kind: params.deliveryMirror.kind,
+            ...(params.deliveryMirror.sourceMessageId !== undefined
+              ? { sourceMessageId: params.deliveryMirror.sourceMessageId }
+              : {}),
+            ...(params.deliveryMirror.kind === "channel-final-suppressed"
+              ? { reason: params.deliveryMirror.reason }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -497,6 +616,7 @@ function findLatestEquivalentAssistantMessageId(
   events: readonly SessionTranscriptEvent[],
   message: SessionTranscriptAssistantMessage,
   config: OpenClawConfig | undefined,
+  excludeDeliveryMirrors = false,
 ): string | undefined {
   const expectedText = extractAssistantMirrorComparableText(message, config);
   if (!expectedText) {
@@ -512,7 +632,10 @@ function findLatestEquivalentAssistantMessageId(
     if (!candidate) {
       continue;
     }
-    if (candidate.role !== "assistant") {
+    if (
+      candidate.role !== "assistant" ||
+      (excludeDeliveryMirrors && isDeliveryMirrorAssistantMessage(candidate))
+    ) {
       return undefined;
     }
     return extractAssistantMirrorComparableText(candidate, config) === expectedText &&
@@ -570,20 +693,4 @@ function projectVisibleMessageEntry(entry: {
       ...(idempotencyKey ? { idempotencyKey } : {}),
     },
   ];
-}
-
-function projectPublicTarget(target: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  targetKind: SessionTranscriptTarget["targetKind"];
-}): SessionTranscriptTarget {
-  const agentId = normalizeAgentId(target.agentId);
-  return {
-    agentId,
-    memoryKey: formatSessionTranscriptMemoryHitKey({ agentId, sessionId: target.sessionId }),
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    targetKind: target.targetKind,
-  };
 }

@@ -1,7 +1,8 @@
-// Update status helpers for `openclaw status`.
-// Wraps registry/git update checks and formats compact update rows/hints.
-
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.js";
+import { formatInstallOwnerMessage } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
@@ -30,7 +31,6 @@ export function resolveStatusRegistryUpdateChannel(
   }).channel;
 }
 
-/** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
@@ -43,35 +43,62 @@ export async function getUpdateCheckResult(params: {
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
-  return await checkUpdateStatus({
+  let gitProbeTimeoutMs: number | undefined;
+  const update = await checkUpdateStatus({
     root,
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
+    onGitProbeTimeout: (timeoutMs) => {
+      gitProbeTimeoutMs ??= timeoutMs;
+    },
     resolveRegistryChannel: ({ installKind, git }) =>
       resolveStatusRegistryUpdateChannel({
         configChannel,
         installKind,
         git,
       }),
-  });
+  }).catch((error: unknown): UpdateCheckResult => ({
+    root,
+    installKind: "unknown",
+    packageManager: "unknown",
+    error: { status: "failed", message: sanitizeTerminalText(formatErrorMessage(error)) },
+  }));
+  if (gitProbeTimeoutMs !== undefined) {
+    update.error = {
+      status: "unknown",
+      timeoutMs: gitProbeTimeoutMs,
+      message: `git check did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
+    };
+  } else if (update.git?.error) {
+    update.error = { status: "failed", message: sanitizeTerminalText(update.git.error) };
+  }
+  if (update.installKind === "git" && update.git && !params.fetchGit) {
+    const stale = await import("../infra/update-run-ledger.js")
+      .then(({ getLatestUpdateFetchFailure }) => getLatestUpdateFetchFailure())
+      .catch(() => undefined);
+    if (stale) {
+      update.git = { ...update.git, stale, countsCached: true };
+    }
+  }
+  return update;
 }
 
-type UpdateAvailability = {
-  available: boolean;
-  hasGitUpdate: boolean;
-  hasRegistryUpdate: boolean;
-  latestVersion: string | null;
-  gitBehind: number | null;
-};
-
-/** Determines whether git and/or registry data indicate an available update. */
-export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
+export function resolveUpdateAvailability(update: UpdateCheckResult) {
+  if (update.installKind === "host" || update.installKind === "immutable") {
+    return {
+      available: false,
+      hasGitUpdate: false,
+      hasRegistryUpdate: false,
+      latestVersion: null,
+      gitBehind: null,
+    };
+  }
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
-  const hasRegistryUpdate = registryCmp != null && registryCmp < 0;
+  const hasRegistryUpdate = !update.error && registryCmp != null && registryCmp < 0;
   const gitBehind =
-    update.installKind === "git" && typeof update.git?.behind === "number"
+    !update.error && update.installKind === "git" && typeof update.git?.behind === "number"
       ? update.git.behind
       : null;
   const hasGitUpdate = gitBehind != null && gitBehind > 0;
@@ -85,7 +112,6 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
-/** Formats the actionable update hint shown in status footers. */
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
@@ -94,7 +120,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
   const details: string[] = [];
   if (availability.hasGitUpdate && availability.gitBehind != null) {
-    details.push(`git behind ${availability.gitBehind}`);
+    details.push(
+      `git behind ${availability.gitBehind}${update.git?.countsCached ? " (cached)" : ""}`,
+    );
   }
   if (availability.hasRegistryUpdate && availability.latestVersion) {
     details.push(`npm ${availability.latestVersion}`);
@@ -103,8 +131,19 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 
-/** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
+  if (update.installKind === "host" && update.installOwner) {
+    return `Update: ${formatInstallOwnerMessage(update.installOwner)}`;
+  }
+  if (update.error) {
+    return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
+  }
+  if (update.installKind === "immutable") {
+    const install = update.immutable;
+    return install
+      ? `Update: immutable ${install.currentSha.slice(0, 12)}${install.prepared ? ` · prepared ${install.prepared.sha.slice(0, 12)}` : ""} · activation unavailable`
+      : "Update: immutable · installation facts unavailable";
+  }
   const parts: string[] = [];
 
   const appendRegistryUpdateSummary = () => {
@@ -136,23 +175,13 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
       return;
     }
     if (update.registry?.error) {
-      if (update.registry.reason === "unsupported_git_channel") {
-        parts.push("extended-stable requires a package install");
-        return;
-      }
-      if (update.registry.reason === "selector_missing") {
-        parts.push("npm extended-stable selector missing");
-        return;
-      }
-      if (update.registry.reason === "selector_query_failed") {
-        parts.push("npm extended-stable query failed");
-        return;
-      }
-      if (update.registry.reason === "exact_package_mismatch") {
-        parts.push("npm extended-stable exact package verification failed");
-        return;
-      }
-      parts.push(`${registryLabel} unknown`);
+      const errors = new Map([
+        ["unsupported_git_channel", "extended-stable requires a package install"],
+        ["selector_missing", "npm extended-stable selector missing"],
+        ["selector_query_failed", "npm extended-stable query failed"],
+        ["exact_package_mismatch", "npm extended-stable exact package verification failed"],
+      ]);
+      parts.push(errors.get(update.registry.reason ?? "") ?? `${registryLabel} unknown`);
     }
   };
 
@@ -165,7 +194,15 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.dirty === true) {
       parts.push("dirty");
     }
-    if (update.git.behind != null && update.git.ahead != null) {
+    if (update.git.stale) {
+      const { failedAtMs, detail } = update.git.stale;
+      parts.push(
+        `update check stale: last update fetch failed ${formatTimeAgo(Math.max(0, Date.now() - failedAtMs))} (${detail})`,
+      );
+      if (update.git.behind != null && update.git.ahead != null) {
+        parts.push(`cached: ahead ${update.git.ahead}, behind ${update.git.behind}`);
+      }
+    } else if (update.git.behind != null && update.git.ahead != null) {
       if (update.git.behind === 0 && update.git.ahead === 0) {
         parts.push("up to date");
       } else if (update.git.behind > 0 && update.git.ahead === 0) {
@@ -178,6 +215,11 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     }
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
+    }
+    // A checkout that pulled but never rebuilt keeps executing the previous dist,
+    // so report the built commit rather than letting HEAD imply what is running.
+    if (update.git.builtSha && update.git.sha && update.git.builtSha !== update.git.sha) {
+      parts.push(`stale build (running ${update.git.builtSha.slice(0, 8)}, run pnpm build)`);
     }
     appendRegistryUpdateSummary();
   } else {

@@ -1,7 +1,5 @@
-// Qa Matrix plugin module implements gateway CLI E2EE scenarios.
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient } from "../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import { buildMatrixQaE2eeScenarioRoomKey } from "./scenario-contract.js";
 import {
   patchMatrixQaGatewayMatrixAccount,
@@ -9,6 +7,7 @@ import {
 } from "./scenario-runtime-config.js";
 import {
   assertMatrixQaCliE2eeStatus,
+  assertMatrixQaCliEncryptionSetupResult,
   readMatrixQaCliConfig,
 } from "./scenario-runtime-e2ee-cli-config.js";
 import {
@@ -17,15 +16,15 @@ import {
 } from "./scenario-runtime-e2ee-cli-runtime.js";
 import {
   buildMatrixQaPluginActivationConfig,
-  parseMatrixQaCliJson,
+  loginMatrixQaCliDevice,
   registerMatrixQaCliE2eeAccount,
+  runMatrixQaSetupCliJson,
   type MatrixQaCliEncryptionSetupStatus,
-  writeMatrixQaCliOutputArtifacts,
 } from "./scenario-runtime-e2ee-cli-shared.js";
 import { buildMatrixE2eeReplyArtifact } from "./scenario-runtime-e2ee-room.js";
 import {
+  createMatrixQaE2eeAccountClient,
   ensureMatrixQaE2eeOwnDeviceVerified,
-  requireMatrixQaE2eeOutputDir,
   requireMatrixQaGatewayConfigPath,
 } from "./scenario-runtime-e2ee-shared.js";
 import {
@@ -48,17 +47,12 @@ export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
     deviceName: "OpenClaw Matrix QA CLI Multi Account Owner",
     scenarioId: "matrix-e2ee-cli-encryption-setup-multi-account",
   });
-  const loginClient = createMatrixQaClient({
-    baseUrl: context.baseUrl,
-  });
-  const cliDevice = await loginClient.loginWithPassword({
-    deviceName: "OpenClaw Matrix QA CLI Multi Account Target Device",
-    password: account.password,
-    userId: account.userId,
-  });
-  if (!cliDevice.deviceId) {
-    throw new Error("Matrix E2EE CLI multi-account setup login did not return a device id");
-  }
+  const cliDevice = await loginMatrixQaCliDevice(
+    context.baseUrl,
+    account,
+    "OpenClaw Matrix QA CLI Multi Account Target Device",
+    "Matrix E2EE CLI multi-account setup",
+  );
   const cli = await createMatrixQaCliE2eeSetupRuntime({
     artifactLabel: "cli-encryption-setup-multi-account",
     context,
@@ -98,31 +92,18 @@ export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
     },
   });
   try {
-    const setupResult = await cli.run([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
+    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup-multi-account",
+      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+    );
+    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
+    assertMatrixQaCliEncryptionSetupResult(
+      setup,
       accountId,
-      "--json",
-    ]);
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup-multi-account",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
-    if (
-      setup.accountId !== accountId ||
-      setup.success !== true ||
-      setup.encryptionChanged !== true ||
-      setup.bootstrap?.success !== true ||
-      !setup.status
-    ) {
-      throw new Error(
-        `Matrix CLI multi-account encryption setup did not target the requested account: ${setup.bootstrap?.error ?? "unknown error"}`,
-      );
-    }
+      true,
+      "Matrix CLI multi-account encryption setup did not target the requested account",
+    );
     assertMatrixQaCliE2eeStatus("Matrix CLI multi-account encryption setup", setup.status);
 
     const config = await readMatrixQaCliConfig(cli.configPath);
@@ -257,20 +238,12 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     context,
   });
   try {
-    const setupResult = await cli.run([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
-      accountId,
-      "--json",
-    ]);
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
+    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup",
+      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+    );
+    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       setup.accountId !== accountId ||
       setup.success !== true ||
@@ -302,16 +275,12 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     await context.waitGatewayAccountReady?.(accountId, {
       timeoutMs: context.timeoutMs,
     });
-    const driverClient = await createMatrixQaE2eeScenarioClient({
+    const driverClient = await createMatrixQaE2eeAccountClient(context, {
       accessToken: driverAccount.accessToken,
       actorId: `driver-cli-setup-gateway-${randomUUID().slice(0, 8)}`,
-      baseUrl: context.baseUrl,
       deviceId: driverAccount.deviceId,
-      observedEvents: context.observedEvents,
-      outputDir: requireMatrixQaE2eeOutputDir(context),
       password: driverAccount.password,
       scenarioId,
-      timeoutMs: context.timeoutMs,
       userId: driverAccount.userId,
     });
     const replied = await (async () => {

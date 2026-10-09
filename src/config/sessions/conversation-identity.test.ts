@@ -71,13 +71,6 @@ describe("conversation identity", () => {
     expect(prefixed?.conversationRef).toBe(native?.conversationRef);
   });
 
-  it("keeps different peers independently addressable inside one model session", () => {
-    const peerA = conversationIdentityFromSessionEntry(directEntry("peer-a"));
-    const peerB = conversationIdentityFromSessionEntry(directEntry("peer-b"));
-
-    expect(peerA?.conversationRef).not.toBe(peerB?.conversationRef);
-  });
-
   it("uses the canonical delivery snapshot when stale origin metadata disagrees", () => {
     const identity = conversationIdentityFromSessionEntry({
       ...directEntry("peer-a"),
@@ -224,6 +217,32 @@ describe("conversation identity", () => {
       conversationIdentityFromSessionEntry(directEntry("peer-b"))?.conversationRef,
     );
   });
+
+  it.each(["exec", "cron", "heartbeat"] as const)(
+    "binds synthetic %s metadata to its originating direct route, not its execution sender",
+    (source) => {
+      const identity = conversationIdentityFromMsgContext({
+        ctx: {
+          Provider: "reef",
+          ChatType: "direct",
+          From: "reef:owner",
+          To: "reef:owner",
+          InternalTurnSource: source,
+          OriginatingChannel: "reef",
+          OriginatingTo: "reef:peer-b",
+          AccountId: "work",
+          MessageThreadId: "thread-b",
+        },
+      });
+      expect(identity).toMatchObject({
+        kind: "direct",
+        accountId: "work",
+        deliveryTarget: "reef:peer-b",
+        peerId: "peer-b",
+        threadId: "thread-b",
+      });
+    },
+  );
 
   it.each([
     { fallback: { origin: { provider: "reef", accountId: "work" } }, label: "origin" },

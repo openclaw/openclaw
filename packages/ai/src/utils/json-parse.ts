@@ -2,37 +2,28 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 
-const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+const SIMPLE_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t"]);
 const JSON_CONTROL_ESCAPES = new Set(["b", "f", "n", "r", "t"]);
-
-function isControlCharacter(char: string): boolean {
-  const codePoint = char.codePointAt(0);
-  return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
-}
-
-function escapeControlCharacter(char: string): string {
-  switch (char) {
-    case "\b":
-      return "\\b";
-    case "\f":
-      return "\\f";
-    case "\n":
-      return "\\n";
-    case "\r":
-      return "\\r";
-    case "\t":
-      return "\\t";
-    default:
-      return `\\u${char.codePointAt(0)?.toString(16).padStart(4, "0") ?? "0000"}`;
-  }
-}
 
 /**
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
  * - doubling backslashes before invalid escape characters
+ *
+ * By default a valid control escape (`\n`, `\t`, ...) that follows a Windows-path-looking
+ * prefix is treated as an unescaped path separator and doubled. Pass
+ * `preserveValidControlEscapes` when the text is authoritative (for example a completed
+ * tool-call argument buffer) and every valid escape must survive as written.
  */
-export function repairJson(json: string): string {
+export function repairJson(
+  json: string,
+  options?: { preserveValidControlEscapes?: boolean },
+): string {
+  // oxlint-disable-next-line no-control-regex -- JSON string repair must detect raw control characters.
+  if (!/[\\\x00-\x1f]/.test(json)) {
+    return json;
+  }
+  const preserveValidControlEscapes = options?.preserveValidControlEscapes === true;
   let repaired = "";
   let inString = false;
   let stringValuePrefix = "";
@@ -71,22 +62,19 @@ export function repairJson(json: string): string {
           index += 5;
           continue;
         }
-        // A \u not followed by four hex digits is an invalid escape: double the
-        // backslash like the other invalid escapes below. Falling through would
-        // hit the valid-escape branch (VALID_JSON_ESCAPES contains "u") and
-        // re-emit the broken \u, leaving the JSON unparseable.
-        repaired += "\\\\";
-        stringValuePrefix += "\\";
-        continue;
       }
 
-      if (JSON_CONTROL_ESCAPES.has(nextChar) && looksLikeWindowsPathPrefix(stringValuePrefix)) {
-        repaired += "\\\\";
-        stringValuePrefix += "\\";
-        continue;
+      if (!preserveValidControlEscapes && JSON_CONTROL_ESCAPES.has(nextChar)) {
+        // Only this suffix can influence the Windows-path heuristic.
+        stringValuePrefix = stringValuePrefix.slice(-160);
+        if (looksLikeWindowsPathPrefix(stringValuePrefix)) {
+          repaired += "\\\\";
+          stringValuePrefix += "\\";
+          continue;
+        }
       }
 
-      if (VALID_JSON_ESCAPES.has(nextChar)) {
+      if (SIMPLE_JSON_ESCAPES.has(nextChar)) {
         repaired += `\\${nextChar}`;
         stringValuePrefix += nextChar === "\\" ? "\\" : `\\${nextChar}`;
         index += 1;
@@ -98,7 +86,7 @@ export function repairJson(json: string): string {
       continue;
     }
 
-    repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+    repaired += char.charCodeAt(0) <= 0x1f ? JSON.stringify(char).slice(1, -1) : char;
     stringValuePrefix += char;
   }
 
@@ -110,8 +98,7 @@ export function parseJsonWithRepair(json: string): unknown {
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
-  const tail = prefix.slice(-160);
-  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
+  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(prefix);
 }
 
 /**
@@ -132,11 +119,7 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
     try {
       return asNonArrayRecord(partialParse(partialJson));
     } catch {
-      try {
-        return asNonArrayRecord(partialParse(repairJson(partialJson)));
-      } catch {
-        return {};
-      }
+      return {};
     }
   }
 }

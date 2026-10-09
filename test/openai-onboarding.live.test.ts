@@ -240,7 +240,7 @@ describeLive("fresh OpenAI onboarding live", () => {
           agents?: { defaults?: { model?: { primary?: string }; workspace?: string } };
           gateway?: { mode?: string; auth?: { mode?: string; token?: unknown } };
         };
-        expect(config.agents?.defaults?.model?.primary).toBe("openai/gpt-5.6-sol");
+        expect(config.agents?.defaults?.model?.primary).toBe("openai/gpt-6-astra");
         expect(config.agents?.defaults?.workspace).toBe(
           path.join(state.home, ".openclaw", "workspace"),
         );
@@ -266,8 +266,6 @@ describeLive("fresh OpenAI onboarding live", () => {
           "openai-onboarding-live-default",
           "--message",
           `Return exactly ${replyMarker} and no other text.`,
-          "--thinking",
-          "off",
           "--json",
         ],
         state.env,
@@ -310,8 +308,6 @@ describeLive("fresh OpenAI onboarding live", () => {
           gatewaySessionId,
           "--message",
           gatewayPrompt,
-          "--thinking",
-          "off",
           "--json",
         ],
         state.env,

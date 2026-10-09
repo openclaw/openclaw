@@ -13,6 +13,7 @@ import {
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
@@ -483,12 +484,7 @@ describe("pruneProcessedHistoryImages", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       } as AgentMessage),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "bytes" }],
-      }),
+      castAgentMessage(textToolResult("call_1", "read", "bytes")),
       assistantTurn(),
       userText(),
       assistantTurn(),
@@ -542,12 +538,7 @@ describe("pruneProcessedHistoryImages", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_4", name: "read", arguments: {} }],
       }),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_4",
-        toolName: "read",
-        content: [{ type: "text", text: "bytes" }],
-      }),
+      castAgentMessage(textToolResult("call_4", "read", "bytes")),
     );
     const duringLoop = pruneProcessedHistoryImages(messages) ?? messages;
     expect(JSON.stringify(duringLoop.slice(0, retainedLength))).toBe(retainedBytes);

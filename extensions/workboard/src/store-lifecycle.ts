@@ -4,10 +4,16 @@ import type { WorkboardStore } from "./store.js";
 export function registerWorkboardStoreLifecycle(
   api: OpenClawPluginApi,
   store: WorkboardStore,
-  stopServices?: () => void,
+  stopServices?: () => void | Promise<void>,
 ): void {
+  const dispose = async () => {
+    // Stop producers before the store drains admitted work and closes its connection.
+    await stopServices?.();
+    await store.close();
+  };
   api.lifecycle.registerRuntimeLifecycle({
     id: "workboard-sqlite-store",
+    dispose,
     cleanup: ({ reason, sessionKey, runId }) => {
       // Session cleanup shares this hook, but only registry retirement owns the whole store.
       if (
@@ -15,9 +21,7 @@ export function registerWorkboardStoreLifecycle(
         runId === undefined &&
         (reason === "disable" || reason === "restart")
       ) {
-        // Stop producers before the store drains admitted work and closes its connection.
-        stopServices?.();
-        return store.close();
+        return dispose();
       }
       return undefined;
     },

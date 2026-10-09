@@ -55,7 +55,7 @@ describe("Crabline Telegram native command arguments", () => {
           })),
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });

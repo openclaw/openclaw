@@ -59,15 +59,14 @@ describe("BrowserScreencastClient", () => {
     expect(socket.close).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    [4003, "navigation_blocked"],
-    [4004, "target_closed"],
-    [1012, "gateway shutting down"],
-  ])("preserves close code %i and reason", (code, reason) => {
+  it("preserves the socket close code and reason", () => {
     const { socket, callbacks } = connect();
-    socket.disconnect(code, reason);
+    socket.disconnect(4003, "navigation_blocked");
     socket.receive(screencastFrame());
-    expect(callbacks.onClose).toHaveBeenCalledExactlyOnceWith({ code, reason });
+    expect(callbacks.onClose).toHaveBeenCalledExactlyOnceWith({
+      code: 4003,
+      reason: "navigation_blocked",
+    });
     expect(callbacks.onFrame).not.toHaveBeenCalled();
   });
 

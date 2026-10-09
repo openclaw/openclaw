@@ -55,3 +55,12 @@
 .board-session-surface__state--error {
   color: var(--danger);
 }
+
+.board-widget__notice {
+  overflow: hidden;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

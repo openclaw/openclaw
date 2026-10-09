@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import * as pidIdentity from "../shared/pid-alive.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore as createStore } from "./update-managed-service-handoff-lease.js";
 import type {
   createManagedHandoffLeaseStore,
@@ -54,6 +55,10 @@ function fixture() {
   if (acquired.kind !== "acquired") {
     throw new Error("fixture busy");
   }
+  const stagedOptions = {
+    ...options,
+    existingIdentity: captureManagedUpdateLeaseDatabaseIdentity(options.databasePath),
+  };
   // Exercise the transaction's observation window using real owner operations.
   const racing = (beforeBegin: () => void) => {
     let pending: (() => void) | undefined = beforeBegin;
@@ -80,7 +85,7 @@ function fixture() {
     // without deleting the closed row. No fabricated lease grants reclamation.
     const common = `const fs=require('node:fs'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process');
 const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
-const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});`;
+const store=createManagedHandoffLeaseStore(${JSON.stringify(stagedOptions)});`;
     const executor =
       common +
       `process.once('message',lease=>{const closed=store.settle(lease,${JSON.stringify(uncertain ? "uncertain" : "closed")});if(!closed)throw new Error('complete failed');process.send(closed,()=>process.disconnect());});`;
@@ -105,7 +110,16 @@ if(!running)throw new Error('activation failed');child.send(running);
     expect(closed.action).toMatchObject({ phase: uncertain ? "uncertain" : "closed" });
     return closed;
   };
-  return { from, to, store, source: acquired.lease, racing, closedDestination, options };
+  return {
+    from,
+    to,
+    store,
+    source: acquired.lease,
+    racing,
+    closedDestination,
+    options,
+    stagedOptions,
+  };
 }
 
 unix.each(["failed", "inactive"])(
@@ -301,15 +315,20 @@ unix("leaves source and destination unchanged when destination inspection is unr
     db.prepare = (sql) => {
       const statement = prepare(sql);
       if (sql.startsWith('select "owner"')) {
-        const iterate = statement.iterate.bind(statement);
-        statement.iterate = (root) => {
+        const requireReadableRoot = (root: unknown) => {
           if (typeof root !== "string") {
             throw new Error("expected one positional installation root");
           }
           if (root === to) {
             throw new Error("destination unreadable");
           }
-          return iterate(root);
+          return root;
+        };
+        const get = statement.get.bind(statement);
+        statement.get = (root) => get(requireReadableRoot(root));
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = (root) => {
+          return iterate(requireReadableRoot(root));
         };
       }
       return statement;
@@ -340,16 +359,13 @@ unix.each(["update", "foreground", "retarget"] as const)(
     const db = new DatabaseSync(options.databasePath);
     try {
       const payload = JSON.stringify({ version: 1, pid, startIdentity: "0" });
-      db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-        to,
-        "legacy-owner",
-        payload,
-        1,
-      );
+      db.prepare(
+        "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+      ).run(to, "legacy-owner", payload, 1);
       const rows = () =>
         db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
       const before = rows();
-      expect(store.read(to)).toEqual({ kind: "unreadable" });
+      expect(store.read(to)).toEqual({ kind: "unreadable", error: expect.any(Error) });
       expect(rows()).toEqual(before);
       const result =
         admission === "retarget"
@@ -388,7 +404,9 @@ unix("reclaims a legacy reused PID without granting authority to its live proces
   const { to, store, options } = fixture();
   const db = new DatabaseSync(options.databasePath);
   try {
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(
       to,
       "legacy-owner",
       JSON.stringify({ version: 1, pid: process.pid, startIdentity: "0" }),
@@ -424,12 +442,9 @@ unix.each([
   const { to, store, source, options } = fixture();
   const db = new DatabaseSync(options.databasePath);
   try {
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-      to,
-      "legacy-owner",
-      JSON.stringify(value(store.processIdentity())),
-      1,
-    );
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(to, "legacy-owner", JSON.stringify(value(store.processIdentity())), 1);
     const rows = () =>
       db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
     const before = rows();
@@ -452,12 +467,9 @@ unix.each(["owner", "payload_json", "updated_at"] as const)(
       const rows = () =>
         db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
       for (const admission of ["acquire", "retarget"]) {
-        db.prepare("INSERT OR REPLACE INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-          to,
-          "legacy-owner",
-          payload,
-          1,
-        );
+        db.prepare(
+          "INSERT OR REPLACE INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+        ).run(to, "legacy-owner", payload, 1);
         let winner: ReturnType<typeof rows> = [];
         const other = racing(() => {
           db.prepare(`UPDATE managed_update_handoffs SET ${column} = ? WHERE install_root = ?`).run(
@@ -483,7 +495,9 @@ unix("keeps the dead legacy destination when its retarget source changes", () =>
   const { to, store, source, options, racing } = fixture();
   const db = new DatabaseSync(options.databasePath);
   try {
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(
       to,
       "legacy-owner",
       JSON.stringify({ version: 1, pid: process.pid, startIdentity: "0" }),
@@ -514,12 +528,9 @@ unix("does not reclaim a legacy process when its creation identity is unknown", 
   const readStart = pidIdentity.getFileLockProcessStartTime;
   try {
     const identity = store.processIdentity(child.pid);
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-      to,
-      "legacy-owner",
-      JSON.stringify({ version: 1, ...identity, startIdentity: "0" }),
-      1,
-    );
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(to, "legacy-owner", JSON.stringify({ version: 1, ...identity, startIdentity: "0" }), 1);
     const rows = () =>
       db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
     const before = rows();
@@ -543,7 +554,7 @@ unix("does not reclaim a legacy process when its creation identity is unknown", 
 unix(
   "keeps a closed v2 generation occupied while its actors live and preserves late revoke",
   async () => {
-    const { to, store, source, options } = fixture();
+    const { to, store, source, stagedOptions } = fixture();
     const acquired = store.acquire(to, "closing-owner", {
       kind: "triage",
       phase: "reserved",
@@ -560,7 +571,7 @@ unix(
         `
     const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
     const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
-    const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
+    const store=createManagedHandoffLeaseStore(${JSON.stringify(stagedOptions)});
     process.stdin.resume();
     process.once('message',lease=>{const closed=store.settle(lease, "closed");if(!closed)throw new Error('completion refused');process.send(closed,()=>process.disconnect());});
   `,
@@ -610,6 +621,11 @@ unix(
     const { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } =
       await import("./update-managed-service-handoff-lease.js");
     const { to } = fixture();
+    const tmpDirOwner = await import("./tmp-openclaw-dir.js");
+    // Keep the legacy fixture row away from concurrent config writers.
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      path.join(path.dirname(to), "coordinator"),
+    );
     const store = createManagedHandoffLeaseStore();
     const reserved = store.acquire(to, "legacy-owner", { kind: "update" });
     expect(reserved.kind).toBe("acquired");

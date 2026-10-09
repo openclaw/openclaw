@@ -20,6 +20,7 @@ function usageContext(
 
 describe("Codex app-server provider usage", () => {
   it("contributes OpenAI usage windows for the synthetic app-server credential", async () => {
+    const signal = new AbortController().signal;
     const readUsage = vi.fn(async () => ({
       rateLimits: {
         rateLimitsByLimitId: {
@@ -36,7 +37,9 @@ describe("Codex app-server provider usage", () => {
       accountEmail: "codex-account@example.com",
     }));
 
-    await expect(fetchCodexAppServerUsageSnapshot(usageContext(), { readUsage })).resolves.toEqual({
+    await expect(
+      fetchCodexAppServerUsageSnapshot(usageContext({ signal }), { readUsage }),
+    ).resolves.toEqual({
       provider: "openai",
       displayName: "OpenAI",
       windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
@@ -45,6 +48,7 @@ describe("Codex app-server provider usage", () => {
     });
     expect(readUsage).toHaveBeenCalledWith({
       timeoutMs: 3_500,
+      signal,
       agentDir: undefined,
       config: {},
       startOptions: expect.objectContaining({

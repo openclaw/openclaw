@@ -1,5 +1,5 @@
-// Gateway startup runtime-config resolver.
-// Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type {
   GatewayAuthConfig,
   GatewayBindMode,
@@ -17,7 +17,8 @@ import {
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
-import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
+import { commitHookTransformMappingReload } from "./hooks-mapping.js";
+import { resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -38,6 +39,33 @@ type GatewayRuntimeConfig = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
 };
 
+const GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE = "GATEWAY_EFFECTIVE_CONFIG_CONFLICT";
+
+/**
+ * The effective bind/auth/Tailscale combination (after CLI and service overrides are
+ * applied) is invalid. A supervisor restart cannot fix this without operator action, so
+ * callers must classify it the same as a persisted-config validation failure rather than
+ * a transient startup error eligible for restart.
+ */
+class GatewayEffectiveConfigConflictError extends Error {
+  readonly code = GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayEffectiveConfigConflictError";
+  }
+}
+
+export function isGatewayEffectiveConfigConflictError(error: unknown): boolean {
+  return (
+    error instanceof GatewayEffectiveConfigConflictError ||
+    (error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE)
+  );
+}
+
 /** Startup and reload validate the same security policy against the serving listener. */
 export function assertGatewayRuntimeSecurityConfig(
   params: Pick<
@@ -53,49 +81,52 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasSharedSecret =
     (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
     (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
-  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg).some((value) =>
+    value.trim(),
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
   assertGatewayAuthConfigured(resolvedAuth, cfg.gateway?.auth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
   if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
-    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
+    throw new GatewayEffectiveConfigConflictError(
+      formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+    );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    throw new GatewayEffectiveConfigConflictError(
+      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
+    );
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
     );
   }
   if (
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
-    controlUiAllowedOrigins.length === 0 &&
+    !hasControlUiAllowedOrigins &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
     // Host-header fallback; otherwise any reachable host name can become a browser origin.
-    throw new Error(
-      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+    throw new GatewayEffectiveConfigConflictError(
+      "non-loopback Control UI requires gateway.controlUi.allowedOrigins or gateway.publicOrigin when the allowlist is omitted, or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
     );
   }
   if (authMode === "trusted-proxy" && !cfg.gateway?.trustedProxies?.length) {
-    throw new Error(
+    throw new GatewayEffectiveConfigConflictError(
       "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
     );
   }
 }
 
-/** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
@@ -147,11 +178,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
-  const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
-  const controlUiRoot =
-    typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
-      ? controlUiRootRaw.trim()
-      : undefined;
+  const controlUiRoot = normalizeOptionalString(params.cfg.gateway?.controlUi?.root);
   const tailscaleBase = params.cfg.gateway?.tailscale ?? {};
   const tailscaleOverrides = params.tailscale ?? {};
   const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
@@ -177,7 +204,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   };
   assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
   if (hooksConfig) {
-    commitHooksConfigReload();
+    commitHookTransformMappingReload();
   }
   return runtimeConfig;
 }

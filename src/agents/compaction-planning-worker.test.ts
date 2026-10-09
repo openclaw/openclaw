@@ -4,6 +4,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
 import {
   CompactionPlanningWorkerError,
@@ -418,14 +419,7 @@ describe("compaction planning worker", () => {
         timestamp: 1,
       }),
       displacedUser,
-      {
-        role: "toolResult",
-        toolCallId: "call_large",
-        toolName: "read",
-        content: [{ type: "text", text: "small result" }],
-        isError: false,
-        timestamp: 3,
-      },
+      makeTextToolResult("call_large", "read", "small result", false, 3),
       ...Array.from({ length: 61 }, (_, index) => makeMessage(index + 4, "keep")),
     ];
 
@@ -448,6 +442,8 @@ describe("compaction planning worker", () => {
         },
       }));
     `);
+    // Isolate clamping from elapsed admission time in the absolute worker deadline.
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       await runCompactionPlanningWorker({
@@ -460,10 +456,14 @@ describe("compaction planning worker", () => {
         workerUrl,
       });
       // Node timers reject values above the signed 32-bit cap; clamping keeps
-      // huge caller timeouts from firing immediately.
-      expect(setTimeoutSpy.mock.calls).toContainEqual([expect.any(Function), MAX_TIMER_TIMEOUT_MS]);
+      // huge caller timeouts from firing immediately. Queue time consumes the
+      // task deadline, so the armed delay may sit just below the cap.
+      const delays = setTimeoutSpy.mock.calls.map(([, delay]) => delay ?? 0);
+      expect(Math.max(...delays)).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
+      expect(Math.max(...delays)).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS - 1_000);
     } finally {
       setTimeoutSpy.mockRestore();
+      clock.mockRestore();
     }
   });
 

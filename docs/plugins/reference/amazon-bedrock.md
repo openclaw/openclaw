@@ -15,7 +15,7 @@ OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and gu
 ## Distribution
 
 - Package: `@openclaw/amazon-bedrock-provider`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/amazon-bedrock-provider`
 
 ## Surface
 

@@ -74,17 +74,17 @@ async function expectCharacter(cursor: JsonCharacterCursor, expected: string): P
   }
 }
 
-async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
-  await cursor.skipWhitespace();
-  if ((await cursor.take()) !== '"') {
-    throw new Error("expected string in legacy JSON store");
-  }
+/** The opening quote has already been consumed by the enclosing parser. */
+async function readJsonStringToken(
+  cursor: JsonCharacterCursor,
+  enclosing: "string" | "object",
+): Promise<string> {
   let raw = '"';
   let escaped = false;
   while (true) {
     const character = await cursor.take();
     if (character === null) {
-      throw new Error("unterminated string in legacy JSON store");
+      throw new Error(`unterminated ${enclosing} in legacy JSON store`);
     }
     raw += character;
     if (escaped) {
@@ -96,13 +96,21 @@ async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
       continue;
     }
     if (character === '"') {
-      const parsed = parseLegacyJson(raw);
-      if (typeof parsed !== "string") {
-        throw new Error("invalid string in legacy JSON store");
-      }
-      return parsed;
+      return raw;
     }
   }
+}
+
+async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
+  await cursor.skipWhitespace();
+  if ((await cursor.take()) !== '"') {
+    throw new Error("expected string in legacy JSON store");
+  }
+  const parsed = parseLegacyJson(await readJsonStringToken(cursor, "string"));
+  if (typeof parsed !== "string") {
+    throw new Error("invalid string in legacy JSON store");
+  }
+  return parsed;
 }
 
 async function readJsonObject(cursor: JsonCharacterCursor): Promise<unknown> {
@@ -112,27 +120,17 @@ async function readJsonObject(cursor: JsonCharacterCursor): Promise<unknown> {
   }
   let raw = "{";
   let depth = 1;
-  let escaped = false;
-  let inString = false;
   while (depth > 0) {
     const character = await cursor.take();
     if (character === null) {
       throw new Error("unterminated object in legacy JSON store");
     }
-    raw += character;
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
+    if (character === '"') {
+      raw += await readJsonStringToken(cursor, "object");
       continue;
     }
-    if (character === '"') {
-      inString = true;
-    } else if (character === "{") {
+    raw += character;
+    if (character === "{") {
       depth += 1;
     } else if (character === "}") {
       depth -= 1;
@@ -224,7 +222,7 @@ export async function readLegacyJsonObjectStream(params: {
   property?: string;
   onEntry?: (key: string, value: unknown) => void;
 }): Promise<LegacyJsonStreamSnapshot> {
-  const opened = await params.stateRoot.open(params.relativePath, {
+  await using opened = await params.stateRoot.open(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",
   });
@@ -267,7 +265,5 @@ export async function readLegacyJsonObjectStream(params: {
       throw new Error("legacy JSON store is not valid UTF-8", { cause: error });
     }
     throw error;
-  } finally {
-    await opened[Symbol.asyncDispose]();
   }
 }

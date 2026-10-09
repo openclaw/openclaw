@@ -57,6 +57,7 @@ export function registerManagedUpdateHandoffTriageTests(
         log: helperLog,
         savedFailure,
         sensitiveFilesRemoved,
+        triageDeadline,
       } = await runManagedServiceManagerBoundary("systemd", {
         ...options,
         updaterExitCode: 7,
@@ -127,6 +128,11 @@ export function registerManagedUpdateHandoffTriageTests(
       expect(helperLog).toContain("update triage could not complete");
       if (options.triageHang) {
         expect(typeof state.triageDescendantPid).toBe("number");
+        expect(triageDeadline).toEqual({
+          requestedMs: 60_000,
+          descendantPid: state.triageDescendantPid,
+        });
+        expect(helperLog).toContain("verified recovery command exceeded its update timeout");
         await expect.poll(() => isPidAlive(Number(state.triageDescendantPid))).toBe(false);
       }
     },

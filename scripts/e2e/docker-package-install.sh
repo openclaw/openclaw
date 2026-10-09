@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -135,7 +139,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    npm install -g --prefix /tmp/bun-runtime bun@1.4.0 --no-fund --no-audit
+    npm install -g --prefix /tmp/bun-runtime bun@1.4.2 --no-fund --no-audit
     cd /repo
     BUN_BIN=/tmp/bun-runtime/bin/bun \
       OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0 \
@@ -160,79 +164,17 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     exec sleep infinity
   ' >/dev/null
 
-wait_for_proof() {
-  local container_name="$1"
-  for _ in $(seq 1 240); do
-    if docker exec "$container_name" test -f /tmp/openclaw-proof-ready; then
-      return 0
-    fi
-    if [ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != "true" ]; then
-      docker logs "$container_name" >&2
-      return 1
-    fi
-    sleep 1
-  done
-  docker logs "$container_name" >&2
-  return 1
-}
-
 for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF_CONTAINER" "$MUSL_PROOF_CONTAINER"; do
-  wait_for_proof "$container_name"
+  docker_e2e_wait_for_proof "$container_name" 240
 done
 
-NPM_PACKAGE_ROOT="/usr/local/lib/node_modules/openclaw"
-NPM_INSTALLED_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
-PNPM_PACKAGE_ROOT="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-package-root | tr -d '\r\n')"
-PNPM_PACKAGE_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" node -p "require('$PNPM_PACKAGE_ROOT/package.json').version")"
-PNPM_INSTALLED_VERSION="$(docker exec "$PNPM_PROOF_CONTAINER" cat /tmp/openclaw-version | tr -d '\r\n')"
-BUN_OPENCLAW_PATH="$(
-  docker exec "$BUN_PROOF_CONTAINER" \
-    node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawPath'
-)"
-BUN_INSTALLED_VERSION="$(
-  docker exec "$BUN_PROOF_CONTAINER" \
-    node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawVersion'
-)"
-PACKAGE_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" node -p "require('$NPM_PACKAGE_ROOT/package.json').version")"
-test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"
-for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BUN_INSTALLED_VERSION"; do
-  if [[ "$installed_version" != *"$PACKAGE_VERSION"* ]]; then
-    echo "installed CLI output $installed_version does not contain package version $PACKAGE_VERSION" >&2
-    exit 1
-  fi
-done
-
-# The legacy contract intentionally skips native verification; evidence must not
-# present that omission as an executed native proof.
-MUSL_FS_SAFE_NATIVE_OUTCOME="passed"
-if [[ "${OPENCLAW_FS_SAFE_NATIVE_CONTRACT:-required}" == "not-applicable" ]]; then
-  MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"
-fi
-
-node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
-  --scenario docker-package-install \
-  --output "$IDENTITY_PATH" \
-  --image "$IMAGE_NAME" \
-  --package "$PACKAGE_TGZ" \
-  --container "npm=$NPM_PROOF_CONTAINER" \
-  --container "pnpm=$PNPM_PROOF_CONTAINER" \
-  --container "bun=$BUN_PROOF_CONTAINER" \
-  --container "musl=$MUSL_PROOF_CONTAINER" \
-  --detail "npm:installedPackageRoot=$NPM_PACKAGE_ROOT" \
-  --detail "npm:installedPackageVersion=$PACKAGE_VERSION" \
-  --detail "npm:openclawVersion=$NPM_INSTALLED_VERSION" \
-  --detail "npm:openclawPath=/usr/local/bin/openclaw" \
-  --detail "npm:helpCommand=passed" \
-  --detail "npm:nonRootExecution=passed" \
-  --detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME" \
-  --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
-  --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
-  --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \
-  --detail "pnpm:openclawPath=/tmp/pnpm-home/bin/openclaw" \
-  --detail "pnpm:helpCommand=passed" \
-  --detail "bun:installedPackageVersion=$PACKAGE_VERSION" \
-  --detail "bun:openclawVersion=$BUN_INSTALLED_VERSION" \
-  --detail "bun:openclawPath=$BUN_OPENCLAW_PATH" \
-  --detail "bun:helpCommand=passed"
+bash "$ROOT_DIR/scripts/e2e/lib/docker-package-identity.sh" \
+  "$PACKAGE_TGZ" \
+  "$IDENTITY_PATH" \
+  "$IMAGE_NAME" \
+  "$NPM_PROOF_CONTAINER" \
+  "$PNPM_PROOF_CONTAINER" \
+  "$BUN_PROOF_CONTAINER" \
+  "$MUSL_PROOF_CONTAINER"
 
 echo "npm, pnpm, and Bun package artifact proofs passed."

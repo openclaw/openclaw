@@ -5,6 +5,7 @@ import Testing
 struct DashboardRouteMapTests {
     @Test func `route constants match Control UI paths`() {
         #expect(DashboardRouteMap.settingsPath == "/settings")
+        #expect(DashboardRouteMap.appearanceSettingsPath == "/settings/appearance")
         #expect(DashboardRouteMap.deviceSettingsPath == "/settings/device")
         #expect(DashboardRouteMap.devicePermissionsSettingsPath == "/settings/device/permissions")
         #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
@@ -48,6 +49,7 @@ struct DashboardRouteMapTests {
 
     @Test(arguments: [
         DashboardRouteMap.settingsPath,
+        DashboardRouteMap.appearanceSettingsPath,
         DashboardRouteMap.deviceSettingsPath,
         DashboardRouteMap.devicePermissionsSettingsPath,
         DashboardRouteMap.activityPagePath,

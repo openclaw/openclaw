@@ -1,5 +1,5 @@
 use crate::cli::OpenClawCli;
-use crate::gateway_ws::GatewayWsConfig;
+use crate::gateway_ws::{GatewayOwnership, GatewayWsConfig};
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
@@ -16,39 +16,55 @@ pub struct GatewaySnapshot {
     pub reachable: bool,
     pub status: String,
     pub detail: Option<String>,
+    #[serde(skip)]
+    pub runtime_path: Option<std::path::PathBuf>,
 }
 
 impl GatewaySnapshot {
-    pub fn unconfigured() -> Self {
+    fn unavailable(phase: &'static str, status: &str, detail: impl Into<String>) -> Self {
         Self {
-            phase: "unconfigured",
+            phase,
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
-            status: "Setup required".to_string(),
-            detail: Some("Choose where your OpenClaw Gateway should run.".to_string()),
+            status: status.to_string(),
+            detail: Some(detail.into()),
         }
     }
 
+    pub(crate) fn remote_opening() -> Self {
+        Self::unavailable(
+            "remoteOpening",
+            "Opening remote dashboard",
+            "Gateway authentication and readiness are shown in the dashboard.",
+        )
+    }
+
+    pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
+        Self::unavailable("remoteError", "Remote connection unavailable", detail)
+    }
+
+    pub fn unconfigured() -> Self {
+        Self::unavailable(
+            "unconfigured",
+            "Setup required",
+            "Choose where your OpenClaw Gateway should run.",
+        )
+    }
+
     pub fn missing_cli() -> Self {
-        Self {
-            phase: "missingCli",
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "CLI required".to_string(),
-            detail: Some("Install the OpenClaw CLI to continue.".to_string()),
-        }
+        Self::unavailable(
+            "missingCli",
+            "CLI required",
+            "Install the OpenClaw CLI to continue.",
+        )
     }
 
     pub fn reconnecting(detail: impl Into<String>) -> Self {
         Self {
-            phase: "reconnecting",
             installed: true,
-            running: false,
-            reachable: false,
-            status: "Reconnecting".to_string(),
-            detail: Some(detail.into()),
+            ..Self::unavailable("reconnecting", "Reconnecting", detail)
         }
     }
 }
@@ -86,10 +102,17 @@ struct DaemonStatus {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceStatus {
-    loaded: bool,
+    loaded: Option<bool>,
+    load_state: Option<ServiceLoadState>,
     command: Option<serde_json::Value>,
     runtime: Option<ServiceRuntime>,
+}
+
+#[derive(Deserialize)]
+struct ServiceLoadState {
+    detail: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,20 +150,39 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
-    let installed = value.service.command.is_some() || value.service.loaded;
+    let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
+    // A failed service inspection is not evidence that installation is missing.
+    // A healthy RPC can still attach without inspecting or changing the service.
+    if !reachable && value.service.loaded.is_none() {
+        let service_detail = value
+            .service
+            .load_state
+            .as_ref()
+            .and_then(|state| state.detail.as_deref())
+            .unwrap_or("The CLI could not determine the Gateway service state.");
+        let rpc_detail = value
+            .rpc
+            .as_ref()
+            .and_then(|rpc| rpc.error.as_deref())
+            .unwrap_or("The Gateway RPC check did not report a healthy connection.");
+        return Err(format!(
+            "{service_detail}\n{rpc_detail}\nRun `openclaw gateway status` in a terminal \
+             to inspect service access and Gateway credentials, then retry."
+        ));
+    }
+    let installed = value.service.command.is_some() || value.service.loaded == Some(true);
     let runtime_status = value
         .service
         .runtime
         .as_ref()
         .and_then(|runtime| runtime.status.as_deref())
-        .unwrap_or("stopped");
+        .unwrap_or("unknown");
     let running = runtime_status == "running";
-    let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
     let (phase, status) = if reachable {
         ("connected", "Connected")
     } else if !installed {
         ("notInstalled", "Not installed")
-    } else if running {
+    } else if runtime_status != "stopped" {
         ("reconnecting", "Unavailable")
     } else {
         ("stopped", "Stopped")
@@ -164,7 +206,15 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             }
         })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
+    let runtime_path = value
+        .service
+        .command
+        .as_ref()
+        .and_then(|command| command.pointer("/programArguments/0"))
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from);
     Ok(GatewaySnapshot {
+        runtime_path,
         phase,
         installed,
         running,
@@ -174,6 +224,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     })
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {
@@ -184,7 +235,7 @@ pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
         run_service_command(cli, "install")?;
         snapshot = status(cli)?;
     }
-    if !snapshot.running {
+    if snapshot.phase == "stopped" {
         run_service_command(cli, "start")?;
     }
 
@@ -252,6 +303,7 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
                 token,
                 response.gateway_password,
                 response.tls_fingerprint,
+                GatewayOwnership::Local,
             ),
         });
     }
@@ -282,6 +334,10 @@ fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {
         .map(|(_, value)| value.into_owned())
         .filter(|value| !value.is_empty()))
 }
+
+#[cfg(all(test, unix))]
+#[path = "gateway_status_tests.rs"]
+mod status_tests;
 
 #[cfg(test)]
 mod dashboard_tests {

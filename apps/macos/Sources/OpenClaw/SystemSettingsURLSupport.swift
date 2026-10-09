@@ -24,7 +24,6 @@ enum SystemSettingsURLSupport {
         case .notifications: "Notifications"
         case .accessibility: "Accessibility"
         case .screenRecording: "ScreenCapture"
-        case .appleScript: "Automation"
         case .microphone: "Microphone"
         case .speechRecognition: "SpeechRecognition"
         case .camera: "Camera"
@@ -36,13 +35,18 @@ enum SystemSettingsURLSupport {
         ]
     }
 
-    static func openPrivacySettings(for capability: Capability) {
+    @MainActor static func openPrivacySettings(for capability: Capability) {
         self.openFirst(self.privacySettingsCandidates(for: capability))
     }
 
-    static func openFirst(_ candidates: [String]) {
+    @MainActor static func openFirst(_ candidates: [String]) {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            Logger(subsystem: "ai.openclaw", category: "permissions").warning(
+                "System Settings deferred by --no-activate; relaunch without the flag to open settings, then retry.")
+            return
+        }
         for candidate in candidates {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+            if let url = URL(string: candidate), AppActivation.shared.open(url) {
                 return
             }
         }

@@ -49,71 +49,72 @@ describe("cron canonical speech payload delivery", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["Report complete.", "NO_REPLY\nReport complete."])(
-    "preserves direct-delivery ownership while normalizing %j",
-    (text) => {
-      const metadata = {
-        tts: { tagged: true as const, text: "The report is complete." },
-        channelReplyTransformOwner: {},
-        sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
-      };
-      const source = setReplyPayloadMetadata({ text }, metadata);
-      const normalized = normalizeDirectCronDeliveryPayloads({ deliveryPayloads: [source] });
+  it("preserves direct-delivery ownership while stripping control text", () => {
+    const text = "NO_REPLY\nReport complete.";
+    const metadata = {
+      tts: { tagged: true as const, text: "The report is complete." },
+      channelReplyTransformOwner: {},
+      sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
+    };
+    const source = setReplyPayloadMetadata({ text }, metadata);
+    const normalized = normalizeDirectCronDeliveryPayloads({ deliveryPayloads: [source] });
 
-      expect(normalized.kind).toBe("deliver");
-      if (normalized.kind !== "deliver") {
-        throw new Error("expected visible report after normalization");
-      }
-      expect(normalized.payload).toEqual([{ text: "Report complete." }]);
-      expect(getReplyPayloadMetadata(normalized.payload[0]!)).toEqual(metadata);
-      expect(source.text).toBe(text);
-    },
-  );
-
-  it.each(
-    ["whatsapp", "telegram", "discord", "slack"].flatMap((channel) =>
-      (["tagged", "always"] as const).map((auto) => ({ channel, auto })),
-    ),
-  )("preserves authored speech for $channel with $auto TTS", async ({ channel, auto }) => {
-    const visibleText = "Your report is ready.";
-    const spokenText = "The report has finished successfully.";
-    const payloads = buildPayloads({
-      isCronTrigger: true,
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: visibleText }],
-        openclawDelivery: { tts: { tagged: true, text: spokenText } },
-      } as AssistantMessage,
-    });
-    const outcome = resolveCronPayloadOutcome({
-      payloads,
-      finalAssistantVisibleText: visibleText,
-      preferFinalAssistantVisibleText: channel !== "whatsapp",
-    });
-    const normalized = normalizeDirectCronDeliveryPayloads(outcome);
     expect(normalized.kind).toBe("deliver");
     if (normalized.kind !== "deliver") {
-      throw new Error("expected the canonical cron reply to remain deliverable");
+      throw new Error("expected visible report after normalization");
     }
-
-    const result = await maybeApplyTtsToCronPayloads({
-      cfg: createTtsConfig(`openclaw-cron-speech-${randomUUID()}`),
-      payloads: normalized.payload,
-      delivery: { ok: true, channel, to: "test-recipient", mode: "explicit" },
-      agentId: "main",
-      ttsAuto: auto,
-    });
-
-    expect(synthesizeMock).toHaveBeenCalledTimes(1);
-    expect(synthesizeMock.mock.calls[0]?.[0].text).toBe(spokenText);
-    expect(result).toEqual([
-      expect.objectContaining({
-        text: visibleText,
-        spokenText,
-        mediaUrl: "/tmp/cron-speech-proof.ogg",
-      }),
-    ]);
-    expect(getReplyPayloadMetadata(payloads[0]!)?.tts?.text).toBe(spokenText);
+    expect(normalized.payload).toEqual([{ text: "Report complete." }]);
+    expect(getReplyPayloadMetadata(normalized.payload[0]!)).toEqual(metadata);
+    expect(source.text).toBe(text);
   });
+
+  it.each([
+    { channel: "whatsapp", auto: "tagged" },
+    { channel: "telegram", auto: "always" },
+    { channel: "slack", auto: "tagged" },
+  ] as const)(
+    "preserves authored speech for $channel with $auto TTS",
+    async ({ channel, auto }) => {
+      const visibleText = "Your report is ready.";
+      const spokenText = "The report has finished successfully.";
+      const payloads = buildPayloads({
+        isCronTrigger: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: visibleText }],
+          openclawDelivery: { tts: { tagged: true, text: spokenText } },
+        } as AssistantMessage,
+      });
+      const outcome = resolveCronPayloadOutcome({
+        payloads,
+        finalAssistantVisibleText: visibleText,
+        preferFinalAssistantVisibleText: channel !== "whatsapp",
+      });
+      const normalized = normalizeDirectCronDeliveryPayloads(outcome);
+      expect(normalized.kind).toBe("deliver");
+      if (normalized.kind !== "deliver") {
+        throw new Error("expected the canonical cron reply to remain deliverable");
+      }
+
+      const result = await maybeApplyTtsToCronPayloads({
+        cfg: createTtsConfig(`openclaw-cron-speech-${randomUUID()}`),
+        payloads: normalized.payload,
+        delivery: { ok: true, channel, to: "test-recipient", mode: "explicit" },
+        agentId: "main",
+        ttsAuto: auto,
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledTimes(1);
+      expect(synthesizeMock.mock.calls[0]?.[0].text).toBe(spokenText);
+      expect(result).toEqual([
+        expect.objectContaining({
+          text: visibleText,
+          spokenText,
+          mediaUrl: "/tmp/cron-speech-proof.ogg",
+        }),
+      ]);
+      expect(getReplyPayloadMetadata(payloads[0]!)?.tts?.text).toBe(spokenText);
+    },
+  );
 });

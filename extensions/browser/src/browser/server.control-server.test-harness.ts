@@ -1,14 +1,16 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { RequestListener } from "node:http";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Shared Browser control-server test harness with mocked Chrome, CDP,
  * Playwright, Chrome MCP, config, and media dependencies.
  */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import * as browserServer from "../server.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
-import { getFreePort } from "./test-port.js";
+import { reserveBrowserTestListener } from "./test-port.js";
 
 type HarnessState = {
   testPort: number;
@@ -50,6 +52,25 @@ const state: HarnessState = {
   prevGatewayToken: undefined,
   prevGatewayPassword: undefined,
 };
+let listenerReservation: Awaited<ReturnType<typeof reserveBrowserTestListener>> | undefined;
+
+vi.mock("./http-listen.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./http-listen.js")>();
+  return {
+    ...actual,
+    listenBrowserHttpServer: async (app: RequestListener, port: number, host: string) => {
+      if (port !== state.testPort) {
+        return await actual.listenBrowserHttpServer(app, port, host);
+      }
+      if (!listenerReservation || listenerReservation.port !== port || host !== "127.0.0.1") {
+        throw new Error("Browser control server has no matching reserved listener");
+      }
+      const server = listenerReservation.attach(app);
+      listenerReservation = undefined;
+      return server;
+    },
+  };
+});
 
 /** Returns mutable Browser control-server harness state. */
 export function getBrowserControlServerTestState(): HarnessState {
@@ -107,7 +128,10 @@ const cdpMocks = vi.hoisted(() => ({
   createTargetViaCdp: vi.fn<() => Promise<{ targetId: string }>>(async () => {
     throw new Error("cdp disabled");
   }),
-  getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
+  getDocumentIdentitiesViaCdp: vi.fn(async () => ({
+    mainFrame: "cdp:test-document",
+    frameTree: "cdp:test-tree",
+  })),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
@@ -121,13 +145,13 @@ const cdpMocks = vi.hoisted(() => ({
 /** Returns mocked CDP functions used by Browser control-server tests. */
 export function getCdpMocks(): {
   createTargetViaCdp: MockFn;
-  getMainFrameDocumentIdentityViaCdp: MockFn;
+  getDocumentIdentitiesViaCdp: MockFn;
   snapshotAria: MockFn;
   snapshotRoleViaCdp: MockFn;
 } {
   return cdpMocks as unknown as {
     createTargetViaCdp: MockFn;
-    getMainFrameDocumentIdentityViaCdp: MockFn;
+    getDocumentIdentitiesViaCdp: MockFn;
     snapshotAria: MockFn;
     snapshotRoleViaCdp: MockFn;
   };
@@ -196,12 +220,16 @@ const pwMocks = vi.hoisted(() => {
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePlaywrightBrowserConnection,
     hasCachedPlaywrightBrowserConnection: vi.fn((_cdpUrl: string) => false),
-    retirePlaywrightBrowserConnection: vi.fn(() => false),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: false,
       close: async () => await closePlaywrightBrowserConnection(opts),
     })),
     cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
+    downloadCurrentDocumentViaPlaywright: vi.fn(async (_opts?: unknown) => ({
+      url: "https://example.com/inline.png",
+      suggestedFilename: "inline.png",
+      path: "/tmp/managed-inline.png",
+    })),
     downloadViaPlaywright: vi.fn(async () => ({
       url: "https://example.com/report.pdf",
       suggestedFilename: "report.pdf",
@@ -215,7 +243,10 @@ const pwMocks = vi.hoisted(() => {
     getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
       dialogs: { pending: [], recent: [] },
     })),
-    getMainFrameDocumentIdentityViaPlaywright: vi.fn(async () => "pw:test-document"),
+    getDocumentIdentitiesViaPlaywright: vi.fn(async () => ({
+      mainFrame: "pw:test-document",
+      frameTree: "pw:test-tree",
+    })),
     getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
     getPageTextViaPlaywright: vi.fn(async (_opts?: unknown) => ({
       text: "Page text",
@@ -236,7 +267,6 @@ const pwMocks = vi.hoisted(() => {
     resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     setInputFilesViaPlaywright: vi.fn(async () => {}),
-    snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
     snapshotRoleViaPlaywright: vi.fn(async () => ({
       snapshot: '- button "Role" [ref=e1]',
       refs: { e1: { role: "button", name: "Role" } },
@@ -459,27 +489,32 @@ function defaultProfilesForState(testPort: number): HarnessState["cfgProfiles"] 
   };
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const loadConfig = () => {
-    return {
-      browser: {
-        enabled: true,
-        evaluateEnabled: state.cfgEvaluateEnabled,
-        extraArgs: state.cfgExtraArgs,
-        color: "#FF4500",
-        attachOnly: state.cfgAttachOnly,
-        ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
-        headless: true,
-        defaultProfile: state.cfgDefaultProfile,
-        profiles:
-          Object.keys(state.cfgProfiles).length > 0
-            ? state.cfgProfiles
-            : defaultProfilesForState(state.testPort),
-      },
-    };
+function loadConfig() {
+  return {
+    browser: {
+      enabled: true,
+      evaluateEnabled: state.cfgEvaluateEnabled,
+      extraArgs: state.cfgExtraArgs,
+      color: "#FF4500",
+      attachOnly: state.cfgAttachOnly,
+      ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
+      headless: true,
+      defaultProfile: state.cfgDefaultProfile,
+      profiles:
+        Object.keys(state.cfgProfiles).length > 0
+          ? state.cfgProfiles
+          : defaultProfilesForState(state.testPort),
+    },
   };
-  const writeConfigFile = vi.fn(async (_cfg?: ReturnType<typeof loadConfig>) => {});
+}
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfig: loadConfig,
+  getRuntimeConfigSnapshot: vi.fn(() => null),
+}));
+
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => {
   const mutateConfigFile = vi.fn(
     async (params: {
       mutate: (
@@ -489,7 +524,6 @@ vi.mock("../config/config.js", async () => {
     }) => {
       const draft = structuredClone(loadConfig());
       const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
-      await writeConfigFile(draft);
       return {
         path: "/tmp/openclaw.json",
         previousHash: "test-hash",
@@ -504,15 +538,7 @@ vi.mock("../config/config.js", async () => {
     },
   );
   return {
-    ...actual,
-    createConfigIO: vi.fn(() => ({
-      loadConfig,
-      writeConfigFile,
-    })),
-    getRuntimeConfig: loadConfig,
-    getRuntimeConfigSnapshot: vi.fn(() => null),
-    loadConfig,
-    writeConfigFile,
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
     mutateConfigFile,
   };
 });
@@ -531,12 +557,13 @@ vi.mock("./chrome.js", () => ({
       exe: { kind: "chrome", path: "/fake/chrome" },
       userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
-      startedAt: Date.now(),
       proc,
     };
   }),
   resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
-  stopOwnedOpenClawChrome: vi.fn(async () => false),
+  stopOwnedOpenClawChrome: vi.fn<typeof import("./chrome.js").stopOwnedOpenClawChrome>(
+    async () => ({ status: "not-running" }),
+  ),
   stopOpenClawChrome: vi.fn(async () => {
     state.reachable = false;
   }),
@@ -544,7 +571,7 @@ vi.mock("./chrome.js", () => ({
 
 vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
-  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
+  getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
@@ -560,7 +587,8 @@ vi.mock("./pw-ai.js", () => ({ pwAi: pwMocks }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
 
-vi.mock("../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   ensureMediaDir: vi.fn(async () => {}),
   getMediaDir: vi.fn(() => "/tmp"),
@@ -577,15 +605,13 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
-
 /** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {
-  return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
+  return await browserServer.startBrowserControlServerFromConfig();
 }
 
 async function stopBrowserControlServer(): Promise<void> {
-  await (await loadBrowserServerModule()).stopBrowserControlServer();
+  await browserServer.stopBrowserControlServer();
 }
 
 /** Creates a minimal Response-like object for mocked fetch handlers. */
@@ -622,7 +648,12 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   mockClearAll(cdpMocks);
   mockClearAll(chromeMcpMocks);
 
-  state.testPort = await getFreePort();
+  await listenerReservation?.close();
+  listenerReservation = undefined;
+  const { listenBrowserHttpServer } =
+    await vi.importActual<typeof import("./http-listen.js")>("./http-listen.js");
+  listenerReservation = await reserveBrowserTestListener(listenBrowserHttpServer);
+  state.testPort = listenerReservation.port;
   state.cdpBaseUrl = `http://127.0.0.1:${defaultBrowserCdpPortForState(state.testPort)}`;
   state.cfgProfiles = defaultProfilesForState(state.testPort);
   state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
@@ -657,7 +688,12 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
   vi.restoreAllMocks();
   restoreGatewayPortEnv(state.prevGatewayPort);
   restoreGatewayAuthEnv(state.prevGatewayToken, state.prevGatewayPassword);
-  await stopBrowserControlServer();
+  try {
+    await stopBrowserControlServer();
+  } finally {
+    await listenerReservation?.close();
+    listenerReservation = undefined;
+  }
 }
 
 /** Installs beforeEach/afterEach hooks for Browser control-server tests. */

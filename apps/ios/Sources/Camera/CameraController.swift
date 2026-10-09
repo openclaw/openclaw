@@ -27,11 +27,7 @@ actor CameraController {
                 "Microphone unavailable"
             case let .permissionDenied(kind):
                 "\(kind) permission denied"
-            case let .invalidParams(msg):
-                msg
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .invalidParams(msg), let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }
@@ -39,11 +35,7 @@ actor CameraController {
 
     func snap(
         params: OpenClawCameraSnapParams,
-        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
-        format: String,
-        base64: String,
-        width: Int,
-        height: Int)
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraSnapResult
     {
         let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let format = params.format ?? .jpg
@@ -105,14 +97,10 @@ actor CameraController {
 
     func clip(
         params: OpenClawCameraClipParams,
-        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
-        format: String,
-        base64: String,
-        durationMs: Int,
-        hasAudio: Bool)
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraClipResult
     {
         let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
-        let durationMs = Self.clampDurationMs(params.durationMs)
+        let durationMs = CaptureRateLimits.clampDurationMs(params.durationMs, defaultMs: 3000)
         let includeAudio = params.includeAudio ?? true
         let format = params.format ?? .mp4
 
@@ -168,7 +156,7 @@ actor CameraController {
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
-                position: Self.positionLabel(device.position),
+                position: CameraCapturePipelineSupport.positionLabel(device.position),
                 deviceType: device.deviceType.rawValue)
         }
     }
@@ -221,10 +209,6 @@ actor CameraController {
             captureFailed: { .captureFailed($0) })
     }
 
-    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        CameraCapturePipelineSupport.positionLabel(position)
-    }
-
     private nonisolated static func discoverVideoDevices() -> [AVCaptureDevice] {
         let types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
@@ -246,12 +230,6 @@ actor CameraController {
     nonisolated static func clampQuality(_ quality: Double?) -> Double {
         let q = quality ?? 0.9
         return min(1.0, max(0.05, q))
-    }
-
-    nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 3000
-        // Keep clips short by default; avoid huge base64 payloads on the gateway.
-        return min(60000, max(250, v))
     }
 
     nonisolated static func resolveFacing(
@@ -304,20 +282,15 @@ final class CameraCaptureSessionStopper: @unchecked Sendable {
 
     func stop() {
         self.condition.lock()
-        switch self.state {
-        case .stopped:
-            self.condition.unlock()
-            return
-        case .stopping:
-            while self.state == .stopping {
-                self.condition.wait()
-            }
-            self.condition.unlock()
-            return
-        case .running:
-            self.state = .stopping
-            self.condition.unlock()
+        while self.state == .stopping {
+            self.condition.wait()
         }
+        guard self.state == .running else {
+            self.condition.unlock()
+            return
+        }
+        self.state = .stopping
+        self.condition.unlock()
 
         self.stopAction()
 
@@ -328,11 +301,9 @@ final class CameraCaptureSessionStopper: @unchecked Sendable {
     }
 }
 
-final class CameraPhotoCaptureOperation: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
-    typealias StartAction = (any AVCapturePhotoCaptureDelegate) -> Void
-    typealias CancelAction = () -> Void
-
-    private enum Phase: Equatable {
+/// Orders cancellation against synchronous capture admission and the delegate's final callback.
+private final class CameraCaptureOperation<Output: Sendable>: @unchecked Sendable {
+    private enum Phase {
         case idle
         case starting
         case capturing
@@ -343,33 +314,25 @@ final class CameraPhotoCaptureOperation: NSObject, AVCapturePhotoCaptureDelegate
 
     private struct State {
         var phase = Phase.idle
-        var continuation: CheckedContinuation<Data, Error>?
-        var processedResult: Result<Data, Error>?
+        var continuation: CheckedContinuation<Output, Error>?
+        var processedResult: Result<Output, Error>?
+        var cancellationRequested = false
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
-    private let startAction: StartAction
-    private let cancelAction: CancelAction
+    private let name: String
+    private let cancelAction: () -> Void
 
-    convenience init(output: AVCapturePhotoOutput, cancelAction: @escaping CancelAction) {
-        let settings = CameraCapturePipelineSupport.makePhotoSettings(output: output)
-        self.init(
-            startAction: { delegate in
-                output.capturePhoto(with: settings, delegate: delegate)
-            },
-            cancelAction: cancelAction)
-    }
-
-    init(startAction: @escaping StartAction, cancelAction: @escaping CancelAction = {}) {
-        self.startAction = startAction
+    init(name: String, cancelAction: @escaping () -> Void) {
+        self.name = name
         self.cancelAction = cancelAction
     }
 
-    func run() async throws -> Data {
+    func run(startAction: () -> Void) async throws -> Output {
         try Task.checkCancellation()
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
-                self.begin(continuation)
+                self.begin(continuation, startAction: startAction)
             }
         }, onCancel: {
             self.cancel()
@@ -387,50 +350,124 @@ final class CameraPhotoCaptureOperation: NSObject, AVCapturePhotoCaptureDelegate
                 return false
             case .capturing:
                 state.phase = .cancelling
+                state.cancellationRequested = true
                 return true
             case .cancelling, .cancelled, .finished:
                 return false
             }
         }
-        if shouldCancel {
-            self.cancelAction()
+        if shouldCancel { self.cancelAction() }
+    }
+
+    func captureDidStart() {
+        self.state.withLock { state in
+            if state.phase == .starting { state.phase = .capturing }
         }
     }
 
-    func processingDidFinish(_ result: Result<Data, Error>) {
+    func processingDidFinish(_ result: Result<Output, Error>) {
         self.state.withLock { state in
-            guard state.phase == .starting || state.phase == .capturing || state.phase == .cancelling else {
-                return
-            }
+            guard state.phase == .starting || state.phase == .capturing || state.phase == .cancelling else { return }
             state.processedResult = result
         }
     }
 
-    func captureDidFinish(error: Error?) {
-        let completion = self.state.withLock { state -> (CheckedContinuation<Data, Error>, Result<Data, Error>)? in
+    func finish(_ result: @Sendable (Result<Output, Error>?) -> Result<Output, Error>) {
+        let completion = self.state.withLock { state -> (CheckedContinuation<Output, Error>, Result<Output, Error>)? in
             guard let continuation = state.continuation else { return nil }
-
-            let result: Result<Data, Error>
+            let resolved: Result<Output, Error>
             switch state.phase {
             case .cancelling:
-                result = .failure(CancellationError())
+                resolved = .failure(CancellationError())
             case .starting, .capturing:
-                if let error {
-                    result = .failure(error)
-                } else {
-                    result = state.processedResult ?? .failure(Self.missingDataError)
-                }
+                resolved = result(state.processedResult)
             case .idle, .cancelled, .finished:
                 return nil
             }
-
             state.phase = .finished
             state.continuation = nil
             state.processedResult = nil
-            return (continuation, result)
+            return (continuation, resolved)
         }
         if let (continuation, result) = completion {
             continuation.resume(with: result)
+        }
+    }
+
+    private func begin(_ continuation: CheckedContinuation<Output, Error>, startAction: () -> Void) {
+        let shouldStart = self.state.withLock { state -> Bool in
+            switch state.phase {
+            case .idle:
+                state.phase = .starting
+                state.continuation = continuation
+                return true
+            case .cancelled:
+                state.phase = .finished
+                return false
+            case .starting, .capturing, .cancelling, .finished:
+                preconditionFailure("\(self.name) operation can only run once")
+            }
+        }
+        guard shouldStart else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        startAction()
+        let shouldCancel = self.state.withLock { state -> Bool in
+            switch state.phase {
+            case .starting:
+                state.phase = .capturing
+                return false
+            case .cancelling:
+                guard !state.cancellationRequested else { return false }
+                state.cancellationRequested = true
+                return true
+            case .idle, .capturing, .cancelled, .finished:
+                return false
+            }
+        }
+        if shouldCancel { self.cancelAction() }
+    }
+}
+
+final class CameraPhotoCaptureOperation: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
+    typealias StartAction = (any AVCapturePhotoCaptureDelegate) -> Void
+    typealias CancelAction = () -> Void
+
+    private let operation: CameraCaptureOperation<Data>
+    private let startAction: StartAction
+
+    convenience init(output: AVCapturePhotoOutput, cancelAction: @escaping CancelAction) {
+        let settings = CameraCapturePipelineSupport.makePhotoSettings(output: output)
+        self.init(
+            startAction: { delegate in
+                output.capturePhoto(with: settings, delegate: delegate)
+            },
+            cancelAction: cancelAction)
+    }
+
+    init(startAction: @escaping StartAction, cancelAction: @escaping CancelAction = {}) {
+        self.startAction = startAction
+        self.operation = CameraCaptureOperation(name: "camera photo capture", cancelAction: cancelAction)
+    }
+
+    func run() async throws -> Data {
+        defer { withExtendedLifetime(self) {} }
+        return try await self.operation.run { self.startAction(self) }
+    }
+
+    func cancel() {
+        self.operation.cancel()
+    }
+
+    func processingDidFinish(_ result: Result<Data, Error>) {
+        self.operation.processingDidFinish(result)
+    }
+
+    func captureDidFinish(error: Error?) {
+        self.operation.finish { processedResult in
+            if let error { return .failure(error) }
+            return processedResult ?? .failure(Self.missingDataError)
         }
     }
 
@@ -464,42 +501,6 @@ final class CameraPhotoCaptureOperation: NSObject, AVCapturePhotoCaptureDelegate
         self.captureDidFinish(error: error)
     }
 
-    private func begin(_ continuation: CheckedContinuation<Data, Error>) {
-        let shouldStart = self.state.withLock { state -> Bool in
-            switch state.phase {
-            case .idle:
-                state.phase = .starting
-                state.continuation = continuation
-                return true
-            case .cancelled:
-                state.phase = .finished
-                return false
-            case .starting, .capturing, .cancelling, .finished:
-                preconditionFailure("camera photo capture operation can only run once")
-            }
-        }
-        guard shouldStart else {
-            continuation.resume(throwing: CancellationError())
-            return
-        }
-
-        self.startAction(self)
-        let shouldCancel = self.state.withLock { state -> Bool in
-            switch state.phase {
-            case .starting:
-                state.phase = .capturing
-                return false
-            case .cancelling:
-                return true
-            case .idle, .capturing, .cancelled, .finished:
-                return false
-            }
-        }
-        if shouldCancel {
-            self.cancelAction()
-        }
-    }
-
     private static let missingDataError = NSError(domain: "Camera", code: 1, userInfo: [
         NSLocalizedDescriptionKey: "photo data missing",
     ])
@@ -509,25 +510,8 @@ final class CameraMovieRecordingOperation: NSObject, AVCaptureFileOutputRecordin
     typealias StartAction = (any AVCaptureFileOutputRecordingDelegate) -> Void
     typealias StopAction = () -> Void
 
-    private enum Phase {
-        case idle
-        case starting
-        case startRequested
-        case recording
-        case cancelling
-        case cancelled
-        case finished
-    }
-
-    private struct State {
-        var phase = Phase.idle
-        var continuation: CheckedContinuation<URL, Error>?
-        var stopRequested = false
-    }
-
-    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let operation: CameraCaptureOperation<URL>
     private let startAction: StartAction
-    private let stopAction: StopAction
 
     convenience init(output: AVCaptureMovieFileOutput, outputURL: URL) {
         self.init(
@@ -542,77 +526,24 @@ final class CameraMovieRecordingOperation: NSObject, AVCaptureFileOutputRecordin
         stopAction: @escaping StopAction)
     {
         self.startAction = startAction
-        self.stopAction = stopAction
+        self.operation = CameraCaptureOperation(name: "camera movie recording", cancelAction: stopAction)
     }
 
     func run() async throws -> URL {
-        try Task.checkCancellation()
-        return try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation { continuation in
-                self.begin(continuation)
-            }
-        }, onCancel: {
-            self.cancel()
-        })
+        defer { withExtendedLifetime(self) {} }
+        return try await self.operation.run { self.startAction(self) }
     }
 
     func cancel() {
-        let shouldStop = self.state.withLock { state -> Bool in
-            switch state.phase {
-            case .idle:
-                state.phase = .cancelled
-                return false
-            case .starting:
-                state.phase = .cancelling
-                return false
-            case .startRequested, .recording:
-                state.phase = .cancelling
-                guard !state.stopRequested else { return false }
-                state.stopRequested = true
-                return true
-            case .cancelling, .cancelled, .finished:
-                return false
-            }
-        }
-        if shouldStop {
-            self.stopAction()
-        }
+        self.operation.cancel()
     }
 
     func recordingDidStart() {
-        self.state.withLock { state in
-            switch state.phase {
-            case .starting, .startRequested:
-                state.phase = .recording
-            case .cancelling:
-                break
-            case .idle, .recording, .cancelled, .finished:
-                break
-            }
-        }
+        self.operation.captureDidStart()
     }
 
     func recordingDidFinish(outputURL: URL, error: Error?) {
-        let completion = self.state.withLock { state -> (CheckedContinuation<URL, Error>, Result<URL, Error>)? in
-            guard let continuation = state.continuation else { return nil }
-
-            let result: Result<URL, Error>
-            switch state.phase {
-            case .cancelling:
-                result = .failure(CancellationError())
-            case .starting, .startRequested, .recording:
-                result = Self.recordingResult(outputURL: outputURL, error: error)
-            case .idle, .cancelled, .finished:
-                return nil
-            }
-
-            state.phase = .finished
-            state.continuation = nil
-            return (continuation, result)
-        }
-        if let (continuation, result) = completion {
-            continuation.resume(with: result)
-        }
+        self.operation.finish { _ in Self.recordingResult(outputURL: outputURL, error: error) }
     }
 
     func fileOutput(
@@ -630,44 +561,6 @@ final class CameraMovieRecordingOperation: NSObject, AVCaptureFileOutputRecordin
         error: Error?)
     {
         self.recordingDidFinish(outputURL: outputFileURL, error: error)
-    }
-
-    private func begin(_ continuation: CheckedContinuation<URL, Error>) {
-        let shouldStart = self.state.withLock { state -> Bool in
-            switch state.phase {
-            case .idle:
-                state.phase = .starting
-                state.continuation = continuation
-                return true
-            case .cancelled:
-                state.phase = .finished
-                return false
-            case .starting, .startRequested, .recording, .cancelling, .finished:
-                preconditionFailure("camera movie recording operation can only run once")
-            }
-        }
-        guard shouldStart else {
-            continuation.resume(throwing: CancellationError())
-            return
-        }
-
-        self.startAction(self)
-        let shouldStop = self.state.withLock { state -> Bool in
-            switch state.phase {
-            case .starting:
-                state.phase = .startRequested
-                return false
-            case .cancelling:
-                guard !state.stopRequested else { return false }
-                state.stopRequested = true
-                return true
-            case .idle, .startRequested, .recording, .cancelled, .finished:
-                return false
-            }
-        }
-        if shouldStop {
-            self.stopAction()
-        }
     }
 
     private static func recordingResult(outputURL: URL, error: Error?) -> Result<URL, Error> {

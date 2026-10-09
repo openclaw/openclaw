@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -14,7 +16,6 @@ defineDiscordVoiceTests(
     createConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
-    createAudioPlayerMock,
     agentCommandMock,
     resolveVoiceIngressWithParticipantsMock,
     transcribeAudioFileMock,
@@ -38,7 +39,6 @@ defineDiscordVoiceTests(
     getLastAudioPlayer,
     beginSpeakerTurn,
     lastAgentCommandArgs,
-    lastAgentCommandToolNames,
     lastRealtimeBridgeParams,
     createJoinedAgentProxyFixture,
     lastTtsArgs,
@@ -48,6 +48,20 @@ defineDiscordVoiceTests(
     handleSpeakingStart,
     receiveRecordedSpeech,
   }) => {
+    const lastAgentCommandToolNames = () => {
+      const args = lastAgentCommandArgs();
+      if (typeof args.senderIsOwner !== "boolean") {
+        throw new Error("expected agent command owner identity");
+      }
+      return createOpenClawCodingTools({
+        config: {},
+        senderIsOwner: args.senderIsOwner,
+        messageProvider: "discord",
+        workspaceDir: "/tmp/openclaw-discord-voice-tools",
+        agentDir: "/tmp/openclaw-discord-voice-agent",
+      }).map((tool) => tool.name);
+    };
+
     it("composes join, audio ingress, agent dispatch, playback, and leave", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -220,6 +234,7 @@ defineDiscordVoiceTests(
       await entry.playbackQueue;
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+        getToolAuthorityOverlay: expect.any(Function),
         sessionKey: entry.route?.sessionKey,
         text: "use the smaller implementation",
       });
@@ -262,7 +277,7 @@ defineDiscordVoiceTests(
       expect(commandArgs?.model).toBe("openai/gpt-5.4-mini");
     });
 
-    it("runs voice replies under Discord voice output policy", async () => {
+    it("runs voice replies under Discord voice output policy", async ({ signal }) => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-voice-"));
       const audioPath = path.join(tempDir, "reply.mp3");
       await fs.writeFile(audioPath, "voice");
@@ -279,13 +294,13 @@ defineDiscordVoiceTests(
       );
       try {
         await receiveVoiceUtterance(manager, "u-guest");
-        await vi.waitFor(async () => {
-          const exists = await fs.access(audioPath).then(
-            () => true,
-            () => false,
-          );
-          expect(exists).toBe(false);
-        });
+        // Playback owns the reply file until its releaseAudio finally completes.
+        await withinTest(getSessionEntry(manager).playbackQueue, signal);
+        const exists = await fs.access(audioPath).then(
+          () => true,
+          () => false,
+        );
+        expect(exists).toBe(false);
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
@@ -702,7 +717,7 @@ defineDiscordVoiceTests(
             resolveConnect = () => resolve(undefined);
           }),
       );
-      const player = createAudioPlayerMock();
+      const audio = { on: vi.fn(), off: vi.fn(), send: vi.fn() };
       const session = new realtimeModule.DiscordRealtimeVoiceSession({
         accountId: "default",
         cfg: {},
@@ -712,7 +727,7 @@ defineDiscordVoiceTests(
           channelId: "1001",
           voiceSessionKey: "discord:g1:1001",
           route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
-          player,
+          audio,
         },
         mode: "agent-proxy",
         onTerminalError: vi.fn(),
@@ -722,14 +737,16 @@ defineDiscordVoiceTests(
       const connect = session.connect();
       await vi.waitFor(() => expect(realtimeSessionMock.connect).toHaveBeenCalledOnce());
       const provider = lastRealtimeBridgeParams();
-      session.close();
+      const closed = session.close();
       expect(provider.audioSink.isOpen?.()).toBe(false);
       resolveConnect();
       await connect;
+      await closed;
 
       provider.onReady?.();
       expect(provider.audioSink.isOpen?.()).toBe(false);
       expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+      expect(audio.send).toHaveBeenCalledExactlyOnceWith({ type: "output-shutdown" });
     });
 
     it("provider reset fences tool, playback, and consult completions", async () => {

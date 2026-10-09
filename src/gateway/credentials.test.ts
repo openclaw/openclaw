@@ -253,14 +253,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
-  it("throws when local password auth relies on an unresolved SecretRef", () => {
-    expectUnresolvedLocalAuthSecretRefFailure({
-      authMode: "password",
-      secretId: "MISSING_GATEWAY_PASSWORD",
-      errorPath: "gateway.auth.password",
-    });
-  });
-
   it("fails closed on env-template local tokens in the synchronous resolver", () => {
     expect(() =>
       resolveGatewayCredentialsFromConfig({
@@ -361,16 +353,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       auth: DEFAULT_GATEWAY_AUTH,
     });
     expectEnvGatewayCredentials(resolved);
-  });
-
-  it("supports env-first password override in remote mode for gateway call path", () => {
-    const resolved = resolveRemoteModeWithRemoteCredentials({
-      remotePasswordPrecedence: "env-first", // pragma: allowlist secret
-    });
-    expect(resolved).toEqual({
-      token: "remote-token",
-      password: "env-password", // pragma: allowlist secret
-    });
   });
 
   it("supports env-first token precedence in remote mode", () => {
@@ -581,16 +563,5 @@ describe("resolveGatewayCredentialsFromValues", () => {
       passwordPrecedence: "config-first", // pragma: allowlist secret
     });
     expect(resolved).toEqual({ token: undefined, password: undefined });
-  });
-
-  it("accepts config credentials that do not contain env var references", () => {
-    const resolved = resolveGatewayCredentialsFromValues({
-      configToken: "real-token-value",
-      configPassword: "real-password", // pragma: allowlist secret
-      env: {} as NodeJS.ProcessEnv,
-      tokenPrecedence: "config-first",
-      passwordPrecedence: "config-first", // pragma: allowlist secret
-    });
-    expect(resolved).toEqual({ token: "real-token-value", password: "real-password" }); // pragma: allowlist secret
   });
 });

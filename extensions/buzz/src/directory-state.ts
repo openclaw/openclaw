@@ -1,6 +1,8 @@
 import type { Event } from "nostr-tools";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/directory-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { applyBuzzDirectoryQueryAndLimit } from "./directory-query.js";
 import { isNewerBuzzRevision } from "./event-order.js";
 import type { BuzzMentionMember } from "./mentions.js";
 import type { BuzzRoomMembership } from "./room-membership.js";
@@ -18,32 +20,12 @@ const MAX_DIRECTORY_NAME_CHARS = 512;
 const MAX_DIRECTORY_HANDLE_CHARS = 320;
 const MAX_DIRECTORY_URL_CHARS = 4_096;
 
-type BuzzDirectoryProfile = {
-  publicKey: string;
-  displayName?: string;
-  handle?: string;
-  avatarUrl?: string;
-  createdAt: number;
-  eventId: string;
-};
-
-type BuzzDirectoryRoom = {
-  roomId: string;
-  name?: string;
-  archived: boolean;
-  createdAt: number;
-  eventId: string;
-};
+type BuzzDirectoryProfile = NonNullable<ReturnType<typeof parseBuzzDirectoryProfileEvent>>;
+type BuzzDirectoryRoom = NonNullable<ReturnType<typeof parseBuzzDirectoryRoomEvent>>;
 
 function normalizeBoundedString(value: unknown, maxChars: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return truncateUtf16Safe(trimmed, maxChars);
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? truncateUtf16Safe(trimmed, maxChars) : undefined;
 }
 
 function readPreferredString(params: {
@@ -62,46 +44,13 @@ function fallbackPublicKeyLabel(publicKey: string): string {
   return `${publicKey.slice(0, 8)}...${publicKey.slice(-6)}`;
 }
 
-function matchesDirectoryQuery(entry: ChannelDirectoryEntry, query: string): boolean {
-  if (!query) {
-    return true;
-  }
-  return [entry.id, entry.name, entry.handle].some((value) => value?.toLowerCase().includes(query));
-}
-
-function applyQueryAndLimit(
-  entries: ChannelDirectoryEntry[],
-  params: { query?: string | null; limit?: number | null },
-): ChannelDirectoryEntry[] {
-  const query = params.query?.trim().toLowerCase() ?? "";
-  const limit =
-    typeof params.limit === "number" && params.limit > 0 ? Math.floor(params.limit) : undefined;
-  const result: ChannelDirectoryEntry[] = [];
-  for (const entry of entries) {
-    if (!matchesDirectoryQuery(entry, query)) {
-      continue;
-    }
-    result.push(entry);
-    if (limit !== undefined && result.length >= limit) {
-      break;
-    }
-  }
-  return result;
-}
-
-function parseBuzzDirectoryProfileEvent(event: Event): BuzzDirectoryProfile | undefined {
+function parseBuzzDirectoryProfileEvent(event: Event) {
   const publicKey = event.pubkey.trim().toLowerCase();
   if (event.kind !== BUZZ_PROFILE_KIND || !HEX_PUBLIC_KEY_PATTERN.test(publicKey)) {
     return undefined;
   }
-  let content: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(event.content);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return undefined;
-    }
-    content = parsed as Record<string, unknown>;
-  } catch {
+  const content = safeParseJson<unknown>(event.content);
+  if (!isRecord(content)) {
     return undefined;
   }
   return {
@@ -124,7 +73,7 @@ function parseBuzzDirectoryProfileEvent(event: Event): BuzzDirectoryProfile | un
   };
 }
 
-function parseBuzzDirectoryRoomEvent(event: Event): BuzzDirectoryRoom | undefined {
+function parseBuzzDirectoryRoomEvent(event: Event) {
   if (event.kind !== BUZZ_ROOM_METADATA_KIND) {
     return undefined;
   }
@@ -298,14 +247,14 @@ export class BuzzDirectoryState {
     const entries = [...peers]
       .map((publicKey) => this.#buildUserEntry(publicKey))
       .toSorted(compareDirectoryEntries);
-    return applyQueryAndLimit(entries, params);
+    return applyBuzzDirectoryQueryAndLimit(entries, params);
   }
 
   listGroups(params: { query?: string | null; limit?: number | null }): ChannelDirectoryEntry[] {
     const entries = this.activeRoomIds()
       .map((roomId) => this.#buildRoomEntry(roomId))
       .toSorted(compareDirectoryEntries);
-    return applyQueryAndLimit(entries, params);
+    return applyBuzzDirectoryQueryAndLimit(entries, params);
   }
 
   listGroupMembers(params: { groupId: string; limit?: number | null }): ChannelDirectoryEntry[] {
@@ -333,7 +282,7 @@ export class BuzzDirectoryState {
         return entry;
       })
       .toSorted(compareDirectoryEntries);
-    return applyQueryAndLimit(entries, { limit: params.limit });
+    return applyBuzzDirectoryQueryAndLimit(entries, { limit: params.limit });
   }
 
   mentionMembers(roomId: string): BuzzMentionMember[] | undefined {

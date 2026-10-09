@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 VM_NAME="Windows 11"
@@ -432,17 +432,14 @@ feature_state() {
 }
 
 ensure_wsl_features() {
-  local changed=0
-  if [[ "$(feature_state Microsoft-Windows-Subsystem-Linux)" != "Enabled" ]]; then
-    say "Enabling Microsoft-Windows-Subsystem-Linux"
-    run_windows_installer dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-    changed=1
-  fi
-  if [[ "$(feature_state VirtualMachinePlatform)" != "Enabled" ]]; then
-    say "Enabling VirtualMachinePlatform"
-    run_windows_installer dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
-    changed=1
-  fi
+  local changed=0 feature
+  for feature in Microsoft-Windows-Subsystem-Linux VirtualMachinePlatform; do
+    if [[ "$(feature_state "$feature")" != "Enabled" ]]; then
+      say "Enabling $feature"
+      run_windows_installer dism.exe /online /enable-feature "/featurename:$feature" /all /norestart
+      changed=1
+    fi
+  done
   if [[ "$changed" == "1" ]]; then
     restart_guest
     WINDOWS_REBOOT_REQUIRED=0

@@ -4,7 +4,8 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionListOptions } from "../../lib/sessions/index.ts";
-import { page, sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
+import { page, type SessionsRouteData } from "./route.ts";
 
 async function loadSessionsRoute(options: {
   search: string;
@@ -39,14 +40,19 @@ async function loadSessionsRoute(options: {
     statusFilter: options.expectedQuery.archivedFilter,
   });
   expect(
-    sessionsPageListQuery(context, {
+    buildSessionsListQuery(context, {
       statusFilter: data.statusFilter,
       deepLinkSessionKey: data.expandedSessionKey,
       includeGlobal: true,
       includeUnknown: false,
       limit: 50,
     }),
-  ).toEqual(options.expectedQuery);
+  ).toEqual({
+    source: "sessions-page",
+    rowMode: "compact",
+    excludeDock: !data.expandedSessionKey,
+    ...options.expectedQuery,
+  });
 }
 
 describe("sessions route", () => {

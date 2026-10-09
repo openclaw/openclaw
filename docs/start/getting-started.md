@@ -12,7 +12,7 @@ working chat session.
 
 ## What you need
 
-- **Node.js 22.22.3+, 24.15+, or 25.9+** (Node 26 is the recommended runtime)
+- **Node.js 24.16+ or 26.1+** (Node 26 is the recommended runtime)
 - **An existing Claude Code or Codex CLI login, or a provider API key** — onboarding can reuse it
 
 <Tip>
@@ -199,5 +199,6 @@ Full reference: [Environment variables](/help/environment).
 - [Install overview](/install)
 - [Channels overview](/channels)
 - [Setup](/start/setup)
+- [Personal assistant setup](/start/openclaw) - end-to-end guide to a dedicated number that behaves like an always-on assistant
 - [Triage](/cli/triage)
 - [Troubleshooting](/help/troubleshooting)

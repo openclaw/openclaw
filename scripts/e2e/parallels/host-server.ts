@@ -39,7 +39,6 @@ function resolveConfiguredSharedHostIp(): string {
     const result = run("prlsrvctl", ["net", "info", "Shared"], {
       check: false,
       env: { ...process.env, LC_ALL: "C" },
-      quiet: true,
     });
     return result.status === 0 ? parseSharedAdapterIpv4(result.stdout) : "";
   } catch {
@@ -49,7 +48,7 @@ function resolveConfiguredSharedHostIp(): string {
 
 function resolveInterfaceHostIp(): string {
   try {
-    const result = run("ifconfig", [], { check: false, quiet: true });
+    const result = run("ifconfig", [], { check: false });
     if (result.status !== 0) {
       return "";
     }
@@ -78,14 +77,10 @@ export function resolveHostIp(explicit = ""): string {
 
 function allocateHostPort(): number {
   return Number(
-    run(
-      "python3",
-      [
-        "-c",
-        "import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[1]); s.close()",
-      ],
-      { quiet: true },
-    ).stdout.trim(),
+    run("python3", [
+      "-c",
+      "import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[1]); s.close()",
+    ]).stdout.trim(),
   );
 }
 
@@ -119,7 +114,6 @@ export async function startHostServer(input: {
   dir: string;
   hostIp: string;
   port: number;
-  artifactPath: string;
   label: string;
 }): Promise<HostServer> {
   const actualPort = input.port || allocateHostPort();
@@ -182,20 +176,16 @@ export async function startNpmRegistryServer(input: {
   };
 }
 
-async function stopHostServerChild(
-  child: HostServerChild,
-  terminateTimeoutMs = 2_000,
-  killTimeoutMs = 1_500,
-): Promise<boolean> {
+async function stopHostServerChild(child: HostServerChild): Promise<boolean> {
   if (hasHostServerChildExited(child)) {
     return true;
   }
   child.kill("SIGTERM");
-  if (await waitForChildExit(child, terminateTimeoutMs)) {
+  if (await waitForChildExit(child, 2_000)) {
     return true;
   }
   child.kill("SIGKILL");
-  return await waitForChildExit(child, killTimeoutMs);
+  return await waitForChildExit(child, 1_500);
 }
 
 async function waitForChildExit(child: HostServerChild, timeoutMs: number): Promise<boolean> {

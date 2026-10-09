@@ -1,6 +1,8 @@
-// Exercise history preparation and prompt submission together: child state belongs after history.
+import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -14,10 +16,11 @@ import {
 } from "./attempt-spawn-workspace.test-support.js";
 
 const tempPaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:runtime-facts";
 let registry: typeof import("../../subagents/registry/subagent-registry.test-helpers.js");
 
-async function captureAttempt(codeModeOverride: boolean) {
+async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
   resetEmbeddedAttemptHarness();
   getHoisted().createOpenClawCodingToolsMock.mockReturnValue([
     {
@@ -34,6 +37,13 @@ async function captureAttempt(codeModeOverride: boolean) {
     sessionKey,
     tempPaths,
     attemptOverrides: {
+      config: { session: { store: sessionStore } },
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "embedded-session",
+        sessionKey,
+        storePath: sessionStore,
+      },
       codeModeOverride,
       disableTools: false,
       trigger: "user",
@@ -70,44 +80,51 @@ describe("subagent facts through full attempt history preparation", () => {
     await preloadRunEmbeddedAttemptForTests();
     registry = await import("../../subagents/registry/subagent-registry.test-helpers.js");
   });
-  beforeEach(() => registry.resetSubagentRegistryForTests());
+  beforeEach(() => registry.resetSubagentRegistryForTests({ persist: false }));
   afterEach(async () => {
-    registry.resetSubagentRegistryForTests();
+    await registry.resetSubagentRegistryForTests({ persist: false });
     await cleanupTempPaths(tempPaths);
   });
 
-  it.each([false, true])(
-    "preserves the complete system prompt across child state with codeMode=%s",
-    async (codeModeOverride) => {
-      const run = {
-        runId: "run-worker",
-        childSessionKey: "agent:main:subagent:worker",
-        controllerSessionKey: sessionKey,
-        requesterSessionKey: sessionKey,
-        requesterDisplayKey: "main",
-        task: "Inspect fixtures",
-        label: "Worker",
-        cleanup: "keep",
-        createdAt: Date.now(),
-        execution: { status: "queued" },
-      } satisfies SubagentRunRecord;
-      registry.addSubagentRunForTests(run);
-      const queued = await captureAttempt(codeModeOverride);
-      registry.addSubagentRunForTests({
-        ...run,
-        execution: { status: "running", startedAt: Date.now() },
-      });
-      const running = await captureAttempt(codeModeOverride);
-      registry.resetSubagentRegistryForTests();
-      const empty = await captureAttempt(codeModeOverride);
+  it("preserves the complete system prompt across child state in code mode", async () => {
+    const codeModeOverride = true;
+    const sessionStore = path.join(
+      tempDirs.make("openclaw-attempt-subagent-facts-"),
+      "sessions.json",
+    );
+    const storePath = resolvePhysicalSessionStorePath({ sessionKey, storePath: sessionStore });
+    const run = {
+      runId: "run-worker",
+      childSessionKey: "agent:main:subagent:worker",
+      controllerSessionKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      requesterStorePath: storePath,
+      controllerStorePath: storePath,
+      requesterDisplayKey: "main",
+      task: "Inspect fixtures",
+      label: "Worker",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      execution: { status: "queued" },
+    } satisfies SubagentRunRecord;
+    registry.seedSubagentRunForReadTest(run);
+    const queued = await captureAttempt(codeModeOverride, sessionStore);
+    registry.seedSubagentRunForReadTest({
+      ...run,
+      execution: { status: "running", startedAt: Date.now() },
+    });
+    const running = await captureAttempt(codeModeOverride, sessionStore);
+    await registry.resetSubagentRegistryForTests({ persist: false });
+    const empty = await captureAttempt(codeModeOverride, sessionStore);
 
-      expect(queued.systemPrompt).toContain("system prompt");
-      expect(running.systemPrompt).toBe(queued.systemPrompt);
-      expect(empty.systemPrompt).toBe(queued.systemPrompt);
-      expect(queued.systemPrompt).not.toContain("run-worker");
-      expectSubagentCarrier(queued.messages, "status=queued");
-      expectSubagentCarrier(running.messages, "status=running");
-      expectSubagentCarrier(empty.messages, "## Active Subagents\nnone");
-    },
-  );
+    expect(queued.systemPrompt).toContain("system prompt");
+    expect(running.systemPrompt).toBe(queued.systemPrompt);
+    expect(empty.systemPrompt).toBe(queued.systemPrompt);
+    expect(queued.systemPrompt).not.toContain("run-worker");
+    expectSubagentCarrier(queued.messages, "status=queued");
+    expectSubagentCarrier(running.messages, "status=running");
+    expect(empty.messages).not.toContainEqual(
+      expect.objectContaining({ customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE }),
+    );
+  });
 });

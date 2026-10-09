@@ -1,8 +1,14 @@
 // Transport message transform tests cover replay cleanup for provider-specific
 // tool-call/result sequencing before messages are sent back to transports.
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+
+const EXPECTED_FAILURE_MARKER =
+  "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
+const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
 function makeModel(api: Api, provider: string, id: string, canonicalModelId?: string): Model {
   return {
@@ -55,6 +61,53 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "compacts sparse %s history without changing the source or sharing assistant arrays",
+    (api) => {
+      const hidden = makeAssistantMessageFixture({
+        api,
+        content: [{ type: "thinking", thinking: "unfinished reasoning" }],
+      });
+      const failed = makeAssistantMessageFixture({
+        api,
+        content: [{ type: "text", text: "unfinished answer" }],
+      });
+      const retained = makeAssistantMessageFixture({
+        api,
+        stopReason: "stop",
+        content: [{ type: "text", text: "completed answer" }],
+      });
+      const user: Context["messages"][number] = {
+        role: "user",
+        content: "continue",
+        timestamp: 1,
+      };
+      const messages: Context["messages"] = [];
+      messages[1] = hidden;
+      messages[3] = failed;
+      messages[4] = retained;
+      messages[6] = user;
+      messages.length = 8;
+      const original = structuredClone(messages);
+
+      const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
+
+      expect(result).toStrictEqual([
+        { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
+        retained,
+        user,
+      ]);
+      const replayedAssistant = result[1];
+      if (replayedAssistant?.role !== "assistant") {
+        throw new Error("expected the completed assistant turn");
+      }
+      replayedAssistant.stopReason = "length";
+      replayedAssistant.content.push({ type: "text", text: "replay-only addition" });
+      result.pop();
+      expect(messages).toStrictEqual(original);
+    },
+  );
+
   it("preserves unframed tool results only for a selected compaction replay window", () => {
     const model = makeModel("openai-responses", "openai", "gpt-5.4");
     const messages = [
@@ -542,7 +595,13 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
 
   it("drops aborted OpenAI transport assistant tool calls before replay", () => {
     const messages: Context["messages"] = [
-      assistantToolCall("call_aborted", "exec", "aborted"),
+      {
+        ...assistantToolCall("call_aborted", "exec", "aborted"),
+        content: [
+          { type: "text", text: "Starting the command" },
+          { type: "toolCall", id: "call_aborted", name: "exec", arguments: {} },
+        ],
+      },
       { role: "user", content: "retry after abort", timestamp: Date.now() },
     ];
 
@@ -555,37 +614,88 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("call_aborted");
   });
 
-  it("drops text-only aborted and errored transport assistant turns before replay", () => {
-    const messages: Context["messages"] = [
-      {
-        role: "assistant",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.4",
-        stopReason: "aborted",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "partial aborted output" }],
-      } as Extract<Context["messages"][number], { role: "assistant" }>,
-      {
-        role: "assistant",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.4",
-        stopReason: "error",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "partial error output" }],
-      } as Extract<Context["messages"][number], { role: "assistant" }>,
-      { role: "user", content: "retry after failed text turns", timestamp: Date.now() },
-    ];
+  it.each([
+    { api: "openai-responses", provider: "openai", model: "gpt-5.4", stopReason: "error" },
+    { api: "openai-responses", provider: "openai", model: "gpt-5.4", stopReason: "aborted" },
+    { api: "openai-completions", provider: "openai", model: "gpt-5.4", stopReason: "error" },
+    {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      stopReason: "error",
+    },
+  ] as const)(
+    "replaces partial $stopReason text with one marker on $api",
+    ({ api, provider, model, stopReason }) => {
+      const before: Context["messages"][number] = {
+        role: "user",
+        content: "summarize the incident",
+        timestamp: 1,
+      };
+      const after: Context["messages"][number] = {
+        role: "user",
+        content: "what is the weather?",
+        timestamp: 3,
+      };
+      const failed = makeAssistantMessageFixture({
+        api,
+        provider,
+        model,
+        stopReason,
+        content: [{ type: "text", text: "Starting the incident summary" }],
+        timestamp: 2,
+      });
 
-    const result = transformTransportMessages(
-      messages,
-      makeModel("openai-responses", "openai", "gpt-5.4"),
-    );
+      const result = transformTransportMessages(
+        [before, failed, after],
+        makeModel(api, provider, model),
+      );
 
-    expect(result.map((msg) => msg.role)).toEqual(["user"]);
-    expect(JSON.stringify(result)).not.toContain("partial aborted output");
-    expect(JSON.stringify(result)).not.toContain("partial error output");
+      expect(result).toEqual([
+        before,
+        { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
+        after,
+      ]);
+      expect(failed.content).toEqual([{ type: "text", text: "Starting the incident summary" }]);
+    },
+  );
+
+  describe.each(["error", "aborted"] as const)("%s replay without visible output", (stopReason) => {
+    it.each([
+      { name: "empty content", content: [] },
+      {
+        name: "hidden reasoning",
+        content: [{ type: "thinking", thinking: "hidden partial reasoning" }],
+      },
+      {
+        name: "the no-content placeholder",
+        content: [{ type: "text", text: NO_CONTENT_PLACEHOLDER }],
+      },
+      {
+        name: "the no-content placeholder with hidden reasoning",
+        content: [
+          { type: "text", text: NO_CONTENT_PLACEHOLDER },
+          { type: "thinking", thinking: "hidden partial reasoning" },
+        ],
+      },
+    ] satisfies Array<{
+      name: string;
+      content: Extract<Context["messages"][number], { role: "assistant" }>["content"];
+    }>)("drops $name across a model change without inventing a visible turn", ({ content }) => {
+      const failed = makeAssistantMessageFixture({ model: "source-model", stopReason, content });
+      const user: Context["messages"][number] = {
+        role: "user",
+        content: "what is the weather?",
+        timestamp: 3,
+      };
+
+      expect(
+        transformTransportMessages(
+          [failed, user],
+          makeModel("openai-responses", "openai", "gpt-5.4"),
+        ),
+      ).toEqual([user]);
+    });
   });
 
   it("drops max-token reasoning-only transport assistant turns before replay", () => {
@@ -694,7 +804,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(requireToolResultMessage(result[1])).toMatchObject({
       toolCallId: "call_repeated",
       isError: true,
-      content: [{ type: "text", text: "No result provided" }],
+      content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
     });
     expect(JSON.stringify(result)).not.toContain("failed turn output");
   });
@@ -734,7 +844,9 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     );
     expect(googleAlias.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
     const googleToolResult = requireToolResultMessage(googleAlias[1]);
-    expect(googleToolResult.content).toEqual([{ type: "text", text: "No result provided" }]);
+    expect(googleToolResult.content).toEqual([
+      { type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT },
+    ]);
 
     const bedrockCanonical = transformTransportMessages(
       messages,

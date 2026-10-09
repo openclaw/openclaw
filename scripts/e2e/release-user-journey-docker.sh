@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Package-installed release journey smoke with provider, plugins, ClickClack,
-# agent turn, and restart survival.
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-user-journey-e2e" OPENCLAW_RELEASE_USER_JOURNEY_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_RELEASE_USER_JOURNEY_E2E_SKIP_BUILD:-0}"
@@ -16,13 +17,7 @@ HTTP_BODY_MAX_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES 1048576
 )"
 run_log=""
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz release-user-journey "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"

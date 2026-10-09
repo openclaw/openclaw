@@ -99,9 +99,9 @@ NODE
     fi
   fi
   rm -f "$port_file"
+  export OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}"
   OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags" \
     OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM="${artifact_dir:+$merge_upstream}" \
-    OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
     node "$server_script" "$port_file" "${registry_args[@]}" >"$log_file" 2>&1 &
   local server_pid="$!"
 
@@ -130,6 +130,17 @@ NODE
   printf -v "$pid_variable" "%s" "$server_pid"
 }
 
+# Exact versions can name different published and candidate bytes. Keep baseline
+# commands on the recorded upstream without losing shell-function state.
+openclaw_prepublish_plugin_registry_run_published() {
+  if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-}" ]; then
+    "$@"
+    return
+  fi
+  local registry="${OPENCLAW_NPM_REGISTRY_UPSTREAM:?missing published registry upstream}"
+  NPM_CONFIG_REGISTRY="$registry" npm_config_registry="$registry" BUN_CONFIG_REGISTRY="$registry" "$@"
+}
+
 # Keep the registry alive for the entire install command, including package
 # lifecycle scripts, then reap it before the build layer or proof exits.
 openclaw_prepublish_plugin_registry_run_mounted() (
@@ -151,8 +162,8 @@ openclaw_prepublish_plugin_registry_run_mounted() (
   trap 'exit 130' INT
   trap 'exit 143' TERM
   trap 'exit 129' HUP
-  # Before lane code selects an update target, published baseline selectors must
-  # remain published; exact candidate dependencies are already in the package set.
+  # Preserve published tags for unscoped commands; baseline commands use the
+  # published scope because exact candidate versions can overlap published ones.
   OPENCLAW_NPM_REGISTRY_DIST_TAGS="" OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM=1 \
     openclaw_prepublish_plugin_registry_start_mounted "$registry_root" registry_pid '[]'
   if [ -n "$registry_pid" ]; then

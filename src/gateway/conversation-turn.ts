@@ -1,23 +1,26 @@
 import type { ConversationTurnResult } from "../../packages/gateway-protocol/src/schema/agent.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { ConversationDeliveryInputError } from "../config/sessions/conversation-delivery-store.js";
 import {
-  resolveConversation,
-  resolveConversationRegistryScope,
+  beginConversationDeliveryOperation,
+  ConversationDeliveryInputError,
+  getConversationDeliveryOperation,
+} from "../config/sessions/conversation-delivery-store.js";
+import {
+  readConversation,
+  prepareConversationRegistryScope,
   type ConversationRecord,
-  type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import {
   ConversationDeliveryRejectedError,
-  defaultConversationDeliveryDeps,
   sendGatewayConversationMessage,
-  type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
 import {
   bindOutboundSessionEntry,
+  captureOutboundSessionBinding,
+  prepareOutboundSessionBinding,
   resolveOutboundSessionRoute,
 } from "../infra/outbound/outbound-session.js";
 import { registerPendingConversationTurn } from "../sessions/conversation-turns.js";
@@ -26,17 +29,10 @@ import {
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
 import {
-  assertConversationDeliveryAttemptAuthorized,
+  withAuthorizedConversationDelivery,
+  assertConversationDeliveryRouteAuthorized,
   assertConversationRouteEligibleForAgent,
 } from "./conversation-route-ownership.js";
-
-type ConversationTurnDeps = ConversationDeliveryDeps & {
-  registerPendingConversationTurn: typeof registerPendingConversationTurn;
-  resolveConversation: typeof resolveConversation;
-  resolveOutboundChannelPlugin: typeof resolveOutboundChannelPlugin;
-  bindOutboundSessionEntry: typeof bindOutboundSessionEntry;
-  resolveOutboundSessionRoute: typeof resolveOutboundSessionRoute;
-};
 
 type BoundConversationRecord = ConversationRecord & {
   sessionId: string;
@@ -49,19 +45,9 @@ function hasConversationSessionBinding(
   return Boolean(conversation.sessionId && conversation.sessionKey);
 }
 
-const defaultDeps: ConversationTurnDeps = {
-  ...defaultConversationDeliveryDeps,
-  registerPendingConversationTurn,
-  resolveConversation,
-  resolveOutboundChannelPlugin,
-  bindOutboundSessionEntry,
-  resolveOutboundSessionRoute,
-};
-
-function resultForCompletedOperation(params: {
-  operation: ReturnType<ConversationDeliveryDeps["beginOperation"]>["record"];
-}): ConversationTurnResult | undefined {
-  const { operation } = params;
+function resultForCompletedOperation(
+  operation: Awaited<ReturnType<typeof beginConversationDeliveryOperation>>["record"],
+): ConversationTurnResult | undefined {
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
     return {
@@ -132,124 +118,33 @@ function resultForCompletedOperation(params: {
   return operation.status satisfies never;
 }
 
-function prepareConversationMessageId(params: {
-  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
-  config: OpenClawConfig;
-  conversation: ConversationRecord;
-  message: string;
-}): string {
-  const prepare = params.plugin?.outbound?.prepareConversationTurnMessageId;
-  if (!prepare) {
-    throw new ConversationInputError(
-      `Channel ${params.conversation.channel} does not support correlated conversation turns; use conversations_send`,
-    );
-  }
-  let preparedMessageId: string;
-  try {
-    preparedMessageId = prepare({
-      cfg: params.config,
-      to: params.conversation.target,
-      text: params.message,
-      accountId: params.conversation.accountId,
-      threadId: params.conversation.threadId,
-    }).trim();
-  } catch (error) {
-    throw new ConversationInputError(error instanceof Error ? error.message : String(error));
-  }
-  if (!preparedMessageId) {
-    throw new ConversationInputError(
-      `Channel ${params.conversation.channel} prepared an empty conversation-turn message id`,
-    );
-  }
-  return preparedMessageId;
-}
-
-async function ensureConversationContextBinding(params: {
-  deps: ConversationTurnDeps;
-  scope: ConversationRegistryScope;
-  config: OpenClawConfig;
-  agentId: string;
-  sourceSessionKey?: string;
-  conversation: ConversationRecord;
-  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
-  expectedRouteFingerprint: string;
-  readCurrentConfig: () => OpenClawConfig;
-}): Promise<BoundConversationRecord> {
-  if (hasConversationSessionBinding(params.conversation)) {
-    return params.conversation;
-  }
-  const channel = (params.plugin?.id ?? params.conversation.channel) as ChannelId;
-  const route = await params.deps.resolveOutboundSessionRoute({
-    cfg: params.config,
-    channel,
-    ...(params.plugin ? { plugin: params.plugin } : {}),
-    agentId: params.agentId,
-    accountId: params.conversation.accountId,
-    target: params.conversation.target,
-    ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
-  });
-  if (!route) {
-    throw new ConversationInputError(
-      `Conversation ${params.conversation.conversationRef} no longer resolves to a channel route`,
-    );
-  }
-  await params.deps.bindOutboundSessionEntry({
-    cfg: params.config,
-    channel,
-    accountId: params.conversation.accountId,
-    route,
-    sourceSessionKey: params.sourceSessionKey,
-    // Route resolution can await plugin work; replay authority at the exact
-    // session-binding commit so a concurrent config change cannot persist it.
-    assertCommitAllowed: () => {
-      assertConversationDeliveryAttemptAuthorized({
-        config: params.readCurrentConfig(),
-        agentId: params.agentId,
-        conversationRef: params.conversation.conversationRef,
-        expectedRouteFingerprint: params.expectedRouteFingerprint,
-        scope: params.scope,
-        resolveConversation: params.deps.resolveConversation,
-      });
-    },
-  });
-  const bound = params.deps.resolveConversation(params.scope, params.conversation.conversationRef);
-  if (!bound || !hasConversationSessionBinding(bound)) {
-    throw new Error(
-      `Conversation ${params.conversation.conversationRef} could not create its local context binding`,
-    );
-  }
-  return bound;
-}
-
 /** Owns correlation, delivery, and waiting inside the Gateway process that receives ingress. */
-export async function runGatewayConversationTurn(
-  params: {
-    config: OpenClawConfig;
-    readCurrentConfig?: () => OpenClawConfig;
-    agentId: string;
-    senderIsOwner: boolean;
-    sourceSessionKey?: string;
-    turnId: string;
-    conversationRef: string;
-    message: string;
-    timeoutMs: number;
-  },
-  deps: ConversationTurnDeps = defaultDeps,
-): Promise<ConversationTurnResult> {
-  const scope = resolveConversationRegistryScope(params);
-  const prior = deps.getOperation(scope, params.turnId);
-  let begun: ReturnType<ConversationDeliveryDeps["beginOperation"]> | undefined;
+export async function runGatewayConversationTurn(params: {
+  config: OpenClawConfig;
+  readCurrentConfig?: () => OpenClawConfig;
+  agentId: string;
+  senderIsOwner: boolean;
+  sourceSessionKey?: string;
+  turnId: string;
+  conversationRef: string;
+  message: string;
+  timeoutMs: number;
+}): Promise<ConversationTurnResult> {
+  const scope = await prepareConversationRegistryScope(params);
+  const binding = captureOutboundSessionBinding({
+    cfg: params.config,
+    scope,
+    sourceSessionKey: params.sourceSessionKey,
+  });
+  let begun: Awaited<ReturnType<typeof beginConversationDeliveryOperation>> | undefined;
   try {
-    if (prior) {
-      begun = deps.beginOperation(scope, {
-        operationId: params.turnId,
-        operationKind: "turn",
-        conversationRef: params.conversationRef,
-        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        message: params.message,
-        ...(prior.preparedMessageId ? { preparedMessageId: prior.preparedMessageId } : {}),
-      });
-    }
+    const prior = await getConversationDeliveryOperation(scope, params.turnId, {
+      operationKind: "turn",
+      conversationRef: params.conversationRef,
+      ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+      message: params.message,
+    });
+    begun = prior ? { created: false, record: prior } : undefined;
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
       throw new ConversationOperationConflictError(error.message);
@@ -257,7 +152,7 @@ export async function runGatewayConversationTurn(
     throw error;
   }
 
-  const discoveredConversation = deps.resolveConversation(scope, params.conversationRef);
+  const discoveredConversation = await readConversation(scope, params.conversationRef);
   if (!discoveredConversation) {
     throw new ConversationInputError(
       `Conversation not found: ${params.conversationRef} (use conversations_list)`,
@@ -272,39 +167,99 @@ export async function runGatewayConversationTurn(
   });
   const discoveredRouteFingerprint = resolveConversationRouteFingerprint(discoveredConversation);
   if (begun) {
-    const completed = resultForCompletedOperation({ operation: begun.record });
+    const completed = resultForCompletedOperation(begun.record);
     if (completed) {
       return completed;
     }
   }
-  const plugin = deps.resolveOutboundChannelPlugin({
+  const plugin = resolveOutboundChannelPlugin({
     channel: discoveredConversation.channel,
     cfg: currentConfig,
   });
-  const candidatePreparedMessageId = begun
-    ? begun.record.preparedMessageId
-    : prepareConversationMessageId({
-        plugin,
-        config: currentConfig,
-        conversation: discoveredConversation,
-        message: params.message,
-      });
+  let candidatePreparedMessageId = begun?.record.preparedMessageId;
+  if (!begun) {
+    const prepare = plugin?.outbound?.prepareConversationTurnMessageId;
+    if (!prepare) {
+      throw new ConversationInputError(
+        `Channel ${discoveredConversation.channel} does not support correlated conversation turns; use conversations_send`,
+      );
+    }
+    try {
+      candidatePreparedMessageId = prepare({
+        cfg: currentConfig,
+        to: discoveredConversation.target,
+        text: params.message,
+        accountId: discoveredConversation.accountId,
+        threadId: discoveredConversation.threadId,
+      }).trim();
+    } catch (error) {
+      throw new ConversationInputError(error instanceof Error ? error.message : String(error));
+    }
+    if (!candidatePreparedMessageId) {
+      throw new ConversationInputError(
+        `Channel ${discoveredConversation.channel} prepared an empty conversation-turn message id`,
+      );
+    }
+  }
   if (!candidatePreparedMessageId) {
     throw new ConversationInputError(
       `Conversation turn ${params.turnId} is missing its prepared message id`,
     );
   }
-  const conversation = await ensureConversationContextBinding({
-    deps,
-    scope,
-    config: currentConfig,
-    agentId: params.agentId,
-    sourceSessionKey: params.sourceSessionKey,
-    conversation: discoveredConversation,
-    plugin,
-    expectedRouteFingerprint: discoveredRouteFingerprint,
-    readCurrentConfig,
-  });
+  let conversation: BoundConversationRecord;
+  if (hasConversationSessionBinding(discoveredConversation)) {
+    conversation = discoveredConversation;
+  } else {
+    const preparedBinding = prepareOutboundSessionBinding(binding);
+    const channel = (plugin?.id ?? discoveredConversation.channel) as ChannelId;
+    const route = await resolveOutboundSessionRoute({
+      cfg: currentConfig,
+      channel,
+      ...(plugin ? { plugin } : {}),
+      agentId: params.agentId,
+      accountId: discoveredConversation.accountId,
+      target: discoveredConversation.target,
+      ...(discoveredConversation.threadId ? { threadId: discoveredConversation.threadId } : {}),
+    });
+    if (!route) {
+      throw new ConversationInputError(
+        `Conversation ${discoveredConversation.conversationRef} no longer resolves to a channel route`,
+      );
+    }
+    await bindOutboundSessionEntry(
+      {
+        cfg: currentConfig,
+        channel,
+        accountId: discoveredConversation.accountId,
+        route,
+        sourceSessionKey: params.sourceSessionKey,
+        // Replay authority after plugin route resolution at the session-binding commit.
+        workerGuard: {
+          conversation: {
+            conversationRef: discoveredConversation.conversationRef,
+            expectedRouteFingerprint: discoveredRouteFingerprint,
+          },
+          assertCurrent: () => {
+            assertConversationDeliveryRouteAuthorized({
+              config: readCurrentConfig(),
+              agentId: params.agentId,
+              conversationRef: discoveredConversation.conversationRef,
+              expectedRouteFingerprint: discoveredRouteFingerprint,
+              conversation: discoveredConversation,
+            });
+          },
+        },
+      },
+      preparedBinding,
+    );
+    const bound = await readConversation(scope, discoveredConversation.conversationRef);
+    if (!bound || !hasConversationSessionBinding(bound)) {
+      throw new Error(
+        `Conversation ${discoveredConversation.conversationRef} could not create its local context binding`,
+      );
+    }
+    conversation = bound;
+  }
   const authorizedConfig = readCurrentConfig();
   assertConversationRouteEligibleForAgent({
     config: authorizedConfig,
@@ -312,23 +267,43 @@ export async function runGatewayConversationTurn(
     conversation,
   });
   const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+  const authority = {
+    conversationRef: conversation.conversationRef,
+    expectedRouteFingerprint: routeFingerprint,
+    expectedSessionId: conversation.sessionId,
+    expectedSessionKey: conversation.sessionKey,
+  };
+  const assertCurrent = () => {
+    assertConversationDeliveryRouteAuthorized({
+      ...authority,
+      config: readCurrentConfig(),
+      agentId: params.agentId,
+      conversation,
+    });
+  };
   if (!begun) {
     try {
-      begun = deps.beginOperation(scope, {
-        operationId: params.turnId,
-        operationKind: "turn",
-        conversationRef: conversation.conversationRef,
-        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        message: params.message,
-        preparedMessageId: candidatePreparedMessageId,
-      });
+      begun = await beginConversationDeliveryOperation(
+        scope,
+        {
+          operationId: params.turnId,
+          operationKind: "turn",
+          conversationRef: conversation.conversationRef,
+          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+          message: params.message,
+          authority,
+          preparedMessageId: candidatePreparedMessageId,
+        },
+        assertCurrent,
+      );
+      assertCurrent();
     } catch (error) {
       if (error instanceof ConversationDeliveryInputError) {
         throw new ConversationOperationConflictError(error.message);
       }
       throw error;
     }
-    const completed = resultForCompletedOperation({ operation: begun.record });
+    const completed = resultForCompletedOperation(begun.record);
     if (completed) {
       return completed;
     }
@@ -342,7 +317,7 @@ export async function runGatewayConversationTurn(
     );
   }
 
-  const pending = deps.registerPendingConversationTurn({
+  const pending = registerPendingConversationTurn({
     agentId: params.agentId,
     id: params.turnId,
     conversationRef: conversation.conversationRef,
@@ -355,7 +330,7 @@ export async function runGatewayConversationTurn(
   pending.setOutboundMessageId(preparedMessageId);
   try {
     const sent = await sendGatewayConversationMessage({
-      deps,
+      scope,
       context: {
         agentId: params.agentId,
         ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
@@ -369,22 +344,23 @@ export async function runGatewayConversationTurn(
       operation: begun.record,
       preparedMessageId,
       routeFingerprint,
-      onDeliveryAttempt: async () => {
-        assertConversationDeliveryAttemptAuthorized({
-          config: readCurrentConfig(),
-          agentId: params.agentId,
-          conversationRef: conversation.conversationRef,
-          expectedRouteFingerprint: routeFingerprint,
-          expectedSessionId: conversation.sessionId,
-          expectedSessionKey: conversation.sessionKey,
-          scope,
-          resolveConversation: deps.resolveConversation,
-        });
-      },
+      authority,
+      assertCurrent,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery(
+          {
+            ...authority,
+            config: authorizedConfig,
+            readCurrentConfig,
+            agentId: params.agentId,
+            scope,
+          },
+          initiate,
+        ),
     });
     if (sent.deliveryStatus !== "sent") {
       pending.cancel();
-      return resultForCompletedOperation({ operation: sent.operation })!;
+      return resultForCompletedOperation(sent.operation)!;
     }
     const exactMessageId = sent.messageId === preparedMessageId;
     if (!exactMessageId) {
@@ -401,22 +377,13 @@ export async function runGatewayConversationTurn(
     }
     pending.markReady();
     const reply = await pending.wait();
-    return reply
-      ? {
-          status: "replied",
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          messageId: preparedMessageId,
-          correlationPersisted: true,
-          reply,
-        }
-      : {
-          status: "timeout",
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          messageId: preparedMessageId,
-          correlationPersisted: true,
-        };
+    const delivered = {
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageId: preparedMessageId,
+      correlationPersisted: true,
+    };
+    return reply ? { status: "replied", ...delivered, reply } : { status: "timeout", ...delivered };
   } catch (error) {
     pending.cancel();
     if (error instanceof ConversationDeliveryRejectedError) {

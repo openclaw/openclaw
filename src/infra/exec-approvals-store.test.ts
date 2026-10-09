@@ -3,14 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
+import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
+import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -22,23 +29,30 @@ import {
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
 import {
-  ensureExecApprovals,
+  commitExecAuthorizations,
+  ensureExecApprovalsSnapshot,
   loadExecApprovals,
   loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnlyAsync,
+  prepareExecApprovalsCurrentRead,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
-  saveExecApprovals,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
 } from "./exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "./exec-approvals-store.test-support.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 const loggerWarn = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
   createSubsystemLogger: (name: string) => ({
+    trace: vi.fn(),
     debug: vi.fn(),
     info: vi.fn(),
     warn: name === "infra/exec-approvals" ? loggerWarn : vi.fn(),
@@ -95,8 +109,10 @@ beforeEach(() => {
   execApprovalsStoreTesting.reset();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
   execApprovalsStoreTesting.reset();
   envSnapshot.restore();
   for (const directory of tempDirs.splice(0)) {
@@ -104,38 +120,74 @@ afterEach(() => {
   }
 });
 
+const readOnlyLoaders = [
+  { name: "synchronous", load: loadExecApprovalsReadOnly },
+  { name: "asynchronous", load: loadExecApprovalsReadOnlyAsync },
+];
+
 describe("exec approvals SQLite store", () => {
-  it("does not create shared state for a read-only load", () => {
-    const statePath = resolveOpenClawStateSqlitePath();
-    expect(fs.existsSync(statePath)).toBe(false);
+  it.each(readOnlyLoaders)(
+    "does not create shared state for a $name read-only load",
+    async ({ load }) => {
+      const statePath = resolveOpenClawStateSqlitePath();
+      expect(fs.existsSync(statePath)).toBe(false);
 
-    expect(loadExecApprovalsReadOnly()).toMatchObject({
-      version: 1,
-      agents: {},
-    });
-    expect(fs.existsSync(statePath)).toBe(false);
-  });
+      expect(await load()).toMatchObject({
+        version: 1,
+        agents: {},
+      });
+      expect(fs.existsSync(statePath)).toBe(false);
+    },
+  );
 
-  it("does not migrate older shared state for a read-only load", () => {
-    saveExecApprovals({
-      version: 1,
-      defaults: { security: "allowlist" },
-      agents: {},
-    });
-    const statePath = resolveOpenClawStateSqlitePath();
-    closeOpenClawStateDatabaseForTest();
-    const older = new DatabaseSync(statePath);
-    older.exec(`
+  it.each(readOnlyLoaders)(
+    "does not migrate older shared state for a $name read-only load",
+    async ({ load }) => {
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist" },
+        agents: {},
+      });
+      const statePath = resolveOpenClawStateSqlitePath();
+      closeOpenClawStateDatabaseForTest();
+      const older = new DatabaseSync(statePath);
+      older.exec(`
       PRAGMA user_version = 7;
       UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
     `);
-    older.close();
+      older.close();
 
-    expect(loadExecApprovalsReadOnly().defaults?.security).toBe("allowlist");
+      expect((await load()).defaults?.security).toBe("allowlist");
 
-    const after = new DatabaseSync(statePath, { readOnly: true });
-    expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
-    after.close();
+      const after = new DatabaseSync(statePath, { readOnly: true });
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      after.close();
+    },
+  );
+
+  it.each(readOnlyLoaders)(
+    "fails closed for an unavailable $name read-only owner",
+    async ({ load }) => {
+      makeStateDatabaseUnavailable();
+      expect((await load()).defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect(loggerWarn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps the captured legacy gate and repair directory when an async read resumes elsewhere", async () => {
+    const original = process.env.OPENCLAW_STATE_DIR;
+    if (!original) {
+      throw new Error("missing test state dir");
+    }
+    fs.writeFileSync(path.join(original, "exec-approvals.json"), "{}");
+    const loaded = loadExecApprovalsReadOnlyAsync();
+    const foreign = createStateDir();
+    await expect(loaded).rejects.toMatchObject({
+      name: "ExecApprovalsMigrationRequiredError",
+      message: expect.stringContaining(`OPENCLAW_STATE_DIR set to ${original}`),
+    });
+    expect(fs.existsSync(path.join(original, "state", "openclaw.sqlite"))).toBe(false);
+    expect(fs.existsSync(path.join(foreign, "state", "openclaw.sqlite"))).toBe(false);
   });
 
   it("uses a permissive missing-row default without creating the row", () => {
@@ -159,22 +211,32 @@ describe("exec approvals SQLite store", () => {
   });
 
   it("persists CRUD state and all denormalized projections", async () => {
-    const written = await updateExecApprovals({
-      update: () => ({
-        version: 1,
-        socket: { path: "/tmp/openclaw-approvals.sock", token: "secret" },
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: true,
+    const sql = observeMainThreadSql();
+    let written: Awaited<ReturnType<typeof updateExecApprovals>>;
+    try {
+      written = await updateExecApprovals({
+        update: {
+          kind: "replace",
+          file: {
+            version: 1,
+            socket: { path: "/tmp/openclaw-approvals.sock", token: "secret" },
+            defaults: {
+              security: "allowlist",
+              ask: "on-miss",
+              askFallback: "deny",
+              autoAllowSkills: true,
+            },
+            agents: {
+              main: { allowlist: [{ pattern: "/usr/bin/rg" }, { pattern: "/usr/bin/git" }] },
+              worker: { allowlist: [{ pattern: "/usr/bin/jq" }] },
+            },
+          },
         },
-        agents: {
-          main: { allowlist: [{ pattern: "/usr/bin/rg" }, { pattern: "/usr/bin/git" }] },
-          worker: { allowlist: [{ pattern: "/usr/bin/jq" }] },
-        },
-      }),
-    });
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
 
     expect(written?.exists).toBe(true);
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
@@ -191,32 +253,104 @@ describe("exec approvals SQLite store", () => {
     });
   });
 
+  it.each(["update", "direct"] as const)(
+    "keeps malformed %s writes fail-closed instead of discarding invalid policy fields",
+    async (writer) => {
+      const file = {
+        version: 1,
+        defaults: { ask: "always" },
+        agents: { runner: { ask: "invalid" } },
+      } as unknown as ExecApprovalsFile;
+      if (writer === "update") {
+        const written = await updateExecApprovals({ update: { kind: "replace", file } });
+        expect(written?.file.defaults).toMatchObject({ security: "deny", ask: "off" });
+        expect(written?.raw).toBe(serializeExecApprovals(file));
+      } else {
+        writeExecApprovalsConfigRow({ db: openOpenClawStateDatabase().db, file });
+      }
+      expect(readExecApprovalsSnapshot().raw).toBe(serializeExecApprovals(file));
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect((await loadExecApprovalsReadOnlyAsync()).defaults).toMatchObject({
+        security: "deny",
+        ask: "off",
+      });
+    },
+  );
+
   it("preserves raw-byte CAS hashes and returns null on a stale base", async () => {
     const missing = readExecApprovalsSnapshot();
     const first = await updateExecApprovals({
       baseHash: missing.hash,
-      update: () => ({ version: 1, defaults: { security: "deny" }, agents: {} }),
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" }, agents: {} } },
     });
     expect(first?.raw).not.toBeNull();
     expect(first?.hash).toBe(sha256Hex(first?.raw ?? ""));
+    if (!first) {
+      throw new Error("missing first snapshot");
+    }
 
     await expect(
       updateExecApprovals({
         baseHash: missing.hash,
-        update: () => ({ version: 1, defaults: { security: "full" }, agents: {} }),
+        update: {
+          kind: "replace",
+          file: { version: 1, defaults: { security: "full" }, agents: {} },
+        },
       }),
     ).resolves.toBeNull();
 
     const updated = await updateExecApprovals({
       baseHash: first?.hash,
-      update: (file) => ({ ...file, defaults: { security: "full" } }),
+      update: { kind: "replace", file: { ...first.file, defaults: { security: "full" } } },
     });
     expect(updated?.file.defaults?.security).toBe("full");
   });
 
-  it("mints one socket token and reuses it on later initialization", () => {
-    const first = ensureExecApprovals();
-    const second = ensureExecApprovals();
+  it("rolls back a policy replacement when current authority ends before commit", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    let current = true;
+    let commitObserved = false;
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            commitObserved = true;
+            current = false;
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    await expect(
+      updateExecApprovals({
+        baseHash: before.hash,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("request authority ended");
+          }
+        },
+        update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
+      }),
+    ).rejects.toThrow("request authority ended");
+    expect(commitObserved).toBe(true);
+    expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
+  });
+
+  it("mints one socket token and reuses it on later initialization", async () => {
+    const first = (await ensureExecApprovalsSnapshot()).file;
+    const transactions = vi.fn();
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            transactions();
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    const second = (await ensureExecApprovalsSnapshot()).file;
+    expect(transactions).not.toHaveBeenCalled();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
@@ -255,9 +389,12 @@ describe("exec approvals SQLite store", () => {
     makeStateDatabaseUnavailable();
     const commit = vi.fn(async () => "committed");
 
-    await expect(withAgentExecApprovalsRemoved("removed", commit)).rejects.toThrow(
-      "Exec approvals SQLite state is unavailable",
-    );
+    await expect(
+      withAgentExecApprovalsRemoved(
+        { agentId: "removed", operationId: TEST_DELETION_OPERATION_ID },
+        commit,
+      ),
+    ).rejects.toThrow("Exec approvals SQLite state is unavailable");
     expect(commit).not.toHaveBeenCalled();
   });
 
@@ -272,7 +409,18 @@ describe("exec approvals SQLite store", () => {
     });
     seedAgentDeletionJournal("main");
 
-    await expect(withAgentExecApprovalsRemoved("main", async () => "ok")).resolves.toBe("ok");
+    const sql = observeMainThreadSql();
+    try {
+      await expect(
+        withAgentExecApprovalsRemoved(
+          { agentId: "main", operationId: TEST_DELETION_OPERATION_ID },
+          async () => "ok",
+        ),
+      ).resolves.toBe("ok");
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
     expect(loadExecApprovals().agents).toEqual({
       "*": { security: "deny" },
       kept: expect.objectContaining({
@@ -290,29 +438,30 @@ describe("exec approvals SQLite store", () => {
       },
     });
     seedAgentDeletionJournal("removed");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
-    const deletion = withAgentExecApprovalsRemoved("removed", async () => {
-      notifyCommitStarted();
-      await commitGate;
-      return "committed";
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
+    const deletion = withAgentExecApprovalsRemoved(
+      { agentId: "removed", operationId: TEST_DELETION_OPERATION_ID },
+      async () => {
+        notifyCommitStarted();
+        await commitGate;
+        return "committed";
+      },
+    );
 
     await commitStarted;
     try {
-      expect(loadExecApprovals().agents).toEqual({ kept: { security: "deny" } });
+      const file = loadExecApprovals();
+      expect(file.agents).toEqual({ kept: { security: "deny" } });
       await expect(
         updateExecApprovals({
-          update: (file) => ({
-            ...file,
-            agents: { ...file.agents, removed: { security: "full" } },
-          }),
+          update: {
+            kind: "replace",
+            file: {
+              ...file,
+              agents: { ...file.agents, removed: { security: "full" } },
+            },
+          },
         }),
       ).rejects.toMatchObject({ name: "ExecApprovalsMutationFencedError" });
     } finally {
@@ -325,18 +474,15 @@ describe("exec approvals SQLite store", () => {
   it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
     seedAgentDeletionJournal("missing");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
-    const deletion = withAgentExecApprovalsRemoved("missing", async () => {
-      notifyCommitStarted();
-      await commitGate;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
+    const deletion = withAgentExecApprovalsRemoved(
+      { agentId: "missing", operationId: TEST_DELETION_OPERATION_ID },
+      async () => {
+        notifyCommitStarted();
+        await commitGate;
+      },
+    );
 
     await commitStarted;
     try {
@@ -364,10 +510,13 @@ describe("exec approvals SQLite store", () => {
     let policiesDuringCommit: ReturnType<typeof loadExecApprovals>["agents"] = undefined;
 
     await expect(
-      withAgentExecApprovalsRemoved("Agent A", async () => {
-        policiesDuringCommit = loadExecApprovals().agents;
-        throw new Error("roster commit failed");
-      }),
+      withAgentExecApprovalsRemoved(
+        { agentId: "Agent A", operationId: TEST_DELETION_OPERATION_ID },
+        async () => {
+          policiesDuringCommit = loadExecApprovals().agents;
+          throw new Error("roster commit failed");
+        },
+      ),
     ).rejects.toThrow("roster commit failed");
 
     expect(policiesDuringCommit).toEqual({ kept: { security: "deny" } });
@@ -378,19 +527,30 @@ describe("exec approvals SQLite store", () => {
     });
   });
 
-  it("requires a deletion journal before commit", async () => {
-    const commit = vi.fn(async () => "committed");
+  it.each(["missing", "superseded"] as const)(
+    "requires current deletion authority before commit (%s)",
+    async (journal) => {
+      if (journal === "superseded") {
+        seedAgentDeletionJournal("missing", "replacement-deletion-operation");
+      }
+      const commit = vi.fn(async () => "committed");
 
-    await expect(withAgentExecApprovalsRemoved("missing", commit)).rejects.toMatchObject({
-      name: "ExecApprovalsMutationFencedError",
-    });
-    expect(commit).not.toHaveBeenCalled();
-  });
+      await expect(
+        withAgentExecApprovalsRemoved(
+          { agentId: "missing", operationId: TEST_DELETION_OPERATION_ID },
+          commit,
+        ),
+      ).rejects.toMatchObject({
+        name: "ExecApprovalsMutationFencedError",
+      });
+      expect(commit).not.toHaveBeenCalled();
+    },
+  );
 
   it("restores snapshots and honors rollback CAS", async () => {
     const missing = readExecApprovalsSnapshot();
     const first = await updateExecApprovals({
-      update: () => ({ version: 1, defaults: { security: "deny" }, agents: {} }),
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" }, agents: {} } },
     });
     if (!first) {
       throw new Error("missing first snapshot");
@@ -401,17 +561,17 @@ describe("exec approvals SQLite store", () => {
     saveExecApprovals({ version: 1, defaults: { security: "allowlist" }, agents: {} });
     const original = readExecApprovalsSnapshot();
     const newer = await updateExecApprovals({
-      update: (file) => ({ ...file, defaults: { security: "full" } }),
+      update: { kind: "replace", file: { ...original.file, defaults: { security: "full" } } },
     });
     if (!newer) {
       throw new Error("missing newer snapshot");
     }
     expect(await restoreExecApprovalsSnapshotLocked(original, original.hash)).toBe(false);
-    restoreExecApprovalsSnapshot(original);
+    expect(await restoreExecApprovalsSnapshotLocked(original, newer.hash)).toBe(true);
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
 
-  it("serializes two SQLite handles and rejects a stale cross-handle CAS", () => {
+  it("observes foreign commits before worker mutation and rejects stale cross-handle CAS", async () => {
     saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     closeOpenClawStateDatabaseForTest();
@@ -427,7 +587,11 @@ describe("exec approvals SQLite store", () => {
       runSqliteImmediateTransactionSync(second, () => {
         writeExecApprovalsConfigRow({
           db: second,
-          file: { version: 1, defaults: { security: "full" }, agents: {} },
+          file: {
+            version: 1,
+            defaults: { security: "full" },
+            agents: { external: { security: "deny" } },
+          },
         });
       });
       const current = snapshotFromExecApprovalsRow({
@@ -436,10 +600,144 @@ describe("exec approvals SQLite store", () => {
       });
       expect(current.hash).not.toBe(stale.hash);
       expect(current.file.defaults?.security).toBe("full");
+      const sql = observeMainThreadSql();
+      try {
+        await expect(
+          updateExecApprovals({
+            baseHash: stale.hash,
+            update: { kind: "replace", file: stale.file },
+          }),
+        ).resolves.toBeNull();
+        const updated = await updateExecApprovals({
+          update: { kind: "ensure-agent", agentId: "added", policy: { security: "allowlist" } },
+        });
+        expect(updated?.file).toMatchObject({
+          defaults: { security: "full" },
+          agents: { external: { security: "deny" }, added: { security: "allowlist" } },
+        });
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
     } finally {
       first.close();
       second.close();
     }
+  });
+
+  it("settles competing policy saves in writer submission order", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    const sql = observeMainThreadSql();
+    try {
+      const [first, second] = await Promise.all([
+        updateExecApprovals({
+          baseHash: before.hash,
+          update: {
+            kind: "replace",
+            file: { ...before.file, defaults: { security: "allowlist" } },
+          },
+        }),
+        updateExecApprovals({
+          baseHash: before.hash,
+          update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
+        }),
+      ]);
+      expect(first?.file.defaults?.security).toBe("allowlist");
+      expect(second).toBeNull();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(loadExecApprovals().defaults?.security).toBe("allowlist");
+  });
+
+  it("does not batch authorizations across an intervening policy denial", async () => {
+    const entry = { id: "echo", pattern: "/usr/bin/echo" };
+    saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+    const input: ExecAuthorizationCommitInput = {
+      agentId: "main",
+      matches: [entry],
+      command: "echo before",
+      authorization: {
+        source: "current-policy",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: true,
+      },
+    };
+    // Admit the final reader before checking the warmed write path for caller SQL.
+    prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext());
+    const sql = observeMainThreadSql();
+    try {
+      const [before, denied, after] = await Promise.allSettled([
+        commitExecAuthorizationLocked(input),
+        updateExecApprovals({
+          update: { kind: "ensure-agent", agentId: "*", policy: { security: "deny" } },
+        }),
+        commitExecAuthorizationLocked({ ...input, command: "echo after" }),
+      ]);
+      expect(before.status).toBe("fulfilled");
+      expect(denied).toMatchObject({
+        status: "fulfilled",
+        value: {
+          file: {
+            agents: {
+              "*": { security: "deny" },
+              main: { allowlist: [{ lastUsedCommand: "echo before" }] },
+            },
+          },
+        },
+      });
+      expect(after).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ message: "Exec approval changed before execution" }),
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo before");
+  });
+
+  it("settles authorizations with independent request lifetimes separately", async () => {
+    const entry = { id: "echo", pattern: "/usr/bin/echo" };
+    saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+    const input: ExecAuthorizationCommitInput = {
+      agentId: "main",
+      matches: [entry],
+      command: "echo canceled",
+      authorization: {
+        source: "current-policy",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: true,
+      },
+    };
+    let canceled = false;
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            canceled = true;
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    const [revoked, current] = await Promise.allSettled([
+      commitExecAuthorizations(input, () => {
+        if (canceled) {
+          throw new Error("request canceled");
+        }
+      }),
+      commitExecAuthorizations({ ...input, command: "echo current" }),
+    ]);
+    expect(revoked).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({ message: "request canceled" }),
+    });
+    expect(current.status).toBe("fulfilled");
+    expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo current");
   });
 
   it.each([
@@ -472,24 +770,6 @@ describe("exec approvals SQLite store", () => {
       expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
     },
   );
-
-  it("scopes the doctor command to the blocked state directory", () => {
-    // A bare `openclaw doctor --fix` repairs the default root, leaving a scoped
-    // install blocked by the same file it was told to repair (#115008).
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("missing test state dir");
-    }
-    const error = new ExecApprovalsMigrationRequiredError(
-      path.join(stateDir, "exec-approvals.json"),
-    );
-
-    // Prose, not `VAR=value cmd`: no Windows shell accepts that form, and a path
-    // containing spaces would need shell-specific quoting to survive a paste.
-    expect(error.message).toContain(
-      `Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir}`,
-    );
-  });
 
   it.each([
     [true, false, false],

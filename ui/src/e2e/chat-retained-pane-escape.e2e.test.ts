@@ -86,7 +86,7 @@ suite.define(() => {
         const visibleChecks = page.locator(
           'openclaw-chat-pane[aria-hidden="false"] .chat-pr__checks',
         );
-        const summary = visibleChecks.locator("summary");
+        const summary = visibleChecks.locator(":scope > summary");
         await summary.focus();
         await summary.press("Enter");
         await expect.poll(() => visibleChecks.getAttribute("open")).toBe("");
@@ -99,11 +99,18 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-pr__checks',
       );
       expect(await hiddenChecks.getAttribute("open")).toBe("");
+      expect(await hiddenChecks.locator(".chat-pr__checks-menu").isVisible()).toBe(false);
+      await expect
+        .poll(() => visibleChecks.locator(".chat-pr__checks-menu").isVisible())
+        .toBe(true);
       if (captureProof) {
         await page.screenshot({ path: path.join(suite.artifactDir, "before-escape.png") });
       }
       await page.keyboard.press("Escape");
       await expect.poll(() => visibleChecks.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => visibleChecks.locator(".chat-pr__checks-menu").isVisible())
+        .toBe(false);
       expect(await hiddenChecks.getAttribute("open")).toBe("");
     } finally {
       if (captureProof) {

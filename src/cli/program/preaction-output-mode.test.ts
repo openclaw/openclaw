@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const mocks = vi.hoisted(() => ({
   ensureConfigReady: vi.fn(async () => {}),
@@ -15,9 +16,11 @@ vi.mock("../../logging/console.js", () => ({
   routeLogsToStderr: mocks.routeLogsToStderr,
 }));
 vi.mock("../banner.js", () => ({ emitCliBanner: vi.fn() }));
-vi.mock("../cli-name.js", () => ({ resolveCliName: () => "openclaw" }));
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: mocks.ensureConfigReady }));
 vi.mock("../plugin-registry.js", () => ({ ensurePluginRegistryLoaded: vi.fn() }));
+vi.mock("../state-dir-gateway-check.js", () => ({
+  checkCliGatewayStateDir: vi.fn(async () => ({ kind: "allow" })),
+}));
 
 const originalArgv = [...process.argv];
 const originalTitle = process.title;
@@ -52,7 +55,6 @@ describe("preaction model output owner", () => {
       .option("--provider <id>")
       .action(() => {});
 
-    const { registerPreActionHooks } = await import("./preaction.js");
     registerPreActionHooks(program, "test");
     loggingState.forceConsoleToStderr = true;
     loggingState.earlyConsoleRoutingRestore = false;

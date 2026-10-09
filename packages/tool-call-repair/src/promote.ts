@@ -1,6 +1,8 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PlainTextToolCallProtectedRangeResolver } from "./contracts.js";
-// Tool Call Repair module implements promote behavior.
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
@@ -87,11 +89,7 @@ function createPromotedToolCallBlocks(
     return undefined;
   }
   const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
-  if (
-    parsedBlocks.some((block) =>
-      protectedRanges.some((range) => block.start >= range.start && block.start < range.end),
-    )
-  ) {
+  if (parsedBlocks.some((block) => isOffsetInProtectedRanges(block.start, protectedRanges))) {
     return undefined;
   }
 
@@ -105,27 +103,6 @@ function createPromotedToolCallBlocks(
     toolCalls.push(options.createToolCallBlock(block, resolvedName));
   }
   return toolCalls;
-}
-
-function createPromotedToolCallBlocksFromTextParts(
-  textParts: readonly string[],
-  options: PlainTextToolCallPromotionOptions,
-): Record<string, unknown>[] | undefined {
-  const text = textParts.join("");
-  if (!text.trim()) {
-    return [];
-  }
-  let offset = 0;
-  const lineBreakOffsets = new Set(
-    textParts.slice(0, -1).map((part) => {
-      offset += part.length;
-      return offset;
-    }),
-  );
-  if (lineBreakOffsets.has(text.length)) {
-    lineBreakOffsets.delete(text.length);
-  }
-  return createPromotedToolCallBlocks(text, options, lineBreakOffsets);
 }
 
 /** Promotes text calls and maps source blocks retained in the projected message. */
@@ -167,7 +144,18 @@ export function projectStandalonePlainTextToolCallMessage(
   let promotedTextBlock = false;
   let textParts: string[] = [];
   const flushTextParts = (): boolean => {
-    const toolCalls = createPromotedToolCallBlocksFromTextParts(textParts, options);
+    const text = textParts.join("");
+    let offset = 0;
+    const lineBreakOffsets = new Set(
+      textParts.slice(0, -1).map((part) => {
+        offset += part.length;
+        return offset;
+      }),
+    );
+    lineBreakOffsets.delete(text.length);
+    const toolCalls = text.trim()
+      ? createPromotedToolCallBlocks(text, options, lineBreakOffsets)
+      : [];
     textParts = [];
     if (!toolCalls) {
       return false;
@@ -200,10 +188,7 @@ export function projectStandalonePlainTextToolCallMessage(
     return undefined;
   }
 
-  if (!flushTextParts()) {
-    return undefined;
-  }
-  if (!promotedTextBlock) {
+  if (!flushTextParts() || !promotedTextBlock) {
     return undefined;
   }
 

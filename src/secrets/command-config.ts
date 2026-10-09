@@ -1,12 +1,11 @@
 /** Collects and analyzes command-scoped secret assignments from OpenClaw config. */
 import { getAuthoredConfigSecretRef, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { getPath } from "./path-utils.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
-/** One resolved SecretRef value ready to inject into a command-scoped config view. */
 /** One command config path whose value can be resolved from a SecretRef. */
 export type CommandSecretAssignment = {
   path: string;
@@ -15,22 +14,8 @@ export type CommandSecretAssignment = {
 };
 
 /** Active or inactive command target that could not be materialized. */
-export type UnresolvedCommandSecretAssignment = {
-  path: string;
-  pathSegments: string[];
-};
+export type UnresolvedCommandSecretAssignment = Omit<CommandSecretAssignment, "value">;
 
-/** Full command assignment analysis before unresolved active refs are rejected. */
-type AnalyzeAssignmentsFromSnapshotResult = {
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-  unresolved: UnresolvedCommandSecretAssignment[];
-  inactive: UnresolvedCommandSecretAssignment[];
-};
-
-/**
- * Compares source SecretRefs with the active resolved snapshot for command-time assignments.
- */
 /** Analyzes command secret assignments without mutating the source config. */
 export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   sourceConfig: OpenClawConfig;
@@ -38,7 +23,7 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   targetIds: ReadonlySet<string>;
   inactiveRefPaths?: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
-}): AnalyzeAssignmentsFromSnapshotResult {
+}) {
   const defaults = params.sourceConfig.secrets?.defaults;
   const assignments: CommandSecretAssignment[] = [];
   const diagnostics: string[] = [];
@@ -55,11 +40,8 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
       value: target.value,
       defaults,
     });
-    const { explicitRef, ref } = resolveSecretInputRef({
-      value: inlineCandidateRef,
-      refValue: target.refValue,
-      defaults,
-    });
+    const explicitRef = parseSecretRef(target.refValue, defaults);
+    const ref = explicitRef ?? inlineCandidateRef;
     if (!ref) {
       continue;
     }

@@ -1,14 +1,23 @@
-// Imessage plugin module implements client behavior.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+
+// Match only the documented Contacts reconciliation diagnostic; other Apple
+// framework messages must keep their error level.
+const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
+  /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ imsg\[\d+:\d+\] )?Could not fetch group for change type \d+ with identifier [^:]+:ABGroup, making it a delete change type\.$/u;
 
 type IMessageRpcError = {
   code?: number;
@@ -49,43 +58,18 @@ export class IMessageRpcRequestError extends Error {
   }
 }
 
-// A stalled bridge, as opposed to a rejected or merely slow request.
-//
-// Matches only imsg's own structured wait error, e.g.
-//   "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
-// which imsg raises after publishing a request to the injected helper and
-// getting nothing back. That is first-hand evidence about the bridge.
-//
-// Deliberately excludes our own client-side timer ("imsg rpc timeout (...)"):
-// it fires when the local wrapper is slow or blocked while imsg itself is
-// healthy, so treating it as a dead bridge would evict a good capability cache
-// and point operators at `imsg launch`, the wrong repair. An ordinary rejection
-// (bad target, unknown chat) says nothing about bridge health either.
-// Module-private: request() is the only production caller, and the behavior is
-// covered through that boundary rather than by calling this directly.
+// Only imsg's helper wait error proves a bridge stall; our client timeout can
+// also mean a slow wrapper and must not evict a healthy capability cache.
 function isIMessageBridgeStall(error: unknown): boolean {
-  // Only an Error can carry a stall. Stringifying an arbitrary value here would
-  // render most objects as "[object Object]" and match nothing anyway.
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("Timed out waiting for response");
+  return error instanceof Error && error.message.includes("Timed out waiting for response");
 }
 
 const BRIDGE_STALL_GUIDANCE =
   "The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, " +
   "then `openclaw channels status --probe` to refresh capability detection.";
 
-// Append the actionable cause without rewriting the error.
-//
-// Normal outbound sends never consult the private-API status cache (send.ts
-// builds a client and dispatches directly), so evicting that cache alone leaves
-// them repeating an opaque timeout. Decorating here reaches every caller.
-//
-// Preserve the class, code, data, and original message text: send.ts keys
-// delayed-send reconciliation off `data.disposition`/`data.retry_safe` and
-// matches `imsg rpc timeout (send)` by regex, so the original wording has to
-// survive as a prefix.
+// Direct sends bypass the capability cache. Preserve the original error prefix,
+// class, code, and data so recovery guidance does not break send reconciliation.
 function describeIMessageBridgeStall(error: unknown): unknown {
   if (error instanceof IMessageRpcRequestError) {
     return new IMessageRpcRequestError(
@@ -103,7 +87,6 @@ function describeIMessageBridgeStall(error: unknown): unknown {
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timer?: NodeJS.Timeout;
 };
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
@@ -274,6 +257,24 @@ export class IMessageRpcClient {
   async request<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
+    opts?: { timeoutMs?: number; assertCurrent?: () => void },
+  ): Promise<T> {
+    const child = this.child;
+    const stdin = child?.stdin;
+    const assertReadAuthority = captureChannelReadAuthority();
+    return captureEffectAuthority().initiate(() => {
+      if (child !== this.child || stdin !== this.child?.stdin) {
+        throw new Error("imsg rpc process changed before request initiation");
+      }
+      assertReadAuthority?.();
+      opts?.assertCurrent?.();
+      return this.initiateRequest<T>(method, params, opts);
+    });
+  }
+
+  private async initiateRequest<T>(
+    method: string,
+    params?: Record<string, unknown>,
     opts?: { timeoutMs?: number },
   ): Promise<T> {
     if (!this.child || !this.child.stdin) {
@@ -289,21 +290,20 @@ export class IMessageRpcClient {
     const line = `${JSON.stringify(payload)}\n`;
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
-    const response = new Promise<T>((resolve, reject) => {
-      const key = String(id);
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              this.pending.delete(key);
-              reject(new Error(`imsg rpc timeout (${method})`));
-            }, timeoutMs)
-          : undefined;
+    const key = String(id);
+    const pendingResponse = new Promise<T>((resolve, reject) => {
       this.pending.set(key, {
         resolve: (value) => resolve(value as T),
         reject,
-        timer,
       });
     });
+    const response =
+      timeoutMs > 0
+        ? raceWithTimeout(pendingResponse, timeoutMs, () => {
+            this.pending.delete(key);
+            throw new Error(`imsg rpc timeout (${method})`);
+          })
+        : pendingResponse;
 
     // Reject the specific pending request on write error (e.g. EPIPE)
     // instead of letting it hang until timeout. (#75438)
@@ -319,12 +319,8 @@ export class IMessageRpcClient {
     try {
       return await response;
     } catch (err) {
-      // Every private-API action funnels through here, so this is the one place
-      // that learns the bridge went away. Without it the cached "available"
-      // verdict never expires and each later send is dispatched into a dead
-      // bridge, surfacing an opaque -32603 instead of the actionable
-      // "run imsg launch" guidance. Clearing the entry makes the next action
-      // re-probe and report the real state.
+      // Successful capability probes have no TTL; invalidate before recovery
+      // so later actions cannot reuse the stalled bridge's available verdict.
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
         try {
@@ -363,19 +359,11 @@ export class IMessageRpcClient {
     if (this.isReaped) {
       return true;
     }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        this.reaped.then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
+    return await raceWithTimeout(
+      this.reaped.then(() => true),
+      timeoutMs,
+      () => false,
+    );
   }
 
   private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
@@ -408,7 +396,13 @@ export class IMessageRpcClient {
     if (!trimmed) {
       return;
     }
+    // The Full Disk Access promotion below must still see every line, including
+    // the benign ones, so record before choosing the log level.
     this.recordProcessDiagnostic(trimmed);
+    if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
+      logVerbose(`imsg rpc: ${trimmed}`);
+      return;
+    }
     this.runtime?.error?.(`imsg rpc: ${trimmed}`);
   }
 
@@ -428,9 +422,6 @@ export class IMessageRpcClient {
       const pending = this.pending.get(key);
       if (!pending) {
         return;
-      }
-      if (pending.timer) {
-        clearTimeout(pending.timer);
       }
       this.pending.delete(key);
 
@@ -484,9 +475,6 @@ export class IMessageRpcClient {
 
   private failAll(err: Error) {
     for (const [key, pending] of this.pending.entries()) {
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
       pending.reject(err);
       this.pending.delete(key);
     }

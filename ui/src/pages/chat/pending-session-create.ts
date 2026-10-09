@@ -1,0 +1,207 @@
+import { html, nothing } from "lit";
+import { property, state } from "lit/decorators.js";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import type { ApplicationContext } from "../../app/context.ts";
+import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderNewSessionBody } from "../new-session/draft-body.ts";
+import { chatStartupStatusLabel } from "./chat-run-startup.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { renderChatPaneHeader } from "./components/chat-pane-header.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
+
+registerNewSessionSetupEnglish();
+
+/** Admission preview owns display only; real pane controllers mount after acceptance. */
+class PendingSessionCreate extends OpenClawLightDomElement {
+  @property({ attribute: false }) context!: ApplicationContext;
+  @property() sessionKey = "";
+  @property({ type: Boolean }) narrow = false;
+  @property({ type: Boolean }) mergedChrome = false;
+  @property({ type: Boolean }) navDrawerOpen = false;
+  private readonly composerId = `pending-create-${generateUUID()}`;
+  @state() private image: ImageLightboxItem | null = null;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) =>
+        gateway.subscribe(() => {
+          this.closeImage();
+          notify();
+        }),
+    )
+    .watch(
+      () => this.context?.chatSubmissions,
+      (submissions, notify) =>
+        submissions.subscribeCreate(() => {
+          this.closeImage();
+          notify();
+        }),
+    )
+    .watchStore(() => this.context?.placementStartup);
+  private readonly closeImage = () => {
+    this.image?.release?.();
+    this.image = null;
+  };
+  override disconnectedCallback() {
+    this.closeImage();
+    this.subscriptions.clear();
+    resetChatComposerState(this.composerId);
+    super.disconnectedCallback();
+  }
+  override render() {
+    const snapshot = this.context.gateway.snapshot;
+    const identity = snapshot.selfUser?.identity;
+    const startup = readDeletedSessionStartup(this.context, this.sessionKey);
+    const failed = startup?.phase === "failed";
+    const cancelled = startup?.phase === "cancelled";
+    const checking = startup?.action === "check-delivery";
+    const submitting = !failed && !cancelled;
+    const turn = startup?.initialTurn;
+    const errorAction =
+      failed && startup
+        ? startup.discardAndReload
+          ? {
+              label: t("newSession.discardUnsavedAndReload"),
+              onClick: startup.discardAndReload,
+            }
+          : startup.retryable
+            ? {
+                label: t(checking ? "chat.queue.checkDelivery" : "common.retry"),
+                onClick: () => this.context.placementStartup.retry(startup.sessionKey),
+              }
+            : undefined
+        : undefined;
+    const pendingMessage = turn
+      ? buildLocalUserMessage(
+          {
+            text: turn.text,
+            mentions: turn.mentions,
+            attachments: turn.attachments,
+            createdAt: turn.createdAt,
+          },
+          "available",
+        )
+      : this.context.chatSubmissions.readCreateMessage(this.sessionKey);
+    const agentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? "";
+    const agent = this.context.agents.state.agentsList?.agents.find(
+      (entry) => entry.id === agentId,
+    );
+    // Reuse the chat chrome without mounting session controllers or granting
+    // mutation access to an identity that the Gateway has not admitted yet.
+    const noAction = () => {};
+    return html`<div class="sidebar-region" ${shellLayoutTraits({ workbench: true })}>
+        <div class="sidebar-region__header">
+          ${renderChatPaneHeader({
+            paneId: this.composerId,
+            narrow: this.narrow,
+            mergedChrome: this.mergedChrome,
+            navDrawerOpen: this.navDrawerOpen,
+            title: t("newSession.title"),
+            session: undefined,
+            incognito: isIncognitoSessionKey(this.sessionKey),
+            catalog: false,
+            editing: false,
+            renameValue: "",
+            workspaceRoot: null,
+            workspaceLabel: null,
+            workspaceIcon: null,
+            parentSession: null,
+            branch: null,
+            branches: [],
+            branchSwitchDisabledReason: null,
+            platform: null,
+            canReveal: false,
+            copiedAction: null,
+            panelActions: nothing,
+            panelLayoutActions: nothing,
+            sessionMenuAction: nothing,
+            onBeginRename: noAction,
+            onRenameInput: noAction,
+            onCommitRename: noAction,
+            onCancelRename: noAction,
+            onMenuOpenChange: noAction,
+            onMenuAction: noAction,
+            onOpenParentSession: noAction,
+            onBranchSelect: noAction,
+          })}
+        </div>
+        <section class="chat" data-region="main" aria-busy=${String(submitting)}>
+          <div class="chat-main__conversation-frame">
+            <div class="chat-main__conversation">
+              ${renderNewSessionBody({
+                inChat: true,
+                error: failed
+                  ? (startup.error ??
+                    t(checking ? "chat.queue.checkDeliveryHelp" : "newSession.createFailed"))
+                  : null,
+                errorAction: errorAction
+                  ? {
+                      ...errorAction,
+                      disabled:
+                        snapshot.phase !== "connected" || !snapshot.client?.recoveryScopeReady,
+                    }
+                  : undefined,
+                pendingMessage,
+                userId: identity?.type === "profile" ? identity.id : null,
+                submitting,
+                statusLabel:
+                  snapshot.phase === "connected"
+                    ? chatStartupStatusLabel(null, startup)
+                    : t("connection.reconnecting"),
+                completion: cancelled
+                  ? { label: startup.error ?? t("newSession.placementCancelled") }
+                  : failed
+                    ? {
+                        label: t(
+                          checking ? "chat.queue.deliveryUnconfirmed" : "chat.queue.notSent",
+                        ),
+                      }
+                    : undefined,
+                renderDraft: () => html`<div role="status">${t("connection.reconnecting")}</div>`,
+                onOpenImage: (item) => {
+                  this.closeImage();
+                  this.image = item;
+                },
+              })}
+              <div class="chat-footer">
+                ${renderChatComposer({
+                  paneId: this.composerId,
+                  sessionKey: this.sessionKey,
+                  currentAgentId: agentId,
+                  assistantName: agent?.identity?.name ?? agent?.name ?? agentId,
+                  connected: snapshot.phase === "connected",
+                  canSend: false,
+                  sessionAdmitted: false,
+                  disabledReason: null,
+                  sending: submitting,
+                  messages: [],
+                  stream: null,
+                  queue: [],
+                  draft: "",
+                  modelCatalog: [],
+                  modelSwitching: false,
+                  sessions: null,
+                  onDraftChange: noAction,
+                  onSend: noAction,
+                  onQueueRemove: noAction,
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+      ${renderChatImageLightbox(this.image, this.closeImage)}`;
+  }
+}
+if (!customElements.get("openclaw-pending-session-create")) {
+  customElements.define("openclaw-pending-session-create", PendingSessionCreate);
+}

@@ -77,7 +77,7 @@ suite.define(() => {
         const session = page.locator(`openclaw-app-sidebar [data-session-key="${sessionKey}"]`);
         await session.waitFor();
         await session.hover();
-        await session.locator("[data-session-menu]").click();
+        await session.click({ button: "right" });
         const menuSurface = page.getByRole("menu", {
           name: "Actions for Release notes",
           exact: true,

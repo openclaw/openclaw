@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { runCommandBufferedMock } = vi.hoisted(() => ({ runCommandBufferedMock: vi.fn() }));
@@ -38,10 +39,13 @@ afterEach(async () => {
 
 describe("dir.fetch process wrapper", () => {
   it("falls back to capped tar when the optional du probe fails", async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of tar.c({ cwd: tmpRoot, gzip: true, portable: true }, ["ok.txt"])) {
+      chunks.push(Buffer.from(chunk));
+    }
     runCommandBufferedMock
       .mockRejectedValueOnce(new Error("du failed"))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("./ok.txt\n") }));
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.concat(chunks) }));
 
     await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
       ok: true,
@@ -126,52 +130,52 @@ describe("dir.fetch process wrapper", () => {
     },
   );
 
-  it("fails tar entry listing closed on wrapper errors", async () => {
+  it("rejects invalid producer archive bytes before returning a transfer", async () => {
     runCommandBufferedMock
       .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))
-      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }))
-      .mockResolvedValueOnce(
-        commandResult({ code: null, termination: "error", error: new Error("listing failed") }),
-      );
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
 
     await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
       ok: false,
       code: "READ_ERROR",
-      message: "tar entry listing failed",
+      message: expect.stringContaining("archive inspection failed:"),
     });
+    expect(runCommandBufferedMock).toHaveBeenCalledTimes(2);
   });
 
   describe.each([true, false])("archive failures with preflight=%s", (preflightOnly) => {
-    it.each([
-      {
-        label: "output cap",
-        result: commandResult({
-          code: null,
-          termination: "output-limit",
-          outputLimitStream: "stdout",
-        }),
-        code: "TREE_TOO_LARGE",
-        message: `tarball exceeded 1024 byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
-      },
-      {
-        label: "timeout",
-        result: commandResult({ code: null, termination: "timeout" }),
-        code: "READ_ERROR",
-        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
-      },
-      {
-        label: "changed canonical path",
-        result: commandResult({ code: 78 }),
-        code: "CANONICAL_PATH_CHANGED",
-        message: "canonical path differs from the authorized target",
-      },
-      {
-        label: "launch error",
-        result: new Error("spawn failed"),
-        code: "READ_ERROR",
-        message: "tar command failed",
-      },
-    ])("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
+    it.each(
+      [
+        {
+          label: "output cap",
+          result: commandResult({
+            code: null,
+            termination: "output-limit",
+            outputLimitStream: "stdout",
+          }),
+          code: "TREE_TOO_LARGE",
+          message: `tarball exceeded 1024 byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
+        },
+        {
+          label: "timeout",
+          result: commandResult({ code: null, termination: "timeout" }),
+          code: "READ_ERROR",
+          message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+        },
+        {
+          label: "changed canonical path",
+          result: commandResult({ code: 78 }),
+          code: "CANONICAL_PATH_CHANGED",
+          message: "canonical path differs from the authorized target",
+        },
+        {
+          label: "launch error",
+          result: new Error("spawn failed"),
+          code: "READ_ERROR",
+          message: "tar command failed",
+        },
+      ].filter(({ label }) => !preflightOnly || label === "output cap" || label === "launch error"),
+    )("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
       if (!preflightOnly) {
         runCommandBufferedMock.mockResolvedValueOnce(
           commandResult({ stdout: Buffer.from("1\tproject\n") }),

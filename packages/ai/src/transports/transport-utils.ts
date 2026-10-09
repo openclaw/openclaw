@@ -1,10 +1,12 @@
 import type { Model } from "@openclaw/llm-core";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
 export { redactIdentifier, sha256Hex } from "@openclaw/normalization-core/node-crypto";
+export { createAbortError } from "../../../retry/src/index.js";
 export { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "../internal/retry-after.js";
+export { parsePositiveInteger } from "./positive-integer.js";
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
@@ -13,14 +15,7 @@ const NON_LATIN_RE =
   /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
 const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
 
-export function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
-}
-
-export function redactSensitiveText(text: string, _options?: unknown): string {
+export function redactSensitiveText(text: string): string {
   return getAiTransportHost().redactToolPayloadText(text);
 }
 
@@ -37,12 +32,6 @@ export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel)
     }
   }
   return headers ? ({ ...model, headers } as TModel) : model;
-}
-
-export function createAbortError(message: string, options?: ErrorOptions): Error {
-  const error = new Error(message, options);
-  error.name = "AbortError";
-  return error;
 }
 
 export function estimateStringChars(text: string): number {
@@ -77,23 +66,9 @@ async function readChunkWithIdleTimeout(
   timeoutMs: number,
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ?? new Error("Read timed out")),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await raceWithTimeout(reader.read(), timeoutMs, () => {
+    throw onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ?? new Error("Read timed out");
+  });
 }
 
 export async function readResponseTextSnippet(

@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Classifies a Gateway connect failure into what the login gate should say and where the fix lives.
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { t } from "../i18n/index.ts";
 import {
@@ -8,19 +7,34 @@ import {
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
+import { formatGatewayHost } from "../lib/gateway-host.ts";
+import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
+
+function isPasswordModeErrorCode(code: string | null): boolean {
+  return (
+    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
+    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED
+  );
+}
 
 type LoginFailureKind =
   | "auth-required"
   | "auth-failed"
+  | "bootstrap-invalid"
   | "trusted-proxy"
   | "auth-rate-limited"
   | "profile-unavailable"
   | "verified-user-required"
+  | "access-denied"
   | "pairing-required"
+  | "pairing-rejected"
+  | "pairing-expired"
   | "insecure-context"
   | "origin-not-allowed"
   | "build-mismatch"
   | "protocol-mismatch"
+  | "busy"
   | "network";
 
 /**
@@ -35,8 +49,6 @@ type LoginFailurePlacement = "form" | "status";
 export type LoginFailureTone = "pending" | "warn" | "danger";
 
 type LoginFormField = "url" | "credential";
-
-export type CredentialMode = "token" | "password";
 
 export type LoginFailureStep = {
   text: string;
@@ -67,43 +79,29 @@ export type LoginFailureFeedback = {
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
   gatewayUrl?: string;
+  secret?: string;
+  reconnectPending?: boolean;
+  reconnectAt?: number;
 };
 
-export const PASSWORD_MODE_CODES = new Set<string>([
-  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
-  ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
-]);
-
-export function formatGatewayHost(gatewayUrl: string | undefined): string {
-  const raw = gatewayUrl?.trim() ?? "";
-  if (!raw) {
-    return t("common.unknown");
-  }
-  try {
-    const url = new URL(raw);
-    return url.host || raw;
-  } catch {
-    return raw;
-  }
-}
-
-function buildFeedback(params: {
-  kind: LoginFailureKind;
-  placement?: LoginFailurePlacement;
-  tone?: LoginFailureTone;
-  field?: LoginFormField;
-  rawError: string;
-  docsHref?: string;
-  titleKey: string;
-  summaryKey?: string;
-  primaryCommand?: string;
-  stepKeys: LoginFailureStepDefinition[];
-  stepParams?: Record<string, string>;
-  refreshAction?: { label: string };
-}): LoginFailureFeedback {
+function buildFeedback(
+  error: string,
+  params: {
+    kind: LoginFailureKind;
+    placement?: LoginFailurePlacement;
+    tone?: LoginFailureTone;
+    field?: LoginFormField;
+    docsHref?: string;
+    titleKey: string;
+    summaryKey?: string;
+    primaryCommand?: string;
+    stepKeys: LoginFailureStepDefinition[];
+    stepParams?: Record<string, string>;
+    refreshAction?: { label: string };
+  },
+): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
-  const rawError = redactLoginFailureError(params.rawError);
+  const rawError = redactLoginFailureError(error);
   return {
     kind: params.kind,
     placement: params.placement ?? "status",
@@ -135,12 +133,40 @@ export function resolveLoginFailureFeedback(
   const lower = normalizeLowercaseStringOrEmpty(rawError);
   const host = formatGatewayHost(params.gatewayUrl);
 
+  if (lastErrorCode === "GATEWAY_BUSY" && params.reconnectPending) {
+    return buildFeedback(rawError, {
+      kind: "busy",
+      tone: "pending",
+      titleKey: "login.failure.busy.title",
+      summaryKey: "login.failure.busy.summary",
+      stepKeys: [],
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
+    return buildFeedback(rawError, {
+      kind: "bootstrap-invalid",
+      tone: "warn",
+      titleKey: "login.failure.bootstrapInvalid.title",
+      summaryKey: "login.failure.bootstrapInvalid.summary",
+      primaryCommand: "openclaw dashboard",
+      stepKeys: [
+        "login.failure.bootstrapInvalid.stepOpen",
+        {
+          key: "login.failure.bootstrapInvalid.stepJson",
+          commands: ["openclaw dashboard --json"],
+        },
+      ],
+      docsHref: "https://docs.openclaw.ai/cli/dashboard",
+    });
+  }
+
   if (lastErrorCode === ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "profile-unavailable",
       tone: "pending",
-      rawError,
       titleKey: "login.failure.profileUnavailable.title",
+      summaryKey: "login.failure.profileUnavailable.summary",
       stepKeys: [
         "login.failure.profileUnavailable.stepRetry",
         "login.failure.profileUnavailable.stepAdmin",
@@ -150,9 +176,8 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "verified-user-required",
-      rawError,
       titleKey: "login.failure.verifiedUserRequired.title",
       summaryKey: "login.failure.verifiedUserRequired.summary",
       stepKeys: [
@@ -163,11 +188,28 @@ export function resolveLoginFailureFeedback(
     });
   }
 
+  if (lastErrorCode === ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED) {
+    return buildFeedback(rawError, {
+      kind: "access-denied",
+      tone: "warn",
+      titleKey: "login.failure.accessDenied.title",
+      summaryKey: "login.failure.accessDenied.summary",
+      stepKeys: [
+        "login.failure.accessDenied.stepAdmin",
+        {
+          key: "login.failure.accessDenied.stepFindProfile",
+          commands: ["openclaw users list --json"],
+        },
+        "login.failure.accessDenied.stepReconnect",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
+    });
+  }
+
   if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "build-mismatch",
       tone: "pending",
-      rawError,
       titleKey: "chat.sidebar.serverUpdatedTitle",
       summaryKey: "chat.sidebar.serverUpdatedRefresh",
       refreshAction: { label: t("login.failure.protocol.refresh") },
@@ -176,12 +218,30 @@ export function resolveLoginFailureFeedback(
     });
   }
 
+  if (
+    lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED ||
+    lastErrorCode === ConnectErrorDetailCodes.PAIRING_EXPIRED
+  ) {
+    const declined = lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED;
+    return buildFeedback(rawError, {
+      kind: declined ? "pairing-rejected" : "pairing-expired",
+      tone: "warn",
+      titleKey: declined
+        ? "login.failure.pairing.declinedTitle"
+        : "login.failure.pairing.expiredTitle",
+      summaryKey: declined
+        ? "login.failure.pairing.declinedSummary"
+        : "login.failure.pairing.expiredSummary",
+      stepKeys: [],
+      docsHref: "https://docs.openclaw.ai/web/control-ui/connect-and-pair",
+    });
+  }
+
   const pairing = resolvePairingHint(false, rawError, lastErrorCode);
   if (pairing) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "pairing-required",
       tone: "pending",
-      rawError,
       docsHref: "https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection",
       titleKey:
         pairing.kind === "scope-upgrade-pending"
@@ -203,7 +263,7 @@ export function resolveLoginFailureFeedback(
       stepKeys: [
         ...(pairing.requestId ? [] : ["login.failure.pairing.stepLatest"]),
         { key: "login.failure.pairing.stepDashboard", commands: ["openclaw dashboard"] },
-        "login.failure.pairing.stepReconnect",
+        ...(params.reconnectPending ? [] : ["login.failure.pairing.stepReconnect"]),
       ],
       stepParams: { host },
     });
@@ -214,10 +274,9 @@ export function resolveLoginFailureFeedback(
     lower.includes("too many failed authentication attempts") ||
     lower.includes("rate limit")
   ) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "auth-rate-limited",
       tone: "warn",
-      rawError,
       titleKey: "login.failure.rateLimited.title",
       summaryKey: "login.failure.rateLimited.summary",
       stepKeys: [
@@ -229,9 +288,8 @@ export function resolveLoginFailureFeedback(
   }
 
   if (shouldShowInsecureContextHint(false, rawError, lastErrorCode)) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "insecure-context",
-      rawError,
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
       titleKey: "login.failure.insecure.title",
       summaryKey: "login.failure.insecure.summary",
@@ -243,11 +301,10 @@ export function resolveLoginFailureFeedback(
     lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
     lower.includes("origin not allowed")
   ) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "origin-not-allowed",
-      rawError,
       docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+        "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.origin.title",
       summaryKey: "login.failure.origin.summary",
       stepKeys: [
@@ -259,11 +316,10 @@ export function resolveLoginFailureFeedback(
   }
 
   if (lower.includes("protocol mismatch")) {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "protocol-mismatch",
-      rawError,
       docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+        "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
       refreshAction: { label: t("login.failure.protocol.refresh") },
@@ -276,10 +332,10 @@ export function resolveLoginFailureFeedback(
   }
 
   const authHintKind = resolveAuthHintKind(params);
+  const expectsPassword = isPasswordModeErrorCode(lastErrorCode);
   if (authHintKind === "trusted-proxy") {
-    return buildFeedback({
+    return buildFeedback(rawError, {
       kind: "trusted-proxy",
-      rawError,
       titleKey: "login.failure.trustedProxy.title",
       summaryKey: "login.failure.trustedProxy.summary",
       stepKeys: [
@@ -290,58 +346,55 @@ export function resolveLoginFailureFeedback(
       docsHref: "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     });
   }
-  if (authHintKind === "required") {
-    return buildFeedback({
-      kind: "auth-required",
+  if (authHintKind === "required" || authHintKind === "failed") {
+    const required = authHintKind === "required";
+    return buildFeedback(rawError, {
+      kind: required ? "auth-required" : "auth-failed",
       placement: "form",
-      tone: "warn",
+      tone: required ? "warn" : "danger",
       field: "credential",
-      rawError,
-      titleKey:
-        lastErrorCode && PASSWORD_MODE_CODES.has(lastErrorCode)
-          ? "login.failure.authRequired.passwordTitle"
-          : "login.failure.authRequired.title",
-      summaryKey: "login.failure.authRequired.summary",
-      stepKeys: [
-        {
-          key: "login.failure.authRequired.stepPaste",
-          commands: ["openclaw gateway auth-token --show"],
-        },
-        {
-          key: "login.failure.authRequired.stepGenerate",
-          commands: ["openclaw doctor --generate-gateway-token"],
-        },
-        "login.failure.authRequired.stepConnect",
-      ],
-      stepParams: { host },
-    });
-  }
-  if (authHintKind === "failed") {
-    return buildFeedback({
-      kind: "auth-failed",
-      placement: "form",
-      field: "credential",
-      rawError,
-      titleKey: "login.failure.authFailed.title",
-      summaryKey: "login.failure.authFailed.summary",
-      stepKeys: [
-        {
-          key: "login.failure.authFailed.stepDashboard",
-          commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
-        },
-        "login.failure.authFailed.stepReplace",
-        "login.failure.authFailed.stepMode",
-      ],
+      titleKey: expectsPassword
+        ? "login.failure.authRequired.passwordTitle"
+        : required || lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
+          ? "login.failure.authRequired.title"
+          : "login.failure.authFailed.title",
+      summaryKey: required
+        ? "login.failure.authRequired.summary"
+        : (lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+              lastErrorCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH) &&
+            classifyGatewaySecret(params.secret ?? "") === "setup-code"
+          ? "login.setupCodeHint"
+          : "login.failure.authFailed.summary",
+      stepKeys: expectsPassword
+        ? ["login.failure.authRequired.stepPassword", "login.failure.authRequired.stepConnect"]
+        : required
+          ? [
+              {
+                key: "login.failure.authRequired.stepPaste",
+                commands: ["openclaw gateway auth-token --show"],
+              },
+              {
+                key: "login.failure.authRequired.stepGenerate",
+                commands: ["openclaw doctor --generate-gateway-token"],
+              },
+              "login.failure.authRequired.stepConnect",
+            ]
+          : [
+              {
+                key: "login.failure.authFailed.stepDashboard",
+                commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
+              },
+              "login.failure.authFailed.stepReplace",
+            ],
       stepParams: { host },
     });
   }
 
-  return buildFeedback({
+  return buildFeedback(rawError, {
     kind: "network",
     placement: "form",
     tone: "warn",
     field: "url",
-    rawError,
     titleKey: "login.failure.network.title",
     summaryKey: "login.failure.network.summary",
     stepKeys: [

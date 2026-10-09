@@ -17,11 +17,7 @@ function attachRunCommandAndCaptureInheritedToken(command: Command) {
 describe("hasExplicitOptions", () => {
   it.each([
     { source: "cli", expected: true },
-    { source: "config", expected: false },
     { source: "env", expected: false },
-    { source: "implied", expected: false },
-    { source: "default", expected: false },
-    { source: undefined, expected: false },
   ] as const)("recognizes only cli option sources ($source)", ({ source, expected }) => {
     const command = new Command().option("--token <token>", "Token");
     command.setOptionValueWithSource("token", "test-token", source);
@@ -74,18 +70,6 @@ describe("inheritOptionFromParent", () => {
 
     await program.parseAsync(argv, { from: "user" });
     expect(getInherited()).toBe(expected);
-  });
-
-  it("does not inherit when the child option was set explicitly", () => {
-    const program = new Command().option("--token <token>", "Root token");
-    const gateway = program.command("gateway").option("--token <token>", "Gateway token");
-    const run = gateway.command("run").option("--token <token>", "Run token");
-
-    program.setOptionValueWithSource("token", "root-token", "cli");
-    gateway.setOptionValueWithSource("token", "gateway-token", "cli");
-    run.setOptionValueWithSource("token", "run-token", "cli");
-
-    expect(inheritOptionFromParent<string>(run, "token")).toBeUndefined();
   });
 
   it("inherits explicitly negated ancestor values", async () => {

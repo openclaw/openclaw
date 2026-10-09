@@ -1,5 +1,5 @@
 // Memory Core coordinates published-index readers with atomic shadow publication.
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   acquireMemorySqliteWriterLease,
@@ -10,6 +10,7 @@ type Waiter = {
   kind: "read" | "write";
   resolve: (release: () => void) => void;
 };
+type GenerationLeaseKind = Waiter["kind"] | "mutation" | "retrieval";
 
 type GenerationLeaseState = {
   readers: number;
@@ -32,7 +33,7 @@ function throwIfGenerationLeaseAborted(signal?: AbortSignal): void {
 
 async function acquireCrossProcessLease(
   databasePath: string,
-  kind: Waiter["kind"],
+  kind: GenerationLeaseKind,
   signal?: AbortSignal,
 ): Promise<MemorySqliteLeaseHandle> {
   const acquireSqliteLease = async (
@@ -41,10 +42,10 @@ async function acquireCrossProcessLease(
   ): Promise<MemorySqliteLeaseHandle> => {
     while (true) {
       throwIfGenerationLeaseAborted(signal);
-      const lease = tryAcquireMemorySqliteLease(location, mode);
+      const lease = await tryAcquireMemorySqliteLease(location, mode);
       if (lease) {
         if (signal?.aborted) {
-          lease.release();
+          await lease.release();
           throw createGenerationLeaseAbortError(signal);
         }
         return lease;
@@ -63,9 +64,12 @@ async function acquireCrossProcessLease(
   let admission: MemorySqliteLeaseHandle;
   try {
     admission =
-      kind === "read"
-        ? await acquireSqliteLease(admissionLocation, "shared")
-        : await acquireMemorySqliteWriterLease(admissionLocation, signal);
+      kind === "write"
+        ? await acquireMemorySqliteWriterLease(admissionLocation, signal)
+        : await acquireSqliteLease(
+            admissionLocation,
+            kind === "retrieval" ? "exclusive" : "shared",
+          );
   } catch (err) {
     throw signal?.aborted ? createGenerationLeaseAbortError(signal) : err;
   }
@@ -73,31 +77,31 @@ async function acquireCrossProcessLease(
   try {
     generation = await acquireSqliteLease(
       `${databasePath}.generation-lock.sqlite`,
-      kind === "read" ? "shared" : "exclusive",
+      kind === "write" ? "exclusive" : "shared",
     );
   } catch (err) {
-    admission.release();
+    await admission.release();
     throw err;
   }
   if (kind === "read") {
     try {
-      admission.release();
+      await admission.release();
     } catch (err) {
-      generation.release();
+      await generation.release();
       throw err;
     }
     if (signal?.aborted) {
-      generation.release();
+      await generation.release();
       throw createGenerationLeaseAbortError(signal);
     }
     return generation;
   }
   return {
-    release: () => {
+    release: async () => {
       try {
-        generation.release();
+        await generation.release();
       } finally {
-        admission.release();
+        await admission.release();
       }
     },
   };
@@ -117,25 +121,18 @@ function drain(key: string, state: GenerationLeaseState): void {
   if (state.writer) {
     return;
   }
-  if (state.readers > 0) {
-    // Readers already in the current generation may admit more readers until a
-    // writer reaches the queue head. Readers behind that writer wait for the next generation.
-    while (state.queue[0]?.kind === "read") {
-      const reader = state.queue.shift()!;
-      state.readers += 1;
-      reader.resolve(() => {
-        state.readers -= 1;
-        drain(key, state);
-      });
+  const first = state.queue[0];
+  if (!first) {
+    if (state.readers === 0) {
+      states.delete(key);
     }
     return;
   }
-  const first = state.queue.shift();
-  if (!first) {
-    states.delete(key);
-    return;
-  }
   if (first.kind === "write") {
+    if (state.readers > 0) {
+      return;
+    }
+    state.queue.shift();
     state.writer = true;
     first.resolve(() => {
       state.writer = false;
@@ -143,11 +140,13 @@ function drain(key: string, state: GenerationLeaseState): void {
     });
     return;
   }
-  const readers = [first];
+  // Admit the full consecutive group before resolving any caller: an aborted
+  // caller can release synchronously and must not let a writer overtake siblings.
+  const readers: Waiter[] = [];
   while (state.queue[0]?.kind === "read") {
     readers.push(state.queue.shift()!);
   }
-  state.readers = readers.length;
+  state.readers += readers.length;
   for (const reader of readers) {
     reader.resolve(() => {
       state.readers -= 1;
@@ -203,51 +202,51 @@ async function acquireLocal(
 
 async function acquire(
   databasePath: string,
-  kind: Waiter["kind"],
+  kind: GenerationLeaseKind,
   signal?: AbortSignal,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
   const key = resolveUserPath(databasePath);
-  const releaseLocal = await acquireLocal(key, kind, signal);
+  const releaseLocal = await acquireLocal(key, kind === "write" ? "write" : "read", signal);
   let crossProcess: MemorySqliteLeaseHandle;
   try {
     throwIfGenerationLeaseAborted(signal);
     crossProcess = await acquireCrossProcessLease(key, kind, signal);
     if (signal?.aborted) {
-      crossProcess.release();
+      await crossProcess.release();
       throw createGenerationLeaseAbortError(signal);
     }
   } catch (err) {
     releaseLocal();
     throw err;
   }
-  return () => {
+  return async () => {
     try {
-      crossProcess.release();
+      await crossProcess.release();
     } finally {
       releaseLocal();
     }
   };
 }
 
-async function withLease<T>(key: string, kind: Waiter["kind"], run: () => Promise<T>): Promise<T> {
-  const release = await acquire(key, kind);
-  try {
-    return await run();
-  } finally {
-    release();
-  }
-}
-
 export async function acquireMemoryIndexReadGeneration(
   databasePath: string,
   signal?: AbortSignal,
-): Promise<() => void> {
-  return await acquire(databasePath, "read", signal);
+  excludeMutations = false,
+): Promise<() => Promise<void>> {
+  // Fused reads retain admission exclusively through acceptance, while existing
+  // ordinary readers keep their shared generation and can finish independently.
+  return await acquire(databasePath, excludeMutations ? "retrieval" : "read", signal);
 }
 
-export async function withMemoryIndexPublishGeneration<T>(
+export async function withMemoryIndexGeneration<T>(
   databasePath: string,
+  kind: "mutation" | "write",
   run: () => Promise<T>,
 ): Promise<T> {
-  return await withLease(databasePath, "write", run);
+  const release = await acquire(databasePath, kind);
+  try {
+    return await run();
+  } finally {
+    await release();
+  }
 }

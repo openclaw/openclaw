@@ -16,3 +16,18 @@ export function textToolResult(
     ...fields,
   };
 }
+
+export function textAssistant(text: string): {
+  role: "assistant";
+  content: { type: "text"; text: string }[];
+} {
+  return { role: "assistant", content: [{ type: "text", text }] };
+}
+
+export function timestampedTextAssistant(text: string, timestamp: number) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp,
+  };
+}

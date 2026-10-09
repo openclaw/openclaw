@@ -33,6 +33,43 @@ const hostStats = {
 };
 
 describe("buildDeviceInventory", () => {
+  it("keeps available device-family metadata for live and offline platform labels", () => {
+    const groups = buildDeviceInventory({
+      paired: [
+        device({ deviceId: "live", platform: "MacIntel", deviceFamily: "Mac" }),
+        device({ deviceId: "offline", platform: "MacIntel", deviceFamily: "Mac" }),
+        device({ deviceId: "legacy", platform: "MacIntel" }),
+        device({ deviceId: "paired-node", platform: "MacIntel", deviceFamily: "Mac" }),
+        device({ deviceId: "node-fallback", platform: "MacIntel" }),
+      ],
+      nodes: [
+        { nodeId: "node-only", platform: "MacIntel", deviceFamily: "iPad" },
+        { nodeId: "paired-node", platform: "MacIntel", deviceFamily: "iPad" },
+        { nodeId: "node-fallback", platform: "MacIntel", deviceFamily: "iPad" },
+      ],
+      presence: [{ deviceId: "live", platform: "MacIntel", deviceFamily: "iPad", ts: 1_000 }],
+    });
+    const entries = groups.map((group) => group.primary);
+    expect(entries.find((entry) => entry.id === "live")).toMatchObject({
+      platform: "MacIntel",
+      deviceFamily: "iPad",
+    });
+    expect(entries.find((entry) => entry.id === "offline")).toMatchObject({ deviceFamily: "Mac" });
+    expect(entries.find((entry) => entry.id === "node-only")).toMatchObject({
+      deviceFamily: "iPad",
+    });
+    expect(entries.find((entry) => entry.id === "legacy")).toMatchObject({
+      platform: "MacIntel",
+      deviceFamily: undefined,
+    });
+    expect(entries.find((entry) => entry.id === "paired-node")).toMatchObject({
+      deviceFamily: "Mac",
+    });
+    expect(entries.find((entry) => entry.id === "node-fallback")).toMatchObject({
+      deviceFamily: "iPad",
+    });
+  });
+
   it("joins device records with node catalog rows by id", () => {
     const groups = buildDeviceInventory({
       paired: [

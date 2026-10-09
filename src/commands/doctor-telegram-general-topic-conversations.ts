@@ -13,8 +13,10 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import type { Conversations } from "../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -24,31 +26,7 @@ import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operati
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
 
-type ConversationRow = {
-  account_id: string;
-  channel: string;
-  conversation_id: string;
-  created_at: number;
-  delivery_target: string;
-  kind: string;
-  label: string | null;
-  metadata_json: string | null;
-  native_channel_id: string | null;
-  native_direct_user_id: string | null;
-  parent_conversation_id: string | null;
-  peer_id: string;
-  thread_id: string | null;
-  updated_at: number;
-};
-
-type TelegramGeneralTopicConversationRepair = {
-  agentId: string;
-  canonicalConversationId: string;
-  legacyConversationId: string;
-  storePath: string;
-};
-
-function canonicalIdentity(row: ConversationRow) {
+function canonicalIdentity(row: Conversations) {
   const targetMatch = LEGACY_GENERAL_TARGET.exec(row.delivery_target);
   if (
     row.channel !== "telegram" ||
@@ -74,7 +52,7 @@ function canonicalIdentity(row: ConversationRow) {
   };
 }
 
-function listLegacyRows(database: import("node:sqlite").DatabaseSync): ConversationRow[] {
+function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversations[] {
   const db = getSessionKysely(database);
   return executeSqliteQuerySync(
     database,
@@ -89,7 +67,11 @@ function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversat
 }
 
 function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  return resolveAllAgentSessionStoreTargetsSync(cfg, { env }).map((target) => {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(cfg, { env }),
+    env,
+    cfg,
+  ).map((target) => {
     const scope = resolveSqliteReadScope({
       agentId: target.agentId,
       env,
@@ -103,7 +85,7 @@ function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
 export function detectTelegramGeneralTopicConversationRepairs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): TelegramGeneralTopicConversationRepair[] {
+}) {
   const env = params.env ?? process.env;
   return resolveRepairScopes(params.cfg, env).flatMap(({ scope, storePath }) => {
     const databaseOptions = toDatabaseOptions(scope);
@@ -116,14 +98,7 @@ export function detectTelegramGeneralTopicConversationRepairs(params: {
             listLegacyRows(database.db).flatMap((row) => {
               const canonical = canonicalIdentity(row);
               return canonical && canonical.conversationId !== row.conversation_id
-                ? [
-                    {
-                      agentId: scope.agentId,
-                      canonicalConversationId: canonical.conversationId,
-                      legacyConversationId: row.conversation_id,
-                      storePath,
-                    },
-                  ]
+                ? [{ agentId: scope.agentId }]
                 : [];
             }),
           databaseOptions,
@@ -199,33 +174,26 @@ function repairLegacyRow(database: OpenClawAgentDatabase, legacyConversationId: 
     throw new Error(`canonical Telegram conversation id collision: ${canonical.conversationId}`);
   }
 
-  const merged = existing ?? legacy;
+  const merged = {
+    created_at: Math.min(existing?.created_at ?? legacy.created_at, legacy.created_at),
+    updated_at: Math.max(existing?.updated_at ?? legacy.updated_at, legacy.updated_at),
+    native_channel_id: existing?.native_channel_id ?? legacy.native_channel_id,
+    native_direct_user_id: existing?.native_direct_user_id ?? legacy.native_direct_user_id,
+    label: existing?.label ?? legacy.label,
+    metadata_json: existing?.metadata_json ?? legacy.metadata_json,
+  };
   executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
       .values({
+        ...(existing ?? legacy),
         ...merged,
         conversation_id: canonical.conversationId,
         peer_id: canonical.peerId,
         delivery_target: canonical.deliveryTarget,
-        created_at: Math.min(existing?.created_at ?? legacy.created_at, legacy.created_at),
-        updated_at: Math.max(existing?.updated_at ?? legacy.updated_at, legacy.updated_at),
-        native_channel_id: existing?.native_channel_id ?? legacy.native_channel_id,
-        native_direct_user_id: existing?.native_direct_user_id ?? legacy.native_direct_user_id,
-        label: existing?.label ?? legacy.label,
-        metadata_json: existing?.metadata_json ?? legacy.metadata_json,
       })
-      .onConflict((conflict) =>
-        conflict.column("conversation_id").doUpdateSet({
-          created_at: Math.min(existing?.created_at ?? legacy.created_at, legacy.created_at),
-          updated_at: Math.max(existing?.updated_at ?? legacy.updated_at, legacy.updated_at),
-          native_channel_id: existing?.native_channel_id ?? legacy.native_channel_id,
-          native_direct_user_id: existing?.native_direct_user_id ?? legacy.native_direct_user_id,
-          label: existing?.label ?? legacy.label,
-          metadata_json: existing?.metadata_json ?? legacy.metadata_json,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("conversation_id").doUpdateSet(merged)),
   );
 
   const boundWindows = executeSqliteQuerySync(
@@ -321,23 +289,27 @@ export async function repairTelegramGeneralTopicConversations(params: {
   const env = params.env ?? process.env;
   let repaired = 0;
   for (const { scope } of resolveRepairScopes(params.cfg, env)) {
-    await runExclusiveSqliteSessionWrite(scope, async () => {
-      repaired += runOpenClawAgentWriteTransaction(
-        (database) => {
-          // Detection is advisory. Re-read every candidate after BEGIN so a live
-          // session write cannot turn the doctor repair into a stale merge.
-          let databaseRepairs = 0;
-          for (const row of listLegacyRows(database.db)) {
-            if (repairLegacyRow(database, row.conversation_id)) {
-              databaseRepairs += 1;
+    await runExclusiveSqliteSessionWrite(
+      scope,
+      async () => {
+        repaired += runOpenClawAgentWriteTransaction(
+          (database) => {
+            // Detection is advisory. Re-read every candidate after BEGIN so a live
+            // session write cannot turn the doctor repair into a stale merge.
+            let databaseRepairs = 0;
+            for (const row of listLegacyRows(database.db)) {
+              if (repairLegacyRow(database, row.conversation_id)) {
+                databaseRepairs += 1;
+              }
             }
-          }
-          return databaseRepairs;
-        },
-        toDatabaseOptions(scope),
-        { operationLabel: "doctor-telegram-general-topic" },
-      );
-    });
+            return databaseRepairs;
+          },
+          toDatabaseOptions(scope),
+          { operationLabel: "doctor-telegram-general-topic" },
+        );
+      },
+      "doctor-telegram-general-topic",
+    );
   }
   return repaired;
 }

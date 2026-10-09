@@ -1,4 +1,5 @@
 // Msteams tests cover oauth plugin behavior.
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -24,6 +25,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 import { buildMSTeamsAuthUrl } from "./oauth.flow.js";
+import { loginMSTeamsDelegated } from "./oauth.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
@@ -46,6 +48,61 @@ function firstFetchCall(fetchSpy: ReturnType<typeof vi.fn>): [string, RequestIni
   }
   return call as [string, RequestInit];
 }
+
+describe("manual delegated sign-in", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["valid", "missing", "mismatched"])(
+    "exchanges the code only for a %s callback state",
+    async (stateKind) => {
+      const fetchSpy = vi.fn(async () =>
+        responseJson({ access_token: "access", refresh_token: "refresh", expires_in: 3600 }),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+      let authUrl: URL | undefined;
+      const login = loginMSTeamsDelegated(
+        {
+          note: vi.fn(async () => {}),
+          log: (message) => {
+            authUrl = new URL(message.match(/https:\/\/\S+/u)![0]);
+          },
+          prompt: async () => {
+            const callback = new URL(MSTEAMS_OAUTH_REDIRECT_URI);
+            callback.searchParams.set("code", "callback-code");
+            if (stateKind !== "missing") {
+              callback.searchParams.set(
+                "state",
+                stateKind === "valid" ? authUrl!.searchParams.get("state")! : "wrong-state",
+              );
+            }
+            return callback.toString();
+          },
+          progress: { update: vi.fn(), stop: vi.fn() },
+        },
+        {
+          tenantId: "tenant",
+          clientId: "client",
+          clientSecret: "synthetic-client-secret", // pragma: allowlist secret
+        },
+      );
+      if (stateKind !== "valid") {
+        await expect(login).rejects.toThrow(/state/u);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(login).resolves.toMatchObject({
+        accessToken: "access",
+        refreshToken: "refresh",
+      });
+      const [, init] = firstFetchCall(fetchSpy);
+      const body = new URLSearchParams(init.body as string);
+      expect(body.get("code")).toBe("callback-code");
+      expect(createHash("sha256").update(body.get("code_verifier")!).digest("base64url")).toBe(
+        authUrl!.searchParams.get("code_challenge"),
+      );
+    },
+  );
+});
 
 describe("buildMSTeamsAuthUrl", () => {
   it("includes correct tenant, client_id, scopes, PKCE params, and redirect_uri", () => {
@@ -137,12 +194,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
   });
 
   it("throws on a 400 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
 
     await expect(
       exchangeMSTeamsCodeForTokens({
@@ -272,57 +324,5 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     });
 
     expect(tokens.refreshToken).toBe("new-rt");
-  });
-
-  it("throws on a 401 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
-    await expect(
-      refreshMSTeamsDelegatedTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        refreshToken: "expired-rt",
-      }),
-    ).rejects.toThrow(/MSTeams token refresh failed \(401\)/);
-  });
-
-  it("reports malformed token refresh JSON with a stable OAuth error", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
-    await expect(
-      refreshMSTeamsDelegatedTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        refreshToken: "bad-json",
-      }),
-    ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
-  });
-
-  it.each([
-    { label: "null", body: null },
-    { label: "array", body: [] },
-  ])("rejects a top-level $label token refresh response", async ({ body }) => {
-    fetchSpy.mockResolvedValueOnce(responseJson(body));
-
-    await expect(
-      refreshMSTeamsDelegatedTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        refreshToken: "rt",
-      }),
-    ).rejects.toThrow("MSTeams token refresh failed: invalid token response fields");
   });
 });

@@ -1,4 +1,13 @@
-import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -54,6 +63,45 @@ function fakeNpmEnvironment(
 }
 
 describe("npm pack inventory", () => {
+  it("reads the toolchain npm manifest without booting npm for version diagnostics", () => {
+    const { packageRoot, root } = createPackageFixture();
+    const nodeDir = join(root, "toolchain");
+    const npmRoot = join(nodeDir, "node_modules", "npm");
+    mkdirSync(join(npmRoot, "bin"), { recursive: true });
+    const execPath = join(nodeDir, process.platform === "win32" ? "node.exe" : "node");
+    // Preserve loader-relative libraries on POSIX without requiring Windows symlink privileges.
+    if (process.platform === "win32") {
+      copyFileSync(process.execPath, execPath);
+    } else {
+      symlinkSync(process.execPath, execPath);
+    }
+    writeFileSync(
+      join(npmRoot, "package.json"),
+      JSON.stringify({ name: "npm", version: "11.12.1" }),
+    );
+    const capturePath = join(root, "capture.json");
+    writeFileSync(
+      join(npmRoot, "bin", "npm-cli.js"),
+      [
+        "const fs = require('node:fs');",
+        "if (process.argv.includes('--version')) { throw new Error('npm version subprocess unavailable'); }",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify(process.argv.slice(2)));",
+        "process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }]));",
+      ].join("\n"),
+    );
+
+    const result = collectNpmPackInventory(packageRoot, {
+      runnerParams: { execPath, platform: process.platform },
+      sourceEnv: { ...process.env, OPENCLAW_TEST_CAPTURE: capturePath },
+      timeoutMs: 2_000,
+    });
+
+    expect(result).toMatchObject({ files: ["package.json"], npmVersion: "11.12.1" });
+    expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual(
+      expect.arrayContaining(["pack", packageRoot, "--dry-run", "--ignore-scripts", "--offline"]),
+    );
+  });
+
   it("packs the package root from an isolated npm sandbox", () => {
     const { packageRoot, root } = createPackageFixture();
     const capturePath = join(root, "capture.json");
@@ -154,11 +202,78 @@ describe("npm pack inventory", () => {
   });
 
   it.each([
-    { name: "successful pack", exitCode: 0 },
-    { name: "failed pack", exitCode: 23 },
+    {
+      name: "successful pack",
+      phase: "pack",
+      exitCode: 0,
+      signal: null,
+      stderr: "",
+      expectedError: null,
+    },
+    {
+      name: "failed pack",
+      phase: "pack",
+      exitCode: 23,
+      signal: null,
+      stderr: "simulated npm 10 failure\n",
+      expectedError: "npm pack inventory failed: simulated npm 10 failure",
+    },
+    {
+      name: "silent failed pack",
+      phase: "pack",
+      exitCode: 23,
+      signal: null,
+      stderr: "",
+      expectedError: "npm pack inventory failed with status 23",
+    },
+    ...(process.platform === "win32"
+      ? []
+      : [
+          {
+            name: "version output limit",
+            phase: "version",
+            exitCode: 23,
+            signal: null,
+            stderr: "x".repeat(128 * 1024),
+            expectedError: "npm --version exceeded its output limit",
+          },
+          {
+            name: "SIGTERM pack",
+            phase: "pack",
+            exitCode: null,
+            signal: "SIGTERM",
+            stderr: "",
+            expectedError: "npm pack inventory failed with signal SIGTERM",
+          },
+          {
+            name: "SIGKILL pack with stderr",
+            phase: "pack",
+            exitCode: null,
+            signal: "SIGKILL",
+            stderr: "simulated npm 10 failure\n",
+            expectedError:
+              "npm pack inventory failed with signal SIGKILL: simulated npm 10 failure",
+          },
+          {
+            name: "SIGTERM version with stderr",
+            phase: "version",
+            exitCode: null,
+            signal: "SIGTERM",
+            stderr: "simulated npm 10 failure\n",
+            expectedError: "npm --version failed with signal SIGTERM: simulated npm 10 failure",
+          },
+          {
+            name: "SIGKILL version",
+            phase: "version",
+            exitCode: null,
+            signal: "SIGKILL",
+            stderr: "",
+            expectedError: "npm --version failed with signal SIGKILL",
+          },
+        ]),
   ])(
-    "suppresses npm 10 lifecycle scripts and restores package.json after $name",
-    ({ exitCode }) => {
+    "preserves npm probe outcomes and package.json after $name",
+    ({ phase, exitCode, signal, stderr, expectedError }) => {
       const { packageRoot, root } = createPackageFixture();
       const packageJsonPath = join(packageRoot, "package.json");
       const capturePath = join(root, "scripts-capture.json");
@@ -168,35 +283,48 @@ describe("npm pack inventory", () => {
       writeFileSync(packageJsonPath, originalBytes);
       chmodSync(packageJsonPath, 0o444);
       const originalMode = statSync(packageJsonPath).mode;
+      const failureBody = [
+        // Write before native termination so the fixture cannot discard its own stderr.
+        stderr ? `fs.writeSync(2, ${JSON.stringify(stderr)});` : "",
+        signal
+          ? `process.kill(process.pid, ${JSON.stringify(signal)});`
+          : `process.exit(${exitCode});`,
+      ].join("\n");
+      const versionBody =
+        phase === "version" ? failureBody : "process.stdout.write('10.9.4\\n'); process.exit(0);";
       const npm = fakeNpmEnvironment(
         root,
         [
           "import fs from 'node:fs';",
           "import path from 'node:path';",
-          "if (process.argv.includes('--version')) { process.stdout.write('10.9.4\\n'); process.exit(0); }",
+          `if (process.argv.includes('--version')) { ${versionBody} }`,
           "const packIndex = process.argv.indexOf('pack');",
           "const packageRoot = process.argv[packIndex + 1];",
           "const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));",
           "fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({ hasScripts: Object.hasOwn(packageJson, 'scripts') }));",
           exitCode === 0
             ? "process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }]));"
-            : `process.stderr.write('simulated npm 10 failure\\n'); process.exit(${exitCode});`,
+            : failureBody,
         ].join("\n"),
       );
       npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
 
-      if (exitCode === 0) {
+      if (expectedError === null) {
         expect(collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 2_000 })).toMatchObject({
           files: ["package.json"],
           npmVersion: "10.9.4",
         });
       } else {
         expect(() => collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 2_000 })).toThrow(
-          "npm pack inventory failed: simulated npm 10 failure",
+          expectedError,
         );
       }
 
-      expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual({ hasScripts: false });
+      if (phase === "pack") {
+        expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual({ hasScripts: false });
+      } else {
+        expect(existsSync(capturePath)).toBe(false);
+      }
       expect(readFileSync(packageJsonPath)).toEqual(originalBytes);
       expect(statSync(packageJsonPath).mode).toBe(originalMode);
     },

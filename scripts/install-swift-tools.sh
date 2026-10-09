@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -euo pipefail
 
@@ -20,10 +20,10 @@ install_archive() {
 
   # Bound individual transfers and the retry window. curl resets --max-time for
   # each retry, while a started retry can outlive --retry-max-time.
-  curl --fail --location --silent --show-error \
+  curl --fail --location --no-progress-meter --show-error \
     --connect-timeout 10 --max-time 120 \
     --retry 3 --retry-max-time 120 \
-    --output "$archive" "$url"
+    --output "$archive" "$url" 2> >(sed 's/^Warning: /::warning::/' >&2)
   if [[ "$(shasum -a 256 "$archive" | awk '{print $1}')" != "$checksum" ]]; then
     echo "$name archive checksum mismatch" >&2
     exit 1

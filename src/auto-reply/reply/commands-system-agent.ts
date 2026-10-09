@@ -1,4 +1,3 @@
-// Implements maintenance commands for OpenClaw-backed session cleanup.
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -33,6 +32,7 @@ export const handleSystemAgentCommand: CommandHandler = async (params, allowText
           commandBody: params.command.commandBodyNormalized,
           agentId: params.agentId,
           isGroup: params.isGroup,
+          assertCurrent: () => params.commandInvocationSignal?.throwIfAborted(),
           deps: {
             setupSurface: "gateway",
             gatewayHostLifecycle: host && {

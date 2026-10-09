@@ -6,7 +6,6 @@ import {
   parseObservationSegments,
   pickKeyframeId,
   revisionWindow,
-  sampleFrames,
   selectBatchFrames,
   validateCardCoverage,
 } from "./analyze.js";
@@ -91,9 +90,6 @@ describe("parseObservationSegments", () => {
 });
 
 describe("parseCardsJson", () => {
-  const windowStartMs = dayMs("10:00:00");
-  const windowEndMs = dayMs("11:00:00");
-
   const card = (overrides: Record<string, unknown> = {}) => ({
     startTime: "10:00:00",
     endTime: "10:30:00",
@@ -105,46 +101,35 @@ describe("parseCardsJson", () => {
     appSites: { primary: "github.com" },
     ...overrides,
   });
+  const parse = (raw: string) => parseCardsJson({ raw, day: DAY });
 
   it("accepts a valid card array and normalizes fields", () => {
-    const result = parseCardsJson({
-      raw: `Here you go:\n${JSON.stringify([
-        card({ category: "CODING", appSites: { primary: "https://GitHub.com/openclaw" } }),
-      ])}\nHope that helps!`,
-      day: DAY,
-      windowStartMs,
-      windowEndMs,
+    expect(
+      parse(
+        `Here you go:\n${JSON.stringify([
+          card({ category: "CODING", appSites: { primary: "https://GitHub.com/openclaw" } }),
+        ])}\nHope that helps!`,
+      ),
+    ).toMatchObject({
+      ok: true,
+      drafts: [{ category: "coding", appPrimary: "github.com" }],
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const draft = expectDefined(result.drafts[0], "normalized logbook draft");
-      expect(draft.category).toBe("coding");
-      expect(draft.appPrimary).toBe("github.com");
-    }
   });
 
   it("maps unknown categories to other", () => {
-    const result = parseCardsJson({
-      raw: JSON.stringify([card({ category: "quantum-vibes" })]),
-      day: DAY,
-      windowStartMs,
-      windowEndMs,
+    expect(parse(JSON.stringify([card({ category: "quantum-vibes" })]))).toMatchObject({
+      ok: true,
+      drafts: [{ category: "other" }],
     });
-    expect(result.ok && expectDefined(result.drafts[0], "unknown-category draft").category).toBe(
-      "other",
-    );
   });
 
   it("trims sub-minute overlaps and rejects large ones", () => {
-    const trimmed = parseCardsJson({
-      raw: JSON.stringify([
+    const trimmed = parse(
+      JSON.stringify([
         card({ startTime: "10:00:00", endTime: "10:30:30" }),
         card({ startTime: "10:30:00", endTime: "11:00:00", title: "Second" }),
       ]),
-      day: DAY,
-      windowStartMs,
-      windowEndMs,
-    });
+    );
     expect(trimmed.ok).toBe(true);
     if (trimmed.ok) {
       const first = expectDefined(trimmed.drafts[0], "first overlap-trimmed draft");
@@ -152,32 +137,33 @@ describe("parseCardsJson", () => {
       expect(second.startMs).toBe(first.endMs);
     }
 
-    const rejected = parseCardsJson({
-      raw: JSON.stringify([
+    const rejected = parse(
+      JSON.stringify([
         card({ startTime: "10:00:00", endTime: "10:45:00" }),
         card({ startTime: "10:30:00", endTime: "11:00:00", title: "Second" }),
       ]),
-      day: DAY,
-      windowStartMs,
-      windowEndMs,
-    });
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) {
-      expect(rejected.error).toContain("overlap");
-    }
+    );
+    expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining("overlap") });
   });
 
+  it.each(["10:30:10", "10:30:30"])(
+    "rejects an overlap that would leave no duration for a card ending at %s",
+    (endTime) => {
+      const result = parse(
+        JSON.stringify([
+          card({ startTime: "10:00:00", endTime: "10:30:30" }),
+          card({ startTime: "10:30:00", endTime, title: "Second" }),
+        ]),
+      );
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("endTime") });
+    },
+  );
+
   it("reports actionable errors for the correction round-trip", () => {
-    const result = parseCardsJson({
-      raw: JSON.stringify([card({ startTime: "13:05 pm" })]),
-      day: DAY,
-      windowStartMs,
-      windowEndMs,
+    expect(parse(JSON.stringify([card({ startTime: "13:05 pm" })]))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("startTime"),
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("startTime");
-    }
   });
 });
 
@@ -185,11 +171,6 @@ describe("selectBatchFrames", () => {
   const windowMs = 15 * 60_000;
   const t0 = dayMs("10:00:00");
   const frame = (id: number, offsetSec: number) => ({ id, capturedAtMs: t0 + offsetSec * 1000 });
-
-  it("keeps an in-progress window open", () => {
-    const frames = [frame(1, 0), frame(2, 30), frame(3, 60)];
-    expect(selectBatchFrames({ frames, windowMs, nowMs: t0 + 5 * 60_000 })).toBeNull();
-  });
 
   it("closes an elapsed window at its boundary so batches meet cleanly", () => {
     const frames = [frame(1, 0), frame(2, 30), frame(3, 60)];
@@ -244,21 +225,6 @@ describe("selectBatchFrames", () => {
     const selection = selectBatchFrames({ frames, windowMs, nowMs: nearMidnight + windowMs });
     expect(selection?.frameIds).toEqual([1, 2]);
     expect(selection?.endMs).toBe(midnight.getTime());
-  });
-});
-
-describe("sampleFrames", () => {
-  it("keeps small sets and evenly samples large ones", () => {
-    expect(sampleFrames([1, 2, 3], 16)).toEqual([1, 2, 3]);
-    expect(sampleFrames([1, 2, 3], 1)).toEqual([1]);
-    expect(sampleFrames([1, 2, 3], 0)).toEqual([]);
-    const sampled = sampleFrames(
-      Array.from({ length: 100 }, (_, i) => i),
-      16,
-    );
-    expect(sampled.length).toBeLessThanOrEqual(16);
-    expect(sampled[0]).toBe(0);
-    expect(sampled[sampled.length - 1]).toBe(99);
   });
 });
 

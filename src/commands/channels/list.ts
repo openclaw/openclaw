@@ -1,11 +1,9 @@
-// Implements `openclaw channels list` across runtime accounts, local config, and catalog-only entries.
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   normalizeRuntimeChannelAccountSnapshots,
@@ -14,10 +12,10 @@ import {
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import {
   formatChannelAccountLabel,
@@ -25,7 +23,7 @@ import {
   requireValidChannelConfig,
 } from "./shared.js";
 
-export type ChannelsListOptions = {
+type ChannelsListOptions = {
   json?: boolean;
   all?: boolean;
 };
@@ -42,58 +40,33 @@ async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload |
   }
 }
 
-const colorValue = (value: string) => {
-  if (value === "none") {
-    return theme.error(value);
-  }
-  if (value === "env") {
-    return theme.accent(value);
-  }
-  return theme.success(value);
-};
-
 function formatEnabled(value: boolean | undefined): string {
   return value === false ? theme.error("disabled") : theme.success("enabled");
 }
 
-function formatConfigured(value: boolean): string {
-  return value ? theme.success("configured") : theme.warn("not configured");
-}
-
-function formatInstalled(value: boolean): string {
-  return value ? theme.success("installed") : theme.warn("not installed");
-}
-
-function formatCredentialSource(source?: string, status?: string): string {
-  const value = source || "none";
-  if (status === "configured_unavailable" && value !== "none") {
-    return theme.warn(`${value}-unavailable`);
-  }
-  return colorValue(value);
-}
-
-function formatTokenSource(source?: string, status?: string): string {
-  return `token=${formatCredentialSource(source, status)}`;
+function formatPresence(label: string, value: boolean): string {
+  return value ? theme.success(label) : theme.warn(`not ${label}`);
 }
 
 function formatSource(label: string, source?: string, status?: string): string {
-  return `${label}=${formatCredentialSource(source, status)}`;
-}
-
-function formatLinked(value: boolean): string {
-  return value ? theme.success("linked") : theme.warn("not linked");
-}
-
-function shouldShowConfigured(channel: ChannelPlugin): boolean {
-  return isChannelVisibleInConfiguredLists(channel.meta);
+  const value = source || "none";
+  const formatted =
+    value === "none"
+      ? theme.error(value)
+      : status === "configured_unavailable"
+        ? theme.warn(`${value}-unavailable`)
+        : value === "env"
+          ? theme.accent(value)
+          : theme.success(value);
+  return `${label}=${formatted}`;
 }
 
 function formatAccountLine(params: {
-  channel: ChannelPlugin;
+  plugin: ChannelPlugin;
   snapshot: ChannelAccountSnapshot;
   installed: boolean;
 }): string {
-  const { channel, snapshot, installed } = params;
+  const { plugin: channel, snapshot, installed } = params;
   const label = formatChannelAccountLabel({
     channel: channel.id,
     accountId: snapshot.accountId,
@@ -102,19 +75,18 @@ function formatAccountLine(params: {
     channelStyle: theme.accent,
     accountStyle: theme.heading,
   });
-  const bits: string[] = [];
-  bits.push(formatInstalled(installed));
-  if (shouldShowConfigured(channel) && typeof snapshot.configured === "boolean") {
-    bits.push(formatConfigured(snapshot.configured));
+  const bits = [formatPresence("installed", installed)];
+  if (isChannelVisibleInConfiguredLists(channel.meta) && typeof snapshot.configured === "boolean") {
+    bits.push(formatPresence("configured", snapshot.configured));
   }
   if (typeof snapshot.enabled === "boolean") {
     bits.push(formatEnabled(snapshot.enabled));
   }
   if (snapshot.linked !== undefined) {
-    bits.push(formatLinked(snapshot.linked));
+    bits.push(formatPresence("linked", snapshot.linked));
   }
   if (snapshot.tokenSource) {
-    bits.push(formatTokenSource(snapshot.tokenSource, snapshot.tokenStatus));
+    bits.push(formatSource("token", snapshot.tokenSource, snapshot.tokenStatus));
   }
   if (snapshot.botTokenSource) {
     bits.push(formatSource("bot", snapshot.botTokenSource, snapshot.botTokenStatus));
@@ -128,31 +100,11 @@ function formatAccountLine(params: {
   return `- ${label}: ${bits.join(", ")}`;
 }
 
-function formatCatalogOnlyLine(params: {
-  entry: ChannelPluginCatalogEntry;
-  installed: boolean;
-  configured: boolean;
-  repairHint?: string;
-}): string {
-  const { entry, installed, configured, repairHint } = params;
-  const channelText = theme.accent(entry.meta.label ?? entry.id);
-  const bits: string[] = [
-    formatInstalled(installed),
-    formatConfigured(configured),
-    formatEnabled(false),
-  ];
-  if (repairHint) {
-    bits.push(repairHint);
-  }
-  return `- ${channelText}: ${bits.join(", ")}`;
-}
-
-/** Print or serialize configured, available, and installable chat channel accounts. */
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidChannelConfig(runtime, { skipPluginValidation: true });
+  const cfg = await requireValidChannelConfig(runtime);
   if (!cfg) {
     return;
   }
@@ -173,16 +125,17 @@ export async function channelsListCommand(
 
   // JSON needs only manifest-backed account ids. Text keeps setup-backed snapshots
   // because its credential/status details are part of the human output contract.
-  const plugins = opts.json
-    ? listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot })
-    : listReadOnlyChannelPluginsForConfig(cfg, {
-        includeSetupFallbackPlugins: true,
-        metadataSnapshot,
-      });
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    ...(!opts.json ? { includeSetupFallbackPlugins: true } : {}),
+    metadataSnapshot,
+  });
   const catalogEntries = listTrustedChannelPluginCatalogEntries({
     cfg,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
+    ...(metadataSnapshot.index.installRecords
+      ? { installRecords: metadataSnapshot.index.installRecords }
+      : {}),
   });
   const runtimeAccountsByChannel =
     opts.json === true
@@ -191,10 +144,10 @@ export async function channelsListCommand(
   // Installed ids are one prepared manifest fact set for the invocation. Rebuilding
   // discovery for each catalog row turns this read into a full filesystem walk per row.
   const manifestInstalledChannelIds = new Set<string>(
-    listManifestInstalledChannelIds({
-      cfg,
-      ...(workspaceDir ? { workspaceDir } : {}),
-      index: metadataSnapshot.index,
+    listPluginContributionIds({
+      contribution: "channels",
+      includeDisabled: true,
+      lookUpTable: metadataSnapshot,
     }),
   );
   const installedByChannelId = new Map(
@@ -204,12 +157,7 @@ export async function channelsListCommand(
   // the manifest snapshot above because no plugin projection exists for them.
   const isInstalled = (channelId: string): boolean => installedByChannelId.get(channelId) ?? true;
 
-  type AccountLineSource = {
-    plugin: ChannelPlugin;
-    snapshot: ChannelAccountSnapshot;
-    installed: boolean;
-  };
-  const accountLines: AccountLineSource[] = [];
+  const accountLines: Parameters<typeof formatAccountLine>[0][] = [];
   const accountIdsByPlugin = new Map(
     plugins.map((plugin) => [plugin.id, plugin.config.listAccountIds(cfg) ?? []]),
   );
@@ -218,14 +166,14 @@ export async function channelsListCommand(
       .filter(
         (plugin) =>
           (accountIdsByPlugin.get(plugin.id)?.length ?? 0) > 0 ||
-          (showAll && shouldShowConfigured(plugin)),
+          (showAll && isChannelVisibleInConfiguredLists(plugin.meta)),
       )
       .map((plugin) => plugin.id),
   );
 
   for (const plugin of opts.json ? [] : plugins) {
     const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
-    if (accountIds && accountIds.length > 0) {
+    if (accountIds.length > 0) {
       const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
       const rows = await resolveChannelAccountStatusRows({
         localAccountIds: accountIds,
@@ -242,10 +190,7 @@ export async function channelsListCommand(
       }
       continue;
     }
-    if (!showAll) {
-      continue;
-    }
-    if (!shouldShowConfigured(plugin)) {
+    if (!showAll || !isChannelVisibleInConfiguredLists(plugin.meta)) {
       continue;
     }
     // --all: surface installed-but-unconfigured plugins (bundled, or
@@ -268,29 +213,20 @@ export async function channelsListCommand(
     });
   }
 
-  // Catalog entries that are not already represented by a plugin row above can
-  // still be useful in two shapes:
-  //   1. Catalog plugin package is not yet installed on disk — rendered as
-  //      `not installed, not configured, disabled` so the channel still
-  //      appears in the listing as installable.
-  //   2. Catalog plugin package IS installed but the user has no config
-  //      entry for the channel, AND the read-only loader did not surface
-  //      a plugin object for it (because it only activates based on
-  //      configured channels). These would otherwise silently disappear
-  //      from the listing — render them as `installed, not configured,
-  //      disabled` so operators can tell the plugin is ready to configure.
-  // Without --all, keep this limited to configured channels whose official
-  // external plugin owner is missing, otherwise `channels list` can claim
-  // there are no configured channels even though openclaw.json has one.
-  const catalogOnlyLines = catalogEntries
-    .filter((entry) => !renderedChannelIds.has(entry.id))
+  // --all includes installed and installable catalog-only channels; ordinary lists
+  // retain missing configured owners. Evaluate presence once for this inventory.
+  const catalogOnlyEntries = catalogEntries.filter((entry) => !renderedChannelIds.has(entry.id));
+  const repairHintsByChannelId = new Map(
+    resolveMissingOfficialExternalChannelPluginRepairHints({
+      config: cfg,
+      channelIds: catalogOnlyEntries.map((entry) => entry.id),
+      ...(workspaceDir ? { workspaceDir } : {}),
+      manifestRecords: metadataSnapshot.plugins,
+    }).map((hint) => [hint.channelId, hint]),
+  );
+  const catalogOnlyLines = catalogOnlyEntries
     .map((entry) => {
-      const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: cfg,
-        channelId: entry.id,
-        ...(workspaceDir ? { workspaceDir } : {}),
-        manifestRecords: metadataSnapshot.plugins,
-      });
+      const hint = repairHintsByChannelId.get(entry.id);
       return {
         entry,
         installed: isInstalled(entry.id),
@@ -303,30 +239,35 @@ export async function channelsListCommand(
   if (opts.json) {
     type JsonChannelEntry = {
       accounts: string[];
+      label: string;
+      docsPath?: string;
       installed: boolean;
       origin: "configured" | "available" | "installable";
     };
     const chat: Record<string, JsonChannelEntry> = {};
+    const catalogById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
     for (const plugin of plugins) {
       const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
       const installed = isInstalled(plugin.id);
-      if (accountIds && accountIds.length > 0) {
+      const catalog = catalogById.get(plugin.id);
+      const metadata = {
+        label: catalog?.meta.label ?? plugin.meta.label,
+        ...(catalog?.officialDocsPath ? { docsPath: catalog.officialDocsPath } : {}),
+      };
+      if (accountIds.length > 0 || (showAll && isChannelVisibleInConfiguredLists(plugin.meta))) {
         chat[plugin.id] = {
           accounts: accountIds,
+          ...metadata,
           installed,
-          origin: "configured",
-        };
-      } else if (showAll && shouldShowConfigured(plugin)) {
-        chat[plugin.id] = {
-          accounts: [],
-          installed,
-          origin: "available",
+          origin: accountIds.length > 0 ? "configured" : "available",
         };
       }
     }
     for (const line of catalogOnlyLines) {
       chat[line.entry.id] = {
         accounts: [],
+        label: line.entry.meta.label,
+        ...(line.entry.officialDocsPath ? { docsPath: line.entry.officialDocsPath } : {}),
         installed: line.installed,
         origin: line.configured ? "configured" : line.installed ? "available" : "installable",
       };
@@ -349,23 +290,18 @@ export async function channelsListCommand(
     );
   } else {
     for (const line of accountLines) {
-      lines.push(
-        formatAccountLine({
-          channel: line.plugin,
-          snapshot: line.snapshot,
-          installed: line.installed,
-        }),
-      );
+      lines.push(formatAccountLine(line));
     }
-    for (const line of catalogOnlyLines) {
-      lines.push(
-        formatCatalogOnlyLine({
-          entry: line.entry,
-          installed: line.installed,
-          configured: line.configured,
-          ...(line.repairHint ? { repairHint: line.repairHint } : {}),
-        }),
-      );
+    for (const { entry, installed, configured, repairHint } of catalogOnlyLines) {
+      const bits = [
+        formatPresence("installed", installed),
+        formatPresence("configured", configured),
+        formatEnabled(false),
+      ];
+      if (repairHint) {
+        bits.push(repairHint);
+      }
+      lines.push(`- ${theme.accent(entry.meta.label ?? entry.id)}: ${bits.join(", ")}`);
     }
   }
 

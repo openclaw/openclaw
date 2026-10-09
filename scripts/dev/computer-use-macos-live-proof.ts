@@ -65,7 +65,7 @@ if (advertisedProvider.id !== expectedProviderId) {
     `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
   );
 }
-const tool = createComputerTool({ modelHasVision: true });
+const tool = createComputerTool();
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {
@@ -111,14 +111,15 @@ function resultText(result: ToolResult): string {
 
 function wireResult(result: ToolResult): JsonRecord {
   const details = result.details as { result?: unknown } | undefined;
-  if (details?.result && typeof details.result === "object" && !Array.isArray(details.result)) {
-    return details.result as JsonRecord;
+  const structured = record(details?.result);
+  if (structured) {
+    return structured;
   }
   for (const line of resultText(result).split("\n")) {
     try {
-      const parsed = JSON.parse(line) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as JsonRecord;
+      const parsed = record(JSON.parse(line));
+      if (parsed) {
+        return parsed;
       }
     } catch {
       // Mutating actions prefix their follow-up screenshot with one JSON result line.
@@ -170,7 +171,7 @@ function summarizeOutcome(outcome: ActionOutcome): JsonRecord {
 
 async function saveImage(name: string, result: ToolResult): Promise<string> {
   const image = result.content.find((block) => block.type === "image");
-  if (!image || image.type !== "image") {
+  if (!image) {
     throw new Error(`missing model-visible image in ${name}`);
   }
   const extension = image.mimeType === "image/jpeg" ? "jpeg" : "png";

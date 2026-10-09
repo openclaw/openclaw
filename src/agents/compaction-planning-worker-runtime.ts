@@ -11,7 +11,7 @@ const COMPACTION_PLANNING_WORKER_TIMEOUT_MS = 60_000;
 export class CompactionPlanningWorkerError extends Error {
   constructor(
     message: string,
-    readonly code: "unavailable" | "timeout" | "failed",
+    readonly code: "unavailable" | "timeout" | "failed" | "overloaded",
   ) {
     super(message);
     this.name = "CompactionPlanningWorkerError";
@@ -22,6 +22,8 @@ const planningPool = new WorkerTaskPool<
   CompactionPlanningWorkerInput,
   CompactionPlanningWorkerValue
 >({
+  workerClass: "compute",
+  sharedCompute: true,
   workerUrl: resolveRuntimeWorkerUrl({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "compaction-planning.worker",
@@ -37,6 +39,7 @@ export async function runCompactionPlanningWorker(params: {
 }): Promise<CompactionPlanningWorkerValue> {
   const pool = params.workerUrl
     ? new WorkerTaskPool<CompactionPlanningWorkerInput, CompactionPlanningWorkerValue>({
+        workerClass: "compute",
         workerUrl: params.workerUrl,
       })
     : planningPool;

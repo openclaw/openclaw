@@ -1,3 +1,5 @@
+export const UPDATE_RUN_DRIVER_LIMIT = 8;
+
 export const UPDATE_RUN_PHASES = [
   "requested",
   "staging",
@@ -29,4 +31,17 @@ export const UPDATE_RUN_STEP_STATUSES = [
   "completed",
   "failed",
   "skipped",
+] as const;
+
+export const UPDATE_NPM_ERROR_CODES = [
+  "ETARGET",
+  "E404",
+  "EINTEGRITY",
+  "EACCES",
+  "ENOTEMPTY",
+  "ENOSPC",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EBUSY",
+  "unknown",
 ] as const;

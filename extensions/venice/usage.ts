@@ -1,5 +1,6 @@
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   parseProviderUsageNonNegativeNumber,
   type ProviderUsageSnapshot,
@@ -18,16 +19,6 @@ type VeniceBalanceResponse = {
   diemEpochAllocation?: unknown;
 };
 
-async function readPayload(response: Response, timeoutMs: number): Promise<VeniceBalanceResponse> {
-  const data = await readProviderJsonObjectResponse(response, "Venice usage", {
-    maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,
-    chunkTimeoutMs: timeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Venice usage response stalled for ${chunkTimeoutMs}ms`),
-  });
-  return data as VeniceBalanceResponse;
-}
-
 export async function fetchVeniceUsage(params: {
   token: string;
   timeoutMs: number;
@@ -43,12 +34,7 @@ export async function fetchVeniceUsage(params: {
       signal: AbortSignal.timeout(params.timeoutMs),
     });
   } catch {
-    return {
-      provider: "venice",
-      displayName: "Venice",
-      windows: [],
-      error: "Usage unavailable",
-    };
+    return buildUsageErrorSnapshot("venice", "Usage unavailable");
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -57,14 +43,14 @@ export async function fetchVeniceUsage(params: {
 
   let data: VeniceBalanceResponse;
   try {
-    data = await readPayload(response, params.timeoutMs);
+    data = await readProviderJsonObjectResponse(response, "Venice usage", {
+      maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,
+      chunkTimeoutMs: params.timeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Venice usage response stalled for ${chunkTimeoutMs}ms`),
+    });
   } catch {
-    return {
-      provider: "venice",
-      displayName: "Venice",
-      windows: [],
-      error: "Malformed usage response",
-    };
+    return buildUsageErrorSnapshot("venice", "Malformed usage response");
   }
 
   const diem = parseProviderUsageNonNegativeNumber(data.balances?.diem);

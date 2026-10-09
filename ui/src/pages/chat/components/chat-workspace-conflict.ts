@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { handleCopyButton, renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -11,13 +12,16 @@ import {
 } from "../workspace-conflict.ts";
 
 function renderConflictCopyAction(text: string, label: string) {
-  return html`<button
-    class="btn btn--sm chat-copy-btn"
-    type="button"
-    @click=${(event: Event) => void handleCopyButton(event, text, label)}
-  >
-    <span data-copy-label>${label}</span>
-  </button>`;
+  return keyed(
+    text,
+    html`<button
+      class="btn btn--sm chat-copy-btn"
+      type="button"
+      @click=${(event: Event) => void handleCopyButton(event, text, label)}
+    >
+      <span data-copy-label>${label}</span>
+    </button>`,
+  );
 }
 
 export function renderWorkspaceConflictNotice(props: {
@@ -111,22 +115,18 @@ export function renderWorkspaceConflictNotice(props: {
           ${
             commands
               ? html`<div class="chat-workspace-conflict-commands">
-                    <div>
-                      <span>${t("chat.workspaceConflict.inspectCloud")}</span>
-                      <code>${commands.inspect}</code>
-                      ${renderCopyButton(
-                        commands.inspect,
-                        t("chat.workspaceConflict.copyInspectCommand"),
-                      )}
-                    </div>
-                    <div>
-                      <span>${t("chat.workspaceConflict.takeCloud")}</span>
-                      <code>${commands.takeCloud}</code>
-                      ${renderCopyButton(
-                        commands.takeCloud,
-                        t("chat.workspaceConflict.copyTakeCommand"),
-                      )}
-                    </div>
+                    ${(
+                      [
+                        [commands.inspect, "inspectCloud", "copyInspectCommand"],
+                        [commands.takeCloud, "takeCloud", "copyTakeCommand"],
+                      ] as const
+                    ).map(
+                      ([command, labelKey, copyKey]) => html`<div>
+                        <span>${t(`chat.workspaceConflict.${labelKey}`)}</span>
+                        <code>${command}</code>
+                        ${renderCopyButton(command, t(`chat.workspaceConflict.${copyKey}`))}
+                      </div>`,
+                    )}
                   </div>
                   <p class="chat-workspace-conflict-command-help">
                     ${t("chat.workspaceConflict.commandHelp")}

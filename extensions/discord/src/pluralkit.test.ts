@@ -1,50 +1,16 @@
-// Discord tests cover pluralkit plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
-type MockResponse = {
-  status: number;
-  ok: boolean;
-  text: () => Promise<string>;
-  json: () => Promise<unknown>;
-  body: null;
-  arrayBuffer: () => Promise<Buffer>;
-};
-
-const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
+const buildResponse = (params: { status: number; body?: unknown }): Response => {
   const body = params.body;
-  const textPayload = typeof body === "string" ? body : body == null ? "" : JSON.stringify(body);
-  return {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body ?? {}), {
     status: params.status,
-    ok: params.status >= 200 && params.status < 300,
-    text: async () => textPayload,
-    json: async () => body ?? {},
-    body: null,
-    arrayBuffer: async () => Buffer.from(textPayload),
-  };
-};
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
+    headers: { "content-type": "application/json" },
   });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
+};
 
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
@@ -59,7 +25,7 @@ describe("fetchPluralKitMessageInfo", () => {
   });
 
   it("returns null on 404", async () => {
-    const tracked = cancelTrackedResponse("missing", { status: 404 });
+    const tracked = cancelTrackedTextResponse("missing", { status: 404 });
     const fetcher = vi.fn(async () => tracked.response);
     const result = await fetchPluralKitMessageInfo({
       messageId: "missing",
@@ -180,8 +146,66 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(observedSignal?.aborted).toBe(true);
   });
 
+  it("redacts reflected PluralKit credentials from a real HTTP error body", async () => {
+    const uniqueSecret = "pluralkit-loopback-secret";
+    const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
+    let authorization: string | undefined;
+    let requestUrl: string | undefined;
+    const server = createServer((request, response) => {
+      authorization = request.headers.authorization;
+      requestUrl = request.url;
+      response.writeHead(502, { "content-type": "text/plain" });
+      response.end(`proxy failure Authorization: ${authorization}; request rejected`);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected an ephemeral loopback address");
+    }
+    const origin = `http://127.0.0.1:${(address as AddressInfo).port}`;
+    const fetcher: typeof fetch = async (input, init) => {
+      const href =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const rewritten = new URL(href);
+      const target = new URL(`${rewritten.pathname}${rewritten.search}`, origin);
+      return await fetch(target, init);
+    };
+
+    let caught: Error | undefined;
+    try {
+      await fetchPluralKitMessageInfo({
+        messageId: "boom",
+        config: { enabled: true, token },
+        fetcher,
+      });
+    } catch (error) {
+      caught = error as Error;
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((closeError) => (closeError ? reject(closeError) : resolve()));
+      });
+    }
+
+    expect(requestUrl).toBe("/v2/messages/boom");
+    expect(authorization).toBe(token);
+    expect(caught?.message).toContain("PluralKit API failed (502)");
+    expect(caught?.message).toContain("proxy failure");
+    expect(caught?.message).toContain("Authorization:");
+    expect(caught?.message).not.toContain(token);
+    expect(caught?.message).not.toContain(uniqueSecret);
+    console.log(
+      `[pluralkit credential redaction proof] transport=http status=502 path=${requestUrl} authorization_received=${authorization === token} token_present=${caught?.message.includes(token)} unique_fragment_present=${caught?.message.includes(uniqueSecret)} detail=${caught?.message}`,
+    );
+  });
+
   it("bounds PluralKit API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"plural failure ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"plural failure ".repeat(1024)}tail`, {
       status: 500,
       headers: { "content-type": "text/plain" },
     });

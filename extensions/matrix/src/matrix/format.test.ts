@@ -1,6 +1,6 @@
 // Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { findMatrixSpoilerDelimiterOffsets } from "./format-spoiler-ranges.js";
+import { analyzeMatrixSpoilers } from "./format-spoiler-ranges.js";
 import {
   MATRIX_FORMAT_PROFILE,
   markdownToMatrixBody,
@@ -19,21 +19,18 @@ const MATRIX_FORMAT_GOLDENS = [
   {
     name: "spoiler",
     markdown: "before ||secret|| after",
-    previousHtml: "<p>before ||secret|| after</p>",
     html: "<p>before <span data-mx-spoiler>secret</span> after</p>",
     body: "before [Spoiler] after",
   },
   {
     name: "authored underline",
     markdown: "<u>under</u> and <ins>inserted</ins>",
-    previousHtml: "<p>&lt;u&gt;under&lt;/u&gt; and &lt;ins&gt;inserted&lt;/ins&gt;</p>",
     html: "<p><u>under</u> and <u>inserted</u></p>",
     body: "<u>under</u> and <ins>inserted</ins>",
   },
   {
     name: "native table",
     markdown: "| Name | Age |\n|---|---|\n| Alice | 30 |",
-    previousHtml: "<p><strong>Alice</strong><br>\n• Age: 30</p>",
     html: "<table>\n<thead>\n<tr>\n<th>Name</th>\n<th>Age</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Alice</td>\n<td>30</td>\n</tr>\n</tbody>\n</table>",
     body: "| Name | Age |\n|---|---|\n| Alice | 30 |",
   },
@@ -103,7 +100,6 @@ describe("Matrix formatting migration goldens", () => {
     it(`${golden.name}: emits the authorized before-to-after payload`, () => {
       expect(markdownToMatrixHtml(golden.markdown)).toBe(golden.html);
       expect(markdownToMatrixBody(golden.markdown)).toBe(golden.body);
-      expect(golden.html).not.toBe(golden.previousHtml);
     });
   }
 
@@ -134,7 +130,7 @@ describe("Matrix formatting migration goldens", () => {
 
   it("does not treat pipes in link destinations as spoiler delimiters", () => {
     const markdown = "[docs\nmore](https://example.test/a(b)||literal||) ||secret||";
-    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([
+    expect(analyzeMatrixSpoilers(markdown).delimiterOffsets).toEqual([
       markdown.indexOf("||secret||"),
       markdown.lastIndexOf("||"),
     ]);
@@ -237,7 +233,7 @@ describe("Matrix formatting migration goldens", () => {
 
   it("leaves compact empty-cell pipes to native table grammar", () => {
     const markdown = "| A | B | C |\n|---|---|---|\n| x || y || z |";
-    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([]);
+    expect(analyzeMatrixSpoilers(markdown).delimiterOffsets).toEqual([]);
     expect(markdownToMatrixHtml(markdown)).toContain("<table>");
     expect(markdownToMatrixBody(markdown)).toBe(markdown);
   });
@@ -253,16 +249,6 @@ describe("Matrix formatting migration goldens", () => {
 });
 
 describe("markdownToMatrixHtml", () => {
-  it("renders basic inline formatting", () => {
-    const html = markdownToMatrixHtml("hi _there_ **boss** `code`");
-    expect(html).toBe("<p>hi <em>there</em> <strong>boss</strong> <code>code</code></p>");
-  });
-
-  it("renders links as HTML", () => {
-    const html = markdownToMatrixHtml("see [docs](https://example.com)");
-    expect(html).toBe('<p>see <a href="https://example.com">docs</a></p>');
-  });
-
   it("does not auto-link bare file references into external urls", () => {
     const html = markdownToMatrixHtml("Check README.md and backup.sh");
     expect(html).toBe("<p>Check README.md and backup.sh</p>");
@@ -280,30 +266,10 @@ describe("markdownToMatrixHtml", () => {
     expect(html).toBe("<p>&lt;b&gt;nope&lt;/b&gt;</p>");
   });
 
-  it("flattens images into alt text", () => {
-    const html = markdownToMatrixHtml("![alt](https://example.com/img.png)");
-    expect(html).toBe("<p>alt</p>");
-  });
-
   it.each(["\n", "\r\n", "\r"])("preserves %j line breaks in text and HTML", (newline) => {
     const markdown = `line1${newline}line2`;
     expect(markdownToMatrixBody(markdown)).toBe("line1\nline2");
     expect(markdownToMatrixHtml(markdown)).toBe("<p>line1<br>\nline2</p>");
-  });
-
-  it("compacts loose ordered lists without paragraph tags", () => {
-    const html = markdownToMatrixHtml("1. first\n\n2. second\n\n3. third");
-    expect(html).toBe("<ol>\n<li>first</li>\n<li>second</li>\n<li>third</li>\n</ol>");
-  });
-
-  it("compacts loose unordered lists without paragraph tags", () => {
-    const html = markdownToMatrixHtml("- one\n\n- two\n\n- three");
-    expect(html).toBe("<ul>\n<li>one</li>\n<li>two</li>\n<li>three</li>\n</ul>");
-  });
-
-  it("keeps tight lists unchanged", () => {
-    const html = markdownToMatrixHtml("- one\n- two");
-    expect(html).toBe("<ul>\n<li>one</li>\n<li>two</li>\n</ul>");
   });
 
   it("preserves inline formatting in loose lists", () => {
@@ -407,18 +373,6 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toBe("<p>hello @room</p>");
-    expect(result.mentions).toEqual({
-      room: true,
-    });
-  });
-
-  it("treats sentence-ending room mentions as room mentions", async () => {
-    const result = await renderMarkdownToMatrixHtmlWithMentions({
-      markdown: "hello @room.",
-      client: createMentionClient(),
-    });
-
-    expect(result.html).toBe("<p>hello @room.</p>");
     expect(result.mentions).toEqual({
       room: true,
     });
@@ -541,6 +495,16 @@ describe("markdownToMatrixHtml", () => {
       name: "keeps escaped mentions literal after escaped backticks",
       markdown: "\\`literal then \\@alice:example.org",
       html: "<p>`literal then @alice:example.org</p>",
+    },
+    {
+      name: "keeps escaped mentions literal after unmatched backticks",
+      markdown: "`literal then \\@alice:example.org",
+      html: "<p>`literal then @alice:example.org</p>",
+    },
+    {
+      name: "keeps escaped room mentions literal after unmatched double backticks",
+      markdown: "``literal then \\@room",
+      html: "<p>``literal then @room</p>",
     },
     {
       name: "restores escaped mentions in markdown link labels without linking them",

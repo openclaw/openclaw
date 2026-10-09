@@ -1,4 +1,3 @@
-// Debug Claude Usage script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -8,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.mjs";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -28,15 +27,16 @@ type FetchOptions = {
   timeoutMs?: number;
 };
 
+type AuthProfiles = {
+  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
+};
+
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const FETCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const mask = (value: string) => {
-  return maskIdentifier(
-    value,
-    value.trim().length >= 12 ? 6 : 4,
-    value.trim().length >= 12 ? 6 : 4,
-  );
+  const visibleChars = value.trim().length >= 12 ? 6 : 4;
+  return maskIdentifier(value, visibleChars, visibleChars);
 };
 
 const parseArgs = (args = process.argv.slice(2)): Args => {
@@ -47,13 +47,21 @@ const parseArgs = (args = process.argv.slice(2)): Args => {
 
   for (let i = 0; i < args.length; i++) {
     const arg = expectDefined(args[i], `Claude usage argument at index ${i}`);
-    if (arg === "--agent") {
-      agentId = parseNonBlankArgValue(requireOptionArgument(args, i, "--agent"), "--agent");
-      i += 1;
-      continue;
-    }
-    if (arg.startsWith("--agent=")) {
-      agentId = parseNonBlankArgValue(parseInlineArgValue(arg, "--agent"), "--agent");
+    const valueFlag = ["--agent", "--session-key"].find(
+      (flag) => arg === flag || arg.startsWith(`${flag}=`),
+    );
+    if (valueFlag) {
+      const value = parseNonBlankArgValue(
+        arg === valueFlag
+          ? requireOptionArgument(args, i++, valueFlag)
+          : arg.slice(valueFlag.length + 1),
+        valueFlag,
+      );
+      if (valueFlag === "--agent") {
+        agentId = value;
+      } else {
+        sessionKey = value;
+      }
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -64,34 +72,11 @@ const parseArgs = (args = process.argv.slice(2)): Args => {
       reveal = true;
       continue;
     }
-    if (arg === "--session-key") {
-      sessionKey = parseNonBlankArgValue(
-        requireOptionArgument(args, i, "--session-key"),
-        "--session-key",
-      );
-      i += 1;
-      continue;
-    }
-    if (arg.startsWith("--session-key=")) {
-      sessionKey = parseNonBlankArgValue(
-        parseInlineArgValue(arg, "--session-key"),
-        "--session-key",
-      );
-      continue;
-    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
   return { agentId, help, reveal, sessionKey };
 };
-
-function parseInlineArgValue(arg: string, label: string): string {
-  const value = arg.slice(`${label}=`.length);
-  if (!value) {
-    throw new Error(`${label} requires a value`);
-  }
-  return value;
-}
 
 function parseNonBlankArgValue(value: string, label: string): string {
   const normalized = normalizeOptionalString(value);
@@ -117,9 +102,7 @@ const loadAuthProfiles = (agentId: string) => {
   if (!fs.existsSync(authPath)) {
     throw new Error(`Missing: ${authPath}`);
   }
-  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
-    profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-  };
+  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfiles;
   return { authPath, store };
 };
 
@@ -128,22 +111,12 @@ const CLAUDE_COOKIE_HOST_SQL =
 const CLAUDE_FIREFOX_COOKIE_HOST_SQL =
   "(host = 'claude.ai' OR host = '.claude.ai' OR host LIKE '%.claude.ai')";
 
-const pickAnthropicTokens = (store: {
-  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-}): Array<{ profileId: string; token: string }> => {
-  const profiles = store.profiles ?? {};
-  const found: Array<{ profileId: string; token: string }> = [];
-  for (const [id, cred] of Object.entries(profiles)) {
-    if (cred?.provider !== "anthropic") {
-      continue;
-    }
-    const token = cred.type === "token" ? cred.token?.trim() : undefined;
-    if (token) {
-      found.push({ profileId: id, token });
-    }
-  }
-  return found;
-};
+const pickAnthropicTokens = (store: AuthProfiles): Array<{ profileId: string; token: string }> =>
+  Object.entries(store.profiles ?? {}).flatMap(([profileId, cred]) => {
+    const token =
+      cred?.provider === "anthropic" && cred.type === "token" ? cred.token?.trim() : undefined;
+    return token ? [{ profileId, token }] : [];
+  });
 
 const resolveFetchTimeoutMs = (raw = process.env.OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS) => {
   return parseStrictIntegerOption({
@@ -177,17 +150,6 @@ const withFetchTimeout = async <T>(
   }
 };
 
-const readBoundedResponseText = (
-  response: Response,
-  label: string,
-  signal: AbortSignal,
-  maxBytes = FETCH_RESPONSE_MAX_BYTES,
-): Promise<string> =>
-  readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    createTooLargeError: (message: string) => new Error(message),
-    signal,
-  });
-
 const fetchText = async (
   label: string,
   url: string,
@@ -198,7 +160,7 @@ const fetchText = async (
   const timeoutMs = options.timeoutMs ?? resolveFetchTimeoutMs();
   return await withFetchTimeout(label, timeoutMs, async (signal) => {
     const res = await fetchImpl(url, { ...init, signal });
-    const text = await readBoundedResponseText(res, label, signal);
+    const text = await readBoundedResponseText(res, label, FETCH_RESPONSE_MAX_BYTES, { signal });
     return { res, text };
   });
 };
@@ -223,7 +185,6 @@ const fetchAnthropicOAuthUsage = async (token: string, options: FetchOptions = {
 
 const readClaudeCliKeychain = (): {
   accessToken: string;
-  expiresAt?: number;
   scopes?: string[];
 } | null => {
   if (process.platform !== "darwin") {
@@ -244,11 +205,10 @@ const readClaudeCliKeychain = (): {
     if (typeof accessToken !== "string" || !accessToken.trim()) {
       return null;
     }
-    const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
     const scopes = Array.isArray(oauth.scopes)
       ? oauth.scopes.filter((v): v is string => typeof v === "string")
       : undefined;
-    return { accessToken, expiresAt, scopes };
+    return { accessToken, scopes };
   } catch {
     return null;
   }
@@ -373,8 +333,6 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
   }
 };
 
-const browserRootLabel = (root: string): string => path.basename(root) || "browser";
-
 const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
   if (process.platform !== "darwin") {
     return null;
@@ -422,7 +380,10 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
       }
       const value = queryChromeCookieDb(db);
       if (value) {
-        return { sessionKey: value, source: `chromium:${browserRootLabel(root)}/${profile}` };
+        return {
+          sessionKey: value,
+          source: `chromium:${path.basename(root) || "browser"}/${profile}`,
+        };
       }
     }
   }
@@ -506,7 +467,7 @@ const main = async (argv = process.argv.slice(2)) => {
   const envSessionKey =
     process.env.CLAUDE_AI_SESSION_KEY?.trim() || process.env.CLAUDE_WEB_SESSION_KEY?.trim();
   const discoveredSession = opts.sessionKey || envSessionKey ? null : findClaudeSessionKey();
-  const sessionKey = opts.sessionKey?.trim() || envSessionKey || discoveredSession?.sessionKey;
+  const sessionKey = opts.sessionKey || envSessionKey || discoveredSession?.sessionKey;
   const source = opts.sessionKey
     ? "--session-key"
     : envSessionKey
@@ -535,10 +496,8 @@ const main = async (argv = process.argv.slice(2)) => {
 
 export const testing = {
   CLAUDE_COOKIE_HOST_SQL,
-  FETCH_RESPONSE_MAX_BYTES,
   fetchAnthropicOAuthUsage,
   parseArgs,
-  readBoundedResponseText,
   resolveFetchTimeoutMs,
 };
 

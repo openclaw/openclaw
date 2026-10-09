@@ -1,7 +1,19 @@
 // Gateway readiness tests cover readiness checks, status details, and failure messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
-import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+const { gatherStatus, confirm, installGateway, startGateway } = vi.hoisted(() => ({
+  gatherStatus: vi.fn(),
+  confirm: vi.fn(),
+  installGateway: vi.fn(),
+  startGateway: vi.fn(),
+}));
+vi.mock("../cli/daemon-cli/status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
+vi.mock("../cli/prompt.js", () => ({ promptYesNo: confirm }));
+vi.mock("../cli/daemon-cli/install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("../cli/daemon-cli/lifecycle.js", () => ({ runDaemonStart: startGateway }));
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Omit<DaemonStatus["service"], "loaded">;
@@ -47,32 +59,26 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
   };
 }
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
-describe("ensureGatewayReadyForOperation", () => {
+describe("ensureDashboardGatewayReady", () => {
   beforeEach(() => {
+    vi.resetAllMocks();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
   });
 
   it("returns ready without prompting when the gateway probe succeeds", async () => {
-    const gatherStatus = vi.fn().mockResolvedValue(
+    gatherStatus.mockResolvedValue(
       createStatus({
         rpc: { ok: true },
         port: { port: 18789, status: "busy", listeners: [], hints: [] },
       }),
     );
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "run a command",
-      deps: { gatherStatus, confirm },
     });
 
     expect(result.ready).toBe(true);
@@ -87,15 +93,12 @@ describe("ensureGatewayReadyForOperation", () => {
         port: { port: 18789, status: "busy", listeners: [], hints: [] },
         rpc: { ok: false, error },
       });
-      const confirm = vi.fn().mockResolvedValue(false);
-      const installGateway = vi.fn();
-      const startGateway = vi.fn();
-      const result = await ensureGatewayReadyForOperation({
+      confirm.mockResolvedValue(false);
+      gatherStatus.mockResolvedValue(status);
+
+      const result = await ensureDashboardGatewayReady({
         runtime,
-        operation: "open the dashboard",
-        readyWhenReachable: true,
         interactive: true,
-        deps: { gatherStatus: async () => status, confirm, installGateway, startGateway },
       });
 
       expect(result).toMatchObject({ ready: false, recoverable: false });
@@ -103,21 +106,19 @@ describe("ensureGatewayReadyForOperation", () => {
       expect(installGateway).not.toHaveBeenCalled();
       expect(startGateway).not.toHaveBeenCalled();
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("Gateway probe failed:");
+      expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");
     },
   );
 
   it("prints diagnosis and skips recovery when an interactive user declines", async () => {
-    const gatherStatus = vi.fn().mockResolvedValue(createStatus());
-    const confirm = vi.fn().mockResolvedValue(false);
+    gatherStatus.mockResolvedValue(createStatus());
+    confirm.mockResolvedValue(false);
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       interactive: true,
-      deps: { gatherStatus, confirm },
     });
 
     expect(result.ready).toBe(false);
@@ -144,15 +145,13 @@ describe("ensureGatewayReadyForOperation", () => {
       port: { port: 18789, status: "busy", listeners: [], hints: [] },
       rpc: { ok: true },
     });
-    const gatherStatus = vi.fn().mockResolvedValueOnce(stopped).mockResolvedValueOnce(running);
-    const installGateway = vi.fn().mockResolvedValue(undefined);
-    const startGateway = vi.fn().mockResolvedValue(undefined);
+    gatherStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(running);
+    installGateway.mockResolvedValue(undefined);
+    startGateway.mockResolvedValue(undefined);
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       yes: true,
-      deps: { gatherStatus, installGateway, startGateway },
     });
 
     expect(result).toMatchObject({ ready: true, recovered: true });
@@ -183,15 +182,13 @@ describe("ensureGatewayReadyForOperation", () => {
       port: { port: 18789, status: "busy", listeners: [], hints: [] },
       rpc: { ok: true },
     });
-    const gatherStatus = vi.fn().mockResolvedValueOnce(stopped).mockResolvedValueOnce(running);
-    const installGateway = vi.fn().mockResolvedValue(undefined);
-    const startGateway = vi.fn().mockResolvedValue(undefined);
+    gatherStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(running);
+    installGateway.mockResolvedValue(undefined);
+    startGateway.mockResolvedValue(undefined);
 
-    const result = await ensureGatewayReadyForOperation({
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       yes: true,
-      deps: { gatherStatus, installGateway, startGateway },
     });
 
     expect(result).toMatchObject({ ready: true, recovered: true });
@@ -224,20 +221,13 @@ describe("ensureGatewayReadyForOperation", () => {
         url: "ws://127.0.0.1:18900",
       },
     });
-    const confirm = vi.fn().mockResolvedValue(false);
-    const installGateway = vi.fn();
-    const startGateway = vi.fn();
+    confirm.mockResolvedValue(false);
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       interactive: true,
-      deps: {
-        gatherStatus: vi.fn().mockResolvedValue(status),
-        confirm,
-        installGateway,
-        startGateway,
-      },
     });
 
     expect(result).toMatchObject({ ready: false, recoverable: false });
@@ -262,19 +252,18 @@ describe("ensureGatewayReadyForOperation", () => {
       port: { port: 18789, status: "busy", listeners: [], hints: [] },
       rpc: { ok: false, error: "gateway closed (1008): auth failed" },
     });
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
       interactive: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
 
     expect(result).toMatchObject({ ready: false, recoverable: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: gateway closed (1008): auth failed",
+      "Gateway check failed: gateway closed (1008): auth failed",
     );
   });
 
@@ -297,14 +286,12 @@ describe("ensureGatewayReadyForOperation", () => {
         url: "ws://127.0.0.1:49876",
       },
     });
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
 
     expect(result).toMatchObject({ ready: true, recovered: false });
@@ -330,14 +317,12 @@ describe("ensureGatewayReadyForOperation", () => {
         url: "ws://127.0.0.1:18789",
       },
     });
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
 
     expect(result).toMatchObject({ ready: true, recovered: false });
@@ -364,14 +349,12 @@ describe("ensureGatewayReadyForOperation", () => {
         url: "ws://127.0.0.1:18789",
       },
     });
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
 
     expect(result).toMatchObject({ ready: true, recovered: false });
@@ -397,13 +380,11 @@ describe("ensureGatewayReadyForOperation", () => {
         url: "ws://127.0.0.1:18789",
       },
     });
-    const startGateway = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), startGateway },
     });
 
     expect(result).toMatchObject({ ready: true, recovered: false });
@@ -423,20 +404,18 @@ describe("ensureGatewayReadyForOperation", () => {
       port: { port: 18789, status: "busy", listeners: [], hints: [] },
       rpc: { ok: false, error: "timeout", url: "ws://127.0.0.1:18789" },
     });
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
 
     expect(result).toMatchObject({ ready: false, recoverable: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: timeout",
+      "Gateway check failed: timeout",
     );
   });
 
@@ -457,20 +436,18 @@ describe("ensureGatewayReadyForOperation", () => {
         url: "ws://127.0.0.1:18789",
       },
     });
-    const confirm = vi.fn();
 
-    const result = await ensureGatewayReadyForOperation({
+    gatherStatus.mockResolvedValue(status);
+
+    const result = await ensureDashboardGatewayReady({
       runtime,
-      operation: "open the dashboard",
-      readyWhenReachable: true,
       interactive: true,
-      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
     });
 
     expect(result).toMatchObject({ ready: false, recoverable: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: Unexpected server response: 200",
+      "Gateway check failed: Unexpected server response: 200",
     );
   });
 });

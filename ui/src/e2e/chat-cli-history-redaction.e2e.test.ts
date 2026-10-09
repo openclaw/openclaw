@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { AgentMessage } from "../../../src/agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../../src/agents/transcript-redact.js";
-import { resolveChatHistoryWithCliSessionImports } from "../../../src/gateway/cli-session-history.js";
+import {
+  mergeImportedChatHistoryMessages,
+  readClaudeCliSessionMessagesAsync,
+} from "../../../src/gateway/cli-session-history.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   chatSessionListResponse,
@@ -59,19 +62,20 @@ suite.define(() => {
         content: userText,
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
       } as AgentMessage);
-      const mergedMessages = resolveChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "control-ui-local-claude-history",
-          updatedAt: Date.now(),
-          cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-        },
-        provider: "claude-cli",
+      const mergedMessages = mergeImportedChatHistoryMessages({
         localMessages: [localUserMessage],
-        homeDir,
-      }).messages;
+        importedMessages: await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir }),
+      });
 
       expect(mergedMessages).toHaveLength(2);
-      expect(mergedMessages[0]).toBe(localUserMessage);
+      expect(mergedMessages[0]).toEqual({
+        ...localUserMessage,
+        __openclaw: {
+          cliSessionId,
+          externalId: "control-ui-claude-user-copy",
+          importedFrom: "claude-cli",
+        },
+      });
       expect(requireRecord(requireRecord(mergedMessages[1])["__openclaw"])).toMatchObject({
         cliSessionId,
         externalId: "control-ui-claude-imported-assistant",

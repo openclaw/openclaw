@@ -1,7 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
+import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
-import type { FastMode } from "../../api/types.ts";
+import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
+import {
+  renderDecisionModelPicker,
+  type DecisionModelEntry,
+} from "../../components/decision-model-picker.ts";
 import { icons } from "../../components/icons.ts";
 import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
 import {
@@ -11,27 +17,45 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+} from "../../lib/model-auth.ts";
+import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
+import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import { renderMutationMessage } from "./view-status.ts";
 
-type DefaultModelsViewProps = {
+export type DefaultModelsViewProps = {
   models: ModelPickerEntry[];
+  decisionModels: DecisionModelEntry[];
   selection: DefaultModelSelection;
+  authStatus?: ModelAuthStatusResult | null;
+  automaticUtilityModel?: string | null;
+  /** Route the utility model in effect (automatic or explicit) runs on. */
+  utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   loading?: boolean;
+  catalogDiscovering?: boolean;
+  /** Retryable discovery error from the current catalog publication or explicit Retry. */
+  catalogDiscoveryError?: string | null;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: Record<string, boolean>;
-  message?: { kind: "success" | "error"; text: string; warning?: string };
+  message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
-  onThinkingChange: (level: string, element: HTMLElement) => void;
+  onDecisionChange: (model: string | null) => void;
+  onThinkingChange: (level: string) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
+  onCatalogRetry: () => void;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -45,29 +69,32 @@ const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
-function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
-  const seen = new Set<string>();
-  const options: ModelPickerOption[] = [];
-  for (const model of models) {
-    const ref = modelCatalogRef(model);
-    if (seen.has(ref)) {
-      continue;
-    }
-    seen.add(ref);
-    options.push({
-      value: ref,
-      label: model.name || ref,
-      ...(model.provider ? { provider: model.provider } : {}),
-    });
-  }
-  return options.toSorted((a, b) => a.label.localeCompare(b.label));
+function modelOption(
+  model: ModelPickerEntry,
+  authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
+): ModelPickerOption {
+  const ref = modelCatalogRef(model);
+  const provider = authProviders.get(canonicalModelAuthProviderId(model.provider));
+  const auth = provider
+    ? describeModelProviderAuth(provider, {
+        authProfileId: splitTrailingAuthProfile(ref).profile,
+        projection: "available-credentials",
+      })
+    : undefined;
+  return {
+    value: ref,
+    label: model.name || ref,
+    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(model.available === false ? { disabled: true } : {}),
+    ...(model.provider ? { provider: model.provider } : {}),
+  };
 }
 
 function renderHelpTitle(params: {
   title: string;
   label: string;
   triggerId: string;
-  body: TemplateResult;
+  paragraphs: string[];
 }) {
   return html`
     <span class="model-providers__label-with-help">
@@ -87,38 +114,60 @@ function renderHelpTitle(params: {
           >
             ${icons.info}
           </button>
-          <div slot="content" class="settings-section__help-panel">${params.body}</div>
+          <div slot="content" class="settings-section__help-panel">
+            ${params.paragraphs.map((text) => html`<p>${text}</p>`)}
+          </div>
         </openclaw-tooltip>
       </span>
     </span>
   `;
 }
 
-function renderDefaultOption(params: { label: string; help: string }): TemplateResult {
-  return html`
-    <span class="model-providers__segment-label">
-      <span>${params.label}</span>
-      <openclaw-tooltip open-on-click .content=${params.help}>
-        <button
-          type="button"
-          class="model-providers__segment-info"
-          aria-label=${params.help}
-          @click=${(event: Event) => event.stopPropagation()}
-          @keydown=${(event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-              event.stopPropagation();
-            }
-          }}
-        >
-          ${icons.info}
-        </button>
-      </openclaw-tooltip>
-    </span>
-  `;
+function renderBehaviorSetting(field: "thinking" | "fastMode", control: TemplateResult) {
+  return renderSettingsRow({
+    title: renderHelpTitle({
+      title: t(`quickSettings.model.${field}`),
+      label: t(`modelProviders.defaults.${field}HelpLabel`),
+      triggerId: field === "thinking" ? THINKING_HELP_ID : FAST_MODE_HELP_ID,
+      paragraphs: [
+        t(`modelProviders.defaults.${field}Help`),
+        t(`modelProviders.defaults.${field}DefaultHelp`),
+      ],
+    }),
+    control,
+  });
 }
 
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
+function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
+  return value === "auto" || value === "ultrafast" ? value : value === "on";
+}
+
+// Discovery progress does not change the saved selection or disable known models.
+function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult {
+  return html`
+    ${
+      props.catalogDiscovering
+        ? html`
+            <div class="model-providers__catalog-progress" role="status" aria-live="polite">
+              <span class="btn__spinner" aria-hidden="true"></span>
+              <span>${t("modelProviders.defaults.discoveringMore")}</span>
+            </div>
+          `
+        : nothing
+    }
+    ${
+      props.catalogDiscoveryError
+        ? html`
+            <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
+              <span>${t("modelProviders.defaults.discoverFailed")}</span>
+              <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
+                ${t("modelProviders.defaults.retryDiscover")}
+              </button>
+            </div>
+          `
+        : nothing
+    }
+  `;
 }
 
 export function renderDefaultModels(props: DefaultModelsViewProps) {
@@ -132,6 +181,38 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       : THINKING_LEVELS;
   const fastMode = props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode);
   const fallback = props.selection.fallbacks[0] ?? "";
+  const authProviders = new Map(
+    listEffectiveModelAuthProviders(props.authStatus?.providers ?? []).map((provider) => [
+      provider.provider,
+      provider,
+    ]),
+  );
+  const options = dedupeByKey(props.models, modelCatalogRef).map((model) =>
+    modelOption(model, authProviders),
+  );
+  const automaticRef = props.automaticUtilityModel;
+  const utilityValue = props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE;
+  const utilityRoute = formatCompletionRoute(props.utilityRuntime);
+  // The route describes the model in effect, so it joins that option's account detail.
+  const withUtilityRoute = (value: string, detail: string | undefined) =>
+    value === utilityValue && utilityRoute
+      ? [detail, utilityRoute.label].filter(Boolean).join(" · ")
+      : detail;
+  const automaticBaseRef = automaticRef ? splitTrailingAuthProfile(automaticRef).model : "";
+  const automaticEntry = props.models.find((model) => modelCatalogRef(model) === automaticBaseRef);
+  const automaticModel = automaticRef
+    ? modelOption(
+        {
+          ...(automaticEntry ?? {
+            id: automaticBaseRef,
+            name: automaticBaseRef,
+            provider: automaticBaseRef.split("/", 1)[0] ?? "",
+          }),
+          selectionRef: automaticRef,
+        },
+        authProviders,
+      )
+    : undefined;
 
   const body = html`
     <div class="model-providers__defaults">
@@ -142,7 +223,6 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
       }
       ${renderSettingsRow({
         title: t("modelProviders.defaults.primary"),
-        stackedOnNarrow: true,
         control: renderModelPicker({
           label: t("modelProviders.defaults.primary"),
           value: props.selection.primary,
@@ -150,12 +230,15 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             {
               value: "",
               label: t("modelProviders.defaults.selectModel"),
-              disabled: Boolean(props.selection.primary),
+              disabled: !props.canMutate || Boolean(props.selection.primary),
             },
-            ...modelOptions(props.models),
+            ...(props.canMutate
+              ? options
+              : options.map((option) => ({ ...option, disabled: true }))),
           ],
-          disabled: modelControlsDisabled || saving,
+          disabled: props.models.length === 0 || saving,
           title,
+          showSelectedDetail: true,
           onChange: props.onPrimaryChange,
         }),
       })}
@@ -164,62 +247,78 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("modelProviders.defaults.utility"),
           label: t("modelProviders.defaults.utilityHelpLabel"),
           triggerId: UTILITY_MODEL_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.utilityHelpPurpose")}</p>
-            <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>
-          `,
+          paragraphs: [
+            t("modelProviders.defaults.utilityHelpPurpose"),
+            t("modelProviders.defaults.utilityHelpAutomatic"),
+          ],
         }),
-        stackedOnNarrow: true,
         control: renderModelPicker({
           id: UTILITY_MODEL_PICKER_ID,
           label: t("modelProviders.defaults.utility"),
-          value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
+          value: utilityValue,
           options: [
-            { value: AUTOMATIC_UTILITY_VALUE, label: t("quickSettings.model.fastModes.auto") },
+            {
+              value: AUTOMATIC_UTILITY_VALUE,
+              label: props.automaticUtilityModel
+                ? `${t("quickSettings.model.fastModes.auto")} · ${automaticModel?.label ?? props.automaticUtilityModel}`
+                : t("quickSettings.model.fastModes.auto"),
+              provider: automaticModel?.provider,
+              detail:
+                automaticRef === null
+                  ? t("modelProviders.defaults.automaticUnavailable")
+                  : withUtilityRoute(AUTOMATIC_UTILITY_VALUE, automaticModel?.detail),
+            },
             { value: "", label: t("modelProviders.defaults.disabled") },
-            ...modelOptions(props.models),
+            ...options.map((option) => {
+              const detail = withUtilityRoute(option.value, option.detail);
+              return detail === option.detail ? option : { ...option, detail };
+            }),
           ],
           disabled: modelControlsDisabled || saving,
-          title,
+          // A blocked mutation explains itself first; otherwise the tooltip explains the route.
+          title: title || utilityRoute?.detail || "",
+          showSelectedDetail: true,
           onChange: (value) =>
             props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
         }),
       })}
       ${renderSettingsRow({
+        title: t("chat.modelControls.decisionLabel"),
+        description: t("chat.modelControls.decisionHelp"),
+        control: renderDecisionModelPicker({
+          id: "model-providers-decision-model",
+          models: props.decisionModels,
+          value: props.selection.decisionModel,
+          disabled: !props.canMutate || saving,
+          title,
+          onChange: props.onDecisionChange,
+        }),
+      })}
+      ${renderSettingsRow({
         title: t("modelProviders.defaults.fallback"),
-        stackedOnNarrow: true,
         control: renderModelPicker({
           label: t("modelProviders.defaults.fallback"),
           value: fallback,
           options: [
             { value: "", label: t("modelProviders.defaults.noFallback") },
-            ...modelOptions(
-              props.models.filter((model) => modelCatalogRef(model) !== props.selection.primary),
-            ),
+            ...options.filter((option) => option.value !== props.selection.primary),
           ],
           disabled: modelControlsDisabled || saving || !props.selection.primary,
           title,
+          showSelectedDetail: true,
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.thinking"),
-          label: t("modelProviders.defaults.thinkingHelpLabel"),
-          triggerId: THINKING_HELP_ID,
-          body: html`<p>${t("modelProviders.defaults.thinkingHelp")}</p>`,
-        }),
-        stackedOnNarrow: true,
-        control: html`
+      ${renderBehaviorSetting(
+        "thinking",
+        html`
           ${renderSettingsSegmented({
             value: props.thinkingLevel ?? "",
+            ariaLabel: t("quickSettings.model.thinking"),
             options: [
               {
                 value: "",
-                label: renderDefaultOption({
-                  label: t("quickSettings.model.default"),
-                  help: t("modelProviders.defaults.thinkingDefaultHelp"),
-                }),
+                label: t("quickSettings.model.default"),
               },
               ...thinkingLevels.map((level) => ({
                 value: level,
@@ -229,8 +328,8 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
               })),
             ],
             disabled: saving || behaviorControlsDisabled,
-            onChange: (value, element) =>
-              value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
+            onChange: (value) =>
+              value === "" ? props.onThinkingReset() : props.onThinkingChange(value),
             onReselect: (value) => {
               if (value === "" && props.thinkingOverridden) {
                 props.onThinkingReset();
@@ -238,25 +337,17 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             },
           })}
         `,
-      })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.fastMode"),
-          label: t("modelProviders.defaults.fastModeHelpLabel"),
-          triggerId: FAST_MODE_HELP_ID,
-          body: html`<p>${t("modelProviders.defaults.fastModeHelp")}</p>`,
-        }),
-        stackedOnNarrow: true,
-        control: html`
-          ${renderSettingsSegmented<"" | "auto" | "on" | "off">({
+      )}
+      ${renderBehaviorSetting(
+        "fastMode",
+        html`
+          ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
             value: fastMode,
+            ariaLabel: t("quickSettings.model.fastMode"),
             options: [
               {
                 value: "",
-                label: renderDefaultOption({
-                  label: t("quickSettings.model.default"),
-                  help: t("modelProviders.defaults.fastModeDefaultHelp"),
-                }),
+                label: t("quickSettings.model.default"),
               },
               { value: "auto", label: t("quickSettings.model.fastModes.auto") },
               { value: "on", label: t("quickSettings.model.fastModes.on") },
@@ -277,22 +368,9 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             },
           })}
         `,
-      })}
-      ${
-        props.canMutate && props.message
-          ? html`<div
-              class="callout ${props.message.kind}"
-              role=${props.message.kind === "error" ? "alert" : "status"}
-            >
-              ${props.message.text}
-            </div>`
-          : nothing
-      }
-      ${
-        props.canMutate && props.message?.warning
-          ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
-          : nothing
-      }
+      )}
+      ${renderCatalogProgress(props)}
+      ${props.canMutate ? renderMutationMessage(props.message) : nothing}
     </div>
   `;
   return renderSettingsSection(

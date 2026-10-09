@@ -1,16 +1,15 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveAgentDir, tryResolveLegacyDataOwnerAgentId } from "./agent-scope-config.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 
 export function resolveLegacyInheritedAuthAgentId(config: OpenClawConfig): string {
   return (
     normalizeOptionalString(config.agents?.defaults?.authInheritance?.agentId) ??
-    tryResolveLegacyCompatibilityAgentId(config) ??
+    tryResolveLegacyDataOwnerAgentId(config) ??
     "main"
   );
 }
@@ -25,9 +24,10 @@ export function resolveLegacyInheritedAuthAgentDir(
 export function resolveLegacyInheritedAuthDir(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  preparedLegacyAgentDir?: () => string | undefined,
 ): string | undefined {
   return resolveSharedAuthStoreOwnership(env).location === "legacy-main"
-    ? resolveLegacyInheritedAuthAgentDir(config, env)
+    ? (preparedLegacyAgentDir?.() ?? resolveLegacyInheritedAuthAgentDir(config, env))
     : undefined;
 }
 

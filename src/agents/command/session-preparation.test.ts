@@ -32,9 +32,13 @@ vi.mock("./runtime-loaders.js", () => ({
   }),
 }));
 
-it.each([false, true])(
-  "projects command startup and capacity waits without a chat controller (internal=%s)",
-  async (internal) => {
+it.each([
+  { internal: false, coordination: false },
+  { internal: true, coordination: false },
+  { internal: false, coordination: true },
+])(
+  "projects command startup and capacity waits (internal=$internal, coordination=$coordination)",
+  async ({ internal, coordination }) => {
     const runId = "command-activity";
     const sessionKey = "agent:main:command-activity";
     const sessionId = "command-activity-session";
@@ -51,25 +55,36 @@ it.each([false, true])(
     try {
       await prepareEmbeddedSessionState({
         cfg: {},
-        opts: { message: "hello" },
+        opts: {
+          message: "hello",
+          ...(coordination
+            ? {
+                inputProvenance: {
+                  kind: "inter_session" as const,
+                  sourceTool: "sessions_send",
+                  sourceRole: "subagent" as const,
+                },
+              }
+            : {}),
+        },
         sessionKey,
         sessionId,
         storePath: "/unused/command.sqlite",
         sessionAgentId: "main",
         lifecycleGeneration,
         runId,
-        workspaceDir: "/workspace",
-        executionSkillsDir: "/workspace/skills",
+        executionWorkspaceDir: "/workspace",
         watchSkills: false,
         isNewSession: false,
         isSubagentLaneTurn: false,
         suppressVisibleSessionEffects: internal,
         sessionStateActor: { actorType: "human" },
       });
-      const active = internal ? { active: false, runIds: [] } : { active: true };
+      const hidden = internal || coordination;
+      const active = hidden ? { active: false, runIds: [] } : { active: true };
       expect(state()).toEqual(active);
       releaseWait = registerAgentRunCapacityWait(runId, lifecycleGeneration);
-      expect(state()).toEqual(internal ? active : { active: true, status: "queued" });
+      expect(state()).toEqual(hidden ? active : { active: true, status: "queued" });
       releaseWait?.();
       expect(state()).toEqual(active);
     } finally {

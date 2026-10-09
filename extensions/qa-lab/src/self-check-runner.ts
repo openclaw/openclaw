@@ -1,7 +1,6 @@
-// Qa Lab plugin module implements self check runner behavior.
 import { startQaLabServer } from "./lab-server.js";
 
-export async function runQaLabSelfCheck(params?: { repoRoot?: string; outputPath?: string }) {
+export async function runQaE2eSelfCheck(params?: { repoRoot?: string; outputPath?: string }) {
   const server = await startQaLabServer({
     repoRoot: params?.repoRoot,
     outputPath: params?.outputPath,
@@ -12,5 +11,3 @@ export async function runQaLabSelfCheck(params?: { repoRoot?: string; outputPath
     await server.stop();
   }
 }
-
-export const runQaE2eSelfCheck = runQaLabSelfCheck;

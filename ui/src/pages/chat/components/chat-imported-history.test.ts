@@ -2,14 +2,15 @@ import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
 import { projectImportedMessageForDisplay } from "../../../lib/chat/imported-message-display.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import {
+  prepareChatMessageRender,
   renderMessageActionButtons,
   resolveMessageActionDetails,
 } from "./chat-message-markdown.ts";
-import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 
 const importKey = "example-catalog:thread:item";
 const wrap = (text: string) =>
@@ -64,7 +65,10 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     const body = "Imported **answer**\n\n~~~ts\nconst answer = 42;\n~~~";
     const message = { role, content: wrap(body), __openclaw: { idempotencyKey: importKey } };
     render(
-      renderGroupedMessage(message, "imported", { isStreaming: false, showReasoning: false }),
+      renderGroupedMessage(prepareChatMessageRender(message), "imported", {
+        isStreaming: false,
+        showReasoning: false,
+      }),
       container,
     );
     expect(container.querySelector(".chat-text strong")?.textContent).toBe("answer");
@@ -73,8 +77,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     expect(container.textContent).not.toContain("Source: External");
     expect(container.querySelector("h2")).toBeNull();
     const onReply = vi.fn();
-    const details = resolveMessageActionDetails({
-      message,
+    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
       messageId: "imported",
       senderLabel: role,
       onReply,
@@ -89,6 +92,22 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(body));
     }
   });
+
+  it("preserves CRLF body whitespace while removing only framing", () => {
+    const body = "  First\r\n\r\nSecond  ";
+    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
+    // Assistant media parsing already trims trailing whitespace; retain that display contract.
+    expect(normalizeMessage(message).content).toEqual(
+      normalizeMessage({ role, content: body }).content,
+    );
+    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
+  });
+});
+
+describe("imported history framing", () => {
+  const role = "assistant";
 
   it.each([
     ["fenced example", (text: string) => "~~~text\n" + text + "\n~~~"],
@@ -112,34 +131,25 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     expect(displayed(message)).toBe(content);
   });
 
-  it("preserves CRLF body whitespace while removing only framing", () => {
-    const body = "  First\r\n\r\nSecond  ";
-    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
-    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
-    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
-    // Assistant media parsing already trims trailing whitespace; retain that display contract.
-    expect(normalizeMessage(message).content).toEqual(
-      normalizeMessage({ role, content: body }).content,
-    );
-    expect(displayed(message)).toBe(body.trim());
-  });
-
   it.each(["\n", "\r\n", "Thinking\n\n\n"])(
     "preserves extra leading separators %j instead of treating them as import framing",
     (prefix) => {
-      const content = prefix + wrap("Keep this body");
+      const framed = wrap("Keep this body");
+      const content = prefix + framed;
       const message = { role, content, __openclaw: { idempotencyKey: importKey } };
       expect(projectImportedMessageForDisplay(message)).toEqual(message);
-      expect(displayed(message)).toBe(content.trim());
+      // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
+      expect(displayed(message)).toBe(prefix === "\n" || prefix === "\r\n" ? framed : content);
       expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     },
   );
 
   it.each(["\n", "\r\n"])("preserves extra trailing separators %j", (suffix) => {
-    const content = wrap("Keep this body") + suffix;
+    const framed = wrap("Keep this body");
+    const content = framed + suffix;
     const message = { role, content, __openclaw: { idempotencyKey: importKey } };
     expect(projectImportedMessageForDisplay(message)).toEqual(message);
-    expect(displayed(message)).toBe(content.trim());
+    expect(displayed(message)).toBe(framed);
     expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
   });
 

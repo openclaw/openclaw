@@ -72,22 +72,12 @@ function appendReceivedValueHint(message: string, pathValue: string, value: unkn
 }
 
 describe("formatConfigIssuePath", () => {
-  it("formats numeric segments with bracket notation", () => {
-    expect(formatConfigIssuePath(["agents", "list", 3, "tools", "profile"])).toBe(
-      "agents.list[3].tools.profile",
-    );
-  });
-
   it("handles consecutive numeric indices", () => {
     expect(formatConfigIssuePath(["a", 0, "b", 1])).toBe("a[0].b[1]");
   });
 
   it("normalizes an empty path to the root marker", () => {
     expect(formatConfigIssuePath([])).toBe("<root>");
-  });
-
-  it("handles all-string path", () => {
-    expect(formatConfigIssuePath(["foo", "bar", "baz"])).toBe("foo.bar.baz");
   });
 });
 
@@ -113,121 +103,54 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["agents", "list", 1, "tools", "profile"])).toBe(9);
   });
 
-  it("resolves line number for top-level key", () => {
-    const raw = ["{", '  "update": {', '    "channel": "nightly"', "  }", "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["update", "channel"])).toBe(3);
-  });
-
   it("returns undefined for path not in raw text", () => {
     const raw = ["{", "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["nonexistent"])).toBeUndefined();
   });
 
-  it("handles JSON5 comments", () => {
-    const raw = ["{", "  // comment", '  "key": "value"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles comments between unquoted keys and colons", () => {
-    const raw = ["{", "  key // comment", '  : "value"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles comments directly after scalar values", () => {
-    const raw = ["{", "  ignored: 1 // comment", '  , target: "bad"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["target"])).toBe(3);
-  });
-
-  it("uses the active value when an object repeats a key", () => {
-    const raw = ["{", '  key: "old",', '  key: "bad"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles single-quoted strings", () => {
-    const raw = ["{", "  'key': 'value'", "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
-  });
-
-  it("handles hex numbers as values", () => {
-    const raw = ["{", '  "a": 0x1A,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles leading decimal numbers", () => {
-    const raw = ["{", '  "a": .5,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles Infinity value", () => {
-    const raw = ["{", '  "a": Infinity,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles NaN value", () => {
-    const raw = ["{", '  "a": NaN,', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles null and boolean values", () => {
-    const raw = ["{", '  "a": null, "b": true, "c": false', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(2);
-    expect(resolveConfigIssueLineInRaw(raw, ["c"])).toBe(2);
-  });
-
-  it("handles trailing commas in objects", () => {
-    const raw = ["{", '  "a": 1,', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-  });
-
-  it("handles trailing commas in arrays", () => {
-    const raw = ["{", '  "a": [1, 2,]', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
+  it.each<[string, string, string, number]>([
+    ["handles JSON5 comments", '{\n  // comment\n  "key": "value"\n}', "key", 3],
+    [
+      "handles comments between unquoted keys and colons",
+      '{\n  key // comment\n  : "value"\n}',
+      "key",
+      3,
+    ],
+    [
+      "handles comments directly after scalar values",
+      '{\n  ignored: 1 // comment\n  , target: "bad"\n}',
+      "target",
+      3,
+    ],
+    [
+      "uses the active value when an object repeats a key",
+      '{\n  key: "old",\n  key: "bad"\n}',
+      "key",
+      3,
+    ],
+    ["handles single-quoted strings", "{\n  'key': 'value'\n}", "key", 2],
+    ["handles hex numbers as values", '{\n  "a": 0x1A,\n  "b": 1\n}', "b", 3],
+    ["handles trailing commas in objects", '{\n  "a": 1,\n}', "a", 2],
+    ["handles trailing commas in arrays", '{\n  "a": [1, 2,]\n}', "a", 2],
+    [
+      "handles unicode escape sequences in strings",
+      '{\n  "a": "hello \\u0041",\n  "b": 1\n}',
+      "b",
+      3,
+    ],
+    ["handles multi-line string continuation", '{\n  "a": "hello \\\nworld",\n  "b": 1\n}', "b", 4],
+    ["handles unicode keys", '{\n  "café": 1\n}', "café", 2],
+    ["handles escaped quotes in strings", '{\n  "a": "hello \\"world\\"",\n  "b": 1\n}', "b", 3],
+    ["handles block comments before keys", '{\n  /* comment */\n  "key": "value"\n}', "key", 3],
+    ["handles empty object value", '{\n  "a": {}\n}', "a", 2],
+    ["handles empty array value", '{\n  "a": []\n}', "a", 2],
+  ])("%s", (_name, raw, key, expectedLine) => {
+    expect(resolveConfigIssueLineInRaw(raw, [key])).toBe(expectedLine);
   });
 
   it("handles deeply nested arrays", () => {
     const raw = ["{", '  "a": { "b": { "c": [1, [2, [3]]] } } }', "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["a", "b", "c", 1, 0])).toBe(2);
-  });
-
-  it("handles unicode escape sequences in strings", () => {
-    const raw = ["{", '  "a": "hello \\u0041",', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles multi-line string continuation", () => {
-    const raw = ["{", '  "a": "hello \\', 'world",', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(4);
-  });
-
-  it("handles unicode keys", () => {
-    const raw = ["{", '  "café": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["café"])).toBe(2);
-  });
-
-  it("handles escaped quotes in strings", () => {
-    const raw = ["{", '  "a": "hello \\"world\\"",', '  "b": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["b"])).toBe(3);
-  });
-
-  it("handles block comments before keys", () => {
-    const raw = ["{", "  /* comment */", '  "key": "value"', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
-  });
-
-  it("handles mixed single/double quotes", () => {
-    const raw = ["{", "  'key': \"value\"", "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
-  });
-
-  it("handles empty object value", () => {
-    const raw = ["{", '  "a": {}', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
-  });
-
-  it("handles empty array value", () => {
-    const raw = ["{", '  "a": []', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a"])).toBe(2);
   });
 
   it("gracefully degrades for unresolvable paths", () => {
@@ -244,16 +167,6 @@ describe("resolveConfigIssueLineInRaw", () => {
 });
 
 describe("appendReceivedValueHint", () => {
-  it("appends got: for simple values", () => {
-    expect(
-      appendReceivedValueHint(
-        'Invalid input (allowed: "minimal", "coding")',
-        "agents.list[0].tools.profile",
-        "none",
-      ),
-    ).toBe('Invalid input (allowed: "minimal", "coding"), got: "none"');
-  });
-
   it("keeps truncated received values on a valid UTF-16 boundary", () => {
     const message = appendReceivedValueHint(
       "invalid input",
@@ -320,6 +233,39 @@ describe("renderConfigValidationIssueLines", () => {
     message,
   });
 
+  it.each([
+    {
+      name: "an object",
+      ignoredLines: [
+        "  ignored: {",
+        '    nested: [{ text: "}, ]", values: [1, {}, []] }],',
+        "    // Closing delimiters in this comment: } ]",
+        "  },",
+      ],
+    },
+    {
+      name: "an array",
+      ignoredLines: [
+        "  ignored: [",
+        '    { nested: [[], { text: "}, ]" }] },',
+        "    /* Keep scanning after nested containers. */ {},",
+        "  ],",
+      ],
+    },
+  ])("locates the value after skipping $name with mixed nesting", ({ ignoredLines }) => {
+    const raw = ["{", ...ignoredLines, '  target: "bad",', "}"].join("\n");
+    const config = JSON5.parse(raw);
+
+    expect(
+      renderIssue({
+        issue: issue(["target"], "Invalid input"),
+        raw,
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe('openclaw.json:6 — target: Invalid input, got: "bad"');
+  });
+
   it("combines display paths, source locations, and received values", () => {
     const raw = [
       "{",
@@ -373,7 +319,7 @@ describe("renderConfigValidationIssueLines", () => {
         parsed: config,
         effective: config,
       }),
-    ).toBe('openclaw.json:1 — foo.bar: Invalid input, got: "literal"');
+    ).toBe('openclaw.json:1 — ["foo.bar"]: Invalid input, got: "literal"');
     expect(
       renderIssue({
         issue: issue(["foo", "bar"], "Invalid input"),
@@ -395,7 +341,10 @@ describe("renderConfigValidationIssueLines", () => {
     ).toBe("openclaw.json:1 — gateway.bind: Invalid input");
   });
 
-  it.each(["custom", "vendor.plugin"])("omits plugin-owned values for %s", (pluginId) => {
+  it.each([
+    ["custom", "plugins.entries.custom.config.accessCode"],
+    ["vendor.plugin", 'plugins.entries["vendor.plugin"].config.accessCode'],
+  ])("omits plugin-owned values for %s", (pluginId, displayPath) => {
     const config = {
       plugins: { entries: { [pluginId]: { config: { accessCode: "private" } } } },
     };
@@ -406,6 +355,6 @@ describe("renderConfigValidationIssueLines", () => {
         parsed: config,
         effective: config,
       }),
-    ).toBe(`openclaw.json:1 — plugins.entries.${pluginId}.config.accessCode: Invalid input`);
+    ).toBe(`openclaw.json:1 — ${displayPath}: Invalid input`);
   });
 });

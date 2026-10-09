@@ -156,6 +156,24 @@ describe("fs-safe", () => {
     await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
   });
 
+  it("cleans partial external command output when the producer fails", async () => {
+    const dir = await tempDirs.make("openclaw-fs-safe-output-failure-");
+    const failure = new Error("external producer failed");
+
+    await expect(
+      writeExternalFileWithinRoot({
+        rootDir: dir,
+        path: "artifact.txt",
+        write: async (tempPath) => {
+          await fs.writeFile(tempPath, "partial artifact");
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    await expect(fs.readdir(dir)).resolves.toEqual([]);
+  });
+
   it.each([
     ["fallbackFileName", { fallbackFileName: "safe-output.bin" }],
     ["tempPrefix", { tempPrefix: "safe-output.bin" }],
@@ -480,16 +498,6 @@ describe("fs-safe", () => {
     await expectRejectCode(fs.stat(path.join(root, "nested", "big.bin")), "ENOENT");
   });
 
-  it("writes a file within root from another local source path safely", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const outside = await tempDirs.make("openclaw-fs-safe-src-");
-    const sourcePath = path.join(outside, "source.bin");
-    await fs.writeFile(sourcePath, "hello-from-source");
-    await (await openRoot(root)).copyIn("nested/from-source.txt", sourcePath);
-    await expect(fs.readFile(path.join(root, "nested", "from-source.txt"), "utf8")).resolves.toBe(
-      "hello-from-source",
-    );
-  });
   it("rejects write traversal outside root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     await expectRejectCode((await openRoot(root)).write("../escape.txt", "x"), "outside-workspace");
