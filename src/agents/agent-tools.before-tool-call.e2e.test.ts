@@ -1885,6 +1885,53 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("binds a transferred entry's read to its retained identified bytes", async () => {
+    const delivery = createSkillDeliveryState();
+    const underlying = vi.fn().mockResolvedValue(asSkillUsageTextResult("# Changed on disk"));
+    const tool = wrapToolWithBeforeToolCallHook(
+      wrapReadToolWithSkillContent(
+        asAgentTool({ name: "read", execute: underlying }),
+        [
+          {
+            filePath: pondLocator,
+            readContent: pondInstructions,
+            bundleFingerprint: "fp-retained-generation",
+          },
+        ],
+        {
+          instructionDeliveryCache: delivery.cache,
+          instructionDeliveryMarkers: delivery.markers,
+        },
+      ),
+      createSkillFingerprintContext({
+        delivery,
+        entryBundleFingerprint: "fp-retained-generation",
+      }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      const result = await tool.execute(
+        "retained-instruction-read",
+        { path: pondLocator },
+        undefined,
+        undefined,
+      );
+      // Retained identified instructions serve verbatim: the underlying
+      // reader is never consulted for the delivery, so a changed file can
+      // never swap the bytes an emission attributes.
+      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      expect(underlying).not.toHaveBeenCalled();
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        activation: "read",
+        skillFingerprint: "fp-retained-generation",
+      });
+    });
+  });
+
   it("attributes within-generation already-served re-reads while support-file reads emit no skill usage", async () => {
     // Real producer routes ground the sequence: delivery prep reads the source
     // tree and materialization writes the revision-keyed copy the reader serves.
@@ -2247,6 +2294,60 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("omits a command fingerprint whose file is not the stamped entry's own", async () => {
+    const delivery = createSkillDeliveryState();
+    const ctx = createSkillFingerprintContext({
+      delivery,
+      entryBundleFingerprint: "fp-generation-b",
+    });
+    const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
+    // The dispatched command moved; the stamped resolved entry still carries
+    // its old generation. A name/source match never borrows that stamp.
+    const relocatedCommandFile = path.join(
+      "/tmp",
+      "openclaw-skill-fingerprint",
+      "relocated",
+      "pond",
+      "SKILL.md",
+    );
+    const tool = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "message", execute: commandExecute }),
+      {
+        ...ctx,
+        skillCommand: {
+          commandName: "pond_command",
+          skillFile: relocatedCommandFile,
+          skillName: "pond",
+          skillSource: "workspace",
+          toolName: "message",
+        },
+      },
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+      await tool.execute(
+        "command-relocated-read",
+        { commandName: "pond_command" },
+        undefined,
+        undefined,
+      );
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        skillName: "pond",
+        activation: "command",
+      });
+      // The command's own file is named, and no stamp is borrowed from the
+      // different file the snapshot entry still carries.
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+      expect(privateData[0]?.skillUsage?.skillFile).toContain(
+        path.join("relocated", "pond", "SKILL.md"),
+      );
+    });
+  });
+
   it("attributes the installed skills_read route from the receipt its serving read captures", async () => {
     const delivery = createSkillDeliveryState();
     // Real receipt shapes: a live-tree entry acquires at delivery against the
@@ -2330,7 +2431,9 @@ describe("before_tool_call loop detection behavior", () => {
       expect(extractSkillReadText(live)).toBe(pondInstructions);
       expect(extractSkillReadText(retained)).toBe("Retained instructions");
       expect(extractSkillReadText(unarmed)).toBe("Unarmed instructions");
-      expect(acquirer).toHaveBeenCalledWith(pondInstructions);
+      // The acquisition receives the current delivery epoch as its coalescing
+      // cohort alongside the served text.
+      expect(acquirer).toHaveBeenCalledWith(pondInstructions, 0);
       const used = emitted.filter((evt) => evt.type === "skill.used");
       expect(used).toHaveLength(3);
       expectEventFields(used[0], {

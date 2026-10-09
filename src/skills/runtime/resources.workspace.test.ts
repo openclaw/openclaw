@@ -602,3 +602,121 @@ it("omits an identity whose resource-reader walk cannot be established promptly"
     f.release();
   }
 });
+
+it("walks discovered bundles concurrently under one shared preparation budget", async () => {
+  const f = await fixture();
+  try {
+    // Two more workspace-hosted bundles beside the fixture's guide.
+    const extraSkills: Skill[] = [];
+    for (const name of ["alpha", "beta"]) {
+      const hostDir = path.join(f.host, "skills", name);
+      await fs.mkdir(hostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hostDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
+      );
+      const gatewayDir = path.join(f.gateway, "skills", name);
+      extraSkills.push(
+        recordSkillFileHost(
+          createCanonicalFixtureSkill({
+            name,
+            description: name,
+            filePath: path.join(gatewayDir, "SKILL.md"),
+            baseDir: gatewayDir,
+            source: "openclaw-workspace",
+          }),
+          "workspace",
+        ),
+      );
+    }
+    const snapshot = {
+      ...f.snapshot,
+      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
+      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
+    };
+    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
+    const gates: Array<() => void> = [];
+    f.skillResources.readSkillFiles.mockImplementation(
+      async (skill: Skill, options: { allowMissingRoot: boolean }) => {
+        let release!: () => void;
+        gates.push(() => release());
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return orig(skill, options);
+      },
+    );
+    const pending = stampLocalSkillBundleIdentities({
+      snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    // All discovery walks start together: a slow owning reader delays the
+    // preparation once, never once per discovered bundle.
+    for (let i = 0; i < 100 && gates.length < 3; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(gates.length).toBe(3);
+    for (const release of gates) {
+      release();
+    }
+    const stamped = await pending;
+    for (const skill of snapshot.resolvedSkills ?? []) {
+      const entry = stamped.snapshot?.resolvedSkills?.find(
+        (candidate) => candidate.name === skill.name,
+      );
+      expect(entry?.bundleFingerprint).toBeTypeOf("string");
+    }
+  } finally {
+    f.release();
+  }
+});
+
+it("coalesces concurrent same-cohort acquisitions into a single walk", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot: f.snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.find(
+      (candidate) => candidate.name === workspaceSkill.name,
+    );
+    if (!entry) {
+      throw new Error("missing stamped workspace entry");
+    }
+    const acquirer = stamped.deliveredIdentityAcquirers.get(entry);
+    expect(acquirer).toBeDefined();
+    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.skillResources.readSkillFiles.mockClear();
+    f.skillResources.readSkillFiles.mockImplementationOnce(
+      async (...args: Parameters<typeof orig>) => {
+        await gate;
+        return orig(...args);
+      },
+    );
+    const guideText = await fs.readFile(path.join(f.host, "skills", "guide", "SKILL.md"), "utf8");
+    const first = acquirer!(guideText, 2);
+    const second = acquirer!(guideText, 2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // One in-flight walk serves both same-cohort deliveries.
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toBeTypeOf("string");
+    expect(a).toBe(b);
+    expect(a).toBe(entry.bundleFingerprint);
+  } finally {
+    f.release();
+  }
+});

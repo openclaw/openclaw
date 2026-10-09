@@ -42,6 +42,7 @@ export function createInstalledSkillTools(
   const resolveDeliveredFingerprint = async (
     name: string,
     content: string,
+    cohort?: number,
   ): Promise<string | undefined> => {
     const skill = skills.find((entry) => entry.name === name);
     if (!skill) {
@@ -54,7 +55,7 @@ export function createInstalledSkillTools(
     // serving boundary never borrows a preparation-time identity.
     if (skill.acquireDeliveredFingerprint) {
       try {
-        return await skill.acquireDeliveredFingerprint(content);
+        return await skill.acquireDeliveredFingerprint(content, cohort);
       } catch {
         return undefined;
       }
@@ -115,7 +116,7 @@ export function createInstalledSkillTools(
           let fingerprint: string | undefined;
           try {
             fingerprint = await racePromiseWithAbortSignal(
-              resolveDeliveredFingerprint(name, instructions.content),
+              resolveDeliveredFingerprint(name, instructions.content, markers?.generation()),
               signal,
             );
           } catch {

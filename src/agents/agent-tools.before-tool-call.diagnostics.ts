@@ -420,17 +420,22 @@ export function findSkillUsageMatch(params: {
         skillSource,
         snapshot: params.ctx?.skillsSnapshot,
       });
-      const skillFile = canonicalSkillFile(command.skillFile) ?? snapshotMatch?.skillFile;
+      const commandFile = canonicalSkillFile(command.skillFile);
+      const skillFile = commandFile ?? snapshotMatch?.skillFile;
+      // The dispatched command file must be the stamped resolved entry's own
+      // file: a name/source match alone is not identity, so a relocated or
+      // refreshed command never borrows another generation's stamp and an
+      // unassociated dispatch omits.
+      const associatedFingerprint =
+        snapshotMatch && commandFile !== undefined && snapshotMatch.skillFile === commandFile
+          ? snapshotMatch.skillFingerprint
+          : undefined;
       return {
         skillName: command.skillName,
         skillSource,
         activation: "command",
         ...(skillFile ? { skillFile } : {}),
-        // Command dispatch attributes the retained generation only when the
-        // resolved entry carries one; a name/source match alone is not identity.
-        ...(snapshotMatch?.skillFingerprint
-          ? { skillFingerprint: snapshotMatch.skillFingerprint }
-          : {}),
+        ...(associatedFingerprint ? { skillFingerprint: associatedFingerprint } : {}),
       };
     }
   }

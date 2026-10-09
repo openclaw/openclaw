@@ -600,4 +600,79 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       prepared.restoreSkillEnv();
     }
   });
+
+  it("scopes in-flight identity acquisition to the delivery epoch", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    registerActiveTracingBridge();
+    const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-epoch-"));
+    const baseDir = await writePondSkill(workspace);
+    const prepared = await prepareLocalRun(workspace);
+    try {
+      const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+      const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+      const { locator, read } = wrapLocalReadTool(
+        prepared,
+        workspace,
+        instructionDeliveryCache,
+        instructionDeliveryMarkers,
+      );
+      const entry = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
+        (skill) => skill.name === "pond",
+      )!;
+      // The first delivery's acquisition walk stays in flight.
+      readSkillBundleTreeSpy.mockClear();
+      readSkillBundleTreeSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
+      const first = read.execute("epoch-first-read", { path: locator }, undefined, undefined);
+      while (readSkillBundleTreeSpy.mock.calls.length === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      // The compaction epoch clear empties both delivery stores while that
+      // walk is in flight, and the support file changes under the bundle.
+      instructionDeliveryCache.clear();
+      instructionDeliveryMarkers.clear();
+      await fs.writeFile(path.join(baseDir, "scripts", "check.sh"), "#!/bin/sh\nprintf pond-two\n");
+      // The post-clear delivery acquires a fresh identity for the edited
+      // tree: it never joins the cleared generation's in-flight walk.
+      const served = (await read.execute(
+        "epoch-second-read",
+        { path: locator },
+        undefined,
+        undefined,
+      )) as { details: { kind: string; content: string } };
+      expect(served.details.content).toContain("complete instructions");
+      expect(readSkillBundleTreeSpy).toHaveBeenCalledTimes(2);
+      const expectedAfterEdit = prepareSkillBundle(
+        (await readSkillResourceFiles(entry, { allowMissingRoot: false }))!,
+      ).revision;
+      const ctx = {
+        skillsSnapshot: prepared.skillsSnapshotForRun,
+        skillInstructionDeliveryMarkers: instructionDeliveryMarkers,
+      };
+      const secondMatch = findSkillUsageMatch({
+        toolName: "read",
+        toolParams: { path: locator },
+        ctx,
+        toolCallId: "epoch-second-read",
+      });
+      expect(secondMatch).toBeDefined();
+      expect(secondMatch?.skillFingerprint).toBe(expectedAfterEdit);
+      // The cleared generation's delivery settles no identity of its own.
+      const firstMatch = findSkillUsageMatch({
+        toolName: "read",
+        toolParams: { path: locator },
+        ctx,
+        toolCallId: "epoch-first-read",
+      });
+      expect(firstMatch).toBeDefined();
+      expect(firstMatch?.skillFingerprint).toBeUndefined();
+      // Its hung walk omits under the acquisition deadline on its own clock;
+      // leave it pending without a dangling rejection.
+      void first.then(
+        () => undefined,
+        () => undefined,
+      );
+    } finally {
+      prepared.restoreSkillEnv();
+    }
+  });
 });

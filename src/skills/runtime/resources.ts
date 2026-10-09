@@ -134,9 +134,11 @@ const localSkillResourceReader: SkillResourceSourceReader = {
 /**
  * Telemetry-only bound on bundle-identity acquisition walks: a resource-reader
  * tree walk that cannot establish the bundle promptly omits the identity
- * instead of holding up turn preparation or a completed delivery. Sized
- * generously against the 256-file / 8 MiB bundle caps and the remote reader's
- * default command budget; it never bounds resource-integrity reads.
+ * instead of holding up turn preparation or a completed delivery. Preparation
+ * discovery walks share one budget across all of a preparation's bundles, so
+ * a slow reader delays traced turn startup at most once; delivery acquisitions
+ * observe the same full budget individually. It never bounds
+ * resource-integrity reads.
  */
 export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 15_000;
 
@@ -210,22 +212,25 @@ export async function stampLocalSkillBundleIdentities(params: {
     }
     return workspaceAccessUnavailable ? undefined : localSkillResourceReader;
   };
+  /** One shared budget for all of this preparation's discovery walks. */
+  const preparationDeadlineAt = Date.now() + SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS;
   /** An acquired bundle identity together with the instruction text its tree carries. */
   type AcquiredBundleIdentity = { revision: string; instructionText: string };
   const readBundleIdentity = async (
     skill: Skill,
     reader: SkillResourceSourceReader,
+    budgetMs: number,
   ): Promise<AcquiredBundleIdentity | undefined> => {
     try {
       // The bound sits at the resource-reader boundary so every consumer —
       // preparation discovery stamps and delivery-time acquisition alike —
-      // observes the same deadline: a tree that cannot establish the bundle
-      // promptly omits the identity instead of holding up turn preparation or
-      // a completed delivery. The underlying walk keeps its own semantics;
+      // observes a deadline: a tree that cannot establish the bundle promptly
+      // omits the identity instead of holding up turn preparation or a
+      // completed delivery. The underlying walk keeps its own semantics;
       // resource-integrity reads never pass through here.
       const files = await raceWithTimeout(
         () => reader.readSkillFiles(skill, { allowMissingRoot: true }),
-        SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS,
+        budgetMs,
         () => undefined,
         { ref: false },
       );
@@ -273,7 +278,14 @@ export async function stampLocalSkillBundleIdentities(params: {
     const caches = resolveCaches(reader);
     let identity = caches.discovered.get(directory);
     if (!identity) {
-      identity = readBundleIdentity(skill, reader);
+      // The preparation's shared budget bounds all discovery walks together:
+      // once spent, remaining bundles ship unstamped instead of delaying
+      // turn startup any further.
+      const remainingMs = preparationDeadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        return undefined;
+      }
+      identity = readBundleIdentity(skill, reader, remainingMs);
       caches.discovered.set(directory, identity);
       // Do not pin a failed lookup: a later sibling may legitimately retry.
       void identity.then((acquired) => {
@@ -288,21 +300,25 @@ export async function stampLocalSkillBundleIdentities(params: {
     if (skill.filePath.startsWith("node://")) {
       return;
     }
-    deliveredIdentityAcquirers.set(skill, async (deliveredText) => {
+    deliveredIdentityAcquirers.set(skill, async (deliveredText, cohort) => {
       const reader = resolveSourceReader(skill);
       if (!reader || deliveredText === undefined) {
         return undefined;
       }
       const directory = path.resolve(skill.baseDir);
       const caches = resolveCaches(reader);
-      const inFlight = caches.acquiring.get(directory);
-      // A fresh delivery generation describes the bytes this delivery serves;
-      // results are never cached across generations so a delivery after an
-      // epoch clear can never inherit an identity from before an edit.
-      const acquisition = inFlight ?? readBundleIdentity(skill, reader);
+      // In-flight coalescing is scoped to the caller's delivery cohort: a
+      // generation a compaction epoch clear advanced never joins an earlier
+      // generation's walk, so a fresh delivery after a clear acquires the
+      // identity of the tree it actually serves instead of inheriting one
+      // from before a clear or an edit inside it.
+      const acquiringKey = cohort === undefined ? directory : `${directory}\u0000${cohort}`;
+      const inFlight = caches.acquiring.get(acquiringKey);
+      const acquisition =
+        inFlight ?? readBundleIdentity(skill, reader, SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS);
       if (!inFlight) {
-        caches.acquiring.set(directory, acquisition);
-        void acquisition.then(() => caches.acquiring.delete(directory));
+        caches.acquiring.set(acquiringKey, acquisition);
+        void acquisition.then(() => caches.acquiring.delete(acquiringKey));
       }
       // Verify-at-acquire: the acquired tree must contain the delivered
       // instruction text itself. A bundle that changed between the delivery's
@@ -317,12 +333,19 @@ export async function stampLocalSkillBundleIdentities(params: {
   // every other entry acquires at delivery time.
   const isPinnedRevision = (skill: Skill): boolean => isLibraryPin(skill);
   const stampSkills = async (skills: readonly Skill[]): Promise<Skill[]> => {
-    const stamped: Skill[] = [];
-    for (const skill of skills) {
-      // An entry-carried identity is the retained delivery field its producer
-      // stamped: trust it instead of re-hashing the bundle behind it.
-      const identity =
-        skill.bundleFingerprint ?? (await resolveDiscoveredIdentity(skill))?.revision;
+    // Discovery walks run concurrently under the preparation's shared budget:
+    // a slow remote reader delays traced turn startup at most once, not once
+    // per discovered bundle, and the reader+directory caches still coalesce
+    // same-bundle siblings into a single walk.
+    const identities = await Promise.all(
+      skills.map((skill) =>
+        skill.bundleFingerprint
+          ? Promise.resolve(skill.bundleFingerprint)
+          : resolveDiscoveredIdentity(skill).then((acquired) => acquired?.revision),
+      ),
+    );
+    return skills.map((skill, index) => {
+      const identity = identities[index];
       const stampedSkill =
         identity === undefined || skill.bundleFingerprint === identity
           ? skill
@@ -338,9 +361,8 @@ export async function stampLocalSkillBundleIdentities(params: {
       if (!servesRetainedStamp && !isPinnedRevision(stampedSkill)) {
         armDeliveredIdentityAcquirer(stampedSkill);
       }
-      stamped.push(stampedSkill);
-    }
-    return stamped;
+      return stampedSkill;
+    });
   };
   const resolvedSkills = params.snapshot?.resolvedSkills;
   const discoverySkills = params.snapshot?.discoverySkills;

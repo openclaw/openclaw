@@ -111,9 +111,14 @@ type SkillReadContent = {
  * Acquires the retained bundle identity of the bytes a delivery actually
  * serves; `deliveredText` is the instruction text that delivery read, and the
  * acquirer omits when the acquired tree cannot be shown to contain it.
+ * Concurrent acquisitions coalesce per reader and directory within one
+ * delivery `cohort`; a generation a compaction epoch clear advanced never
+ * joins an earlier generation's in-flight walk.
  */
 export type SkillDeliveredIdentityAcquirer = (
   deliveredText: string | undefined,
+  /** Delivery epoch cohort scoping in-flight acquisition coalescing. */
+  cohort?: number,
 ) => Promise<string | undefined>;
 
 /** Per-preparation delivery acquirers keyed by the resource-candidate entry they arm. */
@@ -149,6 +154,8 @@ export type SkillInstructionDeliveryMarkers = {
   deleteInvocationFingerprint(toolCallId: string): void;
   /** Epoch clear: drop settled identities and unconsumed markers together. */
   clear(): void;
+  /** Monotonic epoch generation; clear() advances it. */
+  generation(): number;
 };
 
 const MAX_INVOCATION_FINGERPRINTS = 1_024;
@@ -156,6 +163,7 @@ const MAX_INVOCATION_FINGERPRINTS = 1_024;
 export function createSkillInstructionDeliveryMarkers(): SkillInstructionDeliveryMarkers {
   const settledFingerprints = new Map<string, string>();
   const invocationFingerprints = new Map<string, string>();
+  let epoch = 0;
   return {
     settledFingerprint: (path) => settledFingerprints.get(path),
     settleFingerprint: (path, fingerprint) => {
@@ -179,7 +187,9 @@ export function createSkillInstructionDeliveryMarkers(): SkillInstructionDeliver
     clear: () => {
       settledFingerprints.clear();
       invocationFingerprints.clear();
+      epoch += 1;
     },
+    generation: () => epoch,
   };
 }
 
@@ -1093,7 +1103,14 @@ export function wrapReadToolWithSkillContent(
   for (const skill of skills ?? []) {
     instructionContent.set(
       resolveInstructionPath(skill.filePath),
-      skill.filePath.startsWith("node://") ? skill.readContent : undefined,
+      // Retained identified content serves verbatim on every locator: node://
+      // entries have no file, and a transferred bundle's stamped identity
+      // describes exactly its retained instructions. Serving those bytes
+      // keeps the delivery provably bound to the identity its producer
+      // stamped, never to whatever later occupied the path on disk.
+      skill.filePath.startsWith("node://") || typeof skill.readContent === "string"
+        ? skill.readContent
+        : undefined,
     );
   }
   if (instructionContent.size === 0) {
@@ -1251,7 +1268,7 @@ export function wrapReadToolWithSkillContent(
             // already-aborted signal omits the identity instead of stalling
             // the returned result or settling a marker for a canceled read.
             fingerprint = await racePromiseWithAbortSignal(
-              acquirer(getReadResultContent(result)),
+              acquirer(getReadResultContent(result), instructionDeliveryMarkers?.generation()),
               signal,
             );
           } catch {
