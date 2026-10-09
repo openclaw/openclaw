@@ -8,7 +8,7 @@ import {
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
 import {
-  listMemorySessionTombstones,
+  findForgottenMemorySessionIds,
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -95,11 +95,10 @@ async function listSessionBackfillSources(params: {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
   });
-  const forgottenSessionIds = new Set(
-    (await listMemorySessionTombstones({ agentId: params.agentId })).map(
-      (entry) => entry.sessionId,
-    ),
-  );
+  const forgottenSessionIds = await findForgottenMemorySessionIds({
+    agentId: params.agentId,
+    sessionIds: corpus.map((entry) => entry.sessionId),
+  });
   const candidates = corpus
     .map((entry) => sessionIngestionSourceFromCorpus(entry, "backfill"))
     .filter((entry) => entry !== null);

@@ -37,7 +37,7 @@ import {
   runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
-import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
   listWorkspaceDirectory,
@@ -506,13 +506,15 @@ async function collectSessionIngestionBatches(params: {
   const sources: SessionIngestionSource[] = [];
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
-    const forgottenSessionIds = new Set(
-      (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
-    );
-    const selectedSources: SessionIngestionSource[] = [];
-    for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
+    const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,
-    })) {
+    });
+    const forgottenSessionIds = await findForgottenMemorySessionIds({
+      agentId,
+      sessionIds: corpus.map((entry) => entry.sessionId),
+    });
+    const selectedSources: SessionIngestionSource[] = [];
+    for (const entry of corpus) {
       knownStateKeys.add(sessionIngestionStateKeyFromCorpus(entry));
       const source = sessionIngestionSourceFromCorpus(entry, "dreaming");
       if (!source) {
