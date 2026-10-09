@@ -165,6 +165,45 @@ describe("favicon presentation ownership", () => {
     expectOriginals();
   });
 
+  it("clips avatar shapes without clipping status dots and replaces same-image shapes", async () => {
+    const artwork = new Image();
+    artwork.src =
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>',
+      );
+    await artwork.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const drawing = canvas.getContext("2d")!;
+    const pixels = async () => {
+      await Promise.resolve();
+      const result = new Image();
+      result.src = svgIcon.href;
+      await result.decode();
+      drawing.clearRect(0, 0, 32, 32);
+      drawing.drawImage(result, 0, 0);
+      expect(pngIcon.href).toBe(svgIcon.href);
+      return (x: number, y: number) => [...drawing.getImageData(x, y, 1, 1).data];
+    };
+    for (const shape of ["rounded", "circle", "square"] as const) {
+      applyControlUiFaviconImage(artwork, shape);
+      applyControlUiFaviconStatus("idle");
+      const pixel = await pixels();
+      expect(pixel(16, 16)).toEqual([180, 40, 110, 255]);
+      expect(pixel(0, 0)[3]).toBe(0);
+      expect(pixel(16, 1)[3]).toBe(shape === "square" ? 0 : 255);
+      expect(pixel(3, 3)[3]).toBe(shape === "rounded" ? 255 : 0);
+      applyControlUiFaviconStatus("working");
+      const activePixel = await pixels();
+      expect(activePixel(25, 25)).toEqual([80, 120, 160, 255]);
+      expect(activePixel(27, 27)).toEqual([80, 120, 160, 255]);
+    }
+    applyControlUiFaviconImage(null);
+    applyControlUiFaviconStatus("idle");
+    expectOriginals();
+  });
+
   function expectOriginals() {
     [svgIcon, pngIcon].forEach((icon, index) => {
       expect([icon.getAttribute("href"), icon.getAttribute("type")]).toEqual(originals[index]);
