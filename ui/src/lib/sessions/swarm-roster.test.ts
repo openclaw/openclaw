@@ -546,7 +546,7 @@ describe("SwarmRosterHydrator", () => {
           parentKey: parentRow().key,
           sourceEpoch: 1,
           currentRows: () => [],
-          onRows: () => hydration.push(hydrator.hydrated),
+          onRows: () => hydration.push(hydrator.hydrated && !hydrator.pendingChildRead),
         });
         await vi.advanceTimersByTimeAsync(250);
         expect(hydrator.hydrated).toBe(true);
@@ -571,7 +571,8 @@ describe("SwarmRosterHydrator", () => {
         previousRead.resolve();
         await vi.advanceTimersByTimeAsync(0);
         expect(list).toHaveBeenCalledTimes(reads + 1);
-        expect(hydrator.hydrated).toBe(false);
+        expect(hydrator.hydrated).toBe(true);
+        expect(hydrator.pendingChildRead).toBe(true);
         expect(hydration.length).toBeGreaterThan(0);
         expect(hydration.every((loaded) => !loaded)).toBe(true);
         expect(hydrator.childrenRead).toBe(true);
@@ -580,6 +581,7 @@ describe("SwarmRosterHydrator", () => {
         await refresh;
         await vi.advanceTimersByTimeAsync(0);
         expect(hydrator.hydrated).toBe(true);
+        expect(hydrator.pendingChildRead).toBe(false);
         expect(hydrator.rows.map((child) => child.key)).toContain(row(count).key);
       } finally {
         hydrator.dispose();
@@ -638,7 +640,7 @@ describe("SwarmRosterHydrator", () => {
 
       lastPage.resolve(result([row(1)], 1, 2));
       await vi.advanceTimersByTimeAsync(0);
-      expect(hydrator.hydrated).toBe(false);
+      expect(hydrator.pendingChildRead).toBe(true);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(firstPageReads).toBe(4);
       expect(hydrator.hydrated).toBe(true);
