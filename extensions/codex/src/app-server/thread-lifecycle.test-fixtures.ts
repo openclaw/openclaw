@@ -82,7 +82,10 @@ export function createCodexLifecycleHarness(options: {
     }
     if (request.method === "thread/read") {
       if (!current) {
-        throw new Error(`Unknown synthetic native thread: ${threadId}`);
+        throw new CodexAppServerRpcError(
+          { code: -32_600, message: `thread not loaded: ${threadId}` },
+          "thread/read",
+        );
       }
       return {
         thread: {
