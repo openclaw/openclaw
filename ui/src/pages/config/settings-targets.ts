@@ -315,6 +315,10 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.appearance.tabIcon.source",
       "configView.appearance.tabIcon.agent",
+      "configView.appearance.tabIcon.shape",
+      "configView.appearance.tabIcon.square",
+      "configView.appearance.tabIcon.rounded",
+      "configView.appearance.tabIcon.circle",
       "configView.appearance.tabIcon.lobsterdex",
     ],
     aliases: "favicon browser tab icon agent avatar image",

@@ -207,7 +207,10 @@ export async function preparePersistedCurrentUserTurn(params: {
     withOwnedSessionTranscriptWriterFence(sessionTarget);
   const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
   const initialWriter = getOwnedSessionTranscriptInitialWriter({ sessionTarget: scope });
-  const reader = prepareSessionManagerHydration(scope, undefined, params.signal, sessionManager);
+  const reader = prepareSessionManagerHydration(scope, {
+    signal: params.signal,
+    manager: sessionManager,
+  });
   let originalSource: { storePath: string; identity?: DatabaseFileIdentity } | undefined;
   const assertCurrent = () => {
     assertOwned();

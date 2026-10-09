@@ -6,7 +6,11 @@ import {
   ServiceOwnershipRefusalError,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
-import { readSystemdBusCall, readSystemdUnitObjectPath } from "./systemd-bus-query.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdUnitObjectPath,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
@@ -100,12 +104,7 @@ export async function admitSystemdServiceReadBinding(
       throw unavailable();
     }
     const managerUid = await query("GetConnectionUnixUser", destination, "u");
-    if (
-      typeof managerUid !== "number" ||
-      !Number.isInteger(managerUid) ||
-      managerUid < 0 ||
-      managerUid >= 0xffffffff
-    ) {
+    if (!isSystemdManagerUid(managerUid)) {
       throw unavailable();
     }
     if (managerUid !== uid) {

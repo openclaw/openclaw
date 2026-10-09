@@ -245,9 +245,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             : {}),
         }),
       );
-      if (health.outcome === "starting") {
+      if (
+        health.outcome === "starting" ||
+        (health.outcome !== "ready" && health.runtime.status === "running")
+      ) {
         warn(
-          `Warning: Doctor repair complete; Gateway is still starting — check \`${formatCliCommand("openclaw gateway status", state.env)}\` in a minute.`,
+          `Warning: Doctor repair complete; Gateway started but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         );
         return;
       }

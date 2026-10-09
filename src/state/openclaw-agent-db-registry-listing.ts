@@ -473,7 +473,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   assertAdmissionCurrent: () => void;
   assertCurrent: () => void;
   followRegistration: (change: AgentDatabaseRegistryChange) => void;
-  read(): Promise<{
+  read(signal?: AbortSignal): Promise<{
     result: OpenClawAgentDatabaseRegistryReadResult;
     assertCurrent: () => void;
     followRegistration: (change: AgentDatabaseRegistryChange) => void;
@@ -574,7 +574,8 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         }
         preparedWitness.followRegistration(change);
       },
-      async read() {
+      async read(signal) {
+        signal?.throwIfAborted();
         assertAdmissionCurrent();
         const witness = scopedWitness ?? captureWitness();
         const { memo, assertCurrent, followRegistration } = witness;
@@ -583,7 +584,11 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         assertCurrent();
         if (!memo.entries) {
           const reply = await inCapturedScope(() =>
-            executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
+            executeExistingOpenClawStateRead(
+              options,
+              { type: "agentDatabaseRegistry.read" },
+              { signal },
+            ),
           );
           if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
             throw new Error("Unexpected agent database registry read result");

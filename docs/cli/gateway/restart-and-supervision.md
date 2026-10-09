@@ -36,9 +36,14 @@ leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Lo
 heartbeat timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
+Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admission,
+including wakes waiting to retry. They cannot start another turn in the draining runtime.
+Already-running wakes and pending final reply writes retain their drain grace.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
-the remaining work categories, writes a diagnostic stability bundle, and exits
+the remaining work categories and pending owners (including command lanes and
+request origins), writes a diagnostic stability bundle, and exits
 with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
 start a fresh Gateway for a restart.

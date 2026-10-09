@@ -155,12 +155,8 @@ function renderMarkdown(source: string) {
 }
 
 function renderInstructions(viewer: WorkshopViewer, props: SkillWorkshopViewProps) {
-  const pending = renderLoadState(viewer);
-  if (pending) {
-    return pending;
-  }
   if (viewer.status !== "ready") {
-    return nothing;
+    return renderLoadState(viewer);
   }
   const { target } = viewer;
   const { body } = splitFrontmatter(viewer.result.content);
@@ -423,12 +419,11 @@ function diffLines(before: string, after: string): DiffLine[] | null {
 /** Reads like the change itself: the saved version's lines in red, today's in green. */
 function renderDiff(current: string, version: string) {
   const lines = diffLines(version, current);
-  if (lines === null) {
-    return html`<p class="sw-diff__same">${t("skillWorkshop.viewer.diffTooLarge")}</p>
-      ${renderMarkdown(version)}`;
-  }
-  if (lines.every((line) => line.kind === "same")) {
-    return html`<p class="sw-diff__same">${t("skillWorkshop.viewer.noDiff")}</p>
+  if (lines === null || lines.every((line) => line.kind === "same")) {
+    const message = t(
+      lines === null ? "skillWorkshop.viewer.diffTooLarge" : "skillWorkshop.viewer.noDiff",
+    );
+    return html`<p class="sw-diff__same">${message}</p>
       ${renderMarkdown(version)}`;
   }
   const sign = (kind: DiffLine["kind"]) => (kind === "add" ? "+" : kind === "remove" ? "−" : "");

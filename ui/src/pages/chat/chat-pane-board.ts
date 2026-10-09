@@ -189,11 +189,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const initialized = this.initializeBrowserSidebarLayout(layout);
-    const fitted =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(initialized, this.paneWidth) ?? initialized)
-        : initialized;
-    state.updateSidebarLayout(fitted, options);
+    state.updateSidebarLayout(this.fitPaneSidebarLayout(initialized), options);
+  }
+
+  private fitPaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    return this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+      ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
+      : layout;
   }
 
   protected initializeBrowserSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -224,10 +226,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const resizedProjection = resizeSidebarPanel(renderedLayout, columnId, size);
-    const fittedProjection =
-      this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(resizedProjection, this.paneWidth) ?? resizedProjection)
-        : resizedProjection;
+    const fittedProjection = this.fitPaneSidebarLayout(resizedProjection);
     const fittedColumn = fittedProjection.columns.find((column) => column.id === columnId);
     const fittedSize =
       sidebarDock(fittedProjection) === "bottom" ? fittedColumn?.height : fittedColumn?.width;

@@ -171,15 +171,11 @@ export function resolveDraftModelTarget(
     };
   }
   const separator = value.indexOf("/");
-  if (separator > 0) {
-    return {
-      model: value.slice(separator + 1),
-      provider: normalizeChatModelProviderId(value.slice(0, separator)) || null,
-    };
-  }
   return {
-    model: value,
-    provider: normalizeChatModelProviderId(provider ?? "") || null,
+    model: separator > 0 ? value.slice(separator + 1) : value,
+    provider:
+      normalizeChatModelProviderId(separator > 0 ? value.slice(0, separator) : (provider ?? "")) ||
+      null,
   };
 }
 

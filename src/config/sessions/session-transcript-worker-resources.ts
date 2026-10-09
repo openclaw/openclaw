@@ -24,6 +24,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { assertOpenClawAgentWriterReleased } from "../../state/openclaw-agent-write-admission-state.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
@@ -54,8 +55,7 @@ function createUsageCostPool(kind: "read" | "refresh") {
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     // A retired task releases lane-wide database custody, which requires one native worker.
     workerClass: kind === "refresh" ? "writer" : "singleton",
-    // Foreground reads must remain available while refresh awaits a host writer.
-    sharedCompute: kind === "refresh",
+    // Host writes can wait for a writer-held shared-compute reader; neither usage lane may hold its permit.
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
@@ -154,14 +154,34 @@ export const costRefreshLane = createDatabaseWorkerLane(
   createUsageCostPool("refresh"),
 );
 
-const historyWorkerLanes = [
+const independentHistoryLanes = [
   historyLane,
   transcriptSearchLane,
   projectionLane,
   maintenanceLane,
-  targetDiscoveryLane,
 ];
+const historyWorkerLanes = [...independentHistoryLanes, targetDiscoveryLane];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
+
+// Install only in development: production dispatch/cleanup has no context check.
+// Target discovery is reserved with the writer; its cold-read host callbacks
+// reenter that reservation. Other pools can wait on an independent writer.
+if (process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development") {
+  for (const lane of [...independentHistoryLanes, costReadLane, costRefreshLane]) {
+    const rotate = lane.pool.rotate.bind(lane.pool);
+    lane.pool.rotate = () => {
+      assertOpenClawAgentWriterReleased(`drain the ${lane.name} reader pool`);
+      return rotate();
+    };
+  }
+  for (const lane of independentHistoryLanes) {
+    const close = lane.pool.closeResources;
+    lane.pool.closeResources = (key) => {
+      assertOpenClawAgentWriterReleased(`close the ${lane.name} reader pool`);
+      return close(key);
+    };
+  }
+}
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
 

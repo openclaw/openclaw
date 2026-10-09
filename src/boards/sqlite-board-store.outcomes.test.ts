@@ -113,6 +113,7 @@ async function receiveExecutedFailure(retire: boolean) {
     detach() {},
   };
   const slot: Parameters<typeof receiveSqliteWorkerReply>[0] = {
+    actors: new Set(),
     current: job,
     worker: {
       postMessage() {

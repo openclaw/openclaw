@@ -10,6 +10,7 @@ import {
   validateTalkClientCreateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { assertSecretOwnerAvailable } from "../../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-control-shared.js";
@@ -151,10 +152,13 @@ export const createTalkClient: GatewayRequestHandler = async ({
     );
     replacement?.assertCurrent(target);
     const { agentId, sessionKey } = target;
-    const assertTargetCurrent = () => {
-      sessionMutationAuthorization?.assertCurrent();
-      replacement?.assertCurrent(target);
-    };
+    const assertTargetCurrent = composeSessionSourceAssertion(
+      [sessionMutationAuthorization?.assertCurrent],
+      (assertSources) => {
+        assertSources();
+        replacement?.assertCurrent(target);
+      },
+    );
     const sessionTarget = { agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
     assertSecretOwnerAvailable("capability", "talk:realtime");
     const resolution = resolveConfiguredRealtimeVoiceProvider({
@@ -373,11 +377,13 @@ export const createTalkClient: GatewayRequestHandler = async ({
         ...(tools.length > 0 ? { tools } : {}),
         ...launchOptions,
       };
-      const assertCommitAllowed = () => {
-        sessionMutationCommitGuard?.();
-        assertTargetCurrent();
-        gatewayControlOwner?.assertOpen();
-      };
+      const assertCommitAllowed = composeSessionSourceAssertion(
+        [sessionMutationCommitGuard, assertTargetCurrent],
+        (assertSources) => {
+          assertSources();
+          gatewayControlOwner?.assertOpen();
+        },
+      );
       let session: Awaited<ReturnType<typeof resolution.provider.createBrowserSession>> | undefined;
       let delivered = false;
       try {

@@ -123,31 +123,6 @@ function updateChatHistoryOwnerRequestCount(
   counts.set(requestKey, nextCount);
 }
 
-async function requestChatHistory<T extends ChatHistoryResponse>(
-  method: "chat.history" | "chat.startup",
-  attempt: () => Promise<T>,
-  shouldContinue: () => boolean,
-  shouldRetry: () => boolean,
-  signal: AbortSignal,
-  onRetry: (error: unknown) => void,
-): Promise<T> {
-  let attemptNumber = 0;
-  for (;;) {
-    try {
-      return await attempt();
-    } catch (err) {
-      if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(err, method)) {
-        throw err;
-      }
-      onRetry(err);
-      await sleepWithAbort(resolveGatewayReadRetryDelayMs(err, attemptNumber++), signal);
-      if (!shouldContinue() || !shouldRetry()) {
-        throw err;
-      }
-    }
-  }
-}
-
 type SharedChatHistoryArgs = [
   client: GatewayBrowserClient,
   requestKey: string,
@@ -221,37 +196,46 @@ export function requestSharedHistory(
     // it could inherit the first consumer's nearly expired startup deadline.
     const shouldRetry = () =>
       [...consumers].some((entry) => entry.isCurrent() && Date.now() < entry.retryDeadlineMs);
-    const promise = requestChatHistory(
-      method,
-      async () => {
-        // Each attempt observes only its present consumers and their current runs.
-        // A late join acquires custody on a retry, never from an earlier read.
-        const consumersAtIssue = new Map(
-          [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
-        );
-        const observation = sessions
-          ? { owner: sessions, reconcile: sessions.captureReconcile() }
-          : undefined;
-        const response = attachHistoryActivity(
-          await client.request<ChatHistoryResponse>(method, params, {
-            signal: controller.signal,
-            timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-          }),
-        );
-        return { ...response, observation, consumersAtIssue };
-      },
-      shouldContinue,
-      shouldRetry,
-      controller.signal,
-      (error) => {
-        for (const entry of consumers) {
-          if (entry.isCurrent()) {
-            entry.lastRetryableError = error;
-            entry.onRetry?.();
+    const attempt = async () => {
+      // Each attempt observes only its present consumers and their current runs.
+      // A late join acquires custody on a retry, never from an earlier read.
+      const consumersAtIssue = new Map(
+        [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
+      );
+      const observation = sessions
+        ? { owner: sessions, reconcile: sessions.captureReconcile() }
+        : undefined;
+      const response = attachHistoryActivity(
+        await client.request<ChatHistoryResponse>(method, params, {
+          signal: controller.signal,
+          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+        }),
+      );
+      return { ...response, observation, consumersAtIssue };
+    };
+    const signal = controller.signal;
+    const promise = (async () => {
+      let attemptNumber = 0;
+      for (;;) {
+        try {
+          return await attempt();
+        } catch (error) {
+          if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(error, method)) {
+            throw error;
+          }
+          for (const entry of consumers) {
+            if (entry.isCurrent()) {
+              entry.lastRetryableError = error;
+              entry.onRetry?.();
+            }
+          }
+          await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attemptNumber++), signal);
+          if (!shouldContinue() || !shouldRetry()) {
+            throw error;
           }
         }
-      },
-    ).finally(() => {
+      }
+    })().finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
       }

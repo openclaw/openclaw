@@ -11,8 +11,8 @@ import {
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -78,7 +78,11 @@ describe("worker turn trajectory authority", () => {
           recorder.recordEvent("session.started", { backend: "cloud-worker" });
           const options = toDatabaseOptions(resolveSqliteReadScope(source.sessionTarget));
           const pathname = resolveOpenClawAgentSqlitePath(options);
-          await closeOpenClawAgentDatabaseByPathAsync(pathname);
+          const cached = getOpenClawAgentDatabaseIfOpen(options);
+          assert(cached, "expected the turn's cached host database before eviction");
+          // Evict the host handle without draining this callback's accepted turn custody.
+          closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          expect(cached.db.isOpen).toBe(false);
           expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
 
           let pendingTransaction = false;

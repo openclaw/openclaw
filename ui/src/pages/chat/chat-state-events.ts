@@ -250,26 +250,6 @@ type TerminalRecoveryOwnership = {
 
 const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, ChatPageHost["client"]>>();
 
-function createTerminalRecoveryOwnership(
-  state: ChatPageHost,
-  payload: ChatEventPayload,
-): TerminalRecoveryOwnership | null {
-  const runId = payload.runId;
-  if (!runId) {
-    return null;
-  }
-  return {
-    sessionKey: payload.sessionKey,
-    agentId: resolveChatAgentId(state),
-    runId,
-    client: state.client,
-    connectionEpoch: state.connectionEpoch,
-    runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
-    initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, runId)
-      .terminalReplySignatures,
-  };
-}
-
 function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryOwnership): boolean {
   let claims = terminalRecoveryClaimsByPane.get(state);
   if (!claims) {
@@ -574,14 +554,20 @@ export function handlePageGatewayEvent(
         recoveryScope &&
         getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
       );
-      const recoveryOwnership =
-        shouldRecoverMissingTerminal && payload
-          ? createTerminalRecoveryOwnership(state, payload)
+      const recoveryOwnership: TerminalRecoveryOwnership | null =
+        shouldRecoverMissingTerminal && payload?.runId
+          ? {
+              sessionKey: payload.sessionKey,
+              agentId: resolveChatAgentId(state),
+              runId: payload.runId,
+              client: state.client,
+              connectionEpoch: state.connectionEpoch,
+              runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
+              initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, payload.runId)
+                .terminalReplySignatures,
+            }
           : null;
-      const recoveryClaimed = recoveryOwnership
-        ? claimTerminalRecovery(state, recoveryOwnership)
-        : false;
-      if (recoveryOwnership && recoveryClaimed) {
+      if (recoveryOwnership && claimTerminalRecovery(state, recoveryOwnership)) {
         state.pendingSessionMessageReloadSessionKey = null;
         // The first owned message-less terminal recovers history even when an
         // earlier snapshot already marked the run complete. Replays, yielded, or

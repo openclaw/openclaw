@@ -120,24 +120,16 @@ function tableHasExactColumns(
   return columns.size === expected.length && expected.every((column) => columns.has(column));
 }
 
-function tablePrimaryKeyColumns(
-  db: DatabaseSync,
-  tableName: string,
-  preparedColumns?: TableColumnInfo[],
-): string[] {
-  return (preparedColumns ?? tableColumnInfo(db, tableName))
-    .filter((row) => row.pk > 0)
-    .toSorted((left, right) => left.pk - right.pk)
-    .map((row) => row.name);
-}
-
 function tableHasPrimaryKey(
   db: DatabaseSync,
   tableName: string,
   expectedColumns: readonly string[],
   preparedColumns?: TableColumnInfo[],
 ): boolean {
-  const columns = tablePrimaryKeyColumns(db, tableName, preparedColumns);
+  const columns = (preparedColumns ?? tableColumnInfo(db, tableName))
+    .filter((row) => row.pk > 0)
+    .toSorted((left, right) => left.pk - right.pk)
+    .map((row) => row.name);
   return (
     columns.length === expectedColumns.length &&
     columns.every((column, index) => column === expectedColumns[index])

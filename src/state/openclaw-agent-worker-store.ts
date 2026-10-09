@@ -117,8 +117,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     moduleUrl: URL;
     input: unknown;
     assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
-    /** Only for an accepted sequence whose owner closes this store at settlement. */
-    retainExecutionUntilClose?: true;
   },
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
@@ -161,7 +159,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   let revoked = false;
   let closing: Promise<void> | undefined;
   let drainExecution: OpenClawAgentDatabaseExecution | undefined;
-  let retainedExecution: OpenClawAgentDatabaseExecution | undefined;
   let releaseBorrow: (() => void) | undefined;
   let unregisterAgent: (() => void) | undefined;
   let unregisterState: (() => void) | undefined;
@@ -205,8 +202,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     closing ??= (async () => {
       await Promise.allSettled(pending);
       await releaseDrainExecution();
-      await retainedExecution?.release();
-      retainedExecution = undefined;
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -242,10 +237,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     });
     if (expectedDatabase) {
       releaseBorrow = retainAgentDatabase(expectedDatabase);
-    }
-    if (worker.retainExecutionUntilClose) {
-      // A lifetime borrow leaves native opening lazy and each command in its own FIFO turn.
-      retainedExecution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
     }
   } catch (error) {
     try {
@@ -325,7 +316,6 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       if (
         completed.ok &&
         !revoked &&
-        !retainedExecution &&
         getGatewayRestartDrainSignal().aborted &&
         !cleanupSignal.aborted
       ) {

@@ -191,7 +191,6 @@ function rewriteLegacyAgentsToolsGuidance(content: string): string {
 
 function findToolsSection(content: string): { headingEnd: number; insertAt: number } | undefined {
   let offset = 0;
-  let insideTools = false;
   let headingEnd = 0;
   let fence: { marker: "`" | "~"; length: number } | undefined;
   for (const lineWithEnding of content.match(/.*(?:\n|$)/gu) ?? []) {
@@ -215,18 +214,17 @@ function findToolsSection(content: string): { headingEnd: number; insertAt: numb
       const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
       if (heading) {
         const depth = heading[1]!.length;
-        if (insideTools && depth <= 2) {
+        if (headingEnd > 0 && depth <= 2) {
           return { headingEnd, insertAt: offset };
         }
         if (depth === 2 && heading[2]!.trim().toLowerCase() === "tools") {
-          insideTools = true;
           headingEnd = offset + lineWithEnding.length;
         }
       }
     }
     offset += lineWithEnding.length;
   }
-  return insideTools ? { headingEnd, insertAt: content.length } : undefined;
+  return headingEnd > 0 ? { headingEnd, insertAt: content.length } : undefined;
 }
 
 function ensureLocalNotesHeading(content: string): string {

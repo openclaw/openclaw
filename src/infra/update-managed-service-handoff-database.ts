@@ -6,6 +6,7 @@ import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
+import { formatCliCommand } from "../cli/command-format.js";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
@@ -60,6 +61,23 @@ type HandoffDatabaseOwner = {
   transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T;
 };
 
+function identityChangedMessage(databasePath: string, changes: string[]): string {
+  return `managed handoff lease database identity changed at ${databasePath}: ${changes.join("; ")}. Run ${formatCliCommand("openclaw update repair")}.`;
+}
+
+function assertRecordedDatabasePath(
+  databasePath: string,
+  existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
+): void {
+  if (existingIdentity && databasePath !== existingIdentity.databasePath) {
+    throw new Error(
+      identityChangedMessage(databasePath, [
+        `path (recorded ${existingIdentity.databasePath}; current ${databasePath})`,
+      ]),
+    );
+  }
+}
+
 function prepareHandoffDirectory(databasePath: string): void {
   const dir = path.dirname(databasePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -79,9 +97,7 @@ export async function prepareManagedHandoffLeaseDatabase(
   databasePath: string,
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ) {
-  if (existingIdentity && databasePath !== existingIdentity.databasePath) {
-    throw new Error("managed handoff lease database path changed");
-  }
+  assertRecordedDatabasePath(databasePath, existingIdentity);
   if (existingIdentity) {
     assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
   } else {
@@ -287,9 +303,24 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   previous?: ManagedUpdateLeaseDatabaseIdentity,
   legacyNumeric = false,
 ): ManagedUpdateLeaseDatabaseIdentity {
-  const canonical = fs.realpathSync(databasePath);
-  const file = fs.lstatSync(canonical, { bigint: true });
-  const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
+  let canonical: string;
+  let file: BigIntStats | undefined;
+  let parent: BigIntStats;
+  try {
+    canonical = fs.realpathSync(databasePath);
+    file = fs.lstatSync(canonical, { bigint: true });
+    parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
+  } catch (error) {
+    if (previous && error instanceof Error && hasErrnoCode(error, "ENOENT")) {
+      const part = file ? "parent directory" : "file";
+      const recorded = file ? previous.parentIdentity : previous.databaseIdentity;
+      // Keep the original filesystem error and code for missing-store recovery callers.
+      error.message = `${identityChangedMessage(databasePath, [
+        `${part} identity (recorded ${recorded}; current missing)`,
+      ])} ${error.message}`;
+    }
+    throw error;
+  }
   assertManagedHandoffPath(file, "file");
   assertManagedHandoffPath(parent, "directory");
   // Accepted <=9.6 one-hop tradeoff: Number serialization can hide an inode collision.
@@ -303,7 +334,21 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
       !matches(file, previous.databaseIdentity) ||
       !matches(parent, previous.parentIdentity))
   ) {
-    throw new Error("managed handoff lease database identity changed");
+    const changes: string[] = [];
+    if (canonical !== previous.databasePath) {
+      changes.push(`path (recorded ${previous.databasePath}; current ${canonical})`);
+    }
+    if (!matches(file, previous.databaseIdentity)) {
+      changes.push(
+        `file identity (recorded ${previous.databaseIdentity}; current ${databaseFileIdentityKey(file)})`,
+      );
+    }
+    if (!matches(parent, previous.parentIdentity)) {
+      changes.push(
+        `parent directory identity (recorded ${previous.parentIdentity}; current ${databaseFileIdentityKey(parent)})`,
+      );
+    }
+    throw new Error(identityChangedMessage(databasePath, changes));
   }
   return Object.freeze({
     databasePath: canonical,
@@ -324,9 +369,12 @@ export function createManagedHandoffLeaseDatabase(
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
   writeLockRoot?: Root,
 ): HandoffDatabaseOwner {
-  if (existingIdentity && databasePath !== existingIdentity.databasePath) {
-    throw new Error("managed handoff lease database path changed");
-  }
+  assertRecordedDatabasePath(databasePath, existingIdentity);
+  const assertCurrent = () => {
+    if (existingIdentity) {
+      assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
+    }
+  };
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
   const validationQuery = createSqliteQueryCache((db) =>
     prepareSqliteQuerySync<void, LeaseTable>(db, () =>
@@ -336,7 +384,7 @@ export function createManagedHandoffLeaseDatabase(
   const existingOptions = existingIdentity
     ? {
         busyTimeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
-        assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
+        assertIdentity: assertCurrent,
         validate: (db: HandoffDatabase) => {
           validationQuery(db)();
         },
@@ -484,9 +532,7 @@ export function createManagedHandoffLeaseDatabase(
     if (!write || !writeLockRoot) {
       return accessDatabase(write, operation);
     }
-    if (existingIdentity) {
-      assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-    }
+    assertCurrent();
     const inherited = writeAdmissions.getStore();
     const admission = inherited?.active
       ? inherited
@@ -532,11 +578,6 @@ export function createManagedHandoffLeaseDatabase(
       };
     },
     transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T {
-      const assertCurrent = () => {
-        if (existingIdentity) {
-          assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-        }
-      };
       assertCurrent();
       const transact: ExistingSqliteTransaction =
         existingTransactions.get(db) ??

@@ -470,7 +470,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     );
     const legacyState = session.entry?.heartbeatTaskState ?? {};
     const jobPlans: TaskJobPlan[] = [];
-    let blocked = false;
     for (const { task, intervalMs, occurrenceIndex } of validatedTasks) {
       const declarationKey = heartbeatTaskDeclarationKey(agent.agentId, task.name, occurrenceIndex);
       const matches = snapshot.jobs.filter((job) => job.declarationKey === declarationKey);
@@ -485,7 +484,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         warnings.push(
           `Agent "${agent.agentId}" task ${JSON.stringify(task.name)} collides with an incompatible cron declaration; scratch was left unchanged.`,
         );
-        blocked = true;
         break;
       }
       const legacyLastRun = legacyState[task.name];
@@ -510,7 +508,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         sortOrder,
       });
     }
-    if (blocked) {
+    if (jobPlans.length !== validatedTasks.length) {
       continue;
     }
 

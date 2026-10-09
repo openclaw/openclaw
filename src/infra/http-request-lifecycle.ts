@@ -37,24 +37,33 @@ function httpRejectionTransport(socket: Socket): "node" | "bun-native" | "bun-no
 /** Abort disconnected work without treating normal request/response completion as cancellation. */
 export function createHttpRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   const controller = new AbortController();
+  let responseFinished = res.writableFinished;
   const abortIfRequestIncomplete = () => {
     if (!req.complete) {
       controller.abort();
     }
   };
   const abortIfResponseStillOpen = () => {
-    if (!res.writableEnded) {
+    if (!responseFinished) {
       controller.abort();
     }
   };
+  const finishResponse = () => {
+    // Node 24 can emit finish after a lost socket drains its write queue.
+    responseFinished = !req.socket.destroyed;
+    abortIfResponseStillOpen();
+  };
+  // Observe completion before Node's own finish listener closes a normal non-keepalive socket.
+  res.prependOnceListener("finish", finishResponse);
   req.once("close", abortIfRequestIncomplete);
   res.once("close", abortIfResponseStillOpen);
-  if ((req.destroyed && !req.complete) || (res.destroyed && !res.writableEnded)) {
+  if ((req.destroyed && !req.complete) || (res.destroyed && !responseFinished)) {
     controller.abort();
   }
   return {
     signal: controller.signal,
     cleanup: () => {
+      res.off("finish", finishResponse);
       req.off("close", abortIfRequestIncomplete);
       res.off("close", abortIfResponseStillOpen);
     },

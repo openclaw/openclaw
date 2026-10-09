@@ -29,24 +29,14 @@ type UiProtocolFreshnessIssue = {
   | { readonly kind: "stale-assets"; readonly changesSinceBuild: readonly string[] }
 );
 
-export async function detectUiProtocolFreshnessIssues(
-  opts: {
-    readonly root?: string;
-    readonly argv1?: string;
-    readonly cwd?: string;
-    readonly collectChangesSinceBuild?: (
-      root: string,
-      uiMtime: Date,
-    ) => Promise<readonly string[] | null>;
-  } = {},
-): Promise<readonly UiProtocolFreshnessIssue[]> {
-  const root =
-    opts.root ??
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: opts.argv1 ?? process.argv[1],
-      cwd: opts.cwd ?? process.cwd(),
-    }));
+export async function detectUiProtocolFreshnessIssues(): Promise<
+  readonly UiProtocolFreshnessIssue[]
+> {
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
   if (!root) {
     return [];
   }
@@ -77,9 +67,10 @@ export async function detectUiProtocolFreshnessIssues(
     if (!canBuild) {
       return [];
     }
-    const changesSinceBuild = await (
-      opts.collectChangesSinceBuild ?? collectProtocolSchemaChangesSince
-    )(root, (await fs.stat(uiIndexPath)).mtime);
+    const changesSinceBuild = await collectProtocolSchemaChangesSince(
+      root,
+      (await fs.stat(uiIndexPath)).mtime,
+    );
     if (changesSinceBuild === null || changesSinceBuild.length === 0) {
       return [];
     }

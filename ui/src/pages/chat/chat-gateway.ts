@@ -377,6 +377,21 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   const materializeVisibleStream = (
     materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
   ) => materializeVisibleAssistantStreamMessages(state.chatMessages, state, materializeOpts);
+  const publishTerminalStream = (
+    message: Record<string, unknown>,
+    visibleMessages: unknown[],
+    disposition?: Parameters<typeof rememberLiveTerminalRun>[2],
+    replaceStream = true,
+  ) => {
+    const live = rememberLiveTerminalRun(message, terminalRunId, disposition);
+    publishVisibleTerminal(
+      message,
+      replaceStream
+        ? appendTerminalAssistantMessage(visibleMessages, live)
+        : [...visibleMessages, live],
+      terminalRunId,
+    );
+  };
   const publishInterruptedStream = () => {
     publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
     // Message-less terminal events still own the retained partial's outcome
@@ -440,13 +455,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       // History already owns this run's terminal message. Discard the live
       // projection; terminal cleanup below clears its remaining stream.
     } else if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      const visibleMessages = materializeVisibleStream();
-      const liveFinal = rememberLiveTerminalRun(finalMessage, terminalRunId);
-      publishVisibleTerminal(
-        finalMessage,
-        appendTerminalAssistantMessage(visibleMessages, liveFinal),
-        terminalRunId,
-      );
+      publishTerminalStream(finalMessage, materializeVisibleStream());
     } else {
       publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
     }
@@ -458,12 +467,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         replacementMessages: [normalizedMessage],
         includeCurrent: false,
       });
-      const liveAborted = rememberLiveTerminalRun(normalizedMessage, terminalRunId, "aborted");
-      publishVisibleTerminal(
-        normalizedMessage,
-        appendTerminalAssistantMessage(visibleMessages, liveAborted),
-        terminalRunId,
-      );
+      publishTerminalStream(normalizedMessage, visibleMessages, "aborted");
     } else {
       publishInterruptedStream();
     }
@@ -491,17 +495,11 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         const visibleMessages = materializeVisibleStream({
           includeCurrent: !replacesVisibleStream,
         });
-        const liveError = rememberLiveTerminalRun(
+        publishTerminalStream(
           visiblePayloadMessage,
-          terminalRunId,
+          visibleMessages,
           projectedRun?.currentRun?.status === "timeout" ? "timeout" : "error",
-        );
-        publishVisibleTerminal(
-          visiblePayloadMessage,
-          replacesVisibleStream
-            ? appendTerminalAssistantMessage(visibleMessages, liveError)
-            : [...visibleMessages, liveError],
-          terminalRunId,
+          replacesVisibleStream,
         );
       } else {
         publishInterruptedStream();

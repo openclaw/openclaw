@@ -9,6 +9,7 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
 import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
@@ -176,10 +177,13 @@ export async function trimSessionTranscriptForManualCompact(
       const source = await prepareSessionSourceAuthority(authority.source);
       const nativeCommit = source.nativeSource || source.hasOpaqueCheck;
       try {
-        const assertCurrent = () => {
+        const assertOwnerCurrent = () => {
           assertReader();
           assertPhysicalSource();
           authority.assertHostCurrent();
+        };
+        const assertCurrent = () => {
+          assertOwnerCurrent();
           if (source.assertPreparedCurrent) {
             source.assertPreparedCurrent();
           } else if (!nativeCommit) {
@@ -229,6 +233,8 @@ export async function trimSessionTranscriptForManualCompact(
                 assertCurrent,
                 {
                   target: resolved,
+                  acceptSourceValidation: (validation) =>
+                    acceptSessionSourceValidation(source, validation),
                   readMetadata: async (phase) =>
                     phase === "initial"
                       ? read.manualCompact?.archive
@@ -282,7 +288,7 @@ export async function trimSessionTranscriptForManualCompact(
           },
           { maxLines: params.maxLines, nowMs: params.nowMs, entries: read.entries },
           {
-            assertCurrent,
+            assertCurrent: assertOwnerCurrent,
             source,
             databaseIdentity: expectedIdentity?.key.slice("file:".length),
           },

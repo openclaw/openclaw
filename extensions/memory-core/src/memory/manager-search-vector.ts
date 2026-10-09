@@ -56,12 +56,11 @@ export async function searchVector(params: {
       },
       params.signal,
     );
-    if (response.fallbackScanRequired) {
-      return await params.runFallback();
+    if (!response.fallbackScanRequired) {
+      return response.rows.map((row) =>
+        projectMemorySearchRow(row, params.snippetMaxChars, 1 - row.dist),
+      );
     }
-    return response.rows.map((row) =>
-      projectMemorySearchRow(row, params.snippetMaxChars, 1 - row.dist),
-    );
   }
 
   return await params.runFallback();

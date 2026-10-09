@@ -229,7 +229,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         requestIndex: 3,
         broke: false,
         cacheRead: 10_000,
-        changes: [{ code: "tools", detail: "tool set changed with same count" }],
+        changes: [{ code: "tools", detail: '1 -> 1 tools; description: "read"' }],
       },
     ]);
   });
