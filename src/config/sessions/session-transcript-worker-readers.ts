@@ -140,6 +140,11 @@ export function createSessionHistoryWorkerReaders(
     ),
     readConversations: reader("conversation-rows", "conversations", (value) => value.rows),
     prewarm: reader("prewarm", "prewarm acknowledgement", () => undefined),
+    readRetirement: reader(
+      "session-retirement-read",
+      "session retirement facts",
+      (value) => value.result,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",

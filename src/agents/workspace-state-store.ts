@@ -1,45 +1,35 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+  createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
+} from "../infra/sqlite-worker-operation-admission.js";
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import {
-  createWorkspaceStateIdentity,
   resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
-  type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 import {
   assertCanonicalIntegerTimestamp,
   assertCanonicalTimestamp,
-  deleteWorkspaceStateRowsInDatabase,
-  resolveWorkspaceIdentityFromDatabase,
   WORKSPACE_SETUP_STATE_VERSION,
   workspacePathEntryExists,
   type WorkspaceAttestation,
   type WorkspaceAttestationInput,
   type WorkspaceSetupState,
-  type WorkspaceStateDatabase,
-  type WorkspaceStateDatabaseHandle,
   type WorkspaceStateSnapshot,
 } from "./workspace-state-store.kernel.js";
 import type {
+  WorkspaceStateDeletionPlan,
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
@@ -65,14 +55,9 @@ type WorkspaceStateOperationOptions = { assertCurrent?: () => void } & Pick<
   "recoveryHoldPredicate" | "beforeLegacyApply"
 >;
 
-type WorkspaceStateDeletionPlan = {
-  cacheRoot: string;
-  lexicalAlias: WorkspaceStateIdentity;
-  currentCanonicalIdentity: WorkspaceStateIdentity;
-  pathEntryExisted: boolean;
-};
-
-async function runWorkspaceStateOperation<K extends keyof WorkspaceStateWorkerOperations>(
+async function runWorkspaceStateOperation<
+  K extends Exclude<keyof WorkspaceStateWorkerOperations, "workspace.delete">,
+>(
   command: { type: K; input: WorkspaceStateWorkerOperations[K]["input"] },
   options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions,
 ): Promise<WorkspaceStateWorkerOperations[K]["output"]> {
@@ -234,17 +219,6 @@ export async function replaceWorkspaceAttestation(
   );
 }
 
-function deleteWorkspaceRows(
-  database: WorkspaceStateDatabaseHandle,
-  identity: WorkspaceStateIdentity,
-): void {
-  deleteWorkspaceStateRowsInDatabase(database, identity);
-  // Explicit agent deletion retains its native transaction and publication owner.
-  deferSqlitePostCommitPublication(database.db, () =>
-    retireWorkspaceFileCache(identity.workspacePath),
-  );
-}
-
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */
 export async function clearExpiredWorkspaceStateForVanishedWorkspace(
   workspaceDir: string,
@@ -278,57 +252,70 @@ export function prepareWorkspaceStateDeletion(workspaceDir: string): WorkspaceSt
 
 export async function deleteWorkspaceState(
   plan: WorkspaceStateDeletionPlan,
-  options: WorkspaceStateOperationOptions = {},
+  options: Pick<OpenClawStateDatabaseOptions, "database" | "path" | "env"> & {
+    /** Host-only authority; the deletion owner supplies durable transaction predicates. */
+    assertCurrent?: () => void;
+    deletion?: AgentDeletionWorkerAuthority;
+  } = {},
 ): Promise<void> {
-  // Delete-only cleanup must not recreate state after reset/uninstall removed
-  // the canonical database successfully or partially.
-  if (!existsSync(resolveOpenClawStateSqlitePath())) {
-    options.assertCurrent?.();
-    retireWorkspaceFileCache(plan.cacheRoot);
+  const capturedPlan = structuredClone(plan);
+  const publish = (facts: unknown) => {
+    if (
+      !isRecord(facts) ||
+      facts.kind !== "workspace-deleted" ||
+      typeof facts.workspacePath !== "string"
+    ) {
+      throw new Error("Workspace deletion has no committed result");
+    }
+    retireWorkspaceFileCache(facts.workspacePath);
+  };
+  const deletionOwner = options.deletion;
+  if (deletionOwner) {
+    await deletionOwner.runWithWorker(
+      (scope, deletion) =>
+        scope.execute({ type: "workspace.delete", input: { plan: capturedPlan, deletion } }),
+      { onCommitted: publish },
+    );
+    deletionOwner.assertCurrentHost();
     return;
   }
-  runOpenClawStateWriteTransaction((database) => {
-    options.assertCurrent?.();
-    const { lexicalAlias, currentCanonicalIdentity } = plan;
-    const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
-    const storedAlias = executeSqliteQueryTakeFirstSync(
-      database.db,
-      kysely
-        .selectFrom("workspace_path_aliases")
-        .selectAll()
-        .where("alias_key", "=", lexicalAlias.workspaceKey),
-    );
-    if (storedAlias && storedAlias.alias_path !== lexicalAlias.workspacePath) {
-      throw new Error("workspace path alias key collision");
-    }
-    let storedIdentity = storedAlias
-      ? createWorkspaceStateIdentity(storedAlias.workspace_path)
-      : undefined;
-    if (storedIdentity && storedIdentity.workspaceKey !== storedAlias?.workspace_key) {
-      throw new Error("workspace path alias target is invalid");
-    }
-    if (
-      storedIdentity &&
-      plan.pathEntryExisted &&
-      storedIdentity.workspaceKey !== currentCanonicalIdentity.workspaceKey
-    ) {
-      // A repointed configured alias no longer owns its former canonical
-      // workspace. Remove only that stale association, then clean current state.
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .deleteFrom("workspace_path_aliases")
-          .where("alias_key", "=", lexicalAlias.workspaceKey),
-      );
-      storedIdentity = undefined;
-    }
-    return deleteWorkspaceRows(
-      database,
-      storedIdentity ??
-        resolveWorkspaceIdentityFromDatabase({
-          workspaceDir: currentCanonicalIdentity.workspacePath,
-          database,
-        }).identity,
-    );
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
   });
+  const assertHost = options.assertCurrent;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    assertHost?.();
+  };
+  assertCurrent();
+  // Delete-only cleanup must not recreate state after reset/uninstall removed
+  // the canonical database successfully or partially.
+  if (!existsSync(context.admission.databasePath)) {
+    retireWorkspaceFileCache(capturedPlan.cacheRoot);
+    return;
+  }
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "workspace.delete", input: { plan: capturedPlan } }),
+    {
+      existingOnly: true,
+      assertCurrent,
+      createAdmission: () => {
+        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage !== "transaction" && request.stage !== "commit") {
+            throw new Error("Workspace deletion requires transaction admission");
+          }
+          assertCurrent();
+          grant();
+        });
+        observeSqliteWorkerCommittedFacts(admission, ({ facts }) => publish(facts));
+        return { admission, nativeLocations: [context.admission.databasePath] };
+      },
+    },
+  );
+  assertCurrent();
+  if (result === undefined) {
+    retireWorkspaceFileCache(capturedPlan.cacheRoot);
+  }
 }

@@ -1,6 +1,5 @@
 import { isMainThread } from "node:worker_threads";
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -47,7 +46,6 @@ import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-ide
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
 import {
-  getSessionKysely,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptReadScope,
@@ -91,6 +89,7 @@ import { mergeSessionEntry } from "./types.js";
 export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 export { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
+export { listSessionEntryKeysReadOnly } from "./session-retirement-read.js";
 export {
   loadExactSessionEntry,
   loadExactSessionEntryCandidates,
@@ -112,21 +111,6 @@ export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionE
 }
 
 export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
-
-/** Lists persisted session keys without materializing their entry JSON. */
-export async function listSessionEntryKeysReadOnly(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
-): Promise<string[]> {
-  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getSessionKysely(database.db);
-    return executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("session_nodes").select("session_key").orderBy("session_key"),
-    ).rows.map((row) => row.session_key);
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : [];
-}
 
 /** Lists direct child rows without cloning or rebuilding the complete session store. */
 export function listSessionChildEntriesReadOnly(

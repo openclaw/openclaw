@@ -49,6 +49,11 @@ does not pass that check. Each verification check has a 90-second deadline.
 Changing `agents.defaults.timeoutSeconds` does not extend setup verification.
 Failures identify whether the response check or tool-use check timed out.
 
+If the configured server executable is missing from OpenClaw's current managed
+installation, chat and local embeddings restore the same verified build before
+starting it. Custom server paths and installations from older releases still
+require manual repair or rerunning setup.
+
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before

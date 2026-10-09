@@ -126,6 +126,18 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Repeated tool errors stop the turn">
+    OpenClaw stops after three consecutive identical failures for the same tool
+    and arguments, including repeated unknown tool IDs. This protection is always
+    active; enabling `tools.loopDetection` is not required.
+
+    Check the arguments in the recorded error. If the model repeatedly invents
+    tool names or cannot use the exposed schemas, switch to a model with native
+    tool calling and start a new turn. Changed errors and successful retries
+    reset the count. See [Tool-loop detection](/tools/loop-detection).
+
+  </Accordion>
+
   <Accordion title="Kimi or GLM returns garbled symbols">
     Hosted Kimi/GLM responses that are long, non-linguistic symbol runs are
     treated as a failed provider call rather than a successful reply, so

@@ -27,7 +27,9 @@ import { assertConfiguredWorkspaceStateReady } from "./workspace-state-dirs.js";
 import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
+  deleteWorkspaceState,
   mergeWorkspaceSetupState,
+  prepareWorkspaceStateDeletion,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
 } from "./workspace-state-store.js";
@@ -72,33 +74,40 @@ async function withoutMainThreadSql<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
-it("snapshots, registers aliases, merges setup, and expires exact state without caller-thread SQL", async () => {
-  await withoutMainThreadSql(seed);
-  await closeOpenClawStateDatabaseAsync();
-  const alias = state.path("runtime-alias");
-  fs.symlinkSync(state.workspaceDir, alias, process.platform === "win32" ? "junction" : "dir");
-  await withoutMainThreadSql(async () => {
-    expect((await readWorkspaceStateSnapshot(alias)).setup.bootstrapSeededAt).toBe(
-      "2026-07-16T01:00:00.000Z",
-    );
-    expect(
-      await mergeWorkspaceSetupState(
-        alias,
-        { bootstrapSeededAt: "2026-07-17T01:00:00.000Z" },
-        2_000,
-      ),
-    ).toEqual({ version: 1, bootstrapSeededAt: "2026-07-16T01:00:00.000Z" });
-    expect(await clearExpiredWorkspaceStateForVanishedWorkspace(alias, 2_000)).toBe(false);
-    fs.unlinkSync(alias);
-    expect(
-      await clearExpiredWorkspaceStateForVanishedWorkspace(
-        alias,
-        WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
-      ),
-    ).toBe(true);
-    expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
-  });
-});
+it.each(["expiry", "deletion"] as const)(
+  "prepares and retires workspace state through %s without caller-thread SQL",
+  async (cleanup) => {
+    await withoutMainThreadSql(seed);
+    await closeOpenClawStateDatabaseAsync();
+    const alias = state.path("runtime-alias");
+    fs.symlinkSync(state.workspaceDir, alias, process.platform === "win32" ? "junction" : "dir");
+    await withoutMainThreadSql(async () => {
+      expect((await readWorkspaceStateSnapshot(alias)).setup.bootstrapSeededAt).toBe(
+        "2026-07-16T01:00:00.000Z",
+      );
+      expect(
+        await mergeWorkspaceSetupState(
+          alias,
+          { bootstrapSeededAt: "2026-07-17T01:00:00.000Z" },
+          2_000,
+        ),
+      ).toEqual({ version: 1, bootstrapSeededAt: "2026-07-16T01:00:00.000Z" });
+      expect(await clearExpiredWorkspaceStateForVanishedWorkspace(alias, 2_000)).toBe(false);
+      fs.unlinkSync(alias);
+      if (cleanup === "deletion") {
+        await deleteWorkspaceState(prepareWorkspaceStateDeletion(alias));
+      } else {
+        expect(
+          await clearExpiredWorkspaceStateForVanishedWorkspace(
+            alias,
+            WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
+          ),
+        ).toBe(true);
+      }
+      expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
+    });
+  },
+);
 
 it("rolls back setup when a recovery hold arrives after caller preparation", async () => {
   const before = await seed();
@@ -125,7 +134,7 @@ it("rolls back setup when a recovery hold arrives after caller preparation", asy
   });
 });
 
-it.each(["snapshot", "merge", "expire"] as const)(
+it.each(["snapshot", "merge", "expire", "delete"] as const)(
   "rejects revoked authority at transaction and commit for %s",
   async (operation) => {
     const before = await seed();
@@ -155,11 +164,13 @@ it.each(["snapshot", "merge", "expire"] as const)(
                 2_000,
                 options,
               )
-            : clearExpiredWorkspaceStateForVanishedWorkspace(
-                alias,
-                WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
-                options,
-              );
+            : operation === "delete"
+              ? deleteWorkspaceState(prepareWorkspaceStateDeletion(alias), options)
+              : clearExpiredWorkspaceStateForVanishedWorkspace(
+                  alias,
+                  WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
+                  options,
+                );
       await expect(pending).rejects.toBe(refusal);
       spy.mockRestore();
       expect(retired).toBe(true);
@@ -197,28 +208,33 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("retires committed expiry cache entries when result delivery fails without replay", async () => {
-  await seed();
-  const filePath = path.join(state.workspaceDir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  const spy = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementationOnce(async (...args) => {
-      await execute(...args);
-      throw new Error("expiry reply lost");
-    });
-  await expect(
-    clearExpiredWorkspaceStateForVanishedWorkspace(
-      state.workspaceDir,
-      WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
-    ),
-  ).rejects.toThrow("expiry reply lost");
-  expect(spy).toHaveBeenCalledTimes(1);
-  spy.mockRestore();
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
-  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
-});
+it.each(["expiry", "deletion"] as const)(
+  "retires committed %s cache entries when result delivery fails without replay",
+  async (cleanup) => {
+    await seed();
+    const filePath = path.join(state.workspaceDir, "AGENTS.md");
+    writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
+    const execute = stateWorker.runOpenClawStateWorkerOperation;
+    const spy = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        await execute(...args);
+        throw new Error("workspace cleanup reply lost");
+      });
+    await expect(
+      cleanup === "deletion"
+        ? deleteWorkspaceState(prepareWorkspaceStateDeletion(state.workspaceDir))
+        : clearExpiredWorkspaceStateForVanishedWorkspace(
+            state.workspaceDir,
+            WORKSPACE_ATTESTATION_RECENT_MS + 2_001,
+          ),
+    ).rejects.toThrow("workspace cleanup reply lost");
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
+    expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
+  },
+);
 
 it("keeps captured first-writer setup milestones across queued merges and reopen", async () => {
   await seed();

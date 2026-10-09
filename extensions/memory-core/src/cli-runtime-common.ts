@@ -24,6 +24,7 @@ import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./
 import type { MemoryCommandOptions } from "./cli.types.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { getMemorySearchManager } from "./memory/index.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
 export type MemoryManager = NonNullable<
@@ -155,6 +156,7 @@ export async function withMemoryCommand(params: {
   purpose?: MemoryManagerPurpose;
   inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
   /** Refuse instead of answering from the sidecar index when another plugin owns the slot. */
   requiresMemorySlot?: boolean;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
@@ -193,6 +195,7 @@ export async function withMemoryCommand(params: {
           purpose: params.purpose,
           inspectSources: params.inspectSources,
           acquireLocalService: params.acquireLocalService,
+          runInBackgroundContext: params.runInBackgroundContext,
         }),
       onMissing: (error) => {
         if (!error?.trim()) {

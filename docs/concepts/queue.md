@@ -18,11 +18,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 ## How it works
 
 - A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; `main` uses `max(8, available CPU parallelism * 4)`, ordinary sub-agent queues default to 8 per spawning session, and Swarm collector queues default to 32 per group).
+- Priority has a bounded head start: foreground work can overtake normal work by up to 15 seconds and background work by up to 30 seconds. After that, newer foreground arrivals cannot keep passing the older work. Lanes and shared capacity groups use the same order, preserving FIFO within each priority. Occupied slots and earlier queued work can still delay admission; running turns are never preempted.
 - CLI, embedded, and Codex runs share the same **session-key lane** (`session:<key>`). Each turn waits there before acquiring the session's execution claim, so changing runtimes cannot start a competing turn.
 - Inbound messages can be persisted before their turn enters the lane. A running turn reads a consistent transcript prefix, so a later queued message does not invalidate its context read. Rewrites, compaction, deletion, and branch changes still invalidate that read.
 - Inbound session runs then enter the **global `main` lane**, whose parallelism is capped by `agents.defaults.maxConcurrent`. Ordinary sub-agent runs instead use their immediate spawning/controller session's budget, set by `agents.defaults.subagents.maxConcurrent`. Swarm collector children use their group's separate budget, set by `tools.swarm.maxConcurrent`.
 - Embedded attempt preparation yields to the event loop after 16 stage starts or at least 8 ms of synchronous dispatch work per slice, so concurrent starts leave room for Gateway requests. A running stage is not preempted. Asynchronous stage work can still overlap and does not count toward that time budget; this does not lower the run concurrency limit or change session serialization.
-- When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
+- When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting. `queueAhead` records the enqueue-time backlog, not a prediction of admission order after priority and aging.
 - Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while the run waits its turn.
 
 ## Defaults

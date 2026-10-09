@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
@@ -216,6 +220,54 @@ describe("Git ref mutation ownership", () => {
       termination: "signal",
     });
     await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
+  });
+
+  it("registers a tracking worktree after the shared ref writer releases config", async ({
+    signal,
+  }) => {
+    const root = await repository();
+    await requireGit(root, ["remote", "add", "origin", root]);
+    await requireGit(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    const controller = new AbortController();
+    const held = holdSnapshotDeletion(undefined, controller.signal);
+    const mutation = runGit(root, ["update-ref", "-d", snapshotRef]);
+    let creation: Promise<unknown> | undefined;
+    const lock = path.join(root, ".git", "config.lock");
+    const destination = path.join(root, "tracking");
+    try {
+      await held.started.promise;
+      await fs.writeFile(lock, "", { flag: "wx" });
+      creation = requireGit(
+        root,
+        [
+          "worktree",
+          "add",
+          "--no-checkout",
+          "-b",
+          "tracking",
+          "--",
+          destination,
+          "refs/remotes/origin/main",
+        ],
+        { signal: controller.signal },
+      );
+      await withinTest(
+        awaitGateBeforeSettlement(
+          held.discovered.promise,
+          creation,
+          "worktree registration bypassed its ref writer",
+        ),
+        signal,
+      );
+    } finally {
+      await fs.rm(lock, { force: true });
+      held.release.resolve();
+      await Promise.allSettled([mutation, creation]);
+    }
+    await creation;
+    expect(
+      await requireGit(destination, ["rev-parse", "--symbolic-full-name", "@{upstream}"]),
+    ).toBe("refs/remotes/origin/main");
   });
 
   it("does not accept an interrupted cached remote HEAD", async () => {

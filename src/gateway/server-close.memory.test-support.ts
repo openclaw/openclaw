@@ -15,8 +15,10 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
-  const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-    memoryRuntime: MemoryPluginRuntime;
+  const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+    createMemoryRuntime: (host: {
+      runInBackgroundContext: <T>(run: () => T) => T;
+    }) => MemoryPluginRuntime;
     configureMemoryCoreDreamingState: (
       open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
     ) => void;
@@ -47,7 +49,13 @@ export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawCo
     memory.kind = "memory";
     memory.memorySlotSelected = true;
     builder.registry.plugins.push(memory);
-    builder.createApi(memory, { config }).registerMemoryCapability({ runtime: memoryRuntime });
+    const api = builder.createApi(memory, { config });
+    assert(api.lifecycle.runInBackgroundContext);
+    api.registerMemoryCapability({
+      runtime: createMemoryRuntime({
+        runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+      }),
+    });
     const embedding = createPluginRecord({
       id: "fixture-embedding",
       source: "fixture",

@@ -431,13 +431,13 @@ Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
 blocks. On direct Anthropic API-key Messages routes, OpenClaw enables
 `inHistorySystemUpdates` for Opus 4.8, Opus 5/5.5, Sonnet 5/5.5, Fable 5/5.1,
-and Mythos 5/5.1. It pins the stable system prefix and appends changed, added,
+and Mythos 5/5.1. It pins the complete system prompt and appends changed, added,
 or removed prompt sections as system messages after the current user turn.
 Workspace instructions, skills, and permission changes therefore preserve the
-earlier prefix. Changing the provider, model, or transport, or compacting the
-session, starts a new prefix series. After a Gateway restart, the series
-continues only when the current stable prefix matches the last saved rendered
-prefix.
+earlier prefix. Changing the provider, model, transport, or selected personal
+profile, or compacting the session, starts a new prefix series. After a Gateway restart, the saved series
+continues and any refreshed sections arrive as appended updates. Dynamic suffix
+changes use the same update path.
 
 These routes also keep runtime context append-only as turn-scoped system
 messages, without user-message delimiters. OpenClaw sends

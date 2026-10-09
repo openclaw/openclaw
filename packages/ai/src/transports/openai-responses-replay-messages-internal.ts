@@ -36,6 +36,7 @@ import {
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import {
@@ -379,6 +380,7 @@ function convertResponsesMessagesWithStyle(
   }
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);
+  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
       messages.push(msg);
@@ -394,10 +396,16 @@ function convertResponsesMessagesWithStyle(
         ]),
       );
     } else if (msg.role === "user") {
+      const role =
+        msg.operatorMessage &&
+        inHistorySystemUpdates &&
+        (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
+          ? resolveResponsesInstructionRole(model)
+          : "user";
       if (typeof msg.content === "string") {
         messages.push(
           buildResponsesInputMessage(
-            "user",
+            role,
             [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
             msg,
           ),
@@ -417,7 +425,7 @@ function convertResponsesMessagesWithStyle(
           (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
         );
         if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content, msg));
+          messages.push(buildResponsesInputMessage(role, content, msg));
         } else if (providerStyle) {
           continue;
         }
