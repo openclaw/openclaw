@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { UI_PREFERENCE_DEFAULTS } from "../../packages/gateway-protocol/src/schema/ui-appearance-preferences.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
@@ -282,16 +283,30 @@ export const OpenClawSchemaShape = {
               z.literal("miami"),
               z.literal("custom"),
             ])
-            .optional(),
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.theme }),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
-            .optional(),
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.themeMode }),
           accent: z.union([z.literal("theme"), HexColorSchema.startsWith("#")]).optional(),
           locale: z.string().max(20).optional(),
-          chatShowThinking: z.boolean().optional(),
-          chatShowToolCalls: z.boolean().optional(),
-          chatPersistCommentary: z.boolean().optional(),
-          chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
+          chatShowThinking: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatShowThinking }),
+          chatShowToolCalls: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatShowToolCalls }),
+          chatPersistCommentary: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatPersistCommentary }),
+          chatSendShortcut: z
+            .union([z.literal("enter"), z.literal("modifier-enter")])
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatSendShortcut }),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
         })

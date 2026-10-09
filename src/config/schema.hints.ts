@@ -146,6 +146,12 @@ export function buildBaseHints(): ConfigUiHints {
       }
     }
   }
+  for (const path of Object.keys(INHERITED_DEFAULT_PLACEHOLDERS)) {
+    if (hints[path]) {
+      hints[path] = { ...hints[path], inheritedDefault: true };
+    }
+  }
+
   for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
     const runtimePath = `${path}.agentRuntime`;
     const codeModePath = `${path}.codeMode`;

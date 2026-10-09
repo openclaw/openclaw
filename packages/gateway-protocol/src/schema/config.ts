@@ -368,6 +368,8 @@ const ConfigUiHintSchema = closedObject({
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
+  // The placeholder describes an inherited default, not an example input.
+  inheritedDefault: Type.Optional(Type.Boolean()),
   presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });
