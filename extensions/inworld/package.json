@@ -1,12 +1,15 @@
 {
   "name": "@openclaw/inworld-speech",
   "version": "2026.9.9",
-  "description": "OpenClaw Inworld speech plugin.",
+  "description": "OpenClaw Inworld speech and realtime voice plugin.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
+  "dependencies": {
+    "ws": "8.22.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

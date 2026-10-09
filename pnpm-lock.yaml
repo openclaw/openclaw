@@ -1411,6 +1411,10 @@ importers:
         version: link:../..
 
   extensions/inworld:
+    dependencies:
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
