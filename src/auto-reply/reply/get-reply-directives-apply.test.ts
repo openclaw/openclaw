@@ -55,8 +55,11 @@ async function runRuntimePolicyDirective(
   >("./directive-handling.impl.js");
   using runtime = vi.spyOn(sandboxRuntime, "resolveSandboxRuntimeStatus");
   const sessionEntry = { sessionId: "runtime-policy", updatedAt: 1 };
+  let outcome:
+    | { kind: "reply"; reply: Awaited<ReturnType<typeof handleDirectiveOnly>> }
+    | { kind: "error"; error: unknown };
   try {
-    return await handleDirectiveOnly({
+    const reply = await handleDirectiveOnly({
       ...params,
       directives: parseInlineSessionDirectives("/elevated on"),
       sessionEntry,
@@ -74,14 +77,20 @@ async function runRuntimePolicyDirective(
       allowedModelCatalog: [],
       resetModelOverride: false,
     });
-  } finally {
-    expect(runtime).toHaveBeenCalledOnce();
-    const result = runtime.mock.results[0];
-    if (result?.type !== "return") {
-      throw new Error("Directive runtime classification did not return");
-    }
-    assertRuntime(result.value);
+    outcome = { kind: "reply", reply };
+  } catch (error) {
+    outcome = { kind: "error", error };
   }
+  expect(runtime).toHaveBeenCalledOnce();
+  const result = runtime.mock.results[0];
+  if (result?.type !== "return") {
+    throw new Error("Directive runtime classification did not return");
+  }
+  assertRuntime(result.value);
+  if (outcome.kind === "error") {
+    throw outcome.error;
+  }
+  return outcome.reply;
 }
 
 describe("applyInlineDirectiveOverrides", () => {

@@ -7,9 +7,9 @@ import type { ChatCommandDefinition } from "./commands-registry.types.js";
 export function listChatCommands(params?: {
   skillCommands?: SkillCommandSpec[];
 }): ChatCommandDefinition[] {
-  return [
-    ...getChatCommands(),
-    ...(params?.skillCommands ?? []).map((spec): ChatCommandDefinition => ({
+  const commands = [...getChatCommands()];
+  for (const spec of params?.skillCommands ?? []) {
+    const command: ChatCommandDefinition = {
       key: `skill:${spec.skillName}`,
       nativeName: spec.name,
       description: spec.description,
@@ -18,11 +18,13 @@ export function listChatCommands(params?: {
       argsParsing: "none",
       scope: "both",
       category: "tools",
-      ...(spec.descriptionLocalizations
-        ? { descriptionLocalizations: spec.descriptionLocalizations }
-        : {}),
-    })),
-  ];
+    };
+    if (spec.descriptionLocalizations) {
+      command.descriptionLocalizations = spec.descriptionLocalizations;
+    }
+    commands.push(command);
+  }
+  return commands;
 }
 
 /** Applies config feature flags to command keys that can be operator-disabled. */

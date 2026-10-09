@@ -97,17 +97,24 @@ function listNativeSpecsFromCommands(
         command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
     )
     .flatMap((command) =>
-      mapNativeCommandNames(command).map((name, index) => ({
-        name,
-        description: command.description,
-        acceptsArgs: Boolean(command.acceptsArgs),
+      mapNativeCommandNames(command).map((name, index) => {
+        const nativeSpec: NativeCommandSpec = {
+          name,
+          description: command.description,
+          acceptsArgs: Boolean(command.acceptsArgs),
+        };
         // Native aliases carry the same payload shape but are marked for channel registration.
-        ...(index > 0 ? { isAlias: true } : {}),
-        ...(command.args ? { args: command.args } : {}),
-        ...(command.descriptionLocalizations
-          ? { descriptionLocalizations: command.descriptionLocalizations }
-          : {}),
-      })),
+        if (index > 0) {
+          nativeSpec.isAlias = true;
+        }
+        if (command.args) {
+          nativeSpec.args = command.args;
+        }
+        if (command.descriptionLocalizations) {
+          nativeSpec.descriptionLocalizations = command.descriptionLocalizations;
+        }
+        return nativeSpec;
+      }),
     );
 }
 

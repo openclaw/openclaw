@@ -695,9 +695,9 @@ export function clearReplyRunState(operation: ReplyOperation): void {
   if (replyRunState.activeKeysBySessionId.get(sessionId) === sessionKey) {
     replyRunState.activeKeysBySessionId.delete(sessionId);
   }
-  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
+  for (const [waitingSessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
     if (mappedKey === sessionKey) {
-      replyRunState.waitKeysBySessionId.delete(sessionId);
+      replyRunState.waitKeysBySessionId.delete(waitingSessionId);
     }
   }
   notifyGatewayWorkMetricsChanged();

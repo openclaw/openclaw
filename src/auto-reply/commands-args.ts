@@ -10,12 +10,16 @@ function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) {
     return undefined;
   }
-  if (typeof value === "object") {
-    return JSON.stringify(value) || undefined;
+  if (typeof value === "string") {
+    return normalizeOptionalString(value);
   }
-  return normalizeOptionalString(
-    typeof value === "symbol" || typeof value === "function" ? value.toString() : String(value),
-  );
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return normalizeOptionalString(String(value));
+  }
+  if (typeof value === "symbol" || typeof value === "function") {
+    return normalizeOptionalString(value.toString());
+  }
+  return JSON.stringify(value) || undefined;
 }
 
 function formatActionArgs(

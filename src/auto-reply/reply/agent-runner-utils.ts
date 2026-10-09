@@ -416,80 +416,82 @@ export async function buildEmbeddedRunExecutionParams(params: {
   const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
   // Retain the base-input snapshot across thinking and vision discovery.
-  params = { ...params };
-  const config = params.run.config;
+  const snapshot = { ...params };
+  const config = snapshot.run.config;
   const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
-    resolveModelFallbackOptions(params.run);
+    resolveModelFallbackOptions(snapshot.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
-  if (params.agentRuntime) {
-    let thinkingCatalog = params.run.thinkingCatalog;
-    if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
+  if (snapshot.agentRuntime) {
+    let thinkingCatalog = snapshot.run.thinkingCatalog;
+    if (
+      needsThinkHydration(thinkingCatalog, snapshot.provider, snapshot.model, snapshot.agentRuntime)
+    ) {
       const { loadProviderScopedThinkingCatalog } =
         await import("../../agents/model-catalog.runtime.js");
       thinkingCatalog = normalizeThinkingCatalogProviders(
         await loadProviderScopedThinkingCatalog({
           config,
-          provider: params.provider,
-          model: params.model,
-          agentRuntime: params.agentRuntime,
-          agentId: params.run.agentId,
-          agentDir: params.run.agentDir,
-          workspaceDir: params.run.workspaceDir,
+          provider: snapshot.provider,
+          model: snapshot.model,
+          agentRuntime: snapshot.agentRuntime,
+          agentId: snapshot.run.agentId,
+          agentDir: snapshot.run.agentDir,
+          workspaceDir: snapshot.run.workspaceDir,
         }),
       );
     }
     modelThinkingCapability = prepareModelRunCapabilities(
       [thinkingCatalog, []],
-      [params.provider, params.model, params.agentRuntime],
+      [snapshot.provider, snapshot.model, snapshot.agentRuntime],
     ).modelThinkingCapability;
   }
   const enforceFinalTag =
-    !params.run.skipProviderRuntimeHints &&
-    (params.run.enforceFinalTag ||
-      isReasoningTagProvider(params.provider, {
+    !snapshot.run.skipProviderRuntimeHints &&
+    (snapshot.run.enforceFinalTag ||
+      isReasoningTagProvider(snapshot.provider, {
         config,
-        workspaceDir: params.run.workspaceDir,
-        modelId: params.model,
+        workspaceDir: snapshot.run.workspaceDir,
+        modelId: snapshot.model,
       }));
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
     ...senderContext,
-    ...buildReplyRunStateParams(params.run),
-    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
-    permissionMode: params.run.permissionMode,
-    sessionRoot: params.run.sessionRoot,
-    agentDir: params.run.agentDir,
+    ...buildReplyRunStateParams(snapshot.run),
+    providerReviewAcknowledgment: snapshot.run.providerReviewAcknowledgment,
+    permissionMode: snapshot.run.permissionMode,
+    sessionRoot: snapshot.run.sessionRoot,
+    agentDir: snapshot.run.agentDir,
     config,
-    trustedInternalHandoff: params.run.trustedInternalHandoff,
-    scheduledToolPolicy: params.run.scheduledToolPolicy,
-    runtimePluginToolGrant: params.run.runtimePluginToolGrant,
+    trustedInternalHandoff: snapshot.run.trustedInternalHandoff,
+    scheduledToolPolicy: snapshot.run.scheduledToolPolicy,
+    runtimePluginToolGrant: snapshot.run.runtimePluginToolGrant,
     enforceFinalTag,
-    silentExpected: params.run.silentExpected,
-    silentReplyPromptMode: params.run.silentReplyPromptMode,
-    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    toolBindings: params.run.toolBindings,
-    skillLibraryAuthoring: params.run.skillLibraryAuthoring,
-    provider: params.provider,
-    model: params.model,
-    modelHasVision: await resolveRunModelHasVision(params),
+    silentExpected: snapshot.run.silentExpected,
+    silentReplyPromptMode: snapshot.run.silentReplyPromptMode,
+    sourceReplyDeliveryMode: snapshot.run.sourceReplyDeliveryMode,
+    toolBindings: snapshot.run.toolBindings,
+    skillLibraryAuthoring: snapshot.run.skillLibraryAuthoring,
+    provider: snapshot.provider,
+    model: snapshot.model,
+    modelHasVision: await resolveRunModelHasVision(snapshot),
     ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
-    modelSelectionLocked: params.run.modelSelectionLocked,
+    modelSelectionLocked: snapshot.run.modelSelectionLocked,
     modelFallbackAvailability,
     modelFallbacksOverride,
     ...authProfile,
-    thinkLevel: params.run.thinkLevel,
-    fastMode: params.run.fastMode,
-    fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
-    verboseLevel: params.run.verboseLevel,
-    reasoningLevel: params.run.reasoningLevel,
-    execOverrides: params.run.execOverrides,
-    bashElevated: params.run.bashElevated,
-    timeoutMs: params.run.timeoutMs,
-    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
-    runId: params.runId,
-    promptCacheKey: params.promptCacheKey,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    thinkLevel: snapshot.run.thinkLevel,
+    fastMode: snapshot.run.fastMode,
+    fastModeAutoOnSeconds: snapshot.run.fastModeAutoOnSeconds,
+    verboseLevel: snapshot.run.verboseLevel,
+    reasoningLevel: snapshot.run.reasoningLevel,
+    execOverrides: snapshot.run.execOverrides,
+    bashElevated: snapshot.run.bashElevated,
+    timeoutMs: snapshot.run.timeoutMs,
+    runTimeoutOverrideMs: snapshot.run.runTimeoutOverrideMs,
+    runId: snapshot.runId,
+    promptCacheKey: snapshot.promptCacheKey,
+    allowTransientCooldownProbe: snapshot.allowTransientCooldownProbe,
   };
 }
