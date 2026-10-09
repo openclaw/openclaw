@@ -24,6 +24,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildBrokerRuntimeConfig, sameParentProxy } from "./broker-config.js";
 import { findLinuxProcessByArgv0 } from "./process-proof.test-helpers.js";
+import { isSrtSandboxAvailable } from "./sandbox-availability.test-helpers.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
 import {
   SessionBroker,
@@ -31,7 +32,9 @@ import {
   SessionBrokerUnavailableError,
 } from "./session-broker.js";
 
-const isLive = process.platform === "darwin" || process.platform === "linux";
+const isLive =
+  (process.platform === "darwin" || process.platform === "linux") &&
+  (await isSrtSandboxAvailable());
 const LIVE_TIMEOUT = 60_000;
 
 function isAlive(pid: number | undefined): boolean {

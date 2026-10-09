@@ -21,8 +21,11 @@ import {
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
+import { isSrtSandboxAvailable } from "./sandbox-availability.test-helpers.js";
 
-const isLive = process.platform === "darwin" || process.platform === "linux";
+const isLive =
+  (process.platform === "darwin" || process.platform === "linux") &&
+  (await isSrtSandboxAvailable());
 const LIVE_TIMEOUT = 60_000;
 
 function makeParams(workspaceDir: string): CreateSandboxBackendParams {

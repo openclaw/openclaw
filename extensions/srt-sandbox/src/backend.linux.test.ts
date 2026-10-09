@@ -23,8 +23,9 @@ import {
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
+import { isSrtSandboxAvailable } from "./sandbox-availability.test-helpers.js";
 
-const isLinux = process.platform === "linux";
+const liveLinux = process.platform === "linux" && (await isSrtSandboxAvailable());
 
 function makeParams(overrides: {
   workspaceDir: string;
@@ -53,7 +54,7 @@ function makeParams(overrides: {
   };
 }
 
-describe.skipIf(!isLinux)("srt sandbox Linux bwrap filesystem matrix (AC-L2)", () => {
+describe.skipIf(!liveLinux)("srt sandbox Linux bwrap filesystem matrix (AC-L2)", () => {
   const cleanups: Array<() => void> = [];
   afterEach(async () => {
     await shutdownSrtSandboxRuntime();
@@ -148,7 +149,7 @@ describe.skipIf(!isLinux)("srt sandbox Linux bwrap filesystem matrix (AC-L2)", (
   });
 });
 
-describe.skipIf(!isLinux)("srt sandbox Linux network deny-all (AC-L3)", () => {
+describe.skipIf(!liveLinux)("srt sandbox Linux network deny-all (AC-L3)", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => {
     while (cleanups.length > 0) {
@@ -194,7 +195,7 @@ describe.skipIf(!isLinux)("srt sandbox Linux network deny-all (AC-L3)", () => {
   });
 });
 
-describe.skipIf(!isLinux)("srt sandbox Linux buildExecSpec (bwrap wrapper in argv)", () => {
+describe.skipIf(!liveLinux)("srt sandbox Linux buildExecSpec (bwrap wrapper in argv)", () => {
   it("wraps the command with bwrap so kernel enforcement is in the spawned argv", async () => {
     const ws = mkdtempSync(path.join(tmpdir(), "srt-lx-exec-"));
     const agentDir = mkdtempSync(path.join(tmpdir(), "srt-lx-exec-agent-"));
@@ -223,7 +224,7 @@ describe.skipIf(!isLinux)("srt sandbox Linux buildExecSpec (bwrap wrapper in arg
 // helper IS present — SRT actually threads the vendored apply-seccomp binary
 // into the bwrap invocation it hands back for a real Linux wrap. Without this,
 // "seccomp is applied" rested on hand-run evidence only.
-describe.skipIf(!isLinux)("srt sandbox Linux seccomp engaged (AC-R3)", () => {
+describe.skipIf(!liveLinux)("srt sandbox Linux seccomp engaged (AC-R3)", () => {
   it("threads the vendored apply-seccomp binary into the bwrap argv for a Linux wrap", async () => {
     const ws = mkdtempSync(path.join(tmpdir(), "srt-lx-seccomp-"));
     const agentDir = mkdtempSync(path.join(tmpdir(), "srt-lx-seccomp-agent-"));

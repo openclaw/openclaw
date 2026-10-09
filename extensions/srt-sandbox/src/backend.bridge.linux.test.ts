@@ -21,9 +21,10 @@ import { resolveSrtPluginConfig } from "./config.js";
 import { createSrtFsBridge, DEFAULT_SRT_PIN_LIMITS } from "./fs-bridge.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { buildPinOwnerCommand } from "./pin-owner-source.js";
+import { isSrtSandboxAvailable } from "./sandbox-availability.test-helpers.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
 
-const isLinux = process.platform === "linux";
+const liveLinux = process.platform === "linux" && (await isSrtSandboxAvailable());
 
 /** Local mirror of the SDK context type (not exported from plugin-sdk/sandbox). */
 type SandboxFsBridgeContext = Parameters<
@@ -91,7 +92,7 @@ afterEach(() => {
   }
 });
 
-describe.skipIf(!isLinux)("srt sandbox Linux AC-L4 (AC4 under bwrap, no downgrade)", () => {
+describe.skipIf(!liveLinux)("srt sandbox Linux AC-L4 (AC4 under bwrap, no downgrade)", () => {
   it("(1) lands the pinned write in the ORIGINAL held vnode after a mid-segment real-dir swap", async () => {
     const f = makeSandboxedFixture();
     mkdirSync(path.join(f.ws, "a", "b"), { recursive: true });
@@ -162,7 +163,7 @@ describe.skipIf(!isLinux)("srt sandbox Linux AC-L4 (AC4 under bwrap, no downgrad
   });
 });
 
-describe.skipIf(!isLinux)("srt sandbox Linux AC-L5 (held-fd/no-leak under bwrap)", () => {
+describe.skipIf(!liveLinux)("srt sandbox Linux AC-L5 (held-fd/no-leak under bwrap)", () => {
   it("returns held-pin and owner fd counts to baseline after a full mutate cycle", async () => {
     const f = makeSandboxedFixture();
     // Wake the owner and record its baseline open-fd count (owner reads /dev/fd,

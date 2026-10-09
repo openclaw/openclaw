@@ -11,9 +11,10 @@ import {
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
+import { isSrtSandboxAvailable } from "./sandbox-availability.test-helpers.js";
 
 const isDarwin = process.platform === "darwin";
-const isSupported = isDarwin || process.platform === "linux";
+const isSupported = (isDarwin || process.platform === "linux") && (await isSrtSandboxAvailable());
 const servers: Server[] = [];
 const tempDirs: string[] = [];
 
