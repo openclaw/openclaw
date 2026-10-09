@@ -352,7 +352,9 @@ describe("loadControlUiGitHubPreview", () => {
       for (const isPublic of [true, false]) {
         let repositoryReads = 0;
         const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+          });
           const url = requestUrl(input);
           if (url.includes("avatars.githubusercontent.com")) {
             return pngResponse();
