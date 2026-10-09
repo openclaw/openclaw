@@ -472,6 +472,42 @@ describe("searchKeyword ranked limits", () => {
     },
   );
 
+  it.each(["unicode61", "trigram"] as const)(
+    "keeps multi-token %s candidate scans bounded with the complete-match tier",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 64; index++) {
+          insertKeywordFixture(db, {
+            id: `chunk-${index}`,
+            path: `memory/${index}.md`,
+            text: "common keyword",
+            source: index % 2 === 0 ? "memory" : "sessions",
+          });
+        }
+        let examined = 0;
+        db.function("observe_keyword_candidate", () => {
+          examined++;
+          return 1;
+        });
+        const results = await searchKeywordFixture(db, "common keyword", {
+          ftsTokenizer,
+          limit: 3,
+          sourceFilter: {
+            sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
+            params: ["sessions"],
+          },
+        });
+        expect(results).toHaveLength(3);
+        // Tiering must run as bounded rank-ordered scans (and leave trigram
+        // plans untiered), never sort every matching row before LIMIT.
+        expect(examined).toBeLessThanOrEqual(16);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it("preserves default BM25 scores without changing a configured rank mapping", async () => {
     const { db } = createMemorySearchDb();
     try {

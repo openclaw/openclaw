@@ -328,8 +328,13 @@ export async function searchKeyword(params: {
   }
 
   // Reserve a complete-match tier so partial OR hits can never push a row
-  // matching every query token out of the bounded candidate window.
-  const strictMatchQuery = buildStrictFtsQuery(params.query);
+  // matching every query token out of the bounded candidate window. Only the
+  // OR-joined unicode61 plan is tiered; trigram plans already AND their terms
+  // and a strict MATCH over raw tokens would just add scan cost.
+  const strictMatchQuery =
+    params.ftsTokenizer !== "trigram" && plan.matchQuery
+      ? buildStrictFtsQuery(params.query)
+      : null;
 
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
@@ -348,24 +353,46 @@ export async function searchKeyword(params: {
       ? `${params.ftsTable} MATCH ? AND ${params.ftsTable}.rank MATCH 'bm25()'`
       : "1=1";
     const tiered = Boolean(matchQuery && strictMatchQuery && strictMatchQuery !== matchQuery);
+    if (tiered && matchQuery && strictMatchQuery) {
+      // Two bounded rank-ordered scans keep FTS early termination: each tier
+      // stops after LIMIT rows instead of sorting every match by a computed
+      // coverage column (preserves the intent of ranked body retrieval).
+      const rankedRows = params.db.prepare(
+        `SELECT id, path, source, start_line, end_line, text,\n` +
+          `       ${params.ftsTable}.rank AS rank\n` +
+          `  FROM ${params.ftsTable}\n` +
+          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` ORDER BY rank ASC\n` +
+          ` LIMIT ?`,
+      );
+      const complete = rankedRows.all(
+        strictMatchQuery,
+        ...terms,
+        ...params.sourceFilter.params,
+        params.limit,
+      ) as Array<MemorySearchRow & { rank: number }>;
+      if (complete.length >= params.limit) {
+        return complete.slice(0, params.limit);
+      }
+      const seen = new Set(complete.map((row) => row.id));
+      const partial = rankedRows.all(
+        matchQuery,
+        ...terms,
+        ...params.sourceFilter.params,
+        params.limit,
+      ) as Array<MemorySearchRow & { rank: number }>;
+      return [...complete, ...partial.filter((row) => !seen.has(row.id))].slice(0, params.limit);
+    }
     return params.db
       .prepare(
         `SELECT id, path, source, start_line, end_line, text,\n` +
-          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank` +
-          (tiered
-            ? `,\n       CASE WHEN id IN (SELECT id FROM ${params.ftsTable} WHERE ${params.ftsTable} MATCH ?) THEN 0 ELSE 1 END AS coverage_tier`
-            : "") +
-          `\n  FROM ${params.ftsTable}\n` +
+          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
+          `  FROM ${params.ftsTable}\n` +
           ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
-          (matchQuery
-            ? tiered
-              ? ` ORDER BY coverage_tier ASC, rank ASC\n`
-              : ` ORDER BY rank ASC\n`
-            : "") +
+          (matchQuery ? ` ORDER BY rank ASC\n` : "") +
           ` LIMIT ?`,
       )
       .all(
-        ...(tiered && strictMatchQuery ? [strictMatchQuery] : []),
         ...(matchQuery ? [matchQuery] : []),
         ...terms,
         ...params.sourceFilter.params,
