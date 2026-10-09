@@ -6,6 +6,7 @@ import {
 } from "../../auto-reply/reply/groups.js";
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
@@ -250,7 +251,7 @@ it.each([
               rules: [],
             }),
           },
-        },
+        } satisfies ChannelPlugin,
       },
     ]),
   );
