@@ -141,6 +141,9 @@ export function createPluginGenerationFileCapture({
         hardlinkedSources.add(target);
       }
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      // Register before copying or admission can fail: known aliases must remain
+      // rejected by the acquisition owner even when the first attempt is incomplete.
+      additions.add(target);
       let copiedContent: ReturnType<typeof copyPluginSourceFile>;
       const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
       if (native) {
@@ -183,7 +186,6 @@ export function createPluginGenerationFileCapture({
           );
         },
       });
-      additions.add(target);
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }

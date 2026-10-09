@@ -120,6 +120,27 @@ it("captures and verifies a native artifact without whole-file Buffer reads", ()
   expect(fs.readFileSync(artifact.resolve(source.filename)).equals(bytes)).toBe(true);
 });
 
+it("reads copied bytes only for the copy hash and receipt admission", () => {
+  const source = fixture(Buffer.alloc(64 * 1024 + 1, "R"), "fixture.dat");
+  const readSync = fs.readSync;
+  const bytesByIdentity = new Map<string, number>();
+  vi.spyOn(fs, "readSync").mockImplementation((...args) => {
+    const length = Reflect.apply(readSync, fs, args);
+    const stat = fs.fstatSync(args[0], { bigint: true });
+    const identity = `${stat.dev}:${stat.ino}`;
+    bytesByIdentity.set(identity, (bytesByIdentity.get(identity) ?? 0) + length);
+    return length;
+  });
+
+  const artifact = source.capture();
+  const captured = artifact.resolve(source.filename);
+  const stat = fs.statSync(captured, { bigint: true });
+  const copiedBytes = bytesByIdentity.get(`${stat.dev}:${stat.ino}`);
+  expect(copiedBytes).toBeDefined();
+  expect(copiedBytes).toBeLessThanOrEqual(source.bytes.length * 2);
+  expect(fs.readFileSync(captured)).toEqual(source.bytes);
+});
+
 it.each(["unchanged metadata", "growing source"])("rejects edits with %s", (kind) => {
   const source = fixture(Buffer.from("before"), "fixture.js");
   const before = fs.statSync(source.filename, { bigint: true });
