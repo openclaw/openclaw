@@ -186,6 +186,8 @@ exit "$probe_status"
         `#!/usr/bin/env bash
 [ "$*" != '--user is-active --quiet openclaw-gateway.service' ] || exit "$PROBE_ACTIVE_STATUS"
 printf '%s\\n' "$*" >>"$PROBE_EVENTS"
+# Stopping an inactive unit succeeds; PROBE_ACTIVE_STATUS models the state after stop.
+[ "$*" != '--user stop openclaw-gateway.service' ] || exit 0
 [ "$*" = '--user start openclaw-gateway.service' ] || exit 97
 printf 'synthetic start diagnostic\\n' >&2
 [ "$PROBE_START_STATUS" -eq 0 ] || exit "$PROBE_START_STATUS"
@@ -221,6 +223,7 @@ printf 'original env\\n' >"$OPENCLAW_STATE_DIR/gateway.systemd.env"
 printf 'original dotenv\\n' >"$OPENCLAW_STATE_DIR/.env"
 printf 'baseline timeline\\n' >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG"
 : >"$PROBE_EVENTS"
+openclaw_e2e_probe_tcp() { return 1; }
 openclaw_e2e_wait_gateway_ready() {
   printf 'readiness\\n' >>"$PROBE_EVENTS"
   return "$PROBE_READY_STATUS"
@@ -237,12 +240,15 @@ update_candidate() {
   [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = "file:$RUNTIME_ROOT/future.tgz" ] && [ "$3" = 2100.1.0 ] || return 99
   printf 'update\\n' >>"$PROBE_EVENTS"
 }
+assert_managed_membership_warning() { printf 'membership-warning\\n' >>"$PROBE_EVENTS"; }
 node() {
   if [ "$#" -eq 3 ] && [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] && [ "$2" = assert-restart-serving-turn ]; then
     printf 'serving-turn\\n' >>"$PROBE_EVENTS"
   elif [ "$#" -eq 2 ] && [ "$2" = assert-state ]; then
     [ "\${OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE:-survival}" = post-inference ] || return 96
     printf 'volume-state\\n' >>"$PROBE_EVENTS"
+  elif [ "$#" -ge 2 ] && [ "$2" = volume-doctor-budget ]; then
+    printf '60'
   else
     command node "$@"
   fi
@@ -293,8 +299,9 @@ exit "$probe_status"
       expect(result.status, result.stdout + result.stderr).toBe(expected);
       expect(
         readFileSync(path.join(root, "events"), "utf8").trimEnd().split("\n").filter(Boolean),
-      ).toEqual(
-        activeStatus !== 3
+      ).toEqual([
+        "--user stop openclaw-gateway.service",
+        ...(activeStatus !== 3
           ? []
           : startStatus || mutation !== "none"
             ? ["--user start openclaw-gateway.service"]
@@ -305,11 +312,12 @@ exit "$probe_status"
                   "readiness",
                   "authenticated",
                   "update",
+                  "membership-warning",
                   "serving-turn",
                   "assert-survival",
                   ...(scenario === "sqlite-volume" ? ["volume-doctor", "volume-state"] : []),
-                ],
-      );
+                ]),
+      ]);
       if (activeStatus === 3) {
         expect(
           readFileSync(
@@ -329,11 +337,16 @@ exit "$probe_status"
           .map((line) => JSON.parse(line));
         expect(
           completedPhases.filter((event) => event.status === "passed").map((event) => event.phase),
-        ).toEqual([
-          "prepare-restart-inference",
-          "prepare-restart-fixture",
-          "prepare-restart-manager",
-        ]);
+        ).toEqual(
+          activeStatus !== 3
+            ? []
+            : [
+                "stop-recovery-service",
+                "prepare-restart-inference",
+                "prepare-restart-fixture",
+                "prepare-restart-manager",
+              ],
+        );
         expect(phases).not.toContain("recovery-update-restart");
       }
     },
@@ -362,12 +375,14 @@ update_repair_required=0
 candidate_version=2026.9.3
 baseline_version=2026.9.2
 OPENCLAW_CLAWHUB_URL=fixture
+stop_update_restart_probe_gateway() { :; }
 prepare_restart_inference() { :; }
 prepare_restart_fixture() { restart_fixture_package=/tmp/fixture.tgz; restart_fixture_version=2026.9.3; }
 install_update_restart_systemctl_shim() { :; }
 run_update_restart_probe_gateway() { :; }
 check_gateway_status() { :; }
 update_candidate() { :; }
+assert_managed_membership_warning() { :; }
 node() { if [ "$#" -ge 2 ] && [ "$2" = "$PROBE_FAILURE" ]; then return 47; fi; }
 read_installed_version() { [ "$PROBE_FAILURE" != installed-version ] || return 47; printf '2026.9.3'; }
 assert_prepublish_plugin_install() { touch "$PROBE_SIDE_EFFECT"; }

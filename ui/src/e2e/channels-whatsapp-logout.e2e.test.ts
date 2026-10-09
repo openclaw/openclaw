@@ -538,7 +538,7 @@ suite.define(() => {
         await expect
           .poll(() => detail.locator("h2.settings-section__heading").textContent())
           .toContain(label);
-        await detail.getByRole("button", { name: "Probe" }).waitFor();
+        await detail.getByRole("button", { name: "Check connection" }).waitFor();
         for (const value of expectedFields[channelId] ?? []) {
           await detail.getByText(value, { exact: true }).waitFor();
         }

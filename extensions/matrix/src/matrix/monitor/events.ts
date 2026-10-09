@@ -1,7 +1,6 @@
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-// Matrix plugin module implements events behavior.
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
 import { readMatrixMessages } from "../actions/messages.js";
@@ -43,10 +42,9 @@ function formatMatrixPostHealthySyncDecryptionHint(accountId: string): string {
 function isFreshPostHealthySyncDecryptFailure(params: {
   event: MatrixRawEvent;
   healthySyncSinceMs?: number;
-  graceMs?: number;
   nowMs: number;
 }): boolean {
-  const { event, healthySyncSinceMs, graceMs = 0, nowMs } = params;
+  const { event, healthySyncSinceMs, nowMs } = params;
   if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
     return false;
   }
@@ -54,7 +52,7 @@ function isFreshPostHealthySyncDecryptFailure(params: {
   if (!Number.isFinite(eventTs) || eventTs <= 0) {
     return false;
   }
-  if (eventTs < healthySyncSinceMs + graceMs) {
+  if (eventTs < healthySyncSinceMs) {
     return false;
   }
   if (eventTs > nowMs + 60_000) {
@@ -65,7 +63,6 @@ function isFreshPostHealthySyncDecryptFailure(params: {
 
 function createMatrixPostHealthySyncDecryptFailureTracker(params: {
   getHealthySyncSinceMs?: () => number | undefined;
-  startupGraceMs?: number;
 }) {
   let observations: MatrixPostHealthySyncDecryptFailureObservation[] = [];
   let warningEmitted = false;
@@ -97,7 +94,6 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         !isFreshPostHealthySyncDecryptFailure({
           event,
           healthySyncSinceMs,
-          graceMs: params.startupGraceMs,
           nowMs,
         })
       ) {
@@ -124,15 +120,12 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
       }
 
       warningEmitted = true;
-      const rooms = uniqueStrings(observations.map((entry) => entry.roomId)).slice(
-        0,
-        MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT,
-      );
+      const rooms = uniqueStrings(observations.map((entry) => entry.roomId));
       const senders = uniqueStrings(
         observations
           .map((entry) => entry.sender)
           .filter((sender): sender is string => Boolean(sender)),
-      ).slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT);
+      );
       const eventIds = observations
         .slice(-MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT)
         .map((entry) => entry.eventId);
@@ -141,10 +134,10 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         freshAfterHealthySync: true,
         failureCount,
         warning: {
-          rooms,
-          roomCount: new Set(observations.map((entry) => entry.roomId)).size,
-          senders,
-          senderCount: new Set(observations.map((entry) => entry.sender).filter(Boolean)).size,
+          rooms: rooms.slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT),
+          roomCount: rooms.length,
+          senders: senders.slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT),
+          senderCount: senders.length,
           eventIds,
           latestError,
           windowMs: MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_WINDOW_MS,
@@ -195,7 +188,6 @@ export function registerMatrixMonitorEvents(params: {
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
   logger: RuntimeLogger;
-  startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
@@ -216,7 +208,6 @@ export function registerMatrixMonitorEvents(params: {
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
     logger,
-    startupGraceMs,
     getHealthySyncSinceMs,
     formatNativeDependencyHint,
     onRoomMessage,
@@ -225,7 +216,6 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
   const postHealthySyncDecryptFailureTracker = createMatrixPostHealthySyncDecryptFailureTracker({
     getHealthySyncSinceMs,
-    startupGraceMs,
   });
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
@@ -249,16 +239,17 @@ export function registerMatrixMonitorEvents(params: {
       });
   };
 
+  const dispatchRoomMessage = (label: string, roomId: string, event: MatrixRawEvent) => {
+    void runMonitorTask(`${label} room=${roomId} id=${event.event_id ?? "unknown"}`, async () => {
+      await onRoomMessage(roomId, event);
+    });
+  };
+
   const onRoomMessageEvent = (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    void runMonitorTask(
-      `room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    dispatchRoomMessage("room message handler", roomId, event);
   };
 
   const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
@@ -277,12 +268,7 @@ export function registerMatrixMonitorEvents(params: {
     if (eventType !== EventType.RoomMessage) {
       return;
     }
-    void runMonitorTask(
-      `decrypted room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    dispatchRoomMessage("decrypted room message handler", roomId, event);
   };
 
   const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
@@ -475,12 +461,7 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void runMonitorTask(
-        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-        async () => {
-          await onRoomMessage(roomId, event);
-        },
-      );
+      dispatchRoomMessage("reaction handler", roomId, event);
       return;
     }
 

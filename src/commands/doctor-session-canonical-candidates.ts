@@ -7,7 +7,6 @@ import {
   type CanonicalSessionRepairFact,
 } from "../config/sessions/session-accessor.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "../config/sessions/store-entry.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -15,7 +14,6 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../gateway/session-store-key.js";
 import {
-  projectExistingAgentDatabaseTargets,
   resolveTargetSqlitePath,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
@@ -33,15 +31,17 @@ export type CanonicalSessionCandidate = {
   entry: SessionEntry;
   expectedEntry: SessionEntry;
   ownerEvidenceOnly: boolean;
-  rawEntryJson?: string;
   sessionKey: string;
   sqlitePath: string;
   storePath: string;
-};
+} & (
+  | { rawEntryJson: string; rawSnapshotRevision: number }
+  | { rawEntryJson?: never; rawSnapshotRevision?: never }
+);
 
 export type CanonicalSessionCandidateFact = Omit<
   CanonicalSessionCandidate,
-  "entry" | "expectedEntry" | "rawEntryJson"
+  "entry" | "expectedEntry" | "rawEntryJson" | "rawSnapshotRevision"
 > & {
   inventoryFact: CanonicalSessionRepairFact;
   lineageRepairRequired: boolean;
@@ -54,17 +54,6 @@ type CanonicalSessionRepairGroup = {
   candidates: CanonicalSessionCandidateFact[];
   removedRows: number;
 };
-
-export function listCanonicalSessionStores(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): ExistingAgentDatabaseTarget[] {
-  return projectExistingAgentDatabaseTargets(
-    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
-    params.env,
-    params.cfg,
-  );
-}
 
 function collectCanonicalSessionCandidateFacts(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
@@ -120,18 +109,12 @@ function collectCanonicalSessionCandidateFacts(
         }
         const storedKey = resolveStoredKey(canonicalAgentId, value);
         const ownerAgentId = parseAgentSessionKey(storedKey)?.agentId ?? canonicalAgentId;
-        for (const key of [value, storedKey]) {
-          const sameStore = canonicalKeysByStoredKey.get(
-            `${target.sqlitePath}\0${ownerAgentId}\0${key}`,
-          );
-          if (sameStore?.size === 1) {
-            return [...sameStore][0];
-          }
-        }
-        for (const key of [value, storedKey]) {
-          const crossStore = canonicalKeysByStoredKey.get(`*\0${ownerAgentId}\0${key}`);
-          if (crossStore?.size === 1) {
-            return [...crossStore][0];
+        for (const sqlitePath of [target.sqlitePath, "*"]) {
+          for (const key of [value, storedKey]) {
+            const mapped = canonicalKeysByStoredKey.get(`${sqlitePath}\0${ownerAgentId}\0${key}`);
+            if (mapped?.size === 1) {
+              return [...mapped][0];
+            }
           }
         }
         return storedKey;
@@ -184,10 +167,11 @@ export function resolveCanonicalSessionDestination(params: {
   };
 }
 
-function groupRepairCandidates(
-  candidates: readonly CanonicalSessionCandidateFact[],
+export function collectCanonicalSessionRepairGroups(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
+  stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
+  const candidates = collectCanonicalSessionCandidateFacts(params, stores);
   const byCanonicalKey = new Map<string, CanonicalSessionCandidateFact[]>();
   for (const candidate of candidates) {
     const sentinelOwner =
@@ -226,11 +210,4 @@ function groupRepairCandidates(
     );
     return [{ candidates: group, removedRows: group.length - (canonicalRowSurvives ? 1 : 0) }];
   });
-}
-
-export function collectCanonicalSessionRepairGroups(
-  params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
-  stores: readonly ExistingAgentDatabaseTarget[],
-): CanonicalSessionRepairGroup[] {
-  return groupRepairCandidates(collectCanonicalSessionCandidateFacts(params, stores), params);
 }

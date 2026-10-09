@@ -1,13 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
@@ -46,14 +48,24 @@ const releasedRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
   }),
 ]);
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
+const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-update-result-") };
+
+beforeAll(() => {
+  createUpdateRun({ trigger: "cli" }, { env });
+});
+
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  executeSqliteQuerySync(db, stateDb.deleteFrom("gateway_restart_sentinel"));
+  executeSqliteQuerySync(db, stateDb.deleteFrom("update_runs"));
+  await withEnvAsync(env, run);
 }
 
 describe("control-plane update restart sentinel", () => {

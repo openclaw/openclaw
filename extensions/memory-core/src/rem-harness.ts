@@ -1,10 +1,11 @@
-// Memory Core plugin module implements rem harness behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { DAILY_MEMORY_FILENAME_RE } from "./dreaming-ingestion-state.js";
 import {
   filterRecallEntriesWithinLookback,
   previewRemDreaming,
@@ -16,13 +17,7 @@ import {
   filterLiveShortTermRecallEntries,
   rankShortTermPromotionCandidates,
   readShortTermRecallEntries,
-  type PromotionCandidate,
 } from "./short-term-promotion.js";
-
-const DAILY_MEMORY_FILE_NAME_RE = /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
-
-type MemoryRemHarnessRemConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
-type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;
 
 export type PreviewRemHarnessOptions = {
   workspaceDir: string;
@@ -37,30 +32,7 @@ export type PreviewRemHarnessOptions = {
   nowMs?: number;
 };
 
-export type PreviewRemHarnessResult = {
-  workspaceDir: string;
-  nowMs: number;
-  remConfig: MemoryRemHarnessRemConfig;
-  deepConfig: MemoryRemHarnessDeepConfig;
-  recallEntryCount: number;
-  remSkipped: boolean;
-  rem: RemDreamingPreview;
-  groundedInputPaths: string[];
-  grounded: GroundedRemPreviewResult | null;
-  deep: {
-    candidateLimit?: number;
-    candidateCount: number;
-    truncated: boolean;
-    candidates: PromotionCandidate[];
-  };
-};
-
-function normalizeOptionalPositiveLimit(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
-}
+export type PreviewRemHarnessResult = Awaited<ReturnType<typeof previewRemHarness>>;
 
 function resolveRemPreviewLimit(configLimit: number, cap: number | undefined): number {
   if (configLimit <= 0) {
@@ -72,23 +44,13 @@ function resolveRemPreviewLimit(configLimit: number, cap: number | undefined): n
   return Math.max(0, Math.min(configLimit, Math.floor(cap)));
 }
 
-function createSkippedRemPreview(): RemDreamingPreview {
-  return {
-    sourceEntryCount: 0,
-    reflections: [],
-    candidateTruths: [],
-    candidateKeys: [],
-    bodyLines: [],
-  };
-}
-
 async function listWorkspaceDailyFiles(workspaceDir: string, limit?: number): Promise<string[]> {
   const memoryDir = path.join(workspaceDir, "memory");
   let entries: string[];
   try {
     const dirEntries = await listWorkspaceDirectory(workspaceDir, memoryDir);
     entries = dirEntries
-      .filter((entry) => entry.isFile() && DAILY_MEMORY_FILE_NAME_RE.test(entry.name))
+      .filter((entry) => entry.isFile() && DAILY_MEMORY_FILENAME_RE.test(entry.name))
       .map((entry) => entry.name);
   } catch (err) {
     if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
@@ -109,16 +71,14 @@ function resolveGroundedFileLimit(
   configLimit: number,
   cap: number | undefined,
 ): number | undefined {
-  if (typeof cap !== "number" || !Number.isFinite(cap)) {
+  const normalizedCap = resolveOptionalIntegerOption(cap, { min: 1 });
+  if (normalizedCap === undefined) {
     return configLimit;
   }
-  const normalizedCap = Math.max(1, Math.floor(cap));
   return configLimit > 0 ? Math.min(configLimit, normalizedCap) : normalizedCap;
 }
 
-export async function previewRemHarness(
-  params: PreviewRemHarnessOptions,
-): Promise<PreviewRemHarnessResult> {
+export async function previewRemHarness(params: PreviewRemHarnessOptions) {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const remConfig = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,
@@ -141,9 +101,15 @@ export async function previewRemHarness(
     }),
   });
   const remPreviewLimit = resolveRemPreviewLimit(remConfig.limit, params.remPreviewLimit);
-  const remSkipped = remConfig.limit <= 0 || remPreviewLimit <= 0;
-  const rem = remSkipped
-    ? createSkippedRemPreview()
+  const remSkipped = remPreviewLimit <= 0;
+  const rem: RemDreamingPreview = remSkipped
+    ? {
+        sourceEntryCount: 0,
+        reflections: [],
+        candidateTruths: [],
+        candidateKeys: [],
+        bodyLines: [],
+      }
     : previewRemDreaming({
         entries: recallEntries,
         limit: remPreviewLimit,
@@ -168,7 +134,7 @@ export async function previewRemHarness(
         : null;
   }
 
-  const candidateLimit = normalizeOptionalPositiveLimit(params.candidateLimit);
+  const candidateLimit = resolveOptionalIntegerOption(params.candidateLimit, { min: 1 });
   const rankedCandidates = await rankShortTermPromotionCandidates({
     workspaceDir: params.workspaceDir,
     minScore: 0,

@@ -11,6 +11,7 @@ import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "./workspace-inventory-limits.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+import { initializeScriptGitWorkspace } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -25,29 +26,7 @@ async function manifestWorkspace(name: string) {
 async function gitWorkspace(name: string) {
   const { home, workspace } = await manifestWorkspace(name);
   await fs.writeFile(path.join(workspace, ".gitignore"), "");
-  for (const args of [
-    ["init", "--quiet"],
-    ["add", ".gitignore"],
-    [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=test@openclaw.invalid",
-      "commit",
-      "--quiet",
-      "-m",
-      "base",
-    ],
-  ]) {
-    expect(
-      await runCommandWithTimeout(["git", "-C", workspace, ...args], { timeoutMs: 10_000 }),
-    ).toMatchObject({ code: 0 });
-  }
-  const baseCommit = (
-    await runCommandWithTimeout(["git", "-C", workspace, "rev-parse", "HEAD"], {
-      timeoutMs: 10_000,
-    })
-  ).stdout.trim();
+  const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
   return { home, workspace, baseCommit };
 }
 

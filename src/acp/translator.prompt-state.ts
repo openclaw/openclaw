@@ -18,6 +18,7 @@ export type AcpPendingPrompt = {
   reject: (err: Error) => void;
   sentText?: string;
   sentThought?: string;
+  streamMessage?: unknown;
   toolCalls?: Map<string, AcpPendingToolCall>;
 };
 
@@ -25,7 +26,6 @@ export type AcpPendingApprovalRelay = {
   approvalId: string;
   runId: string;
   sessionId: string;
-  sessionKey: string;
   state: "active" | "completed";
   /** User decision captured while the gateway was unreachable; replayed on reconnect. */
   pendingDecision?: GatewayExecApprovalDecision;
@@ -34,7 +34,6 @@ export type AcpPendingApprovalRelay = {
 type AcpPendingToolCall = {
   kind: ToolKind;
   locations?: ToolCallLocation[];
-  rawInput?: Record<string, unknown>;
   title: string;
 };
 

@@ -1,30 +1,30 @@
-/** Command handlers for changing ACP runtime mode and config options on live sessions. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type {
   AcpSessionRuntimeOptions,
   EnsureManagerRuntimeHandle,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { createUnsupportedControlError, requireReadySessionMeta } from "./manager.utils.js";
+import {
+  assertCurrentAcpActor,
+  createUnsupportedControlError,
+  requireReadySessionMeta,
+} from "./manager.utils.js";
 import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
-  normalizeRuntimeOptions,
   reconcileAcceptedRuntimeOptions,
   resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
-/** Manager services required by runtime-option command handlers. */
 export type RuntimeOptionCommandServices = {
   runtimeHandles: ManagerRuntimeHandleCache;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor: () => boolean;
@@ -37,20 +37,26 @@ type RuntimeOptionCommandContext = RuntimeOptionCommandServices & {
   agentId: string;
 };
 
-/** Applies a backend runtime mode control and persists the selected mode. */
-export async function runSetManagerSessionRuntimeMode(
-  params: RuntimeOptionCommandContext & { runtimeMode: string },
-): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
+async function resolveRuntimeOptionSessionMeta(params: RuntimeOptionCommandContext) {
+  const assertCurrent = () => {
+    assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
+    params.assertActive?.();
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCurrent,
   });
-  const resolvedMeta = requireReadySessionMeta(resolution);
+  assertCurrent();
+  return requireReadySessionMeta(resolution);
+}
+
+export async function runSetManagerSessionRuntimeMode(
+  params: RuntimeOptionCommandContext & { runtimeMode: string },
+): Promise<AcpSessionRuntimeOptions> {
+  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -61,9 +67,7 @@ export async function runSetManagerSessionRuntimeMode(
   });
   params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
   if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
     throw createUnsupportedControlError({
       backend: handle.backend || meta.backend,
@@ -73,9 +77,7 @@ export async function runSetManagerSessionRuntimeMode(
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
-      if (!params.isCurrentActor()) {
-        throw createSupersededActorError(params.sessionKey);
-      }
+      assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
       params.assertActive?.();
       await runtime.setMode!({
         handle,
@@ -85,9 +87,7 @@ export async function runSetManagerSessionRuntimeMode(
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "Could not update ACP runtime mode.",
   });
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
 
   const nextOptions = mergeRuntimeOptions({
     current: resolveRuntimeOptionsFromMeta(meta),
@@ -100,20 +100,10 @@ export async function runSetManagerSessionRuntimeMode(
   return nextOptions;
 }
 
-/** Applies a backend config-option control and persists the inferred runtime option patch. */
 export async function runSetManagerSessionConfigOption(
   params: RuntimeOptionCommandContext & { key: string; value: string },
 ): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  const resolvedMeta = requireReadySessionMeta(resolution);
+  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -129,9 +119,7 @@ export async function runSetManagerSessionConfigOption(
     handle,
     includeStatusConfigOptionKeys: true,
   });
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
   if (!capabilities.controls.includes("session/set_config_option") || !runtime.setConfigOption) {
     throw createUnsupportedControlError({
       backend: handle.backend || meta.backend,
@@ -163,9 +151,7 @@ export async function runSetManagerSessionConfigOption(
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "Could not update ACP runtime config option.",
   });
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
 
   const nextOptions = reconcileAcceptedRuntimeOptions(
     mergeRuntimeOptions({ current: resolveRuntimeOptionsFromMeta(meta), patch: inferredPatch }),
@@ -178,20 +164,10 @@ export async function runSetManagerSessionConfigOption(
   return nextOptions;
 }
 
-/** Persists runtime option changes that do not need an immediate backend control call. */
 export async function runUpdateManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext & { patch: Partial<AcpSessionRuntimeOptions> },
 ): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  const resolvedMeta = requireReadySessionMeta(resolution);
+  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const nextOptions = mergeRuntimeOptions({
     current: resolveRuntimeOptionsFromMeta(resolvedMeta),
     patch: params.patch,
@@ -204,34 +180,25 @@ export async function runUpdateManagerSessionRuntimeOptions(
   return nextOptions;
 }
 
-/** Closes the current runtime handle and clears persisted runtime options. */
 export async function runResetManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext,
 ): Promise<AcpSessionRuntimeOptions> {
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  const resolution = params.resolveSession({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  requireReadySessionMeta(resolution);
+  await resolveRuntimeOptionSessionMeta(params);
   const cached = params.runtimeHandles.get(params);
   if (cached) {
     await withAcpRuntimeErrorBoundary({
-      run: async () =>
+      run: async () => {
+        assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
+        params.assertActive?.();
         await cached.runtime.close({
           handle: cached.handle,
           reason: "reset-runtime-options",
-        }),
+        });
+      },
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "Could not reset ACP runtime options.",
     });
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
+    assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
     params.runtimeHandles.clearIfHandleMatches({ ...params, handle: cached.handle });
   }
   await persistManagerRuntimeOptions({
@@ -252,11 +219,9 @@ async function persistManagerRuntimeOptions(
     options: AcpSessionRuntimeOptions;
   },
 ): Promise<void> {
-  const normalized = normalizeRuntimeOptions(params.options);
-  const hasOptions = Object.keys(normalized).length > 0;
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  const options = params.options;
+  const hasOptions = Object.keys(options).length > 0;
+  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
   await params.writeSessionMeta({
     assertCommitAllowed: params.assertCommitAllowed,
     cfg: params.cfg,
@@ -273,8 +238,8 @@ async function persistManagerRuntimeOptions(
         runtimeSessionName: current.runtimeSessionName,
         ...(current.identity ? { identity: current.identity } : {}),
         mode: current.mode,
-        runtimeOptions: hasOptions ? normalized : undefined,
-        cwd: normalized.cwd,
+        runtimeOptions: hasOptions ? options : undefined,
+        cwd: options.cwd,
         state: current.state,
         lastActivityAt: Date.now(),
         ...(current.lastError ? { lastError: current.lastError } : {}),
@@ -282,9 +247,7 @@ async function persistManagerRuntimeOptions(
     },
     failOnError: true,
   });
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
 
   const cached = params.runtimeHandles.get(params);
   if (!cached) {

@@ -1,31 +1,24 @@
-// Install download helpers fetch remote skill artifacts into temporary storage.
 import fs from "node:fs";
 import path from "node:path";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { isWindowsDrivePath } from "../../infra/archive-path.js";
 import { sha256File } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { FsSafeError, root as fsRoot, type Root } from "../../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { isWithinDir } from "../../infra/path-safety.js";
 import { withTempDownloadPath } from "../../infra/temp-download.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import type { SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
-const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 // Skill downloads share ClawHub and marketplace's 256 MiB artifact ceiling;
 // changing this limit is a supported-artifact compatibility decision.
 const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
-
-async function loadExtractModule() {
-  return await extractModuleLoader.load();
-}
 
 function resolveDownloadTargetDir(skillKey: string, spec: SkillInstallSpec): string {
   const root = resolveSkillToolsRootDir(skillKey);
@@ -76,7 +69,7 @@ async function downloadFile(params: {
   tempPath: string;
   sha256?: string;
   timeoutMs: number;
-}): Promise<{ bytes: number }> {
+}): Promise<number> {
   const temporaryRoot = await fsRoot(path.dirname(params.tempPath));
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -124,7 +117,7 @@ async function downloadFile(params: {
       }
     }
     await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
-    return { bytes: downloadedBytes };
+    return downloadedBytes;
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "too-large") {
       throw new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`, {
@@ -254,7 +247,7 @@ export async function installDownloadSpec(params: {
   return await withTempDownloadPath({ prefix: "skill-download" }, async (tempArchivePath) => {
     let downloaded;
     try {
-      const result = await downloadFile({
+      downloaded = await downloadFile({
         url,
         relativePath: archiveRelativePath,
         pinnedRoot,
@@ -262,7 +255,6 @@ export async function installDownloadSpec(params: {
         sha256: spec.sha256,
         timeoutMs,
       });
-      downloaded = result.bytes;
     } catch (err) {
       const message = formatErrorMessage(err);
       return { ok: false, message, stdout: "", stderr: message, code: null };
@@ -293,7 +285,7 @@ export async function installDownloadSpec(params: {
     const stagingDir = path.join(path.dirname(tempArchivePath), "extracted");
     try {
       await fs.promises.mkdir(stagingDir, { mode: 0o700 });
-      const { extractSkillDownloadArchive } = await loadExtractModule();
+      const { extractSkillDownloadArchive } = await import("./install-extract.js");
       const extractResult = await extractSkillDownloadArchive({
         archivePath: tempArchivePath,
         archiveType,

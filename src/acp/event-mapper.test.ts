@@ -20,6 +20,12 @@ describe("extractToolCallLocations", () => {
 });
 
 describe("formatToolTitle", () => {
+  it("formats tool arguments with an unset optional value", () => {
+    expect(formatToolTitle("exec", { command: "echo ok", cwd: undefined })).toBe(
+      "exec: command: echo ok, cwd: undefined",
+    );
+  });
+
   it("does not split surrogate pairs when truncating argument values", () => {
     const title = formatToolTitle("exec", {
       command: `${"x".repeat(99)}🚀tail`,

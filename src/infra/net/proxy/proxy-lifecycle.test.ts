@@ -33,8 +33,9 @@ const {
 });
 const forceResetGlobalDispatcherMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@openclaw/proxyline", () => ({
-  installGlobalProxy: installGlobalProxyMock,
+vi.mock("../proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../proxyline-runtime.js")>()),
+  loadProxyline: () => ({ installGlobalProxy: installGlobalProxyMock }),
 }));
 
 vi.mock("../undici-global-dispatcher.js", () => ({
@@ -47,16 +48,16 @@ vi.mock("../../../logger.js", () => ({
 }));
 
 import { logInfo, logWarn } from "../../../logger.js";
-import { getActiveManagedProxyTlsOptions } from "./active-proxy-state.js";
+import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  resetProxyLifecycleForTests,
   registerManagedProxyBrowserCdpBypass,
   registerManagedProxyGatewayLoopbackBypass,
   startProxy as startProxyRuntime,
   stopProxy,
   type ProxyHandle,
 } from "./proxy-lifecycle.js";
+import { stopMockedProxylineHandles } from "./proxyline.test-support.js";
 
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
@@ -105,7 +106,6 @@ describe("startProxy", () => {
     }
     mockLogInfo.mockReset();
     mockLogWarn.mockReset();
-    resetProxyLifecycleForTests();
     installGlobalProxyMock.mockClear();
     proxylineRegisterBypassMock.mockClear();
     proxylineStopMock.mockClear();
@@ -117,7 +117,7 @@ describe("startProxy", () => {
     for (const handle of activeProxyHandles.splice(0).toReversed()) {
       await stopProxy(handle);
     }
-    resetProxyLifecycleForTests();
+    stopMockedProxylineHandles(installGlobalProxyMock.mock.results);
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -128,6 +128,7 @@ describe("startProxy", () => {
         process.env[key] = savedEnv[key];
       }
     }
+    expect(getActiveManagedProxyUrl()).toBeUndefined();
   });
 
   function writeTempCa(contents = "proxy-ca"): string {
@@ -156,8 +157,6 @@ describe("startProxy", () => {
   });
 
   it("exposes the active managed proxy URL", async () => {
-    const { getActiveManagedProxyUrl } = await import("./active-proxy-state.js");
-
     expect(getActiveManagedProxyUrl()).toBeUndefined();
 
     const handle = await startProxy({

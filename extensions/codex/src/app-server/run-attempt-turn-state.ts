@@ -59,6 +59,7 @@ class CodexAttemptState {
   };
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
+  currentTurnHadToolAuthoredFinalReply = false;
 }
 
 export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
@@ -232,7 +233,6 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     steeringQueueRef,
     completeTurn,
     interruptTurn,
-    renewNativeHookRelayForTurnProgress,
     noteProgress,
     deadlines,
   };

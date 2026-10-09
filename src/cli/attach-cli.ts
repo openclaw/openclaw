@@ -20,17 +20,14 @@ type AttachGrant = {
   env: Record<string, string>;
 };
 
-export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]): {
-  path: string;
-  cleanup: () => void;
-} {
+export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]) {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-attach-"));
   const path = join(dir, ".mcp.json");
   writeFileSync(path, JSON.stringify(mcpConfig, null, 2), { encoding: "utf8", mode: 0o600 });
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export async function registerAttachCli(program: Command, _argv: string[] = process.argv) {
+export async function registerAttachCli(program: Command) {
   program
     .command("attach")
     .description("Attach Claude Code to a gateway session with scoped MCP tools")
@@ -84,25 +81,17 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         }
 
         const cfg = getRuntimeConfig();
-        const resolved = target
-          ? await resolveSessionTarget({
-              raw: target,
-              gateway: {
-                config: cfg,
-                url: opts.url,
-                token: opts.token,
-                password: opts.password,
-                tlsFingerprint: opts.tlsFingerprint,
-              },
-            })
-          : undefined;
-        const gateway: SessionTargetGateway = resolved?.gateway ?? {
+        const requestedGateway: SessionTargetGateway = {
           config: cfg,
           url: opts.url,
           token: opts.token,
           password: opts.password,
           tlsFingerprint: opts.tlsFingerprint,
         };
+        const resolved = target
+          ? await resolveSessionTarget({ raw: target, gateway: requestedGateway })
+          : undefined;
+        const gateway = resolved?.gateway ?? requestedGateway;
         const granted = (await callSessionTargetGateway({
           gateway,
           method: "attach.grant",

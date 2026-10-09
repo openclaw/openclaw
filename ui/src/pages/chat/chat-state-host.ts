@@ -3,17 +3,13 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type {
   AgentsListResult,
   ModelAuthStatusResult,
-  ModelCatalogEntry,
   ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
-  ChatStreamSegment,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
@@ -21,50 +17,39 @@ import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
-import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
-import type { SidebarSelection } from "./components/chat-sidebar.ts";
-import type { ChatExportResult } from "./export.ts";
+import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import type { RenderLifecycle } from "./render-lifecycle.ts";
-import type { ChatScrollToEndOptions } from "./scroll.ts";
+import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
   CompactionStatus,
   FallbackStatus,
-  ToolStreamEntry,
   WaitingApprovalStatus,
 } from "./tool-stream-contract.ts";
 
 export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 
 export type ChatPageHost = ChatHost &
-  ChatState &
   ChatRealtimeState &
   PullRequestRefreshHost &
-  SessionWorkspaceHost &
-  BackgroundTasksHost & {
+  SessionWorkspaceHost & {
     reviewQueuedMessageEdit?: () => void;
+    captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
-    chatSubmissions: ApplicationContext["chatSubmissions"];
-    password: string;
-    onboarding: boolean;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
     assistantAvatarReason: string | null;
-    assistantAvatarSource: string | null;
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     automaticallyFetchFavicons: boolean;
-    chatToolMessages: Record<string, unknown>[];
     guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
@@ -73,12 +58,10 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
-    chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelPickerOpenSessionKey?: string | null;
-    chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogInitialized?: boolean;
     chatModelCatalogError: string | null;
     chatModelCatalogRefreshFailed?: boolean;
@@ -101,10 +84,6 @@ export type ChatPageHost = ChatHost &
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Set<string>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
-    chatStreamSegments: ChatStreamSegment[];
-    toolStreamById: Map<string, ToolStreamEntry>;
-    toolStreamOrder: string[];
-    toolStreamSyncTimer: number | null;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     observerDigest: SessionObserverDigest | null;
@@ -112,23 +91,10 @@ export type ChatPageHost = ChatHost &
     waitingApprovalStatuses: Map<string, WaitingApprovalStatus>;
     waitingApprovalResolvedIds: Set<string>;
     chatRunStatus: ChatProps["runStatus"];
-    chatNewMessagesBelow: boolean;
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
-    lastErrorCode: string | null;
     chatStreamRenderFrame: number | null;
-    chatLastScrollTop: number;
     chatLastScrollHeight: number;
-    chatHasAutoScrolled: boolean;
-    chatUserNearBottom: boolean;
-    chatFollowLocked: boolean;
-    chatReadingHistory: boolean;
-    chatIsProgrammaticScroll?: () => boolean;
-    chatIsManualScroll?: () => boolean;
-    chatIsMaintenanceScroll?: () => boolean;
-    chatScrollElement?: () => HTMLElement | null;
-    chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
-    chatCancelScroll?: () => void;
     sidebarLayout: SidebarLayout;
     sidebarContent: SidebarSelection | null;
     sidebarFocusPanelId: string;
@@ -137,22 +103,19 @@ export type ChatPageHost = ChatHost &
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;
-    renderLifecycle: RenderLifecycle;
     resetToolStream: () => void;
-    resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
     loadAssistantIdentity: () => Promise<void>;
-    applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;
     handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (
       messageOverride?: string,
-      options?: unknown,
+      options?: ChatSendSubmitOptions,
       submissionAction?: Event,
     ) => Promise<boolean | void>;
-    handleAbortChat: (options?: unknown) => Promise<void>;
+    handleAbortChat: (options?: Parameters<typeof handleAbortChat>[1]) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
@@ -164,16 +127,15 @@ export type ChatPageHost = ChatHost &
     handleCloseSidebar: (slot: "detail" | "workspace") => void;
     updateSidebarLayout: (
       layout: SidebarLayout,
-      options?: { persist?: boolean; dashboardPresentation?: "personal"; geometryOnly?: boolean },
+      options?: {
+        persist?: boolean;
+        dashboardPresentation?: "personal";
+        geometryOnly?: boolean;
+        automaticResource?: "desktop" | "browser";
+      },
     ) => void;
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;
-    announceSessionSwitch?: (sessionKey: string, label: string) => void;
-    createChatSession?: () => Promise<boolean>;
-    confirmConversationReset?: () => Promise<boolean>;
-    exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
-    refreshCurrentSessionTools?: () => Promise<void>;
-    refreshCurrentChat?: () => Promise<void>;
     retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

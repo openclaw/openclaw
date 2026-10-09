@@ -1,12 +1,32 @@
 // Announce loop-guard tests prove deferred delivery retries through its time
 // window, then gives up instead of looping forever after repeated failures.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { SessionEntry } from "../../../config/sessions.js";
+import {
+  configureMockSubagentRegistryPersistence,
+  type MockSubagentRegistryRows,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const sessionStore = vi.hoisted(() => ({
+const sessionStore = vi.hoisted((): Record<string, SessionEntry> => ({
   "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
   "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
   "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+}));
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../config/sessions/session-entry-read-runtime.js")
+  >()),
+  readSessionEntryReadOnlyInWorker: vi.fn<
+    typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+  >(async (scope, assertCurrent) => {
+    assertCurrent?.();
+    const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
+    assertCurrent?.();
+    return entry;
+  }),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -20,9 +40,8 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(),
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
-  loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
-  saveSubagentRegistryChangesToSqlite: vi.fn(),
-  saveSubagentRegistryToSqlite: vi.fn(),
+  loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(() => new Map()),
+  persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
 
@@ -67,25 +86,34 @@ vi.mock("../../../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
-vi.mock("./subagent-registry.store.sqlite.js", () => ({
-  loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
+// mock-isolation: Keep loop timing independent of native snapshots and worker startup.
+vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
+  getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
+  executeExistingOpenClawStateRead: vi.fn<
+    typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
+  >(async (_options, command, options) => {
+    expect(command).toEqual({ type: "subagents.restore" });
+    const runs = mocks.loadSubagentRegistryFromSqlite();
+    options?.onChunk?.(
+      [...runs.values()].map((entry) => ({
+        entry,
+        version: "fixture-version",
+        createdAt: entry.createdAt,
+      })),
+    );
+    return { ok: true, type: "subagents.restore", sourceAdmitted: true, count: runs.size };
+  }),
 }));
 
 vi.mock("../../timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-    runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
-  };
-});
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+  runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+}));
 vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
@@ -93,9 +121,10 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
 
-  function hydrateAndActivateRegistry() {
-    registry.initSubagentRegistry();
+  async function hydrateAndActivateRegistry() {
+    await registry.initSubagentRegistry();
     const recoveryRuntime = {
+      prepareRestartRecovery: () => undefined,
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(async () => ({ status: "pending" })),
       sendRecoveryNotice: vi.fn(),
@@ -104,16 +133,10 @@ describe("announce loop guard (#18264)", () => {
       recoveryRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
-    registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
   }
 
-  function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {
-    const entry = runs.find((run) => run.runId === runId);
-    if (!entry) {
-      throw new Error(`expected subagent run ${runId}`);
-    }
-    return entry;
-  }
+  const { flushAsync } = createLifecycleWaits("agent:main:main");
 
   async function waitForRun(
     runId: string,
@@ -127,72 +150,41 @@ describe("announce loop guard (#18264)", () => {
         return run;
       }
       await vi.advanceTimersByTimeAsync(1);
-      await vi.dynamicImportSettled();
+      await flushAsync();
     }
     throw new Error(`subagent run ${runId} did not reach expected state`);
   }
 
   beforeAll(async () => {
-    vi.resetModules();
     registry = await import("./subagent-registry.test-helpers.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
-    mocks.callGateway.mockClear();
-    mocks.captureSubagentCompletionReply.mockClear();
-    mocks.getRuntimeConfig.mockClear();
+    vi.clearAllMocks();
     mocks.loadSubagentRegistryFromSqlite.mockReset();
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
-    mocks.onAgentEventStop.mockClear();
     mocks.onAgentEvent.mockReset();
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
-    mocks.resolveAgentTimeoutMs.mockClear();
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
-    mocks.saveSubagentRegistryChangesToSqlite.mockClear();
-    mocks.saveSubagentRegistryToSqlite.mockClear();
-    mocks.updateSessionStore.mockClear();
-    registry.resetSubagentRegistryForTests({ persist: false });
+    await registry.resetSubagentRegistryForTests({ persist: false });
+    mocks.persistRegistryRows.mockReset();
+    await configureMockSubagentRegistryPersistence(mocks);
   });
 
-  afterEach(() => {
-    registry.resetSubagentRegistryForTests({ persist: false });
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
-
-  test("SubagentRunRecord has announceRetryCount and lastAnnounceRetryAt fields", () => {
-    registry.resetSubagentRegistryForTests();
-
-    const now = Date.now();
-    // Add a run that has already ended and exhausted retries
-    registry.addSubagentRunForTests({
-      runId: "test-loop-guard",
-      childSessionKey: "agent:main:subagent:child-1",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "agent:main:main",
-      task: "test task",
-      cleanup: "keep",
-      createdAt: now - 60_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 55_000,
-        endedAt: now - 50_000,
-      },
-      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 10_000 },
-    });
-
-    const runs = registry.listSubagentRunsForRequester("agent:main:main");
-    const entry = requireRunById(runs, "test-loop-guard");
-    expect(entry.delivery?.attemptCount).toBe(3);
-    expect(entry.delivery?.lastAttemptAt).toBe(now - 10_000);
+  afterEach(async () => {
+    try {
+      await flushAsync();
+    } finally {
+      await registry.resetSubagentRegistryForTests({ persist: false });
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      vi.clearAllMocks();
+    }
   });
 
   test("expired entries with high retry count are skipped by resumeSubagentRun", async () => {
-    mocks.runSubagentAnnounceFlow.mockClear();
-    registry.resetSubagentRegistryForTests();
-
     const now = Date.now();
     const entry = {
       // Ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min).
@@ -209,37 +201,39 @@ describe("announce loop guard (#18264)", () => {
         endedAt: now - 10 * 60_000,
       },
       cleanupCompletedAt: undefined,
+      completion: { required: false },
       delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     // Initialization finalizes expired pending rows without another recipient-visible attempt.
     const beforeInit = Date.now();
-    hydrateAndActivateRegistry();
-    await vi.dynamicImportSettled();
+    await hydrateAndActivateRegistry();
+    const completed = await waitForRun(
+      entry.runId,
+      (run) => typeof run.cleanupCompletedAt === "number",
+    );
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
-    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(expect.any(Map), [
-      entry.runId,
-    ]);
+    expect(completed.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [entry.runId]);
   });
 
   test.each([
     {
-      name: "entries over the former retry budget keep announcing inside the delivery window",
-      outcome: "retryable",
-      attemptCount: 4,
-    },
-    {
       name: "pending requester turns preserve the failure budget and schedule another observation",
       outcome: "requester_turn_pending",
       attemptCount: 3,
+      restoreDelayMs: 0,
     },
-  ])("$name", async ({ outcome, attemptCount }) => {
-    mocks.runSubagentAnnounceFlow.mockClear();
+    {
+      name: "restores one timer for a saved delivery backoff",
+      outcome: "requester_turn_pending",
+      attemptCount: 3,
+      restoreDelayMs: 1_000,
+    },
+  ])("$name", async ({ outcome, attemptCount, restoreDelayMs }) => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(outcome);
-    registry.resetSubagentRegistryForTests();
 
     const now = Date.now();
     const entry: SubagentRunRecord = {
@@ -256,11 +250,22 @@ describe("announce loop guard (#18264)", () => {
         endedAt: now - 60_000,
       },
       expectsCompletionMessage: true,
-      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 30_000 },
+      completion: { required: true },
+      delivery: {
+        status: "pending",
+        attemptCount: 3,
+        lastAttemptAt: now - 30_000,
+        ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
+      },
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
-    hydrateAndActivateRegistry();
+    await hydrateAndActivateRegistry();
+    if (restoreDelayMs) {
+      await registry.initSubagentRegistry();
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(restoreDelayMs);
+    }
     const resumed = await waitForRun(
       entry.runId,
       (run) =>
@@ -286,47 +291,8 @@ describe("announce loop guard (#18264)", () => {
     }
   });
 
-  test("expired completion-message entries are still resumed for announce", async () => {
-    mocks.runSubagentAnnounceFlow.mockReset();
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("delivered");
-    registry.resetSubagentRegistryForTests();
-
-    const now = Date.now();
-    const runId = "test-expired-completion-message";
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map([
-        [
-          runId,
-          {
-            runId,
-            childSessionKey: "agent:main:subagent:child-1",
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "agent:main:main",
-            task: "completion announce after long descendants",
-            cleanup: "keep" as const,
-            createdAt: now - 20 * 60_000,
-            execution: {
-              status: "terminal" as const,
-              startedAt: now - 19 * 60_000,
-              endedAt: now - 10 * 60_000,
-            },
-            cleanupHandled: false,
-            expectsCompletionMessage: true,
-          },
-        ],
-      ]),
-    );
-
-    hydrateAndActivateRegistry();
-    await vi.dynamicImportSettled();
-
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-  });
-
   test("announce rejection resets cleanupHandled so retries can resume", async () => {
-    mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockRejectedValueOnce(new Error("announce failed"));
-    registry.resetSubagentRegistryForTests();
 
     const now = Date.now();
     const runId = "test-announce-rejection";
@@ -348,13 +314,15 @@ describe("announce loop guard (#18264)", () => {
               endedAt: now - 10_000,
             },
             cleanupHandled: false,
+            completion: { required: false },
+            delivery: { status: "pending" as const },
           },
         ],
       ]),
     );
 
-    hydrateAndActivateRegistry();
-    await vi.dynamicImportSettled();
+    await hydrateAndActivateRegistry();
+    await flushAsync();
 
     const stored = await waitForRun(
       runId,

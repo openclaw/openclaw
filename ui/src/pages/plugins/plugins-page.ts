@@ -10,9 +10,11 @@ import {
 } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -33,11 +35,11 @@ import {
 } from "./detail-tabs.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
-import type { PluginRowMessage } from "./plugin-row-message.ts";
+import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
+import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
 import { pluginMutationWarnings, PluginsConsentController } from "./plugins-consent-controller.ts";
-import { loadInstalledPluginDetail } from "./plugins-detail-loader.ts";
+import { loadInstalledPluginDetail, loadPluginCatalogDetail } from "./plugins-detail-loader.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 import { PluginsPageIcons } from "./plugins-page-icons.ts";
 import {
@@ -87,6 +89,7 @@ class PluginsPage extends OpenClawLightDomElement {
     onCatalogUrlsChange: (urls) => {
       this.catalogIconUrls = urls;
     },
+    onLoadingChange: () => this.requestUpdate(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -103,6 +106,12 @@ class PluginsPage extends OpenClawLightDomElement {
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
   private readonly skillPreview = new PluginPreviewController(this, this.gateway);
+  private readonly mcpLogin = new PluginMcpLoginController(this, this.gateway, {
+    getDetail: () => this.detail,
+    getName: (pluginId) => this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
+    canSignIn: () => canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
+    refresh: (pluginId) => this.showDetails(pluginId),
+  });
   private readonly discovery = new PluginDiscoveryController(this, {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
@@ -138,8 +147,7 @@ class PluginsPage extends OpenClawLightDomElement {
   });
   private readonly catalogTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
+    task: ([client]: readonly [GatewayPageController["client"]], { signal }) =>
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
@@ -155,10 +163,6 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
     (runtimeConfig) => {
-      if (this.surface === "settings") {
-        void runtimeConfig.ensureLoaded();
-        void runtimeConfig.ensureSchemaLoaded();
-      }
       this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
       return runtimeConfig.subscribe(() => {
         const nextStatus = runtimeConfig.state.configAutoSaveStatus;
@@ -178,6 +182,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.skillPreview.close();
       if (changed.get("routeData")?.location.pathname !== this.routeData?.location.pathname) {
         this.installRequestGeneration += 1;
+        this.mcpLogin.reset();
       }
       this.applyRouteData();
     }
@@ -199,6 +204,7 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.mcpLogin.reset();
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.skillPreview.close();
     this.discovery.disconnect();
@@ -212,8 +218,17 @@ class PluginsPage extends OpenClawLightDomElement {
     // owner close the menu and restore focus before this page handles Escape.
     if (
       event.key !== "Escape" ||
+      isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
       (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
+    ) {
+      return;
+    }
+    if (
+      event.target instanceof Node &&
+      event.target !== document &&
+      event.target !== document.body &&
+      !this.contains(event.target)
     ) {
       return;
     }
@@ -288,9 +303,8 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     if (shouldRefreshAfterChange) {
       void this.refreshCatalog();
-    } else {
-      this.ensureInitialData();
     }
+    this.ensureInitialData();
   }
 
   private applyRouteData() {
@@ -336,7 +350,8 @@ class PluginsPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private invalidateRequests(invalidateCatalog = true) {
+  private invalidateRequests(invalidateCatalog: boolean) {
+    this.mcpLogin.reset();
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
       this.discovery.invalidate();
@@ -349,11 +364,25 @@ class PluginsPage extends OpenClawLightDomElement {
     this.consentController.reset();
   }
 
-  private replaceResult(result: PluginListResult | null, preserveIcons = false) {
-    if (preserveIcons) {
-      this.icons.reconcileInstalled(result);
+  private replaceResult(result: PluginListResult | null) {
+    // Uninstall publishes generations before its final result. Keep the selected
+    // view intact until settlement refreshes inventory and retires its detail.
+    if (this.uninstallingSelection) {
+      return;
+    }
+    if (
+      this.detail &&
+      result &&
+      !result.plugins.some((plugin) => plugin.id === this.detail?.pluginId && plugin.installed)
+    ) {
+      // A late removal failure must survive the disappearance of its row.
+      this.pageNotice = this.messages[pluginRowKey(this.detail.pluginId)] ?? this.pageNotice;
+    }
+    // Route changes reuse artwork; a new Gateway plugin generation retires it.
+    if (this.result?.generation === result?.generation) {
+      this.icons.installed.reconcile(result);
     } else {
-      this.icons.resetInstalled();
+      this.icons.installed.reset();
     }
     this.messages = this.consentController.reconcileInstallMessages(result);
     this.result = result;
@@ -378,14 +407,32 @@ class PluginsPage extends OpenClawLightDomElement {
       : pluginCatalogIdFromPath(pathname, this.context.basePath);
   }
 
+  private get uninstallingSelection(): boolean {
+    return Boolean(
+      this.detail &&
+      this.busy[pluginRowKey(this.detail.pluginId)] === "uninstall" &&
+      this.activeRoutePluginId ===
+        (this.surface === "settings" ? this.detail.pluginId : this.catalogDetail?.id),
+    );
+  }
+
   private ensureInitialData() {
+    // Category navigation needs neither installed inventory nor catalog cards.
+    // Start it as soon as this discovery page has a connection, even while the
+    // route's plugins.list request is pending.
+    if (this.surface === "discovery" && !this.activeRoutePluginId) {
+      void this.discovery.ensureCategories();
+    }
     // The route owns initial loading; a warm page module can render before its data arrives.
     if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;
     }
-    // Direct links and refreshes initialize Settings through the same route
-    // lifecycle as navigation; the click handler only selects the location.
-    if (this.activeRoutePluginId && this.installedDetailTab === "configuration") {
+    // A settings page can mount before connection; admit its reads through
+    // both route changes and connected snapshots, including Advanced.
+    if (
+      this.surface === "settings" ||
+      (this.activeRoutePluginId && this.installedDetailTab === "configuration")
+    ) {
       void this.context.runtimeConfig.ensureLoaded();
       void this.context.runtimeConfig.ensureSchemaLoaded();
     }
@@ -407,11 +454,7 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     const catalogId = this.activeRoutePluginId;
-    if (catalogId) {
-      await this.showCatalogDetail(catalogId);
-    } else {
-      await this.discovery.refresh();
-    }
+    return catalogId ? this.showCatalogDetail(catalogId) : this.discovery.refresh();
   }
 
   private selectHubTab(tab: PluginsHubTab) {
@@ -441,6 +484,7 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private setBusy(key: string, value: PluginMutationAction | null) {
+    const uninstallChanged = value === "uninstall" || this.busy[key] === "uninstall";
     const next = { ...this.busy };
     if (value) {
       next[key] = value;
@@ -448,6 +492,16 @@ class PluginsPage extends OpenClawLightDomElement {
       delete next[key];
     }
     this.busy = next;
+    if (uninstallChanged && this.detail && key === pluginRowKey(this.detail.pluginId)) {
+      // Retire reads admitted before removal. A failed uninstall refreshes the
+      // surviving plugin; success clears its detail before refreshing inventory.
+      if (value === "uninstall") {
+        this.catalogDetail = this.catalogDetail ? { ...this.catalogDetail } : null;
+        void this.showDetails(this.detail.pluginId);
+      } else {
+        void this.refreshCatalog();
+      }
+    }
   }
 
   private setMessage(key: string, message: PluginRowMessage | null) {
@@ -461,100 +515,43 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private applyMutationResult(result: PluginMutationResult) {
-    this.icons.invalidateInstalled(result.plugin.id);
-    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin), true);
+    this.icons.installed.invalidate(result.plugin.id);
+    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin));
   }
 
-  private async showDetails(pluginId: string | null) {
-    // Refresh the same plugin without retiring focused controls or open groups.
-    // Connection changes and navigation clear detail before reaching this owner.
-    const previous = this.detail?.pluginId === pluginId ? this.detail : null;
-    const catalog = this.catalogDetail?.result;
-    const plugin = this.result?.plugins.find((entry) => entry.id === pluginId);
-    let detail: PluginsPageDetail | null = pluginId
-      ? {
-          ...previous,
-          pluginId,
-          inspection: previous?.inspection ?? null,
-          catalog:
-            previous?.catalog ??
-            (catalog && catalog.plugin.id === plugin?.catalogId ? catalog : undefined),
-          error: null,
-        }
-      : null;
-    this.detail = detail;
-    const scope = this.gateway.capture();
-    if (!plugin?.installed || !detail || !scope) {
-      return;
-    }
-    await loadInstalledPluginDetail({
-      plugin,
-      client: scope.client,
-      initial: detail,
-      includeTools:
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "tools.catalog") === true,
-      isCurrent: () => this.gateway.isCurrent(scope) && this.detail === detail,
-      onChange: (next) => {
-        detail = next;
-        this.detail = next;
+  private showDetails(pluginId: string | null) {
+    this.mcpLogin.select(pluginId);
+    return loadInstalledPluginDetail({
+      pluginId,
+      plugin: this.result?.plugins.find((entry) => entry.id === pluginId),
+      catalog: this.catalogDetail?.result,
+      gateway: this.gateway,
+      canInspect: !pluginId || this.busy[pluginRowKey(pluginId)] !== "uninstall",
+      getDetail: () => this.detail,
+      onChange: (detail) => {
+        this.detail = detail;
       },
     });
   }
 
   private async showCatalogDetail(id: string | null) {
-    // Same-selection refreshes retain presentation; a new object fences older requests.
-    const detail = id
-      ? {
-          id,
-          result: this.catalogDetail?.id === id ? this.catalogDetail.result : null,
-          error: null,
-        }
-      : null;
-    if (this.surface === "discovery" && this.catalogDetail?.id !== id) {
-      this.detail = null;
-    }
-    this.catalogDetail = detail;
-    const scope = this.gateway.capture();
-    if (!detail || !scope) {
+    if (this.surface !== "discovery") {
+      this.catalogDetail = null;
       return;
     }
-    const installed = this.result?.plugins.find(
-      (plugin) => plugin.installed && plugin.catalogId === id,
-    );
-    if (installed) {
-      // Installed identity and availability belong to the local inventory. Its
-      // detail loader enriches the overview without waiting on ClawHub.
-      if (new URLSearchParams(this.routeData?.location.search).get("action") === "install") {
-        this.context.replace("plugins", {
-          pathname: this.routeData?.location.pathname,
-          search: "",
-        });
-      }
-      await this.showDetails(installed.id);
-      return;
-    }
-    this.detail = null;
-    try {
-      const result = await loadPluginDiscoveryDetail(scope.client, detail.id);
-      if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
-        this.catalogDetail = { ...detail, result };
-        const installedId = result.plugin.local.installed
-          ? result.plugin.local.pluginId
-          : undefined;
-        void this.showDetails(installedId ?? null);
-        if (new URLSearchParams(this.routeData?.location.search).get("action") === "install") {
-          // A link selects the plugin; installation still requires an explicit button click.
-          this.context.replace("plugins", {
-            pathname: this.routeData?.location.pathname,
-            search: "",
-          });
-        }
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
-        this.catalogDetail = { ...detail, error: formatUiError(error) };
-      }
-    }
+    return loadPluginCatalogDetail({
+      id,
+      gateway: this.gateway,
+      context: this.context,
+      location: this.routeData?.location,
+      inventory: this.result,
+      uninstalling: this.uninstallingSelection,
+      getDetail: () => this.catalogDetail,
+      onChange: (detail) => {
+        this.catalogDetail = detail;
+      },
+      showInstalled: (pluginId) => this.showDetails(pluginId),
+    });
   }
 
   private async installCatalogEntry(id: string): Promise<void> {
@@ -607,13 +604,15 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client, _isCurrent, isLatest) => {
+      async (result, refreshError, client, isLatest) => {
+        if (this.detail?.pluginId === pluginId) {
+          this.detail = null;
+        }
         // Removal hides its row; any remaining warning belongs to the page.
         if (isLatest()) {
           this.pageNotice = pluginMutationWarnings(result, refreshError);
           const routePluginId = this.activeRoutePluginId;
           if (routePluginId === pluginId) {
-            this.detail = null;
             this.context.replace("plugin-settings", {
               pathname: pathForRoute("plugin-settings", this.context.basePath),
             });
@@ -621,13 +620,25 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         await this.refreshCatalog(client);
       },
-      { action: "uninstall", confirm: () => confirmPluginUninstall(name) },
+      {
+        action: "uninstall",
+        confirm: () =>
+          showConfirmDialog({
+            title: t("pluginsPage.removeConfirmTitle", { name }),
+            message: t("pluginsPage.removeConfirmMessage"),
+            confirmLabel: t("pluginsPage.remove"),
+            danger: true,
+          }),
+      },
     );
   }
 
   override render() {
     const blockedReason = this.accessBlockedReason(this.result?.mutationAllowed);
     return renderPluginsPage({
+      mcpLogin: this.mcpLogin.render(),
+      mcpLoginBusy: this.mcpLogin.busy,
+      canMcpLogin: canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
       help: this.help,
       context: this.context,
       routeData: this.routeData,
@@ -644,6 +655,8 @@ class PluginsPage extends OpenClawLightDomElement {
       pageNotice: this.pageNotice,
       iconUrls: this.iconUrls,
       catalogIconUrls: this.catalogIconUrls,
+      iconLoading: this.icons.installed.isLoading,
+      catalogIconLoading: this.icons.catalog.isLoading,
       catalogDetail: this.catalogDetail,
       installedDetailTab: this.installedDetailTab,
       canMutate: this.canMutate(),
@@ -654,6 +667,7 @@ class PluginsPage extends OpenClawLightDomElement {
       renderCredential: this.settings.render,
       skillPreview: this.skillPreview,
       actions: {
+        startMcpLogin: (serverName) => void this.mcpLogin.start(serverName),
         selectHubTab: (tab) => this.selectHubTab(tab),
         closeCatalogDetail: () => this.closeCatalogDetail(),
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
@@ -667,15 +681,15 @@ class PluginsPage extends OpenClawLightDomElement {
           this.query = query;
         },
         refreshCatalog: () => void this.refreshCatalog(),
-        openPluginSettings: (pluginId, fromDiscovery) => {
+        openPluginSettings: (pluginId) => {
           this.context.navigate("plugin-settings", {
             pathname: pluginId
               ? pathForPluginSettings(pluginId, this.context.basePath)
               : pathForRoute("plugin-settings", this.context.basePath),
-            search: fromDiscovery && pluginId ? "?from=plugins" : "",
+            search: "",
           });
         },
-        handlePluginIconError: (pluginId) => this.icons.handleInstalledError(pluginId),
+        handlePluginIconError: (pluginId) => this.icons.installed.handleError(pluginId),
         updateEnabled: (pluginId, enabled, rowKey) =>
           void this.consentController.mutateInstalledPlugin(
             pluginId,
@@ -687,7 +701,10 @@ class PluginsPage extends OpenClawLightDomElement {
         removeConfig: (path) => this.settings.patch(path, undefined),
         reloadConfig: () => {
           this.pluginConfigEditPending = false;
-          void this.context.runtimeConfig.discardDraft({ reloadOnly: true });
+          const runtimeConfig = this.context.runtimeConfig;
+          void runtimeConfig
+            .discardDraft({ reloadOnly: true })
+            .then(() => runtimeConfig.ensureSchemaLoaded());
         },
         retryConfigRead: () => {
           void this.context.runtimeConfig.refresh();

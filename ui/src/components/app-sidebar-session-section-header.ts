@@ -5,6 +5,13 @@ import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
   content: TemplateResult;
+  status?: {
+    content: TemplateResult;
+    label: string;
+    expanded: boolean;
+    title?: string;
+    onToggle: () => void;
+  };
   draggable?: boolean;
   disabledReason?: string;
   onStartDrag: (sectionId: string) => void;
@@ -61,6 +68,21 @@ export function renderSidebarSessionSectionHeader(params: {
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
       ${params.content}
       ${draggable && params.reorder ? renderSidebarReorderMenu({ ...params.reorder, kind: "section" }) : nothing}
+      ${
+        params.status
+          ? html`<button
+              type="button"
+              class="sidebar-session-group-status"
+              tabindex="-1"
+              aria-label=${params.status.label}
+              aria-expanded=${String(params.status.expanded)}
+              title=${params.status.title ?? nothing}
+              @click=${params.status.onToggle}
+            >
+              ${params.status.content}
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }

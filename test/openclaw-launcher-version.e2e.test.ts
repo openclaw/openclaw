@@ -31,6 +31,10 @@ async function makeLauncherVersionFixture(
     path.join(fixtureRoot, "node-host-launcher.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-compile-cache.mjs"),
+    path.join(fixtureRoot, "node-compile-cache.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
     path.join(fixtureRoot, "node-version.mjs"),
   );
@@ -45,6 +49,10 @@ async function makeLauncherVersionFixture(
   await fs.copyFile(
     path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
     path.join(fixtureRoot, "node-runtime-recovery.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-env.mjs"),
+    path.join(fixtureRoot, "node-runtime-env.mjs"),
   );
   await fs.copyFile(
     path.resolve(process.cwd(), "cli-root-options.mjs"),

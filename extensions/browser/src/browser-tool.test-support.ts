@@ -2,6 +2,20 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
 
+function routeBrowserClientMocks(
+  actual: Record<string, (...args: never[]) => unknown>,
+  mocks: Record<string, (...args: never[]) => unknown>,
+) {
+  // Delegated requests retain the production client projection before the mocked Gateway.
+  return Object.fromEntries(
+    Object.entries(mocks).map(([name, local]) => [
+      name,
+      (...args: unknown[]) =>
+        Reflect.apply(typeof args[0] === "function" ? actual[name]! : local, undefined, args),
+    ]),
+  );
+}
+
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserDoctor: vi.fn(async (..._args: unknown[]) => ({
@@ -58,7 +72,10 @@ const browserClientMocks = vi.hoisted(() => ({
     }),
   ),
 }));
-vi.mock("./browser/client.js", () => browserClientMocks);
+vi.mock("./browser/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./browser/client.js")>();
+  return { ...actual, ...routeBrowserClientMocks(actual, browserClientMocks) };
+});
 
 const browserActionsMocks = vi.hoisted(() => ({
   browserAct: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
@@ -118,7 +135,10 @@ const browserActionsMocks = vi.hoisted(() => ({
     },
   })),
 }));
-vi.mock("./browser/client-actions.js", () => browserActionsMocks);
+vi.mock("./browser/client-actions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./browser/client-actions.js")>();
+  return { ...actual, ...routeBrowserClientMocks(actual, browserActionsMocks) };
+});
 
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
@@ -225,151 +245,49 @@ const toolCommonMocks = vi.hoisted(() => ({
     running: true,
     source: "gateway-host",
   })),
-  imageResultFromFile: vi.fn<typeof import("./sdk-setup-tools.js").imageResultFromFile>(),
+  imageResultFromFile:
+    vi.fn<typeof import("openclaw/plugin-sdk/channel-actions").imageResultFromFile>(),
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/openclaw-media/resized.jpg" })),
   stageBrowserScreenshotForSharing: vi.fn(async () => "/tmp/openclaw-media/outbound/share.png"),
 }));
-vi.mock("./sdk-setup-tools.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./sdk-setup-tools.js")>("./sdk-setup-tools.js");
-  return {
-    ...actual,
-    callGatewayTool: gatewayMocks.callGatewayTool,
-    hasGatewayToolRoutingContext: gatewayMocks.hasGatewayToolRoutingContext,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile,
-    describeImageFile: toolCommonMocks.describeImageFile,
-    saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
-    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
-    listNodes: nodesUtilsMocks.listNodes,
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  callGatewayTool: gatewayMocks.callGatewayTool,
+  readGatewayToolOperatorScopes: gatewayMocks.readGatewayToolOperatorScopes,
+  hasGatewayToolRoutingContext: gatewayMocks.hasGatewayToolRoutingContext,
+  listNodes: nodesUtilsMocks.listNodes,
+}));
+vi.mock("openclaw/plugin-sdk/channel-actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-actions")>()),
+  imageResultFromFile: toolCommonMocks.imageResultFromFile,
+}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>()),
+  describeImageFile: toolCommonMocks.describeImageFile,
+}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
+}));
 
-vi.mock("./browser-tool.runtime.js", async () => {
-  const { BrowserToolOutputSchema, createBrowserToolSchema, resolveBrowserToolCapabilities } =
-    await vi.importActual<typeof import("./browser-tool.schema.js")>("./browser-tool.schema.js");
-  const actualClient =
-    await vi.importActual<typeof import("./browser/client.js")>("./browser/client.js");
-  const actualActions = await vi.importActual<typeof import("./browser/client-actions.js")>(
-    "./browser/client-actions.js",
-  );
-  const actualMethods: Record<string, (...args: never[]) => unknown> = {
-    ...actualClient,
-    ...actualActions,
-  };
-  // Node requests exercise the shared client projection before reaching the mocked Gateway.
-  const routedClients = Object.fromEntries(
-    Object.entries({ ...browserClientMocks, ...browserActionsMocks }).map(([name, local]) => [
-      name,
-      (...args: unknown[]) =>
-        Reflect.apply(
-          typeof args[0] === "function" ? actualMethods[name]! : local,
-          undefined,
-          args,
-        ),
-    ]),
-  );
-  const { wrapExternalContent } = await vi.importActual<typeof import("./sdk-security-runtime.js")>(
-    "./sdk-security-runtime.js",
-  );
-  const readRawStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
-  const normalizeMockOptionalString = (value: unknown) =>
-    readRawStringValue(value)?.trim() || undefined;
-  const readStringParam = (
-    params: Record<string, unknown>,
-    key: string,
-    opts?: { required?: boolean; label?: string },
-  ) => {
-    const value = readRawStringValue(params[key])?.trim();
-    if (value) {
-      return value;
-    }
-    if (opts?.required) {
-      throw new Error(`${opts.label ?? key} required`);
-    }
-    return undefined;
-  };
-
-  return {
-    DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
-    DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
-    BrowserToolOutputSchema,
-    createBrowserToolSchema,
-    resolveBrowserToolCapabilities,
-    ...routedClients,
-    ...browserConfigMocks,
-    ...configMocks,
-    ...gatewayMocks,
-    ...sessionTabRegistryMocks,
-    fetchBrowserJson: toolCommonMocks.fetchBrowserJson,
-    getRuntimeConfig: configMocks.loadConfig,
-    resolveRuntimeImageSanitization: () => {
-      const configured = configMocks.loadConfig().agents?.defaults?.imageMaxDimensionPx;
-      return typeof configured === "number" && Number.isFinite(configured)
-        ? { maxDimensionPx: Math.max(1, Math.floor(configured)) }
-        : undefined;
-    },
-    getBrowserProfileCapabilities: (profile: Record<string, unknown>) => {
-      const existingSession = profile.driver === "existing-session";
-      return {
-        usesChromeMcp: existingSession,
-        supportsBatchActions: !existingSession,
-        supportsDownloads: !existingSession,
-        supportsPdf: !existingSession,
-        supportsRequests: !existingSession,
-        supportsErrors: !existingSession,
-        supportsPageText: !existingSession,
-        supportsEmulation: !existingSession,
-      };
-    },
-    describeImageFile: toolCommonMocks.describeImageFile,
-    saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
-    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile,
-    jsonResult: (result: unknown) => ({
-      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      details: result,
-    }),
-    listNodes: nodesUtilsMocks.listNodes,
-    normalizeOptionalString: normalizeMockOptionalString,
-    persistBrowserProxyResultFiles: vi.fn(async (result: unknown) => result),
-    readPositiveIntegerParam: (
-      params: Record<string, unknown>,
-      key: string,
-      options?: { message?: string },
-    ) => {
-      const raw = params[key];
-      if (raw == null) {
-        return undefined;
-      }
-      const value =
-        typeof raw === "number"
-          ? raw
-          : typeof raw === "string" && /^\d+$/.test(raw.trim())
-            ? Number(raw.trim())
-            : undefined;
-      if (value === undefined || !Number.isInteger(value) || value <= 0) {
-        throw new Error(options?.message ?? `${key} must be a positive integer`);
-      }
-      return value;
-    },
-    readStringParam,
-    readStringValue: readRawStringValue,
-    resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
-    resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
-      const node = nodes.find(
-        (entry) => entry.nodeId === requested || entry.displayName === requested,
-      );
-      if (!node?.nodeId || typeof node.nodeId !== "string") {
-        throw new Error(`Node not found: ${requested}`);
-      }
-      return node.nodeId;
-    },
-    selectDefaultNodeFromList: (nodes: Array<Record<string, unknown>>) => nodes[0] ?? null,
-    wrapExternalContent,
-  };
-});
+vi.mock("./browser/client-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/client-fetch.js")>()),
+  fetchBrowserJson: toolCommonMocks.fetchBrowserJson,
+}));
+vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/proxy-files.js")>()),
+  persistBrowserProxyResultFiles: vi.fn(async (result: unknown) => result),
+}));
+vi.mock("./browser/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/paths.js")>()),
+  resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
+}));
+vi.mock("./browser/screenshot-sharing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser/screenshot-sharing.js")>()),
+  stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
+}));
 
 export function resetBrowserToolMocks() {
   vi.clearAllMocks();

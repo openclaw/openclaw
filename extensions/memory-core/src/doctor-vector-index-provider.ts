@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -22,10 +23,17 @@ type InspectConfiguredProvider = (params: {
   env: NodeJS.ProcessEnv;
 }) => Promise<ProviderFailure | null>;
 
-function listConfiguredAgentIds(config: OpenClawConfig): string[] {
-  const ids = new Set(Object.keys(config.agents?.entries ?? {}));
-  for (const entry of config.agents?.list ?? []) {
-    if (entry.id.trim()) {
+function listConfiguredAgentIds(config: unknown): string[] {
+  // Blocked include migrations can leave the health-check candidate in its raw roster shape.
+  const agents = asOptionalObjectRecord(asOptionalObjectRecord(config)?.agents);
+  const ids = new Set(Object.keys(asOptionalObjectRecord(agents?.entries) ?? {}));
+  const legacyList =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
+  for (const value of legacyList) {
+    const entry = asOptionalObjectRecord(value);
+    if (typeof entry?.id === "string" && entry.id.trim()) {
       ids.add(entry.id.trim());
     }
   }
@@ -84,11 +92,18 @@ async function readExistingVectorModel(databasePath: string): Promise<string | n
   return model;
 }
 
-function resolveConfigPrefix(config: OpenClawConfig, agentId: string): string {
-  if (config.agents?.entries?.[agentId]?.memory?.search) {
+function resolveConfigPrefix(config: unknown, agentId: string): string {
+  const agents = asOptionalObjectRecord(asOptionalObjectRecord(config)?.agents);
+  const keyedEntry = asOptionalObjectRecord(asOptionalObjectRecord(agents?.entries)?.[agentId]);
+  if (asOptionalObjectRecord(keyedEntry?.memory)?.search) {
     return `agents.entries.${agentId}.memory.search`;
   }
-  if (config.agents?.list?.find((entry) => entry.id === agentId)?.memory?.search) {
+  const legacyList =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
+  const listedEntry = legacyList.map(asOptionalObjectRecord).find((entry) => entry?.id === agentId);
+  if (asOptionalObjectRecord(listedEntry?.memory)?.search) {
     return `agents.list[].memory.search (agent id ${agentId})`;
   }
   return "memory.search";

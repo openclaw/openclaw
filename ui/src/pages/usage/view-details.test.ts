@@ -93,38 +93,45 @@ function mount(
   render(
     renderSessionDetailPanel(
       { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
-      { points },
-      false,
-      status(errors.timeSeries),
-      "per-turn",
-      vi.fn(),
-      breakdownMode,
-      vi.fn(),
-      start,
-      end,
-      errors.onCursorRangeChange ?? vi.fn(),
-      filters.startDate ?? "",
-      filters.endDate ?? "",
-      filters.selectedDays ?? [],
-      filters.timeZone ?? "local",
-      errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
-      errors.sessionLogsLoading ?? false,
-      status(errors.sessionLogs, errors.sessionLogsHasLoaded),
-      false,
-      vi.fn(),
-      errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
       {
-        weight: errors.contextWeight,
-        loading: false,
-        status: status(),
+        timeSeries: { points },
+        timeSeriesLoading: false,
+        timeSeriesStatus: status(errors.timeSeries),
+        timeSeriesMode: "per-turn",
+        timeSeriesBreakdownMode: breakdownMode,
+        timeSeriesCursorStart: start,
+        timeSeriesCursorEnd: end,
+        sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
+        sessionLogsLoading: errors.sessionLogsLoading ?? false,
+        sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
+        sessionLogsExpanded: false,
+        logFilters: errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
+        context: {
+          weight: errors.contextWeight,
+          loading: false,
+          status: status(),
+        },
+      },
+      {
+        onTimeSeriesModeChange: vi.fn(),
+        onTimeSeriesBreakdownChange: vi.fn(),
+        onTimeSeriesCursorRangeChange: errors.onCursorRangeChange ?? vi.fn(),
+        onToggleSessionLogsExpanded: vi.fn(),
+        onLogFilterRolesChange: vi.fn(),
+        onLogFilterToolsChange: vi.fn(),
+        onLogFilterHasToolsChange: vi.fn(),
+        onLogFilterQueryChange: vi.fn(),
+        onLogFilterClear: vi.fn(),
+        onToggleContextExpanded: errors.onToggleContextExpanded ?? vi.fn(),
+        onSelectSession: vi.fn(),
+      },
+      {
+        startDate: filters.startDate ?? "",
+        endDate: filters.endDate ?? "",
+        selectedDays: filters.selectedDays ?? [],
+        timeZone: filters.timeZone ?? "local",
       },
       errors.contextExpanded ?? false,
-      errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
     ),
     container,
@@ -217,16 +224,16 @@ describe("renderSessionDetailPanel filtered usage", () => {
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
     const localOffsetMs = 8 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });

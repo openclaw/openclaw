@@ -1,5 +1,4 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,7 +22,8 @@ import * as hydration from "../config/sessions/session-transcript-hydration.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
@@ -88,9 +88,12 @@ describe("Side chat with a published Gateway runtime", () => {
         },
       };
       const companion = createSessionCompanion({
+        scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
         contextReader: defaultSessionCompanionContextReader,
-        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
       });
       const observedTools: string[][] = [];
       const observedModels: Array<{
@@ -281,65 +284,18 @@ describe("Side chat with a published Gateway runtime", () => {
         const deniedAuthority = operatorAuthority([]);
         const syncOpen = SessionManager.open.bind(SessionManager);
         const asyncOpen = SessionManager.openAsync.bind(SessionManager);
-        const nativeExec: unknown = Object.getOwnPropertyDescriptor(
-          DatabaseSync.prototype,
-          "exec",
-        )?.value;
-        if (typeof nativeExec !== "function") {
-          throw new Error("Expected the native SQLite exec method");
-        }
-        let nextHydrationProbe = 0;
-        const observeHydrationSql = (target: Parameters<typeof SessionManager.open>[0]) => {
-          const execCalls: Array<{
-            database: string | null | undefined;
-            stack: string | undefined;
-          }> = [];
-          const sql = observeMainThreadSql();
-          const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-          exec.mockImplementation(function (this: DatabaseSync, statement) {
-            let database: string | null | undefined;
-            try {
-              database = this.location();
-            } catch {
-              // Diagnostic lookup must not replace the native operation's error.
-              database = undefined;
-            }
-            const stackTraceLimit = Error.stackTraceLimit;
-            let stack: string | undefined;
-            try {
-              // Coordinator callers can sit beyond the default ten stack frames.
-              Error.stackTraceLimit = Math.max(stackTraceLimit, 32);
-              stack = new Error("Observed SQLite exec").stack;
-            } finally {
-              Error.stackTraceLimit = stackTraceLimit;
-            }
-            execCalls.push({ database, stack });
-            Reflect.apply(nativeExec, this, [statement]);
-          });
-          return {
-            ...sql,
-            diagnostics: {
-              probe: ++nextHydrationProbe,
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              storePath: target.storePath,
-              execCalls,
-            },
-          };
-        };
         let hydrationCount = 0;
         const hydrationFailures: unknown[] = [];
-        const recordHydration = (sql: ReturnType<typeof observeHydrationSql>) => {
+        const recordHydration = (sql: ReturnType<typeof observeMainThreadSql>) => {
           hydrationCount++;
           try {
             sql.expectIdle();
           } catch (error) {
-            console.error("Side chat hydration SQL diagnostics", JSON.stringify(sql.diagnostics));
             hydrationFailures.push(error);
           }
         };
         const syncProbe = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
-          const sql = observeHydrationSql(args[0]);
+          const sql = observeMainThreadSql();
           try {
             const result = syncOpen(...args);
             recordHydration(sql);
@@ -351,7 +307,7 @@ describe("Side chat with a published Gateway runtime", () => {
         const asyncProbe = vi
           .spyOn(SessionManager, "openAsync")
           .mockImplementation(async (...args) => {
-            const sql = observeHydrationSql(args[0]);
+            const sql = observeMainThreadSql();
             try {
               const result = await asyncOpen(...args);
               recordHydration(sql);

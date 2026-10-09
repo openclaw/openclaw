@@ -13,11 +13,15 @@ const installMocks = vi.hoisted(() => ({
 vi.mock("./llama-server-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-install.js")>()),
   ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
+}));
+
+vi.mock("./llama-server-assets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./llama-server-assets.js")>()),
   resolveManagedLlamaServerPaths: installMocks.resolveManagedLlamaServerPaths,
 }));
 
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { selectLlamaServerAsset } from "./llama-server-install.js";
+import { selectLlamaServerAsset } from "./llama-server-assets.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import {
   ensureLlamaCppModel,

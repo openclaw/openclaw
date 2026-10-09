@@ -12,12 +12,6 @@ import {
   resolveTrustedWindowsSystemExecutablePath,
 } from "./trusted-plan-path.js";
 
-type WindowsPrivatePlanFileDependencies = {
-  resolveCompilerTempDir?: (env: NodeJS.ProcessEnv) => Promise<string>;
-  resolveTrustedExecutable?: (targetPath: string) => Promise<string>;
-  run?: typeof runExec;
-};
-
 const WINDOWS_PLAN_FILE_EXISTS_MARKER = "PRIVATE_PLAN_FILE_EXISTS";
 const WINDOWS_PRIVATE_PLAN_FILE_NATIVE_SOURCE = `
 using System;
@@ -228,35 +222,11 @@ function readWindowsEnv(env: NodeJS.ProcessEnv, name: string): string | undefine
   return Object.entries(env).find(([key]) => key.toLowerCase() === lower)?.[1];
 }
 
-async function resolvePrivateWindowsCompilerTempDir(env: NodeJS.ProcessEnv): Promise<string> {
-  const candidate = readWindowsEnv(env, "TEMP") ?? readWindowsEnv(env, "TMP");
-  if (!candidate || !path.win32.isAbsolute(candidate)) {
-    throw new Error(
-      "Unable to resolve an absolute Windows temp directory for private plan creation.",
-    );
-  }
-  return await resolveTrustedPlanDirectoryPath(candidate);
-}
-
-async function resolveTrustedPowerShell(targetPath: string): Promise<string> {
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell || powershell.toLowerCase() !== targetPath.toLowerCase()) {
-    throw new Error("Unable to resolve trusted Windows PowerShell for private plan creation.");
-  }
-  return await resolveTrustedWindowsSystemExecutablePath(targetPath);
-}
-
 export async function createPrivateWindowsPlanFile(
   filePath: string,
   content: string,
   env: NodeJS.ProcessEnv = process.env,
-  dependencies: WindowsPrivatePlanFileDependencies = {},
 ): Promise<void> {
-  const resolveTrustedExecutable =
-    dependencies.resolveTrustedExecutable ?? resolveTrustedPowerShell;
-  const resolveCompilerTempDir =
-    dependencies.resolveCompilerTempDir ?? resolvePrivateWindowsCompilerTempDir;
-  const run = dependencies.run ?? runExec;
   const systemRoot =
     readWindowsEnv(env, "SYSTEMROOT") ?? readWindowsEnv(env, "WINDIR") ?? "C:\\Windows";
   if (!path.win32.isAbsolute(systemRoot)) {
@@ -294,8 +264,18 @@ export async function createPrivateWindowsPlanFile(
     "v1.0",
     "powershell.exe",
   );
-  const powershell = await resolveTrustedExecutable(powershellCandidate);
-  const compilerTempDir = await resolveCompilerTempDir(env);
+  const systemPowerShell = resolveSystemBin("powershell");
+  if (!systemPowerShell || systemPowerShell.toLowerCase() !== powershellCandidate.toLowerCase()) {
+    throw new Error("Unable to resolve trusted Windows PowerShell for private plan creation.");
+  }
+  const powershell = await resolveTrustedWindowsSystemExecutablePath(powershellCandidate);
+  const tempDir = readWindowsEnv(env, "TEMP") ?? readWindowsEnv(env, "TMP");
+  if (!tempDir || !path.win32.isAbsolute(tempDir)) {
+    throw new Error(
+      "Unable to resolve an absolute Windows temp directory for private plan creation.",
+    );
+  }
+  const compilerTempDir = await resolveTrustedPlanDirectoryPath(tempDir);
   const input = Buffer.from(
     JSON.stringify({
       content: Buffer.from(content, "utf8").toString("base64"),
@@ -306,7 +286,7 @@ export async function createPrivateWindowsPlanFile(
     "utf8",
   ).toString("base64");
   try {
-    await run(powershell, buildEncodedPowerShellArgs(command), {
+    await runExec(powershell, buildEncodedPowerShellArgs(command), {
       baseEnv: {},
       env: {
         SYSTEMROOT: systemRoot,

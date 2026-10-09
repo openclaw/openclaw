@@ -8,7 +8,7 @@ type AvatarRouteEntry = {
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
   retryTimer: ReturnType<typeof setTimeout> | undefined;
   retryAttempts: number;
-  retryEligibleAt: number | undefined;
+  unavailable: boolean;
   /** A 401/403 for every candidate credential; retained until auth is restored or the key changes. */
   authRejected: boolean;
 };
@@ -17,7 +17,6 @@ type AvatarRouteEntry = {
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const AUTHENTICATED_AVATAR_MAX_RETRY_AFTER_MS = 30_000;
 const AUTHENTICATED_AVATAR_MAX_RETRIES = 3;
-const AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
 function retryAfterMs(response: Response): number | undefined {
@@ -54,15 +53,6 @@ function deleteEntry(key: string, entry: AvatarRouteEntry) {
   }
 }
 
-function avatarRouteKey(
-  url: string,
-  authTokens: readonly string[],
-  cacheNotFound: boolean,
-  retryUnavailable: boolean,
-): string {
-  return `${cacheNotFound ? "stable-miss" : "retry-miss"}\0${retryUnavailable ? "retry-503" : "drop-503"}\0${authTokens.join("")}\0${url}`;
-}
-
 function releaseEntry(key: string, owner: symbol) {
   const entry = sharedAvatarRoutes.get(key);
   if (!entry) {
@@ -87,10 +77,12 @@ async function fetchAvatarRoute(
   key: string,
   url: string,
   authTokens: readonly string[],
-  cacheNotFound: boolean,
   retryUnavailable: boolean,
   entry: AvatarRouteEntry,
 ) {
+  // Only the current response can retain an unavailable entry. A failed retry
+  // must not inherit the preceding 503 and strand a still-retryable route.
+  entry.unavailable = false;
   const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
   let blobUrl: string | null = null;
   let notFound = false;
@@ -110,7 +102,8 @@ async function fetchAvatarRoute(
         break;
       }
       notFound = response.status === 404;
-      retryDelayMs = retryUnavailable ? retryAfterMs(response) : undefined;
+      entry.unavailable = retryUnavailable && response.status === 503;
+      retryDelayMs = entry.unavailable ? retryAfterMs(response) : undefined;
       if (response.status !== 401 && response.status !== 403) {
         authRejected = false;
         break;
@@ -130,11 +123,11 @@ async function fetchAvatarRoute(
     return;
   }
   if (!blobUrl) {
-    if (notFound && cacheNotFound) {
+    if (notFound) {
       return;
     }
-    if (retryDelayMs !== undefined && entry.consumers.size > 0) {
-      if (entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
+    if (entry.unavailable && entry.consumers.size > 0) {
+      if (retryDelayMs !== undefined && entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
         entry.retryAttempts += 1;
         // The budget belongs to this persistent shared entry. Keeping an
         // exhausted miss prevents Lit rerenders from minting a new poll loop.
@@ -144,13 +137,11 @@ async function fetchAvatarRoute(
             return;
           }
           entry.controller = new AbortController();
-          void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
+          void fetchAvatarRoute(key, url, authTokens, retryUnavailable, entry);
         }, retryDelayMs);
-      } else {
-        // Keep the exhausted entry through a cooldown so render churn cannot
-        // remint the budget. A later render may start a fresh bounded window.
-        entry.retryEligibleAt = Date.now() + AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS;
       }
+      // A render is not evidence that Gateway preparation changed. Keep the
+      // fallback until auth recovery, a new route/credential, or final release.
       return;
     }
     if (authRejected) {
@@ -165,6 +156,7 @@ async function fetchAvatarRoute(
     deleteEntry(key, entry);
     return;
   }
+  entry.unavailable = false;
   entry.blobUrl = blobUrl;
   for (const update of entry.consumers.values()) {
     update();
@@ -186,12 +178,13 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     }
   };
   private readonly onAuthRestored = () => {
-    // A verified session recovery can make a previously rejected route valid.
-    // Drop retained rejections so the next resolve starts one fresh request.
+    // A verified session recovery can make a previously rejected or unavailable
+    // route valid. Drop both retained states so the next resolve starts one
+    // fresh request instead of reusing the stale outcome.
     if (this.connected) {
       for (const key of this.keys) {
         const entry = sharedAvatarRoutes.get(key);
-        if (entry?.authRejected) {
+        if (entry?.authRejected || (entry?.unavailable && entry.retryTimer === undefined)) {
           deleteEntry(key, entry);
         }
       }
@@ -201,7 +194,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly options: { cacheNotFound?: boolean; retryUnavailable?: boolean } = {},
+    private readonly options: { retryUnavailable?: boolean } = {},
   ) {
     host.addController(this);
   }
@@ -240,8 +233,11 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     }
   }
 
-  /** `authTokens` is an ordered candidate list; a rejected credential falls through to the next. */
-  resolve(url: string, authTokens: readonly string[]): string | null {
+  /**
+   * `authTokens` are ordered credential candidates. A lifecycle-owned `cacheScope`
+   * allows recovery after a genuine connection change, never an ordinary render.
+   */
+  resolve(url: string, authTokens: readonly string[], cacheScope = ""): string | null {
     if (!url.startsWith("/")) {
       return url;
     }
@@ -250,9 +246,8 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
     if (!this.connected) {
       return null;
     }
-    const cacheNotFound = this.options.cacheNotFound === true;
     const retryUnavailable = this.options.retryUnavailable === true;
-    const key = avatarRouteKey(url, authTokens, cacheNotFound, retryUnavailable);
+    const key = JSON.stringify([retryUnavailable, authTokens, cacheScope, url]);
     let entry = sharedAvatarRoutes.get(key);
     if (!entry) {
       entry = {
@@ -262,21 +257,11 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
         releaseTimer: undefined,
         retryTimer: undefined,
         retryAttempts: 0,
-        retryEligibleAt: undefined,
+        unavailable: false,
         authRejected: false,
       };
       sharedAvatarRoutes.set(key, entry);
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
-    } else if (
-      entry.blobUrl === null &&
-      entry.retryTimer === undefined &&
-      entry.retryEligibleAt !== undefined &&
-      Date.now() >= entry.retryEligibleAt
-    ) {
-      entry.retryAttempts = 0;
-      entry.retryEligibleAt = undefined;
-      entry.controller = new AbortController();
-      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
+      void fetchAvatarRoute(key, url, authTokens, retryUnavailable, entry);
     }
     if (entry.releaseTimer !== undefined) {
       clearTimeout(entry.releaseTimer);

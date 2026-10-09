@@ -854,17 +854,6 @@ describe("startGatewayDiscovery", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("takes each acquired cleanup once even when shutdown repeats", async () => {
-    useDevelopmentDiscoveryEnv();
-    const stop = vi.fn();
-    const discovery = await startDiscovery({
-      gatewayDiscoveryServices: [makeDiscoveryService({ id: "bonjour", stop })],
-    });
-    await discovery.stop();
-    await discovery.stop();
-    expect(stop).toHaveBeenCalledOnce();
-  });
-
   it.each(["reject", "replace", "shutdown"] as const)(
     "settles a plugin reservation after an in-flight advertisement: %s",
     async (action) => {

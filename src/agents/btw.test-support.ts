@@ -136,12 +136,18 @@ function createDoneEvent(text: string) {
   return createAssistantDoneEvent([{ type: "text", text }]);
 }
 
-function createThinkingOnlyDoneEvent(thinking: string) {
-  return createAssistantDoneEvent([{ type: "thinking", thinking }]);
-}
-
 function mockDoneAnswer(text: string) {
   streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent(text)]));
+}
+
+function createCliRuntimeConfig(): Parameters<typeof runBtwSideQuestion>[0]["cfg"] {
+  return {
+    agents: {
+      defaults: {
+        models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+  };
 }
 
 function mockCliOutput(output: { text: string; rawText?: string }) {
@@ -192,7 +198,7 @@ function createSideQuestionParams(
   overrides: Partial<RunBtwSideQuestionParams> = {},
 ): RunBtwSideQuestionParams {
   return {
-    cfg: { agents: { entries: { main: { default: true } } } } as never,
+    cfg: { agents: { entries: { main: {} } } },
     agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
@@ -342,15 +348,6 @@ function expectTextBlockContains(block: unknown, text: string): void {
   const record = expectRecordFields(block, { type: "text" });
   expect(typeof record.text).toBe("string");
   expect(record.text).toContain(text);
-}
-
-function firstTextBlockIncludes(message: Record<string, unknown>, text: string): boolean {
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const [block] = message.content;
-  const blockText = (block as { text?: unknown } | undefined)?.text;
-  return typeof blockText === "string" && blockText.includes(text);
 }
 
 function expectNoAssistantMessages(context: unknown) {
@@ -529,18 +526,14 @@ export {
   DEFAULT_AGENT_DIR,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
-  DEFAULT_REASONING_LEVEL,
   DEFAULT_SESSION_KEY,
-  DEFAULT_STORE_PATH,
   DEFAULT_QUESTION,
-  MATH_QUESTION,
   MATH_ANSWER,
   makeAsyncEvents,
   createSessionEntry,
-  createAssistantDoneEvent,
   createDoneEvent,
-  createThinkingOnlyDoneEvent,
   mockDoneAnswer,
+  createCliRuntimeConfig,
   mockCliOutput,
   registerCodexSideQuestionHarness,
   supportsPreparedOpenAIAuth,
@@ -560,7 +553,6 @@ export {
   streamContext,
   contextMessages,
   expectTextBlockContains,
-  firstTextBlockIncludes,
   expectNoAssistantMessages,
   expectSanitizedAssistantContext,
   expectSeedOnlyUserContext,
@@ -568,9 +560,7 @@ export {
 };
 export {
   streamSimpleMock,
-  readFileMock,
   buildSessionContextMock,
-  ensureOpenClawModelsJsonMock,
   loadPreparedModelRuntimeSnapshotMock,
   snapshotResources,
   discoverAuthStorageMock,
@@ -587,11 +577,8 @@ export {
   resolveAgentWorkspaceDirMock,
   prepareProviderRuntimeAuthMock,
   registerProviderStreamForModelMock,
-  resolveEmbeddedAgentStreamMock,
   prepareCliRunContextMock,
-  executePreparedCliRunMock,
   diagDebugMock,
-  ensureSelectedAgentHarnessPluginMock,
   createAgentHarnessHostCapabilitiesMock,
   closeAgentHarnessHostCapabilitiesMock,
   agentHarnessHostCapabilitiesMock,

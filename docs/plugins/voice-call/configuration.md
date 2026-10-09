@@ -115,6 +115,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | `enabled`                       | `false`      | Master on/off switch.                                                                                                           |
 | `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](/plugins/voice-call/tts-and-inbound-calls#inbound-calls). |
 | `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                                                               |
+| `callbacks`                     | disabled     | Accepts recent outbound recipients only for realtime calls; classic STT/TTS still applies the inbound policy.                   |
 | `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                                                              |
 | `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](/plugins/voice-call/tts-and-inbound-calls#stale-call-reaper). `0` disables it.                          |
 | `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                                                            |
@@ -134,6 +135,31 @@ non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from
 that Region. See
 [Twilio's non-US REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 
+### Twilio voicemail detection tuning
+
+Set `voicemail.detection: "twilio"` to enable answering-machine detection.
+These optional `voicemail` keys tune Twilio's detection on outbound calls:
+
+| Key                                    | Default | Allowed range                             |
+| -------------------------------------- | ------- | ----------------------------------------- |
+| `machineDetectionSpeechThresholdMs`    | `6000`  | `1000`–`6000` ms                          |
+| `machineDetectionSpeechEndThresholdMs` | `1200`  | `500`–`5000` ms                           |
+| `machineDetectionSilenceTimeoutMs`     | `5000`  | `2000`–`10000` ms                         |
+| `machineDetectionTimeoutMs`            | `30000` | `3000`–`59000` ms, in multiples of `1000` |
+
+The speech threshold defaults to Twilio's maximum of six seconds to reduce
+false machine results for talkative humans and longer business greetings.
+Twilio's own default is `2400` ms. A higher threshold also delays machine
+detection; it cannot reliably classify a human who speaks without pausing for
+thirty seconds. Tune it across representative greetings and carriers.
+
+The other defaults match Twilio. All values are integers in milliseconds;
+the plugin converts `machineDetectionTimeoutMs` to whole seconds for the
+Calls API's `MachineDetectionTimeout`. The three other values pass through
+in milliseconds. The allowed ranges follow
+[Twilio's AMD tuning reference](https://www.twilio.com/docs/voice/answering-machine-detection#optional-api-tuning-parameters)
+and its [invalid detection configuration error](https://www.twilio.com/docs/api/errors/21234).
+
 <AccordionGroup>
   <Accordion title="Provider exposure and security notes">
     - Twilio, Telnyx, and Plivo all require a **publicly reachable** webhook URL.
@@ -141,7 +167,7 @@ that Region. See
     - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
     - `skipSignatureVerification` is for local testing only.
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
-    - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
+    - `tunnel.allowNgrokFreeTierLoopbackBypass: true` trusts forwarding headers from loopback requests when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). This reconstructs the public URL used for signing; valid Twilio signatures are still required.
     - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
     - Tailscale Serve and Funnel automatically expose the realtime or streaming WebSocket path when that audio mode is enabled.
     - `tailscale.port` selects the external HTTPS port for both `tailscale.mode` and unified `tunnel.provider: "tailscale-serve" | "tailscale-funnel"`. It defaults to `443`; use `8443` when another HTTPS server owns port 443. Funnel accepts only `443`, `8443`, or `10000`, while Serve accepts any valid TCP port. Non-default ports appear in the webhook and realtime stream URLs.
@@ -155,11 +181,9 @@ that Region. See
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Run `openclaw doctor --fix` to rewrite these legacy keys to the canonical
-    shape. The Voice Call plugin owns the migration; runtime config parsing
-    accepts only the current keys. When both old and current settings exist,
-    Doctor keeps the current setting, removes the legacy key, and reports which
-    destination it retained. Legacy values fill only missing current fields:
+    Voice Call accepts the current config shape. Migrations for shapes retired
+    before July 2026 are no longer included. Update older configs manually using
+    these replacements, keeping any existing current values:
 
     - `provider: "log"` → `provider: "mock"`
     - `twilio.from` → `fromNumber`
@@ -168,7 +192,7 @@ that Region. See
     - `streaming.sttModel` → `streaming.providers.openai.model`
     - `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
     - `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
-    - `realtime.agentContext.includeSystemPrompt` is removed (realtime context now uses the generated agent prompt)
+    - `realtime.agentContext.includeSystemPrompt` is removed. Hosts with the shared context resolver always include agent-context guidance; `realtime.agentContext` controls optional configured identity and profile files. Supported older hosts retain their optional, bounded context capsule. See [Agent voice context](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 
   </Accordion>
 </AccordionGroup>

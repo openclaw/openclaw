@@ -112,13 +112,6 @@ export const imageLightboxStyles = css`
   .close svg {
     width: 17px;
     height: 17px;
-    /* Shadow DOM: global icon stroke rules don't reach in here; without a
-         stroke the open-path x icon renders invisible. */
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
   }
 
   .stage {
@@ -134,6 +127,12 @@ export const imageLightboxStyles = css`
 
   .stage--gallery {
     touch-action: none;
+  }
+
+  .stage.stage--video {
+    padding: calc(76px + var(--safe-area-top, 0px)) calc(64px + var(--safe-area-right, 0px))
+      calc(76px + var(--safe-area-bottom, 0px)) calc(64px + var(--safe-area-left, 0px));
+    touch-action: pan-y;
   }
 
   .slide {
@@ -282,17 +281,6 @@ export const imageLightboxStyles = css`
 
   @media (max-width: 768px),
     (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-    openclaw-modal-dialog {
-      --openclaw-modal-width: 100vw;
-      --openclaw-modal-max-width: 100vw;
-      --openclaw-modal-max-height: 100dvh;
-    }
-
-    .lightbox {
-      width: 100vw;
-      height: 100dvh;
-    }
-
     .stage {
       padding: calc(68px + var(--safe-area-top, 0px)) calc(12px + var(--safe-area-right, 0px))
         calc(64px + var(--safe-area-bottom, 0px)) calc(12px + var(--safe-area-left, 0px));

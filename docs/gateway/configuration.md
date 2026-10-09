@@ -78,7 +78,7 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Gateway startup first applies safe legacy-key migrations to eligible single-file configs. Unknown keys, malformed types, or invalid values that remain cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. Run `openclaw doctor --fix` to repair legacy keys before starting the Gateway. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
 `openclaw config schema` prints the canonical JSON Schema used by Control UI

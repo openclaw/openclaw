@@ -15,7 +15,7 @@ import {
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   type SessionStoreTarget,
@@ -54,9 +54,10 @@ import {
 export type LegacySessionRecord = {
   entry: SessionEntry;
   sessionKey: string;
+  preserveCurrentSession?: boolean;
   transcriptPath?: string;
   transcriptDependencies: string[];
-  recovery?: { complete: boolean; repaired: boolean; events: number };
+  recovery?: { complete: boolean; repaired: boolean; events: number; sqliteEvents?: number };
   sourceFingerprint?: ReturnType<typeof readTranscriptFingerprint>;
   historical?: {
     originalPath: string;
@@ -170,12 +171,8 @@ export function readArchivedSessionOwnership(
     }
     const ownershipIssues: DoctorSessionSqliteIssue[] = [];
     try {
-      if (
-        !sameMigrationArtifact(
-          readMigrationArtifactIdentity(move.archivePath),
-          move.artifact!.identity,
-        )
-      ) {
+      const identity = readMigrationArtifactIdentity(move.archivePath);
+      if (!sameMigrationArtifact(identity, move.artifact!.identity, { ignoreDevice: true })) {
         throw new Error(
           "Archived session registry no longer matches its migration receipt (file metadata or contents changed).",
         );
@@ -185,10 +182,7 @@ export function readArchivedSessionOwnership(
       );
       if (
         ownershipIssues.length ||
-        !sameMigrationArtifact(
-          readMigrationArtifactIdentity(move.archivePath),
-          move.artifact!.identity,
-        )
+        !sameMigrationArtifact(readMigrationArtifactIdentity(move.archivePath), identity)
       ) {
         throw new Error(
           "Archived session registry changed during verification or contains invalid entries.",
@@ -285,7 +279,9 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       const identity = readMigrationArtifactIdentity(source.path);
       if (
         source.archiveMove &&
-        !sameMigrationArtifact(identity, source.archiveMove.artifact!.identity)
+        !sameMigrationArtifact(identity, source.archiveMove.artifact!.identity, {
+          ignoreDevice: true,
+        })
       ) {
         throw new Error("Archived original changed since migration; retained without importing");
       }
@@ -492,23 +488,22 @@ export function readLegacySessionRecords(
     verifiedSourcePaths?: ReadonlySet<string>;
   } = {},
 ): LegacySessionRecord[] {
-  const records: LegacySessionRecord[] = [];
-  for (const { entry, sessionKey } of readLegacySessionStoreEntries(target, issues, options)
-    .entries) {
-    const { transcriptPath, transcriptDependencies } = resolveLegacyTranscriptPaths(
-      target,
-      entry,
-      options.verifiedSourcePaths,
-    );
-    records.push({
-      // Import repairs file-era fields before canonical SQLite readers can see them.
-      entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
-      sessionKey,
-      transcriptPath,
-      transcriptDependencies,
-    });
-  }
-  return records;
+  return readLegacySessionStoreEntries(target, issues, options).entries.map(
+    ({ entry, sessionKey }) => {
+      const { transcriptPath, transcriptDependencies } = resolveLegacyTranscriptPaths(
+        target,
+        entry,
+        options.verifiedSourcePaths,
+      );
+      return {
+        // Import repairs file-era fields before canonical SQLite readers can see them.
+        entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
+        sessionKey,
+        transcriptPath,
+        transcriptDependencies,
+      };
+    },
+  );
 }
 
 export function listUnreferencedJsonlFiles(

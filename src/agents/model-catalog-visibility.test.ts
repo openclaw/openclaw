@@ -4,6 +4,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import {
@@ -17,6 +19,88 @@ import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
+  it("keeps the selected model ahead of curated and live rows in a large catalog", async () => {
+    const catalog: ModelCatalogEntry[] = Array.from({ length: 300 }, (_, index) => ({
+      provider: "fixture",
+      id: `model-${String(index).padStart(3, "0")}`,
+      name: `Model ${index}`,
+      providerOrder: index,
+    }));
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg: {},
+      catalog,
+      defaultProvider: "fixture",
+      defaultModel: { provider: "fixture", model: "model-298" },
+      selectedModel: { provider: "fixture", model: "model-299" },
+      view: "all",
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async () =>
+        resolveLogicalModelCatalogEntryState({
+          evaluation: { availability: true, routeResolution: null },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+    expect(result.slice(0, 3).map((entry) => entry.id)).toEqual([
+      "model-299",
+      "model-000",
+      "model-001",
+    ]);
+    expect(result).toHaveLength(300);
+    expect(new Set(result.map((entry) => entry.id))).toEqual(
+      new Set(catalog.map((entry) => entry.id)),
+    );
+  });
+
+  it("leads each provider with its hosted-catalog recommendations after the selected model", async () => {
+    const row = (provider: string, id: string, providerOrder: number): ModelCatalogEntry => ({
+      provider,
+      id,
+      name: id,
+      providerOrder,
+    });
+    const catalog = [
+      ...["a-0", "a-1", "a-2", "a-3", "a-4"].map((id, index) => row("alpha", id, index)),
+      row("beta", "b-0", 0),
+      row("beta", "b-1", 1),
+    ];
+    const result = await withRemoteModelCatalogSnapshot(
+      {
+        sourceUrl: resolveRemoteCatalogUrl({}),
+        generatedAt: 1,
+        revision: "fixture",
+        // "gone" is no longer served by alpha; beta recommends nothing.
+        providers: { alpha: { models: [], recommendedModels: ["a-3", "gone", "a-1"] } },
+        pricing: {},
+        upstreamPricing: {},
+      },
+      () =>
+        resolveLogicalVisibleModelCatalog({
+          cfg: {},
+          catalog,
+          defaultProvider: "alpha",
+          selectedModel: { provider: "alpha", model: "a-4" },
+          view: "all",
+          metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+          routePolicy: openAIModelCatalogRoutePolicy,
+          evaluateEntry: async () =>
+            resolveLogicalModelCatalogEntryState({
+              evaluation: { availability: true, routeResolution: null },
+              routePolicy: openAIModelCatalogRoutePolicy,
+            }),
+        }),
+    );
+    expect(result.map((entry) => entry.id)).toEqual([
+      "a-4",
+      "a-3",
+      "a-1",
+      "a-0",
+      "a-2",
+      "b-0",
+      "b-1",
+    ]);
+  });
+
   it.each([
     "native",
     "custom",
@@ -404,7 +488,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       evaluateEntry: evaluateAvailableEntry,
     });
 
-    expect(result.map((entry) => entry.id)).toEqual(["alias-key", "primary"]);
+    expect(result.map((entry) => entry.id).toSorted()).toEqual(["alias-key", "primary"]);
   });
 
   it.each(["all", "default", "configured"] as const)(

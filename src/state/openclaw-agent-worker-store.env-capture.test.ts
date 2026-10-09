@@ -1,12 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
-import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-native.js";
+import type {
+  AgentDatabaseExecutionScope,
+  AgentDatabaseRequestExecutionSource,
+} from "./openclaw-agent-execution-contract.js";
 import { openOpenClawAgentSqliteWorkerStore } from "./openclaw-agent-worker-store.js";
 
 const boundary = vi.hoisted(() => ({
@@ -32,6 +35,9 @@ const boundary = vi.hoisted(() => ({
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {
     readonly isOpen = true;
+    location() {
+      return "/synthetic/captured/main.sqlite";
+    }
   },
 }));
 vi.mock("../config/state-dir.js", () => ({
@@ -45,14 +51,17 @@ vi.mock("./openclaw-state-db.paths.js", () => ({
   resolveOpenClawStateSqlitePath: (env: NodeJS.ProcessEnv) =>
     `${env.OPENCLAW_STATE_DIR}/state.sqlite`,
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({ assertExistingDatabaseIdentity() {} }));
+vi.mock("../infra/sqlite-worker-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-worker-identity.js")>()),
+  assertExistingDatabaseIdentity() {},
+}));
 vi.mock("./openclaw-agent-execution.js", () => ({
   captureOpenClawAgentDatabaseExecution: boundary.capture,
 }));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
     identity: "synthetic-file",
-    filename: "/synthetic/captured/main.sqlite",
+    filename: normalizeDatabasePath("/synthetic/captured/main.sqlite"),
   }),
   isOpenClawAgentDatabasePathCurrent: () => true,
 }));

@@ -3,6 +3,11 @@
  */
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
+export type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentPreparation,
+} from "../config/sessions/session-entry-current.types.js";
+
 export function createPluginStateErrorReporter(
   getRuntime: () => Pick<PluginRuntime, "logging"> | null | undefined,
   plugin: string,

@@ -97,7 +97,7 @@ describe("gateway harness questions", () => {
         }),
       ).toBe(true);
     }
-    const stagedInputs = listSessionPendingInputs(target);
+    const stagedInputs = await listSessionPendingInputs(target);
     expect(stagedInputs.total).toBe(change === "unstaged" ? 0 : 1);
     const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>();
     const input = {
@@ -191,7 +191,7 @@ describe("gateway harness questions", () => {
       if (change === "committed") {
         expect(await claim).toEqual({ accepted: true });
         expect(sourceRecorder.hasPersisted()).toBe(true);
-        expect(listSessionPendingInputs(target)).toEqual({ total: 0, items: [] });
+        expect(await listSessionPendingInputs(target)).toEqual({ total: 0, items: [] });
         expect(sourceRecorder.getAdmissionReceipt()?.entryId).toBe(stagedInputs.items[0]?.id);
         const messages = (await loadTranscriptEvents(target)).filter(
           (event) => asOptionalRecord(event)?.type === "message",
@@ -248,11 +248,18 @@ describe("gateway harness questions", () => {
       releasePersistence.resolve();
       controller.abort();
       replacementController?.abort();
-      await claim;
-      await question;
-      await replacement;
-      host.closeHost();
-      host.closeAdmission();
+      try {
+        await claim;
+        await question;
+        await replacement;
+      } finally {
+        try {
+          sourceRecorder.finishPendingInput?.("interrupted");
+        } finally {
+          host.closeHost();
+          host.closeAdmission();
+        }
+      }
     }
   });
 

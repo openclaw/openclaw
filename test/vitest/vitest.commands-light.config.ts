@@ -7,6 +7,7 @@ export function createCommandsLightVitestConfig(env?: Record<string, string | un
   return createScopedVitestConfig(commandsLightTestFiles, {
     dir: "src/commands",
     env,
+    intersectIncludeFile: true,
     exclude: databaseWorkerCoreTestFiles,
     includeOpenClawRuntimeSetup: false,
     name: "commands-light",

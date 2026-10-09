@@ -8,6 +8,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
@@ -50,12 +51,6 @@ export function live(seq: number, event: Params["event"], runId = RUN): Params {
   return { runEpoch: EPOCH, lastAckedSeq: seq - 1, seq, runId, event };
 }
 
-export const binding = ({ environmentId, ownerEpoch: runEpoch, sessionId }: Identity = ID) => ({
-  environmentId,
-  runEpoch,
-  sessionId: sessionId ?? SID,
-});
-
 export type WireEvent = Params["event"];
 type Payload<K extends WireEvent["kind"]> = Extract<WireEvent, { kind: K }>["payload"];
 export const tool = (payload: Payload<"tool">): WireEvent => ({ kind: "tool", payload });
@@ -76,7 +71,7 @@ export function captureWorkerTranscriptSource(
     throw new Error("expected admitted worker session");
   }
   const sessionTarget = {
-    ...target,
+    ...captureSessionTranscriptTargetBinding(target),
     expectedLifecycleRevision: entry.lifecycleRevision,
     expectedWriterRunId: entry.activeWriterRunId,
   };

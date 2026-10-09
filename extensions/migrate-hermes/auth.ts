@@ -1,4 +1,3 @@
-// Migrate Hermes plugin module implements auth behavior.
 import { createHash } from "node:crypto";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -10,6 +9,7 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOpenAICodexCredentialExtra,
@@ -39,7 +39,7 @@ import {
   readHermesCodexAuthCandidates,
   type HermesCodexAuthCandidate,
 } from "./auth-source.js";
-import { readText } from "./helpers.js";
+import { readJsonObject } from "./helpers.js";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
   HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
@@ -49,7 +49,6 @@ import {
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import type { HermesSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-6-astra";
@@ -88,19 +87,10 @@ function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): strin
 async function readOpenCodeOpenAICandidates(
   authPath: string | undefined,
 ): Promise<HermesCodexAuthCandidate[]> {
-  const raw = await readText(authPath);
-  if (!raw || !authPath) {
+  if (!authPath) {
     return [];
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed)) {
-    return [];
-  }
+  const parsed = await readJsonObject(authPath);
   const openai = isRecord(parsed.openai) ? parsed.openai : undefined;
   const access = normalizeOptionalString(openai?.access);
   const accountId = normalizeOptionalString(openai?.accountId);
@@ -244,24 +234,6 @@ async function readCodexAuthProfilesFromSource(
   return profiles;
 }
 
-async function readCodexAuthProfilesFromPath(params: {
-  sourcePath: string | undefined;
-  sourceKind: unknown;
-}): Promise<HermesCodexAuthProfile[]> {
-  if (params.sourceKind === "opencode-auth-json") {
-    return await readCodexAuthProfilesFromSource({
-      root: "",
-      archivePaths: [],
-      ...(params.sourcePath ? { opencodeAuthPath: params.sourcePath } : {}),
-    });
-  }
-  return await readCodexAuthProfilesFromSource({
-    root: "",
-    archivePaths: [],
-    ...(params.sourcePath ? { authPath: params.sourcePath } : {}),
-  });
-}
-
 function findMatchingProfile(
   store: AuthProfileStore,
   credential: OAuthCredential,
@@ -294,13 +266,6 @@ function oauthAuthProfileConfig(
   };
 }
 
-function matchesSourceCredentialFingerprint(
-  profile: HermesCodexAuthProfile,
-  fingerprint: string,
-): boolean {
-  return sourceCredentialFingerprint(profile.candidate) === fingerprint;
-}
-
 function findPlannedAuthProfile(params: {
   profiles: HermesCodexAuthProfile[];
   sourceProfileId: string;
@@ -314,7 +279,10 @@ function findPlannedAuthProfile(params: {
   if (!fingerprint) {
     return bySourceProfileId;
   }
-  if (bySourceProfileId && matchesSourceCredentialFingerprint(bySourceProfileId, fingerprint)) {
+  if (
+    bySourceProfileId &&
+    sourceCredentialFingerprint(bySourceProfileId.candidate) === fingerprint
+  ) {
     return bySourceProfileId;
   }
   const byIndex =
@@ -323,16 +291,18 @@ function findPlannedAuthProfile(params: {
       : params.profiles.find(
           (entry) => entry.candidate.sourceCredentialIndex === params.sourceCredentialIndex,
         );
-  if (byIndex && matchesSourceCredentialFingerprint(byIndex, fingerprint)) {
+  if (byIndex && sourceCredentialFingerprint(byIndex.candidate) === fingerprint) {
     return byIndex;
   }
-  return params.profiles.find((entry) => matchesSourceCredentialFingerprint(entry, fingerprint));
+  return params.profiles.find(
+    (entry) => sourceCredentialFingerprint(entry.candidate) === fingerprint,
+  );
 }
 
 export async function buildAuthItems(params: {
   ctx: MigrationProviderContext;
   source: HermesSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
   items.push(...(await buildReauthenticationItems(params.source)));
@@ -395,7 +365,7 @@ export async function buildAuthItems(params: {
 export async function applyAuthItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
 ): Promise<MigrationItem> {
   if (item.status !== "planned") {
     return item;
@@ -415,9 +385,12 @@ export async function applyAuthItem(
   if (!source || !profileId) {
     return markMigrationItemError(item, HERMES_REASON_MISSING_SECRET_METADATA);
   }
-  const profiles = await readCodexAuthProfilesFromPath({
-    sourcePath: source,
-    sourceKind: item.details?.sourceKind,
+  const profiles = await readCodexAuthProfilesFromSource({
+    root: "",
+    archivePaths: [],
+    ...(item.details?.sourceKind === "opencode-auth-json"
+      ? { opencodeAuthPath: source }
+      : { authPath: source }),
   });
   const profile = findPlannedAuthProfile({
     profiles,

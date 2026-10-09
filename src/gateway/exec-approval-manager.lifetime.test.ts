@@ -10,6 +10,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
@@ -51,6 +52,7 @@ function createPersistentManager() {
   const onExpired = vi.fn();
   const onLifecycle = vi.fn();
   const manager = createManager({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     persistence: { runtimeEpoch: "approval-lifetime", databaseOptions },
     onExpired,
     onLifecycle,

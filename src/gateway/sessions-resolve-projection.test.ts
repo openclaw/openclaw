@@ -2,8 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/index.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,19 +13,23 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState as withRawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import {
+  createArtifactSessionAccess,
+  prepareArtifactSessionResolution,
+} from "./server-methods/artifacts-session-resolution.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { RespondFn } from "./server-methods/types.js";
-import {
-  resetResolvedSessionKeyForRunCacheForTest,
-  resolveSessionKeyForRun,
-} from "./server-session-key.js";
+import { resolveSessionForRun } from "./server-session-key.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
-import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
+import {
+  resolveSessionKeyFromResolveParams,
+  withPreparedSessionResolve,
+} from "./sessions-resolve.js";
 
 const scope = { agentId: "main", sessionKey: "agent:main:target" };
 const entry = { sessionId: "target-id", updatedAt: 1, label: "original" };
@@ -179,11 +183,10 @@ describe("session resolution metadata", () => {
       const visible = { ...entry, visibility: "shared" as const };
       replaceSessionEntrySync(scope, visible);
       const lookup = async (p: SessionsResolveParams) =>
-        resolveSessionKeyFromResolveParams({
-          client,
-          p,
-          projection: await projectionFor(roleCfg),
-        });
+        withPreparedSessionResolve(
+          { client, p, projection: await projectionFor(roleCfg) },
+          (result) => result,
+        );
       for (let repeat = 0; repeat < 2; repeat++) {
         expect(await lookup({ key: scope.sessionKey })).toEqual(resolved);
         expect(await lookup({ label: entry.label })).toEqual(resolved);
@@ -263,7 +266,9 @@ describe("session resolution metadata", () => {
         });
       await request();
       const pending = request();
-      replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      queueMicrotask(() => {
+        replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      });
       await pending;
       await request();
 
@@ -271,8 +276,7 @@ describe("session resolution metadata", () => {
       const missing = [true, { ok: false }, undefined];
       expect(publications).toHaveLength(3);
       expect(publications[0]).toEqual({ visibility: "shared", response: found });
-      const raced = publications[1]!;
-      expect(raced.response).toEqual(raced.visibility === "shared" ? found : missing);
+      expect(publications[1]).toEqual({ visibility: "shared", response: found });
       expect(publications[2]).toEqual({ visibility: "draft", response: missing });
     });
   });
@@ -390,8 +394,12 @@ describe("gateway session lookups", () => {
     await withOpenClawTestState({ label: "lookup-runid-projection" }, async () => {
       setRuntimeConfigSnapshot(cfg);
       seedStore();
-      resetResolvedSessionKeyForRunCacheForTest();
 
+      const projection = await projectionFor();
+      const context = bindSessionRowProjection(
+        createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        () => projection,
+      );
       const parse = vi.spyOn(JSON, "parse");
       try {
         for (const runId of ["target-id", "absent-run-id"]) {
@@ -401,7 +409,7 @@ describe("gateway session lookups", () => {
             "artifact list handler",
           )({
             params: { runId, agentId: "main" },
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+            context,
             req: { type: "req", id: runId, method: "artifacts.list" },
             client: null,
             isWebchatConnect: () => false,
@@ -422,8 +430,53 @@ describe("gateway session lookups", () => {
         expect(parse.mock.calls.some(([json]) => json.includes(SIBLING_MARKER))).toBe(false);
       } finally {
         parse.mockRestore();
-        resetResolvedSessionKeyForRunCacheForTest();
       }
+    });
+  });
+
+  it("keeps a shared-store run scoped to its logical owner", async () => {
+    await withOpenClawTestState({ label: "lookup-shared-owner" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      const sharedConfig: OpenClawConfig = {
+        agents: {
+          entries: { main: {}, ops: {} },
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+        session: { scope: "global", store: storePath },
+      };
+      setRuntimeConfigSnapshot(sharedConfig);
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      replaceSessionEntrySync(
+        { agentId: "ops", storePath, sessionKey: "global" },
+        { sessionId: "shared-run", updatedAt: 1 },
+      );
+      const projection = await projectionFor(sharedConfig);
+      expect(
+        projection.findBySessionId({ sessionId: "shared-run", agentId: "main", federated: true }),
+      ).toMatchObject([{ agentId: "ops", key: "global", storeTarget: { agentId: "main" } }]);
+      expect(resolveSessionForRun("shared-run", { agentId: "ops", projection })).toEqual({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      expect
+        .soft(resolveSessionForRun("shared-run", { agentId: "main", projection }))
+        .toBeUndefined();
+      expect.soft(resolveSessionForRun("shared-run", { projection })).toEqual({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      const resolveArtifacts = await prepareArtifactSessionResolution(
+        { runId: "shared-run" },
+        projection,
+      );
+      using access = createArtifactSessionAccess({
+        getRuntimeConfig: () => sharedConfig,
+        client: null,
+      });
+      expect(await resolveArtifacts(access)).toMatchObject({
+        sessionKey: "global",
+        agentId: "ops",
+      });
     });
   });
 
@@ -448,13 +501,47 @@ describe("gateway session lookups", () => {
           skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
         },
       );
-      resetResolvedSessionKeyForRunCacheForTest();
 
-      const observed = measureSiblingDecodes(() =>
-        resolveSessionKeyForRun("shared-id", { agentId: "main" }),
-      );
-      expect(observed.result).toBe("fresh");
+      const projection = await projectionFor();
+      const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const observed = measureSiblingDecodes(() => {
+        for (let run = 0; run < 20; run++) {
+          expect(resolveSessionForRun(`orphan-${run}`, { projection })).toBeUndefined();
+        }
+        return resolveSessionForRun("shared-id", { agentId: "main", projection });
+      });
+      expect(statements).not.toHaveBeenCalled();
+      statements.mockRestore();
+      expect(observed.result).toEqual({ sessionKey: "agent:main:fresh", agentId: "main" });
       expect(observed.decodes).toBe(0);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:stale" },
+        { sessionId: "shared-id", updatedAt: 100 },
+      );
+      expect(resolveSessionForRun("shared-id", { projection })).toEqual({
+        sessionKey: "agent:main:stale",
+        agentId: "main",
+      });
+      expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:late" },
+        { sessionId: "late-id", updatedAt: 1 },
+      );
+      expect(resolveSessionForRun("late-id", { projection })).toEqual({
+        sessionKey: "agent:main:late",
+        agentId: "main",
+      });
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:late" },
+        { sessionId: "rolled-id", updatedAt: 2 },
+      );
+      expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
+      expect(resolveSessionForRun("rolled-id", { projection })).toEqual({
+        sessionKey: "agent:main:late",
+        agentId: "main",
+      });
+      projection.dispose();
+      expect(resolveSessionForRun("rolled-id", { projection })).toBeUndefined();
     });
   });
 });

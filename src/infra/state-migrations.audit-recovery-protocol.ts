@@ -123,39 +123,27 @@ export function auditRecoveryStateMatchesJournal(params: {
   if (current.length < original.length) {
     return false;
   }
-  if (progress.direction === "scrubbing") {
-    return (
-      current
-        .subarray(0, progress.committedBytes)
-        .equals(scrubbed.subarray(0, progress.committedBytes)) &&
-      auditRecoveryTransitionMatches(
-        current,
-        original,
-        scrubbed,
-        progress.committedBytes,
-        progress.pendingEnd,
-      ) &&
-      current
-        .subarray(progress.pendingEnd, original.length)
-        .equals(original.subarray(progress.pendingEnd))
-    );
-  }
+  const scrubbing = progress.direction === "scrubbing";
+  const desired = scrubbing ? scrubbed : original;
+  const previous = scrubbing ? original : scrubbed;
+  const previousEnd = scrubbing ? original.length : progress.extentBytes;
   return (
     current
       .subarray(0, progress.committedBytes)
-      .equals(original.subarray(0, progress.committedBytes)) &&
+      .equals(desired.subarray(0, progress.committedBytes)) &&
     auditRecoveryTransitionMatches(
       current,
-      scrubbed,
-      original,
+      previous,
+      desired,
       progress.committedBytes,
       progress.pendingEnd,
     ) &&
     current
-      .subarray(progress.pendingEnd, progress.extentBytes)
-      .equals(scrubbed.subarray(progress.pendingEnd, progress.extentBytes)) &&
-    current
-      .subarray(progress.extentBytes, original.length)
-      .equals(original.subarray(progress.extentBytes))
+      .subarray(progress.pendingEnd, previousEnd)
+      .equals(previous.subarray(progress.pendingEnd, previousEnd)) &&
+    (scrubbing ||
+      current
+        .subarray(progress.extentBytes, original.length)
+        .equals(original.subarray(progress.extentBytes)))
   );
 }

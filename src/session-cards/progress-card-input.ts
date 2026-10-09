@@ -4,7 +4,7 @@ import {
   PROGRESS_CARD_MAX_STEPS,
   PROGRESS_CARD_MAX_UTF8_BYTES,
   type ProgressCardStep,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/progress-card.js";
 import { stripInvisibleUnicode } from "../infra/unicode-visibility.js";
 
 const PLAN_PROGRESS_TOOL_NAMES = new Set(["progress_card", "update_plan"]);

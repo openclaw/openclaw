@@ -173,7 +173,10 @@ class ProgressDisclosureController {
     if (this.touching || this.scrolling) {
       return;
     }
-    this.flushGesture();
+    // The idle timer can precede the first native offset; no movement has settled yet.
+    if (!this.gesture?.valid || this.gesture.distancePx > 0) {
+      this.flushGesture();
+    }
     if (this.state.distancePx > 0) {
       this.dispatch({ type: "settle" });
       this.apply();
@@ -181,12 +184,15 @@ class ProgressDisclosureController {
   }
 
   private readonly handleTranscriptScroll = (observation: TranscriptScrollObservation) => {
-    if (observation.type === "resize") {
+    if (observation.type !== "input" && observation.type !== "offset") {
       return;
     }
     this.touching = observation.touching;
     if (observation.type === "offset") {
       this.scrolling = observation.scrolling;
+      if (observation.programmatic && this.gesture?.distancePx === 0) {
+        this.gesture = undefined;
+      }
       if (!observation.programmatic && observation.delta !== 0) {
         if (this.gesture) {
           this.gesture.distancePx += Math.max(0, -observation.delta);
@@ -413,8 +419,7 @@ class ProgressDisclosureController {
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
           ? this.limit()
           : 1;
-    const extent = this.extent();
-    const next = Math.max(0, Math.min(this.limit(), extent - event.deltaY * unit));
+    const next = this.extent() - event.deltaY * unit;
     // The header is the only wheel target. Body and transcript scrolling stay native.
     event.preventDefault();
     // Accepted input owns the panel even when its extent is already clamped.

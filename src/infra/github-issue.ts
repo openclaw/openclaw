@@ -3,12 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
-export type PreparedGithubIssue = {
-  body: string;
-  browserFallback: GithubIssueBrowserFallback;
-  marker: string;
-  title: string;
-};
+export type PreparedGithubIssue = ReturnType<typeof prepareGithubIssue>;
 
 type GithubIssueBrowserFallback =
   | { status: "available"; url: string }
@@ -81,18 +76,13 @@ function boundUtf8(value: string, maxBytes: number, suffix: string): string {
   return `${truncateUtf8Prefix(value, Math.max(0, maxBytes - suffixBytes))}${suffix}`;
 }
 
-function buildPrefilledUrl(title: string, body: string): string {
-  const query = new URLSearchParams({ body, title });
-  return `https://github.com/openclaw/openclaw/issues/new?${query.toString()}`;
-}
-
 /** Builds an exact browser fallback when its encoded request stays within a safe bound. */
 function prepareGithubIssueBrowserFallback(
   title: string,
   body: string,
 ): GithubIssueBrowserFallback {
-  const boundedTitle = boundUtf8(title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
-  const url = buildPrefilledUrl(boundedTitle, body);
+  const query = new URLSearchParams({ body, title });
+  const url = `https://github.com/openclaw/openclaw/issues/new?${query.toString()}`;
   if (Buffer.byteLength(url, "utf8") > GITHUB_PREFILL_URL_MAX_BYTES) {
     return { reason: "url-too-long", status: "unavailable" };
   }
@@ -100,7 +90,7 @@ function prepareGithubIssueBrowserFallback(
 }
 
 /** Bounds sanitized content and adds the stable marker used for reconciliation. */
-export function prepareGithubIssue(input: { body: string; title: string }): PreparedGithubIssue {
+export function prepareGithubIssue(input: { body: string; title: string }) {
   const title = boundUtf8(input.title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
   const boundedBody = boundUtf8(
     input.body,

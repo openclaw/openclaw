@@ -17,6 +17,24 @@ and applications that require unsupported browser features.
 The examples pin Lightpanda **0.4.1**. They do not change your existing browser
 profile, install a service, or migrate a logged-in Chrome profile.
 
+## Browser plugin architecture
+
+The bundled Browser plugin owns both engine adapters. Chromium and Lightpanda
+use the same `browser` tool, profile selection, route admission, navigation
+policy, and session lifecycle. The registered adapter selects capabilities,
+CDP normalization, snapshot defaults, and connection lifetime; it does not add
+a second browser tool or process manager.
+
+Browser status reports `availableEngines` and the selected engine's
+`sessionScope` and `screenshotFidelity`. Chromium keeps its managed,
+existing-session, extension-relay, and remote-CDP profiles. Lightpanda remains
+an explicitly selected, attach-only external engine with one page per
+connection and no automatic read replay after session loss.
+
+These are adapters inside the existing plugin, not separately installable
+third-party plugins. Enabling the adapter does not download, launch, or bundle
+the Lightpanda engine. Existing profiles and engine configuration are unchanged.
+
 ## Licensing and distribution
 
 OpenClaw's adapter remains MIT-licensed. The optional Lightpanda engine is

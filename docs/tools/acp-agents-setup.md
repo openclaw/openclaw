@@ -255,17 +255,19 @@ Then verify backend health:
 /acp doctor
 ```
 
-### acpx runtime startup probe
+<a id="acpx-runtime-startup-probe" />
+
+### acpx runtime startup check
 
 The `acpx` plugin embeds the ACP runtime directly (no separate `acpx` binary or
 version to configure). By default it registers the embedded backend during
-Gateway startup and waits for one health probe before the gateway `ready`
-signal. That probe also supplies failure diagnostics and is bounded by
+Gateway startup and waits for one health check before the gateway `ready`
+signal. That check also supplies failure diagnostics and is bounded by
 `plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
-launch a second probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+launch a second check. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
-intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
-on-demand probe.
+intentionally keep the startup check disabled. Run `/acp doctor` for an explicit
+on-demand check.
 
 Override an individual ACP agent command with structured arguments when a path
 or flag value should remain one argv token:
@@ -376,12 +378,14 @@ is `agents.defaults.subagents.runTimeoutSeconds`. With the default hybrid reload
 mode, changing `timeoutSeconds` automatically reloads the plugin. See
 [Config hot reload](/gateway/configuration/hot-reload).
 
-### Health probe agent configuration
+<a id="health-probe-agent-configuration" />
 
-When `/acp doctor` or the startup probe checks the backend, the bundled `acpx`
-plugin probes one harness agent. If `acp.allowedAgents` is set, it defaults to
+### Health check agent configuration
+
+When `/acp doctor` or the startup check verifies the backend, the bundled `acpx`
+plugin checks one harness agent. If `acp.allowedAgents` is set, it defaults to
 the first allowed agent; otherwise it defaults to `codex`. If your deployment
-needs a different ACP agent for health checks, set the probe agent explicitly:
+needs a different ACP agent for health checks, set the check agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude
@@ -395,7 +399,8 @@ Run `/acp doctor` to check the updated backend.
 ACP sessions run without an interactive TTY for file-write and shell-exec
 permission prompts. This does not disable ACP form or URL elicitation during a
 channel-delivered turn: those requests use transient Gateway questions instead.
-The acpx plugin provides two config keys that control harness permissions:
+The acpx plugin provides two config keys that control harness permissions,
+`permissionMode` and `nonInteractivePermissions`, both described below.
 
 These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 

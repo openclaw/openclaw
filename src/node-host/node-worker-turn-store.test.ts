@@ -180,7 +180,7 @@ describe("node worker turn journal", () => {
   it("keeps completed turn receipts independent of the physical slot and later turns across reopen", async () => {
     expect(isMainThread).toBe(true);
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-turn-store-") };
-    const parentSql = observeHostDataSql(env);
+    const parentSql = observeHostDataSql();
     try {
       const f = await fixture({ pid: 17, startTime: 23 }, env);
       expect(

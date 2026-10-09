@@ -48,17 +48,6 @@ describe("matrix directory live", () => {
     requestJsonMock.mockResolvedValue({ results: [] });
   });
 
-  it("passes accountId to peer directory auth resolution", async () => {
-    await listMatrixDirectoryPeersLive({
-      cfg,
-      accountId: "assistant",
-      query: "alice",
-      limit: 10,
-    });
-
-    expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
-  });
-
   it("passes accountId to group directory auth resolution", async () => {
     await listMatrixDirectoryGroupsLive({
       cfg,
@@ -124,10 +113,12 @@ describe("matrix directory live", () => {
   it("preserves query casing when searching the Matrix user directory", async () => {
     await listMatrixDirectoryPeersLive({
       cfg,
+      accountId: "assistant",
       query: "Alice",
       limit: 3,
     });
 
+    expect(resolveMatrixAuth).toHaveBeenCalledWith({ cfg, accountId: "assistant" });
     expect(requestJsonMock).toHaveBeenCalledWith({
       method: "POST",
       endpoint: "/_matrix/client/v3/user_directory/search",

@@ -1,14 +1,26 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
+
+export function readOriginalUpdateRecovery(
+  params: Pick<MutableUpdateExecutionParams, "installKind" | "root">,
+  timeoutMs: number,
+) {
+  return params.installKind === "git"
+    ? readCurrentGitUpdateRecovery(params.root, timeoutMs)
+    : verifyPackageUpdateRecovery(params.root);
+}
 
 /** Refuse retained recovery before any package-only effects or diagnostic writes. */
 export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
@@ -22,11 +34,9 @@ export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): vo
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  if (opts.run) {
-    const current = loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
-    if (current) {
-      throw new UpdateRecoveryRequiredError(current);
-    }
+  const current = opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
+  if (current) {
+    throw new UpdateRecoveryRequiredError(current);
   }
 }
 
@@ -73,7 +83,7 @@ export function createUpdateCommandFinalizationFence(
 ): () => void {
   const originalRun = params.opts.run;
   const executor = originalRun?.executorFence;
-  const assertCurrent = () => {
+  return () => {
     try {
       if (params.opts.run !== originalRun || originalRun?.executorFence !== executor) {
         throw new Error("Package finalization lost its original executor.");
@@ -85,5 +95,4 @@ export function createUpdateCommandFinalizationFence(
       });
     }
   };
-  return assertCurrent;
 }

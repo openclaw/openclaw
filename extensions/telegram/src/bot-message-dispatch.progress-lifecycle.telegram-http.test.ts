@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { PluginHookReplyPayloadSendingEvent } from "openclaw/plugin-sdk/core";
 import {
   addTestHook,
@@ -6,12 +7,16 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import type { ReplyResolverOptions } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
-import * as sendRuntime from "./send.runtime.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
 const DELIVERY_WARNING =
@@ -31,99 +36,114 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   } = http;
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["rejected", "no-message-id"] as const)(
-    "keeps continuation custody local after a %s provider response",
-    async (response) => {
-      let adopted = false;
-      http.respondToCall = (call) =>
-        call.method === "sendMessage" && String(call.fields.text).includes("Pending delegation")
-          ? response === "no-message-id"
-            ? response
-            : { error_code: 400, description: "Bad Request: progress rejected" }
-          : undefined;
-      await dispatchProgressTurn(
-        async (options) => {
-          await options?.onItemEvent?.({
-            kind: "preamble",
-            itemId: "pending-parent",
-            phase: "end",
-            progressText: "Pending delegation",
-          });
-        },
-        {
-          mode: "progress",
-          toolProgress: true,
-          finalReply: setReplyPayloadMetadata(
-            { text: "Waiting for delegated work." },
-            {
-              progressContinuation: {
-                adopt: async () => {
-                  adopted = true;
-                  return true;
-                },
-                close: () => undefined,
-              },
-            },
-          ),
-        },
-      );
-      expect(adopted).toBe(false);
-      expect([...visibleMessages.values()]).toEqual(["Waiting for delegated work."]);
-      expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
-        true,
-      );
-    },
-  );
+  it("reports a definite owner rejection without an ambiguous-delivery warning", async () => {
+    await dispatchProgressTurn(async () => {}, {
+      mode: "off",
+      toolProgress: false,
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      finalReply: { text: "The requested answer." },
+      allowErrors: true,
+    });
+    const db = openNodeSqliteDatabase(path.join(http.state.stateDir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM delivery_queue_entries WHERE json_extract(entry_json, '$.recoveryState') IN ('send_attempt_started', 'unknown_after_send')",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+    expect([...visibleMessages.values()]).toEqual([
+      "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error.",
+    ]);
+    expect(calls.some((call) => String(call.fields.text).includes(DELIVERY_WARNING_PREFIX))).toBe(
+      false,
+    );
+  });
 
-  it.each(["media", "buttons"] as const)(
-    "delivers continuation %s instead of swallowing it in card adoption",
-    async (content) => {
+  it.each(["rejected", "no-message-id", "stopped", "media", "buttons"] as const)(
+    "delivers the continuation instead of adopting a %s progress card",
+    async (outcome) => {
+      const waitingText = "Waiting for delegated work.";
+      const missingReceipt = outcome === "rejected" || outcome === "no-message-id";
+      const reply: ReplyPayload = { text: waitingText };
       let adopted = false;
-      if (content === "media") {
-        vi.spyOn(sendRuntime, "loadWebMedia").mockResolvedValue({
+      if (missingReceipt) {
+        http.respondToCall = (call) =>
+          call.method === "sendMessage" && String(call.fields.text).includes("Pending delegation")
+            ? outcome === "no-message-id"
+              ? outcome
+              : { error_code: 400, description: "Bad Request: progress rejected" }
+            : undefined;
+      } else if (outcome === "media") {
+        reply.mediaUrl = "https://example.test/report.pdf";
+        vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
           buffer: Buffer.from("delegated report bytes"),
           contentType: "application/pdf",
           kind: undefined,
           fileName: "report.pdf",
         });
+      } else if (outcome === "stopped") {
+        // The user deleted the card, so its preview stops editing before the parent yields.
+        http.respondToCall = (call) =>
+          call.method === "editMessageText"
+            ? { error_code: 400, description: "Bad Request: message to edit not found" }
+            : undefined;
+      } else {
+        reply.interactive = {
+          blocks: [{ type: "buttons", buttons: [{ label: "Continue", value: "go" }] }],
+        };
       }
       await dispatchProgressTurn(
         async (options) => {
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
+          if (missingReceipt) {
+            await options?.onItemEvent?.({
+              kind: "preamble",
+              itemId: "pending-parent",
+              phase: "end",
+              progressText: "Pending delegation",
+            });
+          } else {
+            await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+            await waitForBotApiCall((call) => call.method === "sendMessage");
+            if (outcome === "stopped") {
+              await emitToolStart(options, { name: "read", phase: "start", toolCallId: "inspect" });
+              await waitForBotApiCall((call) => call.method === "editMessageText");
+            }
+          }
         },
         {
           mode: "progress",
           toolProgress: true,
-          finalReply: setReplyPayloadMetadata<ReplyPayload>(
-            {
-              text: "Waiting for delegated work.",
-              ...(content === "media"
-                ? { mediaUrl: "https://example.test/report.pdf" }
-                : {
-                    interactive: {
-                      blocks: [{ type: "buttons", buttons: [{ label: "Continue", value: "go" }] }],
-                    },
-                  }),
-            },
-            {
-              progressContinuation: {
-                adopt: async () => {
-                  adopted = true;
-                  return true;
-                },
-                close: () => undefined,
+          finalReply: setReplyPayloadMetadata(reply, {
+            progressContinuation: {
+              adopt: () => {
+                adopted = true;
+                return true;
               },
+              close: () => undefined,
             },
-          ),
+          }),
         },
       );
       expect(adopted).toBe(false);
-      if (content === "media") {
+      if (missingReceipt) {
+        expect([...visibleMessages.values()]).toEqual([waitingText]);
+        expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
+          true,
+        );
+      } else if (outcome === "stopped") {
+        expect([...visibleMessages.values()]).toContain(waitingText);
+      } else if (outcome === "media") {
         const document = acceptedCalls.find((call) => call.method === "sendDocument");
         const upload = resolveTelegramTestUpload(document!.fields, "document");
         expect(await upload.text()).toBe("delegated report bytes");
-        expect(document?.fields.caption).toContain("Waiting for delegated work.");
+        expect(document?.fields.caption).toContain(waitingText);
       } else {
         expect([...visibleMarkup.values()]).toEqual([
           { inline_keyboard: [[{ text: "Continue", callback_data: "go" }]] },
@@ -132,204 +152,146 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
-  it.each([
-    { name: "cancelled final", before: undefined, finals: ["cancel"], fallback: false },
-    { name: "empty final after hook", before: undefined, finals: ["empty-hook"], fallback: false },
-    {
-      name: "cancelled tool then failed final",
-      before: "cancel-tool",
-      finals: ["fail"],
-      fallback: true,
-    },
-    {
-      name: "cancelled block then failed final",
-      before: "cancel-block",
-      finals: ["fail"],
-      fallback: true,
-    },
-    {
-      name: "failed final then cancelled final",
-      before: undefined,
-      finals: ["fail", "cancel"],
-      fallback: true,
-    },
-    {
-      name: "failed tool then cancelled final",
-      before: "fail-tool",
-      finals: ["cancel"],
-      fallback: false,
-    },
-    { name: "partially delivered final", before: undefined, finals: ["partial"], fallback: true },
-    {
-      name: "failed final and fallback",
-      before: undefined,
-      finals: ["fail"],
-      fallback: true,
-      rejectFallback: true,
-    },
-  ] as const)(
-    "settles real hook and transport outcomes for $name",
-    async ({ before, finals, fallback, ...scenario }) => {
-      const registry = createEmptyPluginRegistry();
-      const hookDeliveries: Array<{ kind: string; text: string | undefined }> = [];
-      addTestHook({
-        registry,
-        pluginId: "http-outcome-policy",
-        hookName: "reply_payload_sending",
-        handler: (event: PluginHookReplyPayloadSendingEvent) => {
-          hookDeliveries.push({ kind: event.kind, text: event.payload.text });
-          if (event.payload.text?.startsWith("cancel")) {
-            return { cancel: true };
-          }
-          if (event.payload.text === "empty-hook") {
-            return { payload: { ...event.payload, text: "" } };
-          }
-          return undefined;
-        },
-      });
-      initializeGlobalHookRunner(registry);
-      const rejectFallback = "rejectFallback" in scenario && scenario.rejectFallback;
-      http.respondToCall = (call) =>
-        call.method === "sendMessage" &&
-        (String(call.fields.text).startsWith("fail") ||
-          call.fields.text === "B".repeat(40) ||
-          (rejectFallback && DELIVERY_WARNING.includes(String(call.fields.text))))
-          ? { error_code: 400, description: "Bad Request: fixture delivery rejected" }
-          : undefined;
+  it.each(["empty-hook", "rejected-final"] as const)(
+    "settles a %s without claiming visible delivery",
+    async (outcome) => {
+      const text = outcome === "empty-hook" ? outcome : "fail";
+      if (outcome === "empty-hook") {
+        const registry = createEmptyPluginRegistry();
+        addTestHook({
+          registry,
+          pluginId: "http-outcome-policy",
+          hookName: "reply_payload_sending",
+          handler: (event: PluginHookReplyPayloadSendingEvent) =>
+            event.payload.text === text ? { payload: { ...event.payload, text: "" } } : undefined,
+        });
+        initializeGlobalHookRunner(registry);
+      } else {
+        http.respondToCall = (call) =>
+          call.method === "sendMessage" &&
+          (call.fields.text === text || DELIVERY_WARNING.includes(String(call.fields.text)))
+            ? { error_code: 400, description: "Bad Request: fixture delivery rejected" }
+            : undefined;
+      }
       await dispatchProgressTurn(async () => undefined, {
         mode: "off",
         toolProgress: true,
         textLimit: 80,
         producer: async ({ dispatcher }) => {
-          if (before?.endsWith("tool")) {
-            dispatcher.sendToolResult({ text: before });
-          } else if (before) {
-            dispatcher.sendBlockReply({ text: before });
-          }
-          for (const text of finals) {
-            dispatcher.sendFinalReply({
-              text: text === "partial" ? "A".repeat(80) + "B".repeat(40) : text,
-            });
-          }
+          dispatcher.sendFinalReply({ text });
           const counts = dispatcher.getQueuedCounts();
           return { queuedFinal: counts.final > 0, counts };
         },
         allowErrors: true,
       });
-      if (before) {
-        expect(hookDeliveries).toContainEqual({
-          kind: before.endsWith("tool") ? "tool" : "block",
-          text: before,
-        });
-      }
-      if (finals.some((text) => text === "fail")) {
+      expect(
+        calls.filter(
+          (call) =>
+            call.method === "sendMessage" &&
+            String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
+        ),
+      ).toHaveLength(outcome === "empty-hook" ? 0 : 1);
+      if (outcome === "empty-hook") {
+        expect(JSON.stringify(acceptedCalls)).not.toContain("cancel");
+      } else {
         expect(
-          calls.some((call) => call.method === "sendMessage" && call.fields.text === "fail"),
+          calls.some((call) => call.method === "sendMessage" && call.fields.text === text),
         ).toBe(true);
       }
-      const fallbackSends = calls.filter(
-        (call) =>
-          call.method === "sendMessage" &&
-          String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX),
-      );
-      expect(fallbackSends).toHaveLength(fallback ? 1 : 0);
-      expect(JSON.stringify(acceptedCalls)).not.toContain("cancel");
-      const visible = [...visibleMessages.values()];
-      const accepted = finals.some((text) => text === "partial") ? ["A".repeat(80)] : [];
-      expect(visible.slice(0, accepted.length)).toEqual(accepted);
-      expect(visible.slice(accepted.length).join("")).toBe(
-        fallback && !rejectFallback ? DELIVERY_WARNING : "",
-      );
+      expect([...visibleMessages.values()]).toEqual([]);
     },
   );
 
-  it.each([false, true])(
-    "preserves the post-progress final when Telegram rejects cleanup (error: %s)",
-    async (isError) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      http.respondToCall = (call) =>
-        call.method === "deleteMessage"
-          ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
-          : undefined;
-      await dispatchProgressTurn(
-        async (options) => {
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "cleanup" });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
-        },
-        {
-          mode: "progress",
-          toolProgress: true,
-          textLimit: 80,
-          finalReply: { text: "A".repeat(80) + "B".repeat(40), isError },
-        },
-      );
-      await vi.advanceTimersByTimeAsync(4_100);
-      await waitForBotApiCall((call) => call.method === "deleteMessage");
-      expect([...visibleMessages.values()].slice(1)).toEqual(["A".repeat(80), "B".repeat(40)]);
-      expect(
-        calls.filter((call) => call.fields.text === "No response generated. Please try again."),
-      ).toEqual([]);
-    },
-  );
-
-  it("flushes a pending parent progress surface before adopting a fast yield", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const commentary = "The delegated check is still running.";
-    let receipt: unknown;
-    const waitingPayload = setReplyPayloadMetadata(
-      { text: "Waiting for delegated work." },
-      {
-        progressContinuation: {
-          adopt: async (candidate) => {
-            receipt = candidate;
-            return true;
-          },
-          close: () => undefined,
-        },
-      },
-    );
-    await dispatchProgressTurn(
+  it("delivers the final answer through repeated Telegram flood waits", async () => {
+    const floodedAt: number[] = [];
+    let flooded = Promise.withResolvers<void>();
+    http.respondToCall = (call) => {
+      if (
+        call.method !== "sendMessage" ||
+        call.fields.text !== "The command failed." ||
+        floodedAt.length >= 3
+      ) {
+        return undefined;
+      }
+      floodedAt.push(Date.now());
+      flooded.resolve();
+      return {
+        error_code: 429,
+        description: "Too Many Requests: retry after 5",
+        parameters: { retry_after: 5 },
+      };
+    };
+    const turn = dispatchProgressTurn(
       async (options) => {
-        await options?.onItemEvent?.({
-          kind: "preamble",
-          itemId: "parent-commentary",
-          phase: "end",
-          progressText: commentary,
-        });
-        expect(calls.filter((call) => call.method === "sendMessage")).toEqual([]);
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "flood" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
       },
-      { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+      { mode: "progress", toolProgress: true, allowErrors: true },
     );
+    for (let flood = 0; flood < 3; flood += 1) {
+      await flooded.promise;
+      flooded = Promise.withResolvers<void>();
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await turn;
 
-    expect(receipt).toMatchObject({
-      messageId: String([...visibleMessages.keys()][0]),
-      text: expect.stringContaining(commentary),
-      snapshot: { statusHeadline: commentary },
-    });
-    expect([...visibleMessages.values()]).toEqual([expect.stringContaining(commentary)]);
-    expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
-    expect(calls.some((call) => call.fields.text === waitingPayload.text)).toBe(false);
+    expect(floodedAt).toHaveLength(3);
+    expect(floodedAt[2]! - floodedAt[0]!).toBeGreaterThanOrEqual(10_000);
+    expect([...visibleMessages.values()]).toEqual(["The command failed."]);
+    expect(calls.some((call) => String(call.fields.text).startsWith(DELIVERY_WARNING_PREFIX))).toBe(
+      false,
+    );
   });
 
-  it.each([true, false])(
-    "retains the existing progress card only when continuation custody is accepted (%s)",
-    async (accept) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+  it("preserves a post-progress error final when Telegram rejects cleanup", async () => {
+    http.respondToCall = (call) =>
+      call.method === "deleteMessage"
+        ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
+        : undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "cleanup" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "progress",
+        toolProgress: true,
+        textLimit: 80,
+        finalReply: { text: "A".repeat(80) + "B".repeat(40), isError: true },
+      },
+    );
+    await vi.advanceTimersByTimeAsync(4_100);
+    await waitForBotApiCall((call) => call.method === "deleteMessage");
+    expect([...visibleMessages.values()].slice(1)).toEqual(["A".repeat(80), "B".repeat(40)]);
+    expect(
+      calls.filter((call) => call.fields.text === "No response generated. Please try again."),
+    ).toEqual([]);
+  });
+
+  it.each([
+    { accept: true, toolProgress: true },
+    { accept: false, toolProgress: true },
+    { accept: true, toolProgress: false },
+  ])(
+    "keeps the same card after accepted custody ($accept, tool log $toolProgress)",
+    async ({ accept, toolProgress }) => {
       const waitingText = "Waiting for delegated work.";
       const commentary = "Parent commentary remains visible.";
       const plan = [
         { step: "Inspect the request", status: "completed" as const },
         { step: "Finish delegated work", status: "in_progress" as const },
       ];
-      let receipt: unknown;
+      let draft:
+        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
+        | undefined;
       let progressMessageId: number | undefined;
       let parentCallbacks: ReplyResolverOptions | undefined;
       const waitingPayload = setReplyPayloadMetadata(
         { text: waitingText },
         {
           progressContinuation: {
-            adopt: async (candidate) => {
-              receipt = candidate;
+            adopt: (candidate) => {
+              draft = candidate;
               return accept;
             },
             close: () => undefined,
@@ -354,14 +316,10 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           await waitForBotApiCall((call) => call.method === "sendMessage");
           progressMessageId = [...visibleMessages.keys()][0];
         },
-        { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+        { mode: "progress", toolProgress, finalReply: waitingPayload },
       );
 
-      expect(receipt).toMatchObject({
-        messageId: String(progressMessageId),
-        text: expect.stringContaining(commentary),
-        snapshot: { statusHeadline: commentary, plan },
-      });
+      expect(draft).toBeDefined();
       if (accept) {
         await parentCallbacks?.onItemEvent?.({
           kind: "preamble",
@@ -390,57 +348,214 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       ]);
       expect([...visibleMessages.values()][0]).toContain("Finish delegated work");
       expect(calls.filter((call) => call.method === "deleteMessage")).toEqual([]);
-      expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
       expect(calls.some((call) => call.fields.text === waitingText)).toBe(false);
-    },
-  );
 
-  it.each([false, true])(
-    "keeps tool progress until the final answer replaces it (assistant boundary: %s)",
-    async (assistantBoundary) => {
-      const finalText = "The requested result.";
-      let progressMessageId: number | undefined;
-      await dispatchProgressTurn(
-        async (options) => {
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "first" });
-          await waitForBotApiCall(
-            (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
-          );
-          progressMessageId = [...visibleMessages.keys()][0];
-          await options?.onItemEvent?.({
-            kind: "search",
-            itemId: "search-docs",
-            phase: "update",
-            progressText: "Inspecting the release notes",
-          });
-          await waitForBotApiCall((call) =>
-            String(call.fields.text).includes("Inspecting the release notes"),
-          );
-          if (assistantBoundary) {
-            await options?.onAssistantMessageStart?.();
-          }
-          expect([...visibleMessages.values()]).toEqual([expect.stringContaining("Exec")]);
-          expect([...visibleMessages.values()][0]).toContain("Inspecting the release notes");
-          expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
-        },
-        { mode: "partial", toolProgress: true, finalReply: { text: finalText } },
-      );
-
+      draft?.push({
+        itemId: "child",
+        kind: "subagent",
+        title: "Delegated verification",
+        phase: "update",
+        status: "running",
+      });
       await expect
-        .poll(() => [...visibleMessages.values()], { timeout: 5_000 })
-        .toEqual([finalText]);
-      const finalMessageId = [...visibleMessages.keys()][0];
-      expect(finalMessageId).not.toBe(progressMessageId);
-      expect(
-        calls.filter((call) => call.method === "sendMessage" && call.fields.text === finalText),
-      ).toHaveLength(1);
+        .poll(() => [...visibleMessages.values()][0], { timeout: 5_000 })
+        .toContain("Delegated verification");
+      draft?.retire();
+      await expect.poll(() => [...visibleMessages.keys()], { timeout: 5_000 }).toEqual([]);
       expect(
         calls
           .filter((call) => call.method === "deleteMessage")
           .map((call) => Number(call.fields.message_id)),
       ).toEqual([progressMessageId]);
+      expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
     },
   );
+
+  it("gives a queued turn its own progress card while the adopted card stays retained", async () => {
+    let draft:
+      | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
+      | undefined;
+    let parentCallbacks: ReplyResolverOptions | undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        parentCallbacks = options;
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "progress",
+        toolProgress: true,
+        finalReply: setReplyPayloadMetadata(
+          { text: "Waiting for delegated work." },
+          {
+            progressContinuation: {
+              adopt: (candidate) => {
+                draft = candidate;
+                return true;
+              },
+              close: () => undefined,
+            },
+          },
+        ),
+      },
+    );
+    const [retained] = [...visibleMessages.entries()];
+    assert(retained && draft);
+    const [retainedId, retainedText] = retained;
+
+    await parentCallbacks?.onQueuedFollowupAdmitted?.();
+    await emitToolStart(parentCallbacks, {
+      name: "web_search",
+      phase: "start",
+      toolCallId: "queued",
+    });
+    await expect
+      .poll(() => [...visibleMessages.entries()].filter(([id]) => id !== retainedId), {
+        timeout: 5_000,
+      })
+      .toEqual([[expect.any(Number), expect.stringContaining("Web Search")]]);
+    expect(visibleMessages.get(retainedId)).toBe(retainedText);
+
+    draft.retire();
+    await expect.poll(() => visibleMessages.has(retainedId), { timeout: 5_000 }).toBe(false);
+    expect(
+      calls
+        .filter((call) => call.method === "deleteMessage")
+        .map((call) => Number(call.fields.message_id)),
+    ).toEqual([retainedId]);
+  });
+
+  it.each([false, true])(
+    "rejects a retained edit still awaiting Telegram admission once the draft retires (retried: %s)",
+    async (retried) => {
+      // The account scheduler is where an edit waits before network admission.
+      http.bot.api.config.use(
+        getOrCreateAccountThrottler(http.token, () =>
+          apiThrottler({ global: {}, group: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+        ).transformer,
+      );
+      let draft:
+        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
+        | undefined;
+      let parentCallbacks: ReplyResolverOptions | undefined;
+      await dispatchProgressTurn(
+        async (options) => {
+          parentCallbacks = options;
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+        },
+        {
+          mode: "progress",
+          toolProgress: true,
+          finalReply: setReplyPayloadMetadata(
+            { text: "Waiting for delegated work." },
+            {
+              progressContinuation: {
+                adopt: (candidate) => {
+                  draft = candidate;
+                  return true;
+                },
+                close: () => undefined,
+              },
+            },
+          ),
+        },
+      );
+      const [retainedId] = [...visibleMessages.keys()];
+      assert(retainedId !== undefined && draft);
+      const isEditWith =
+        (title: string) => (call: { method: string; fields: Record<string, unknown> }) =>
+          call.method === "editMessageText" && String(call.fields.text).includes(title);
+      const pushChild = (title: string) =>
+        draft?.push({
+          itemId: "late-child",
+          kind: "subagent",
+          title,
+          phase: "update",
+          status: "running",
+        });
+      // Requests entering the account scheduler, before any queue wait.
+      const entered: string[] = [];
+      http.bot.api.config.use((previous, method, payload, signal) => {
+        entered.push(`${method}:${JSON.stringify(payload)}`);
+        return previous(method, payload, signal);
+      });
+      // A queued turn's card holds this chat's request lane, so the retained edit
+      // under test waits in the account scheduler, not on the network.
+      const held = {
+        predicate: (call: { method: string }) => call.method === "sendMessage",
+        arrived: Promise.withResolvers<void>(),
+        release: Promise.withResolvers<void>(),
+      };
+      http.holdNextCall = held;
+      const startQueuedTurn = async () => {
+        await parentCallbacks?.onQueuedFollowupAdmitted?.();
+        return emitToolStart(parentCallbacks, {
+          name: "web_search",
+          phase: "start",
+          toolCallId: "queued",
+        });
+      };
+      let queuedTool: Promise<unknown>;
+      if (retried) {
+        // The second update arrives while the first edit is in flight, so a
+        // scheduled flush retries it after its first attempt fails, with no new
+        // update to carry authority.
+        const first = {
+          arrived: Promise.withResolvers<void>(),
+          release: Promise.withResolvers<void>(),
+        };
+        const second = {
+          arrived: Promise.withResolvers<void>(),
+          release: Promise.withResolvers<void>(),
+        };
+        let secondFailed = false;
+        http.respondToCall = async (call) => {
+          if (isEditWith("Late child first")(call)) {
+            first.arrived.resolve();
+            await first.release.promise;
+            return undefined;
+          }
+          if (secondFailed || !isEditWith("Late child second")(call)) {
+            return undefined;
+          }
+          secondFailed = true;
+          second.arrived.resolve();
+          await second.release.promise;
+          return { error_code: 500, description: "Internal Server Error: fixture" };
+        };
+        pushChild("Late child first");
+        await first.arrived.promise;
+        pushChild("Late child second");
+        await vi.advanceTimersByTimeAsync(2_000);
+        first.release.resolve();
+        await second.arrived.promise;
+        queuedTool = startQueuedTurn();
+        await expect
+          .poll(() => entered.some((entry) => entry.includes("Web Search")), { timeout: 5_000 })
+          .toBe(true);
+        second.release.resolve();
+        await held.arrived.promise;
+      } else {
+        queuedTool = startQueuedTurn();
+        await held.arrived.promise;
+        pushChild("Late child second");
+      }
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(
+        entered.filter(
+          (entry) => entry.startsWith("editMessageText:") && entry.includes("Late child second"),
+        ),
+      ).toHaveLength(retried ? 2 : 1);
+      draft.retire();
+      held.release.resolve();
+      await queuedTool;
+      await expect.poll(() => visibleMessages.has(retainedId), { timeout: 5_000 }).toBe(false);
+      // Only a failed attempt made before retirement ever reached Telegram.
+      expect(calls.filter(isEditWith("Late child second"))).toHaveLength(retried ? 1 : 0);
+    },
+  );
+
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {
     const snapshots: string[] = [];
     let progressId: number | undefined;

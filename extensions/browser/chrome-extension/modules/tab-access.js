@@ -409,9 +409,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
     if (normalized !== mode) {
       mode = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
     return mode;
   }
@@ -420,18 +418,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextEnabled === true;
     if (normalized !== enabled) {
       enabled = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
   function beginTransition() {
     if (!transitioning) {
       transitioning = true;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
@@ -618,6 +612,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     if (state.reason === "incognito") {
       throw new Error(`tab ${tabId} is incognito and unavailable to OpenClaw`);
     }
+    if (state.reason === "discarded") {
+      throw new Error(`tab ${tabId} is discarded by Chrome; open it to reload before using it`);
+    }
     throw new Error(`tab ${tabId} is restricted or unavailable to OpenClaw`);
   }
 
@@ -760,7 +757,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     addTabToGroup,
     inspectTab,
     requireTab,
-    requireTabAfterNavigation: (tabId, epoch) => requireTab(tabId, epoch, true),
     listAccessibleTabs,
     canPublishTab: (tabId) => !createdTabs.has(tabId) || createdTabs.get(tabId).handedOff,
     pause,

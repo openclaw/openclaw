@@ -1,5 +1,3 @@
-// Browser-safe media filenames and format hints shared by Control UI renderers.
-
 const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
   "/__openclaw__/assistant-media",
   "/__openclaw__/media/",
@@ -10,9 +8,7 @@ const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
 function isSameOriginMediaRoute(value: string): boolean {
   return (
     value.startsWith("/") &&
-    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some(
-      (marker) => value.startsWith(marker) || value.includes(marker),
-    )
+    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => value.includes(marker))
   );
 }
 
@@ -22,24 +18,21 @@ function getMediaFileName(value: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  let filename: string;
+  const url =
+    /^https?:\/\//i.test(trimmed) || isSameOriginMediaRoute(trimmed)
+      ? URL.parse(trimmed, "https://openclaw.invalid")
+      : null;
+  if (!url) {
+    return (trimmed.split(/[\\/]/).pop() ?? trimmed) || undefined;
+  }
+  let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
   try {
-    if (/^https?:\/\//i.test(trimmed) || isSameOriginMediaRoute(trimmed)) {
-      const pathname = new URL(trimmed, "https://openclaw.invalid").pathname;
-      filename = pathname.slice(pathname.lastIndexOf("/") + 1);
-      try {
-        // Match media-core: decode only the filename and keep encoded path
-        // separators as filename data instead of turning them into boundaries.
-        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
-        filename = decodeURIComponent(decodable);
-      } catch {
-        // Preserve the raw filename when its own percent encoding is malformed.
-      }
-    } else {
-      filename = trimmed.split(/[\\/]/).pop() ?? trimmed;
-    }
+    // Match media-core: decode only the filename and keep encoded path
+    // separators as filename data instead of turning them into boundaries.
+    const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+    filename = decodeURIComponent(decodable);
   } catch {
-    filename = trimmed.split(/[\\/]/).pop() ?? trimmed;
+    // Preserve the raw filename when its own percent encoding is malformed.
   }
   return filename || undefined;
 }

@@ -5,13 +5,13 @@ import { installTmpDirHarness } from "./test-helpers.js";
 describe("MemoryDB observes externally committed rows", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-staleness-" });
 
-  test.each(["search", "count", "list", "query", "delete"] as const)(
+  test.each(["search", "list", "query", "delete"] as const)(
     "%s observes a commit before any other reader operation refreshes the handle",
     async (operation) => {
       const reader = new MemoryDB(getDbPath(), 2);
       const writer = new MemoryDB(getDbPath(), 2);
       try {
-        await expect(reader.count("alpha")).resolves.toBe(0);
+        await expect(reader.list("alpha")).resolves.toEqual([]);
         const external = await writer.store("alpha", {
           text: "committed by another writer",
           vector: [1, 0],
@@ -24,9 +24,6 @@ describe("MemoryDB observes externally committed rows", () => {
               { entry: { id: external.id, text: external.text } },
             ]);
             break;
-          case "count":
-            await expect(reader.count("alpha")).resolves.toBe(1);
-            break;
           case "list":
             await expect(reader.list("alpha", 5)).resolves.toMatchObject([{ id: external.id }]);
             break;
@@ -38,7 +35,7 @@ describe("MemoryDB observes externally committed rows", () => {
           case "delete":
             await expect(reader.delete("alpha", external.id)).resolves.toBe(true);
             writer.close();
-            await expect(writer.count("alpha")).resolves.toBe(0);
+            await expect(writer.list("alpha")).resolves.toEqual([]);
         }
       } finally {
         reader.close();
@@ -51,7 +48,7 @@ describe("MemoryDB observes externally committed rows", () => {
     const reader = new MemoryDB(getDbPath(), 2);
     const writer = new MemoryDB(getDbPath(), 2);
     try {
-      await expect(reader.count("alpha")).resolves.toBe(0);
+      await expect(reader.list("alpha")).resolves.toEqual([]);
       await writer.store("beta", {
         text: "beta private preference",
         vector: [1, 0],
@@ -67,14 +64,14 @@ describe("MemoryDB observes externally committed rows", () => {
       await expect(reader.search("alpha", [1, 0], 1, 0)).resolves.toMatchObject([
         { entry: { id: local.id } },
       ]);
-      await expect(reader.count("beta")).resolves.toBe(1);
+      await expect(reader.list("beta")).resolves.toHaveLength(1);
       await writer.store("alpha", {
         text: "later alpha fact",
         vector: [0, 1],
         importance: 0.5,
         category: "fact",
       });
-      await expect(reader.count("alpha")).resolves.toBe(2);
+      await expect(reader.list("alpha")).resolves.toHaveLength(2);
     } finally {
       reader.close();
       writer.close();

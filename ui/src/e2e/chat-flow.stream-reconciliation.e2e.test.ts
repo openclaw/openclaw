@@ -11,35 +11,24 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("reconciles a fallback notice around one streamed terminal answer", async () => {
+  it("keeps a saved terminal answer once when its fallback notice arrives", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "fallback-terminal-run";
       const answer = "The workspace check is complete.";
       const notice =
         "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
-      const terminalAnswer = [
-        "<relevant-memories>",
-        "Internal memory context",
-        "</relevant-memories>",
-        answer,
-      ].join("\n");
       const user = {
         role: "user",
         content: [{ type: "text", text: "Check the workspace." }],
         __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
       };
-      const streamedAnswer = {
+      const savedAnswer = {
         role: "assistant",
         content: [{ type: "text", text: answer }],
-        openclawStreamFallback: {
-          itemId: "fallback-answer-item",
-          replacementText: answer,
-          runId,
-          source: "segment",
-        },
+        __openclaw: { id: "fallback-answer", seq: 2, runId },
       };
       const gateway = await installMockGateway(page, {
-        historyMessages: [user, streamedAnswer],
+        historyMessages: [user, savedAnswer],
         inFlightRun: { runId, startedAt: 1_000, text: "" },
         sessionInfo: {
           activeRunIds: [runId],
@@ -50,16 +39,24 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await gateway.deferNext("chat.history");
       await gateway.emitGatewayEvent("chat", {
         sessionKey: "agent:main:main",
         runId,
         state: "final",
         message: {
           role: "assistant",
-          content: [
-            { type: "text", text: notice, openclawStatusNotice: true },
-            { type: "text", text: terminalAnswer },
-          ],
+          content: [{ type: "text", text: answer }],
+          openclawDisplayContent: [],
+        },
+      });
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: "agent:main:main",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: notice, openclawStatusNotice: true }],
         },
       });
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
@@ -76,6 +73,7 @@ suite.define(() => {
           text.includes(answer),
         ).length;
       await expect.poll(answerOccurrences).toBe(1);
+      expect(await page.locator(".chat-bubble.streaming").count()).toBe(0);
     });
   });
 
@@ -151,7 +149,7 @@ suite.define(() => {
           const inFlightRun = {
             runId,
             startedAt: 1_000,
-            text: steer ? `${text} Checking the follow-up.` : text,
+            text: steer ? "Checking the follow-up." : "",
             ...(tool ? { events: [toolEvent, itemEvent] } : {}),
           };
           const gateway = await installMockGateway(page, {
@@ -182,6 +180,12 @@ suite.define(() => {
               messageSeq: 2,
               message,
             });
+          const snapshot = {
+            messages: historyMessages,
+            inFlightRun,
+            sessionInfo,
+            thinkingLevel: null,
+          };
           const startupCount = (await gateway.getRequests("chat.startup")).length;
           await gateway.deferNext("chat.startup");
           await gateway.setOnline(false);
@@ -189,13 +193,14 @@ suite.define(() => {
           await gateway.waitForRequest("chat.startup", { after: startupCount });
           if (order !== "after hydration") {
             await persist();
+            // A commit during the in-flight read retires it; the Gateway answers one fresh read.
+            await gateway.deferNext("chat.startup");
           }
-          await gateway.resolveDeferred("chat.startup", {
-            messages: historyMessages,
-            inFlightRun,
-            sessionInfo,
-            thinkingLevel: null,
-          });
+          await gateway.resolveDeferred("chat.startup", snapshot);
+          if (order !== "after hydration") {
+            await gateway.waitForRequest("chat.startup", { after: startupCount + 1 });
+            await gateway.resolveDeferred("chat.startup", snapshot);
+          }
           await page.waitForFunction(() => {
             const pane = document.querySelector<HTMLElement & { state?: { chatLoading: boolean } }>(
               "openclaw-chat-pane",
@@ -223,6 +228,7 @@ suite.define(() => {
                       : text,
                 },
               ],
+              openclawDisplayContent: steer ? [{ type: "text", text: tailText }] : [],
             },
           });
           await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
@@ -241,6 +247,7 @@ suite.define(() => {
             ),
           ).toEqual(steer ? [text, tailText] : [text]);
           expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
+          expect(await page.locator(".chat-bubble.streaming").count()).toBe(0);
           if (tool) {
             expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
           }
@@ -252,6 +259,7 @@ suite.define(() => {
   it("reconciles distinct commentary items once across reconnect", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "commentary-reconciliation-run";
+      const startedAt = Date.now() - 30_000;
       const items = [
         { itemId: "commentary-item-one", text: "Inspecting the workspace." },
         { itemId: "commentary-item-two", text: "Checking the result." },
@@ -262,12 +270,12 @@ suite.define(() => {
         seq: index + 1,
         sessionKey: "agent:main:main",
         stream: "item",
-        ts: 2_000 + index,
+        ts: startedAt + 2_000 + index,
       }));
       const historyMessages = items.map(({ itemId, text }, index) => ({
         role: "assistant",
         content: [{ type: "text", text }],
-        timestamp: 1_000 + index,
+        timestamp: startedAt + 1_000 + index,
         __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
         openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
       }));
@@ -278,14 +286,12 @@ suite.define(() => {
       };
       const gateway = await installMockGateway(page, {
         historyMessages: [],
-        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        inFlightRun: { runId, startedAt, text: "" },
         sessionInfo,
       });
       const transcript = page.locator(".chat-thread-inner");
       const itemOccurrences = async () => {
-        const bubbles = await transcript
-          .locator(".chat-bubble, .chat-working-indicator__preamble")
-          .allTextContents();
+        const bubbles = await transcript.locator(".chat-bubble").allTextContents();
         return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
       };
 
@@ -296,13 +302,17 @@ suite.define(() => {
       }
       await expect.poll(itemOccurrences).toEqual([1, 1]);
       await expect
-        .poll(() => transcript.locator(".chat-working-indicator__preamble").textContent())
+        .poll(async () =>
+          (
+            await transcript.locator(".chat-text").filter({ hasText: items[1].text }).textContent()
+          )?.trim(),
+        )
         .toBe(items[1].text);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setMethodResponse("chat.startup", {
         messages: historyMessages,
-        inFlightRun: { runId, startedAt: 1_000, text: "", events },
+        inFlightRun: { runId, startedAt, text: "", events },
         sessionInfo,
         thinkingLevel: null,
       });
@@ -351,7 +361,7 @@ suite.define(() => {
         inFlightRun: {
           runId,
           startedAt: 1_000,
-          text: `${commentary.join("\n\n")}\n\nStill working.`,
+          text: "Still working.",
           events: [
             {
               runId,
@@ -377,10 +387,7 @@ suite.define(() => {
         (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
           value.trim(),
         );
-      await expect.poll(assistantTexts).toEqual([commentary[0], "Still working."]);
-      await expect
-        .poll(() => page.locator(".chat-working-indicator__preamble").textContent())
-        .toBe(commentary[1]);
+      await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
       expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -393,8 +400,8 @@ suite.define(() => {
   });
 
   it.each([
-    { persistence: "between deltas", terminal: "final" },
-    { persistence: "before streaming", terminal: "error" },
+    { persistence: "after partial streaming", terminal: "final" },
+    { persistence: "before first stream", terminal: "error" },
   ])(
     "keeps one answer during workspace reconciliation with persistence $persistence and $terminal",
     async ({ persistence, terminal }) => {
@@ -407,20 +414,25 @@ suite.define(() => {
         const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
         const text = "Workspace changes are ready.";
         const partial = "Workspace";
-        const emitDelta = (snapshot: string, deltaText: string) =>
+        const emitDelta = (snapshot: string, deltaText: string, replace = false) =>
           gateway.emitGatewayEvent("chat", {
             sessionKey: "main",
             runId,
             state: "delta",
             deltaText,
+            ...(replace ? { replace: true } : {}),
             message: { role: "assistant", content: [{ type: "text", text: snapshot }] },
           });
-        if (persistence === "between deltas") {
+        if (persistence === "after partial streaming") {
           await emitDelta(partial, partial);
           await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor();
         }
         // Hold background refreshes so only the live message/delta boundary can repair the view.
         await gateway.deferNext("chat.history");
+        if (persistence === "after partial streaming") {
+          // The Gateway retires committed text before publishing its durable row.
+          await emitDelta("", "", true);
+        }
         await gateway.emitGatewayEvent("session.message", {
           sessionKey: "main",
           runId,
@@ -444,10 +456,6 @@ suite.define(() => {
           },
         });
         await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
-        if (persistence === "before streaming") {
-          await emitDelta(partial, partial);
-        }
-        await emitDelta(text, text.slice(partial.length));
         await gateway.emitGatewayEvent("agent", {
           sessionKey: "main",
           runId,
@@ -456,7 +464,7 @@ suite.define(() => {
           stream: "lifecycle",
           data: { phase: "finishing" },
         });
-        // Positive telemetry proves a render after the deltas; absence alone can pass on the old frame.
+        // Positive telemetry proves a render after persistence; absence alone can pass on the old frame.
         await gateway.emitGatewayEvent("agent", {
           sessionKey: "main",
           runId,
@@ -486,12 +494,25 @@ suite.define(() => {
           runId,
           state: terminal,
           ...(terminal === "error" ? { errorMessage } : {}),
-          message: { role: "assistant", content: [{ type: "text", text }] },
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            openclawDisplayContent: [],
+          },
         });
         await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
         await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
         if (terminal === "error") {
-          await page.locator(".chat-error strong", { hasText: errorMessage }).waitFor();
+          const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
+          await failure
+            .locator("summary strong")
+            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+            .waitFor();
+          await failure.locator("summary").click();
+          await failure.getByLabel("Error details", { exact: true }).waitFor();
+          expect(
+            await failure.getByLabel("Error details", { exact: true }).textContent(),
+          ).toContain(errorMessage);
         }
         await emitDelta(text, text.slice(partial.length));
         await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);

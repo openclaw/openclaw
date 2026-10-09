@@ -1,4 +1,3 @@
-/** Post-upgrade validation probes for persisted plugin index and package extension entries. */
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -49,11 +48,10 @@ function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
         fsSync.existsSync(path.join(packageRoot, "src"))
       );
     }
-    const next = path.dirname(current);
-    if (next === current) {
+    if (extensionsDir === current) {
       return false;
     }
-    current = next;
+    current = extensionsDir;
   }
 }
 
@@ -84,7 +82,6 @@ async function resolvePackageJsonRelPath(
   }
 }
 
-/** Runs post-upgrade plugin probes and returns structured findings for the caller to render. */
 export async function runPostUpgradeProbes(params: {
   stateDir?: string;
   updateChannel?: UpdateChannel;
@@ -137,6 +134,15 @@ export async function runPostUpgradeProbes(params: {
   }
 
   for (const record of enabledPlugins) {
+    const reportEntryFailure = (detail: string, entry?: string) => {
+      findings.push({
+        level: "error",
+        code: "plugin.entry_unresolved",
+        message: `Plugin ${record.pluginId}: ${detail}`,
+        plugin: record.pluginId,
+        ...(entry ? { entry } : {}),
+      });
+    };
     const pkgRelPath = await resolvePackageJsonRelPath(record);
     if (pkgRelPath) {
       let pkg: PackageManifest;
@@ -148,24 +154,18 @@ export async function runPostUpgradeProbes(params: {
         process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
         // A declared package is required to validate its runtime entry; logging
         // alone otherwise makes a broken enabled plugin exit as healthy.
-        findings.push({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          message: `Plugin ${record.pluginId}: could not read package.json (${pkgRelPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
-          plugin: record.pluginId,
-          entry: pkgRelPath,
-        });
+        reportEntryFailure(
+          `could not read package.json (${pkgRelPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          pkgRelPath,
+        );
         continue;
       }
       const resolvedEntries = resolvePackageExtensionEntries(pkg);
       if (resolvedEntries.status === "invalid") {
-        findings.push({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          message: `Plugin ${record.pluginId}: ${resolvedEntries.error}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
-          plugin: record.pluginId,
-          entry: pkgRelPath,
-        });
+        reportEntryFailure(
+          `${resolvedEntries.error}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          pkgRelPath,
+        );
       } else if (resolvedEntries.status === "ok") {
         const entries = resolvedEntries.entries;
         // Delegate to the install-time resolver so the probe enforces the same
@@ -179,13 +179,7 @@ export async function runPostUpgradeProbes(params: {
         });
         if (!validation.ok) {
           const offendingEntry = entries.find((entry) => validation.error.includes(entry));
-          findings.push({
-            level: "error",
-            code: "plugin.entry_unresolved",
-            message: `Plugin ${record.pluginId}: ${validation.error}`,
-            plugin: record.pluginId,
-            ...(offendingEntry ? { entry: offendingEntry } : {}),
-          });
+          reportEntryFailure(validation.error, offendingEntry);
         }
       }
     }
@@ -213,7 +207,7 @@ export async function runPostUpgradeProbes(params: {
         findings.push({
           level: "warn",
           code: "plugin.manifest_drift",
-          message: `Plugin ${record.pluginId} manifest hash drifted from installs.json snapshot. Run \`openclaw plugins registry --refresh\` to re-sync.`,
+          message: `Plugin ${record.pluginId} manifest hash drifted from the installed plugin index. Run \`openclaw plugins registry --refresh\` to re-sync.`,
           plugin: record.pluginId,
         });
       }

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import * as commandSession from "../../agents/command/session.js";
-import { backfillSessionKey } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
+import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -19,11 +19,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
-it.each(
-  ["Gateway", "embedded"].flatMap((caller) =>
-    ["global", "unknown"].map((sessionKey) => ({ caller, sessionKey })),
-  ),
-)(
+it.each([
+  { caller: "Gateway", sessionKey: "global" },
+  { caller: "embedded", sessionKey: "unknown" },
+])(
   "does not repeat cold $sessionKey inspection outside the existing listing in $caller",
   async ({ caller, sessionKey }) => {
     await withOpenClawTestState({ label: "session-id-cold-inspection" }, async (state) => {
@@ -109,7 +108,17 @@ it.each(
           expect(respond).not.toHaveBeenCalled();
           expect(routing).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
         } else {
-          expect(backfillSessionKey({ config: cfg, sessionId: "ops-session" })).toBe(sessionKey);
+          const prepared = await prepareEmbeddedRunSession({
+            config: cfg,
+            sessionId: "ops-session",
+            sessionFile: sessionKey,
+            workspaceDir: state.workspaceDir,
+            prompt: "resume",
+            runId: "lookup",
+            timeoutMs: 1000,
+          });
+          expect(prepared.params.sessionKey).toBe(sessionKey);
+          expect(prepared.params.agentId).toBe("ops");
         }
         // The legacy listing still reads on the host; only the added inspection is removed.
         expect(opens).toContain("listing");

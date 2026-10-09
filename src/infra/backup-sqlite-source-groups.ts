@@ -1,8 +1,8 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 export type BackupSqliteSource = {
   path: string;

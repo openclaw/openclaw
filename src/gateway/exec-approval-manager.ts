@@ -55,9 +55,7 @@ import {
 } from "./operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
-export { EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS } from "./exec-approval-lifecycle.js";
 export type {
-  ExecApprovalIdLookupResult,
   ExecApprovalRecord,
   OperatorApprovalLifecycleEvent,
   OperatorStandingGrantMintSpec,
@@ -68,7 +66,7 @@ export class ExecApprovalManager<
   TPayload = ExecApprovalRequestPayload,
 > extends ExecApprovalExpiry<TPayload> {
   constructor(protected readonly options: ExecApprovalManagerOptions<TPayload>) {
-    super();
+    super(options.scheduler);
   }
 
   override get approvalKind(): OperatorApprovalKind {
@@ -315,11 +313,15 @@ export class ExecApprovalManager<
         localEntry &&
         isExecApprovalRuntimeActive(this.options, localEntry.record)
       ) {
-        this.options.retainPlacementStandingGrant?.({
+        const retain =
+          this.options.retainPlacementStandingGrantAsync ??
+          this.options.retainPlacementStandingGrant;
+        await retain?.({
           ...standingGrant,
           approvalId: recordId,
           nowMs: result.record.resolvedAtMs ?? Date.now(),
         });
+        this.assertPendingPersistenceCurrent(localEntry);
       }
       if (
         result.outcome === "resolved" ||

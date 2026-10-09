@@ -70,11 +70,7 @@ function inv(value: unknown): unknown {
 }
 
 function norm(value: unknown): number {
-  const n = Number(value);
-  if (value === null || value === undefined || !Number.isFinite(n)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(100, n)) / 100;
+  return Math.max(0, Math.min(100, coerceFiniteValue(value) ?? 0)) / 100;
 }
 
 function meter(value: unknown, width: number, scale: unknown): string {
@@ -86,25 +82,15 @@ function meter(value: unknown, width: number, scale: unknown): string {
   const full = expectDefined(glyphs[glyphs.length - 1], "glyphs entry at glyphs.length 1");
   const total = norm(value) * width;
   const fullc = Math.trunc(total);
-  const cells: string[] = [];
-  for (let i = 0; i < Math.min(fullc, width); i++) {
-    cells.push(full);
+  if (fullc === width) {
+    return full.repeat(width);
   }
-  if (cells.length < width) {
-    cells.push(
-      expectDefined(
-        glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
-        "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
-      ),
-    );
-  }
-  while (cells.length < width) {
-    cells.push(empty);
-  }
-  return cells.slice(0, width).join("");
+  const partial = expectDefined(
+    glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
+    "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
+  );
+  return full.repeat(fullc) + partial + empty.repeat(width - fullc - 1);
 }
-
-const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
 function parseBoundedIntegerArg(
   raw: string | undefined,
@@ -114,41 +100,35 @@ function parseBoundedIntegerArg(
   return asSafeIntegerInRange(value, options);
 }
 
-function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
-  switch (name) {
-    case "num":
-      return num(value);
-    case "fixed": {
-      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
-      return digits === undefined ? "" : fixed(value, digits);
+type UsageVerb = (value: unknown, args: string[], vocab: Vocab) => unknown;
+
+const VERBS: Record<string, UsageVerb> = {
+  num,
+  dur,
+  pct,
+  inv,
+  fixed(value, args) {
+    const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
+    return digits === undefined ? "" : fixed(value, digits);
+  },
+  alias(value, args, vocab) {
+    const aliases = isObject(vocab["_aliases"]) ? vocab["_aliases"] : {};
+    const table =
+      args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
+    const key = String(value);
+    if (Object.hasOwn(table, key)) {
+      return table[key];
     }
-    case "dur":
-      return dur(value);
-    case "pct":
-      return pct(value);
-    case "inv":
-      return inv(value);
-    case "alias": {
-      const aliases = isObject(vocab["_aliases"]) ? vocab["_aliases"] : {};
-      const table =
-        args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
-      const key = String(value);
-      if (Object.hasOwn(table, key)) {
-        return table[key];
-      }
-      const lower = key.toLowerCase();
-      return Object.hasOwn(table, lower) ? table[lower] : value;
-    }
-    case "meter": {
-      const rawWidth = args[0]?.trim() ? args[0] : undefined;
-      const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
-      const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
-      return width === undefined ? "" : meter(value, width, scale);
-    }
-    default:
-      return String(value);
-  }
-}
+    const lower = key.toLowerCase();
+    return Object.hasOwn(table, lower) ? table[lower] : value;
+  },
+  meter(value, args, vocab) {
+    const rawWidth = args[0]?.trim() ? args[0] : undefined;
+    const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
+    const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
+    return width === undefined ? "" : meter(value, width, scale);
+  },
+};
 
 function getPath(ctx: unknown, path: string): unknown {
   let cur: unknown = ctx;
@@ -170,13 +150,14 @@ function interp(text: string, ctx: unknown, vocab: Vocab): string {
   return text.replace(TOKEN, (_match, body: string) => {
     const parts = body.split("|");
     let val = getPath(ctx, (parts[0] ?? "").trim());
-    const ops: Array<{ name: string; args: string[] }> = [];
+    const ops: Array<{ apply: UsageVerb; args: string[] }> = [];
     let fallback: string | undefined;
     for (const segRaw of parts.slice(1)) {
       const seg = segRaw.trim();
-      const name = expectDefined(seg.split(":")[0], 'seg.split(":") entry at 0');
-      if (VERB_NAMES.has(name)) {
-        ops.push({ name, args: seg.split(":").slice(1) });
+      const [name = "", ...args] = seg.split(":");
+      const apply = Object.hasOwn(VERBS, name) ? VERBS[name] : undefined;
+      if (apply) {
+        ops.push({ apply, args });
       } else {
         fallback = seg;
       }
@@ -185,7 +166,7 @@ function interp(text: string, ctx: unknown, vocab: Vocab): string {
       return fallback ?? "";
     }
     for (const op of ops) {
-      val = applyVerb(op.name, op.args, val, vocab);
+      val = op.apply(val, op.args, vocab);
     }
     return String(val);
   });
@@ -202,7 +183,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
   }
   if ("map" in seg) {
     const v = getPath(ctx, String(seg.map));
-    const key = typeof v === "boolean" ? String(v) : String(v);
+    const key = String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
     const hit = Object.hasOwn(cases, key) ? cases[key] : cases["_default"];
     return typeof hit === "string" ? hit : null;
@@ -212,25 +193,25 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
     const items = Array.isArray(arr) ? arr : [];
     const itemTpl = typeof seg.item === "string" ? seg.item : "";
     const names = Array.isArray(seg.item_scales) ? (seg.item_scales as string[]) : undefined;
-    const parts: string[] = [];
-    items.forEach((el, i) => {
-      let iv = vocab;
-      if (names && names.length > 0) {
-        iv = {
-          ...vocab,
-          "*": vocab[
-            expectDefined(
-              names[Math.min(i, names.length - 1)],
-              "names entry at math.min(i, names.length 1)",
-            )
-          ],
-        };
-      }
-      const r = interp(itemTpl, el, iv);
-      if (r) {
-        parts.push(r);
-      }
-    });
+    const parts = items
+      .map((el, i) =>
+        interp(
+          itemTpl,
+          el,
+          names?.length
+            ? {
+                ...vocab,
+                "*": vocab[
+                  expectDefined(
+                    names[Math.min(i, names.length - 1)],
+                    "names entry at math.min(i, names.length 1)",
+                  )
+                ],
+              }
+            : vocab,
+        ),
+      )
+      .filter(Boolean);
     const join = typeof seg.join === "string" ? seg.join : " ";
     const body = parts.join(join);
     if (!body) {
@@ -284,16 +265,11 @@ export function renderUsageBar(template: UsageBarTemplate, contract: UsageContra
       ...(isObject(template.scales) ? template.scales : {}),
     };
     vocab["_aliases"] = isObject(template.aliases) ? template.aliases : {};
-    const out: string[] = [];
-    for (const piece of pieces) {
-      if (isObject(piece)) {
-        const r = renderSegment(piece, contract, vocab);
-        if (r) {
-          out.push(r);
-        }
-      }
-    }
-    return out.join(sep);
+    return pieces
+      .filter(isObject)
+      .map((piece) => renderSegment(piece, contract, vocab))
+      .filter(Boolean)
+      .join(sep);
   } catch {
     return "";
   }

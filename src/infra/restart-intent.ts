@@ -22,7 +22,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
-import { readGatewayOwnerLease, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
+import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -32,7 +34,6 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { GatewayRestartPreparationError } from "./restart-intent-error.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
-import { tryAcquireGatewayLifecycleCleanupCoordinator } from "./state-database-coordinator.js";
 
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
@@ -43,31 +44,21 @@ const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "gateway_rest
 const restartLog = createSubsystemLogger("restart");
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
 
-type GatewayRestartIntentPayload = {
+type GatewayRestartIntentPayload = Pick<GatewayRestartIntent, "reason" | "force" | "waitMs"> & {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
 };
 
-type GatewayRestartIntentWriteReceipt = {
-  kind: string;
-  pid: number;
-  created_at: number;
-  reason: string | null;
-  force: number | null;
-  wait_ms: number | null;
-  updated_at_ms: number;
-};
+type GatewayRestartIntentWriteReceipt = Omit<
+  OpenClawStateKyselyDatabase["gateway_restart_intent"],
+  "intent_key"
+>;
 
 export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
-  // Only the in-process deferral owner can attest that the drain budget was spent.
-  drainBudgetExhausted?: true;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";
@@ -277,20 +268,24 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   if (opts.nativeStopped) {
     try {
       // A stopped wrapper can still have a serving child or an unpublished startup owner.
-      const exclusion = tryAcquireGatewayLifecycleCleanupCoordinator({
-        databasePath: resolveOpenClawStateSqlitePath(opts.env),
-      });
+      const exclusion = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(opts.env));
       if (exclusion) {
         try {
-          const owner = readGatewayOwnerLease({ env: opts.env, current: true });
-          opts.assertCurrent();
-          if (!owner || owner.state === "dead") {
+          const inactive = exclusion.run(() => {
+            const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+            opts.assertCurrent();
+            if (owner && owner.state !== "dead") {
+              return false;
+            }
             assertLegacyGatewayStoppedSync(opts.env ?? process.env);
             opts.assertCurrent();
+            return true;
+          });
+          if (inactive) {
             return false;
           }
         } finally {
-          // The successor must be able to acquire its lifecycle coordinator during startup.
+          // The successor acquires the same process owner during startup.
           exclusion.release();
         }
       }
@@ -338,12 +333,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
 }
 
 function writeGatewayRestartIntentForTargetSync(
-  opts: {
-    env?: NodeJS.ProcessEnv;
-    intent?: GatewayRestartIntent;
-    reason?: string;
-    onRecorded?: (clear: () => void) => void;
-  },
+  opts: Omit<Parameters<typeof writeGatewayRestartIntentSync>[0], "targetPid">,
   resolveTargetPid: (db: DatabaseSync) => number | undefined,
   assertCurrent?: () => void,
 ): boolean {

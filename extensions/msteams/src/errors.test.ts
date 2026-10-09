@@ -5,7 +5,6 @@ import {
   formatMSTeamsDeliveryFailureGuidance,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
-  isRevokedProxyError,
 } from "./errors.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 
@@ -196,30 +195,6 @@ describe("msteams errors", () => {
     expect(classifyMSTeamsSendError(null).kind).toBe("unknown");
   });
 
-  describe("isRevokedProxyError", () => {
-    it("returns true for revoked proxy TypeError", () => {
-      expect(
-        isRevokedProxyError(new TypeError("Cannot perform 'set' on a proxy that has been revoked")),
-      ).toBe(true);
-      expect(
-        isRevokedProxyError(new TypeError("Cannot perform 'get' on a proxy that has been revoked")),
-      ).toBe(true);
-    });
-
-    it("returns false for non-TypeError errors", () => {
-      expect(isRevokedProxyError(new Error("proxy that has been revoked"))).toBe(false);
-    });
-
-    it("returns false for unrelated TypeErrors", () => {
-      expect(isRevokedProxyError(new TypeError("undefined is not a function"))).toBe(false);
-    });
-
-    it("returns false for non-error values", () => {
-      expect(isRevokedProxyError(null)).toBe(false);
-      expect(isRevokedProxyError("proxy that has been revoked")).toBe(false);
-    });
-  });
-
   describe("withRevokedProxyFallback", () => {
     it("returns primary result when no error occurs", async () => {
       await expect(
@@ -244,8 +219,10 @@ describe("msteams errors", () => {
       expect(onRevokedLog).toHaveBeenCalledOnce();
     });
 
-    it("rethrows non-revoked errors", async () => {
-      const err = Object.assign(new Error("boom"), { statusCode: 500 });
+    it.each([
+      new Error("proxy that has been revoked"),
+      new TypeError("undefined is not a function"),
+    ])("rethrows non-revoked %s", async (err) => {
       await expect(
         withRevokedProxyFallback({
           run: async () => {

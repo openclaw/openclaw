@@ -3,13 +3,15 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { clearConfigCache } from "../config/config.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
 import {
   connectOk,
@@ -87,15 +89,16 @@ afterEach(async () => {
 });
 
 describe("gateway WebSocket chat abort settlement", () => {
-  test.each([
+  test.for([
     "fulfilled",
     "rejected",
     "queued-fulfilled",
     "queued-rejected",
+    "queued-dispatch-settled",
     "accepted-injection",
   ] as const)(
-    "preserves an acknowledged abort and completes its preinstalled waiter after %s dispatch",
-    async (settlement) => {
+    "preserves an acknowledged abort across %s dispatch settlement",
+    async (settlement, { signal }) => {
       const sessionDirectory = temporaryDirectories.make("openclaw-chat-abort-dispatch-");
       testState.sessionStorePath = path.join(sessionDirectory, "sessions.json");
       await writeSessionStore({
@@ -110,7 +113,9 @@ describe("gateway WebSocket chat abort settlement", () => {
       const agentJobs = await import("./agent-turn/agent-job.js");
       const connectionOffset = connectionReleases.length;
       const socket = await gateway.openWs();
+      const requestExecution = await observeGatewayRunExecution();
       const dispatchRelease = createDeferred();
+      const dispatchStarted = createDeferred();
       const waitInstalled = createDeferred();
       const runId = `real-websocket-explicit-abort-before-${settlement}-dispatch`;
       const terminalStates = trackChatTerminalStates(socket, runId);
@@ -119,6 +124,7 @@ describe("gateway WebSocket chat abort settlement", () => {
       let waitWork: ReturnType<typeof agentJobs.waitForAgentJob> | undefined;
       let waitSettled = false;
       let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
+      let queuedReply: InternalGetReplyOptions["onQueuedFollowupReplyBatch"];
       let injectionOperation: ReturnType<typeof createReplyOperation> | undefined;
       let injectionSignal: AbortSignal | undefined;
       const injectionWork: Promise<void>[] = [];
@@ -181,9 +187,11 @@ describe("gateway WebSocket chat abort settlement", () => {
           dispatchInboundMessageMock.mockImplementationOnce((args: unknown) => {
             const work = (async () => {
               if (settlement.startsWith("queued-")) {
-                queuedLifecycle = (args as Parameters<typeof dispatchInboundMessage>[0])
-                  .replyOptions?.turnAdoptionLifecycle;
+                const options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+                queuedLifecycle = options?.turnAdoptionLifecycle;
+                queuedReply = options?.onQueuedFollowupReplyBatch;
               }
+              dispatchStarted.resolve();
               await dispatchRelease.promise;
               if (settlement.endsWith("rejected")) {
                 throw new Error("dispatch rejected after an explicitly aborted run");
@@ -210,20 +218,42 @@ describe("gateway WebSocket chat abort settlement", () => {
           expect(injectionSignal?.aborted).toBe(false);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {
-          await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledOnce(), {
-            interval: 10,
-            timeout: 2_000,
+          await withinTest(dispatchStarted.promise, signal);
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        }
+
+        if (settlement === "queued-dispatch-settled") {
+          expect(queuedLifecycle?.onDeferred?.()).toBe(true);
+          dispatchRelease.resolve();
+          await withinTest(requestExecution.waitForDispatch(runId), signal);
+          await expect(
+            rpcReq(socket, "agent.wait", { runId, timeoutMs: 0 }),
+          ).resolves.toMatchObject({
+            ok: true,
+            payload: { runId, status: "pending", timeoutPhase: "queue" },
           });
+          expect(terminalStates).toEqual([]);
         }
 
         // Hold the wait deadline while real abort and persistence work establishes ordering.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        const waitResponse = rpcReq(socket, "agent.wait", { runId, timeoutMs: 2_000 });
-        frames.push(waitResponse);
-        void waitResponse.catch(() => {});
-        await waitInstalled.promise;
-        if (settlement.startsWith("queued-")) {
+        let waitResponse =
+          settlement === "queued-dispatch-settled"
+            ? undefined
+            : rpcReq(socket, "agent.wait", { runId, timeoutMs: 2_000 });
+        if (waitResponse) {
+          frames.push(waitResponse);
+          void waitResponse.catch(() => {});
+          await withinTest(waitInstalled.promise, signal);
+        }
+        if (waitResponse && settlement.startsWith("queued-")) {
           expect(queuedLifecycle?.onDeferred?.()).toBe(true);
+          await expect(withinTest(waitResponse, signal)).resolves.toMatchObject({
+            ok: true,
+            payload: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
+          });
+          expect(terminalStates).toEqual([]);
+          waitResponse = undefined;
         }
         const abortedFrame = onceMessage(
           socket,
@@ -242,20 +272,46 @@ describe("gateway WebSocket chat abort settlement", () => {
         });
         expect(aborted.ok).toBe(true);
         expect(aborted.payload).toMatchObject({ ok: true, aborted: true, runIds: [runId] });
-        await expect(abortedFrame).resolves.toMatchObject({
+        await expect(withinTest(abortedFrame, signal)).resolves.toMatchObject({
           payload: { runId, state: "aborted" },
         });
-        expect(waitSettled).toBe(false);
+        const outcome = {
+          runId,
+          status: "error",
+          stopReason: settlement === "queued-dispatch-settled" ? "aborted" : "rpc",
+          endedAt: expect.any(Number),
+        };
+        if (settlement.startsWith("queued-")) {
+          expect(queuedLifecycle?.abortSignal?.aborted).toBe(true);
+          await expect(queuedLifecycle?.onAdopted()).rejects.toBeDefined();
+        } else {
+          expect(waitSettled).toBe(false);
+          dispatchRelease.resolve();
+        }
         if (settlement === "accepted-injection") {
           expect(injectionSignal?.aborted).toBe(true);
         }
 
+        const terminalResponse = await withinTest(
+          waitResponse ?? rpcReq(socket, "agent.wait", { runId, timeoutMs: 0 }),
+          signal,
+        );
+        expect(terminalResponse).toMatchObject({ ok: true, payload: outcome });
         dispatchRelease.resolve();
-        await expect(waitResponse).resolves.toMatchObject({
-          ok: true,
-          payload: { runId, status: "error", stopReason: "rpc", endedAt: expect.any(Number) },
-        });
         vi.useRealTimers();
+        await withinTest(requestExecution.waitForDispatch(runId), signal);
+        queuedLifecycle?.onSettled?.();
+        await queuedReply?.({
+          kind: "queued-followup",
+          runId: "late-consumer-after-abort",
+          originatingChannel: "webchat",
+          payloads: [{ text: "must not resurrect the withdrawn input" }],
+          completion: { kind: "completed" },
+        });
+        await expect(rpcReq(socket, "agent.wait", { runId, timeoutMs: 0 })).resolves.toMatchObject({
+          ok: true,
+          payload: terminalResponse.payload,
+        });
 
         // Replay can itself record an aborted receipt, so it must follow the original wait.
         // It also orders any contradictory terminal frame before this cached response.
@@ -279,6 +335,7 @@ describe("gateway WebSocket chat abort settlement", () => {
           },
           () => injectionOperation?.complete(),
           () => waitObserver.mockRestore(),
+          () => requestExecution.restore(),
         );
       }
     },

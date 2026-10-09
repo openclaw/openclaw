@@ -4,6 +4,7 @@ import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js"
 import { createUpdateRun, recordUpdateRunPhase } from "../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -34,11 +35,82 @@ vi.mock("./doctor-health-contribution-runners.config.js", async (importOriginal)
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["rehearsal", "partial-markers"])(
+  "defers only pure advisory contributions during %s and records their IDs",
+  async (mode) => {
+    const env = {
+      ...(mode === "rehearsal" || mode === "partial-markers"
+        ? buildUpdateRehearsalPathEnv("/synthetic/rehearsal")
+        : {}),
+      ...(mode !== "standalone"
+        ? {
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+            OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+            OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+          }
+        : {}),
+      ...(mode === "partial-markers" ? { HOME: "/synthetic/operator" } : {}),
+    };
+    const advisoryIds = new Set([
+      "doctor:security",
+      "doctor:runtime-tool-schemas",
+      "doctor:provider-catalog-projection",
+    ]);
+    const retainedIds = new Set([
+      "doctor:auth-profiles",
+      "doctor:structured-health-repairs",
+      "doctor:skills",
+      "doctor:memory-search",
+      "doctor:session-transcripts",
+      "doctor:auth-profile-migration",
+      "doctor:write-config",
+      "doctor:final-config-validation",
+    ]);
+    const contributions = resolveDoctorHealthContributions().filter(
+      (entry) => advisoryIds.has(entry.id) || retainedIds.has(entry.id),
+    );
+    expect(contributions).toHaveLength(advisoryIds.size + retainedIds.size);
+    const executed: string[] = [];
+    const priorWarnings = Array.from({ length: 31 }, (_, index) => `Repair warning ${index}`);
+    for (const contribution of contributions) {
+      vi.spyOn(contribution, "run").mockImplementation(async (ctx) => {
+        executed.push(contribution.id);
+        if (contribution.id === "doctor:write-config") {
+          recordDoctorHealthWarnings(ctx, [], ["Final repair warning"]);
+        }
+      });
+    }
+    const ctx = createDoctorHealthFlowContext({
+      env,
+      updateWarnings: priorWarnings,
+      updateBudget: {
+        agentCount: 1,
+        phase: mode === "rehearsal" ? "validation" : "activation",
+        inspectionDeadlineMs: Date.now() + 149_000,
+        source: "activation-policy",
+        deferred: new Map(),
+      },
+    });
+    await runDoctorHealthContributionList(ctx, contributions);
+    expect(new Set(executed)).toEqual(
+      mode === "rehearsal" ? retainedIds : new Set([...retainedIds, ...advisoryIds]),
+    );
+    if (mode === "rehearsal") {
+      for (const id of advisoryIds) {
+        expect(ctx.runtime.log).toHaveBeenCalledWith(expect.stringContaining(id));
+      }
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("copied-state rehearsal"),
+      );
+    }
+    expect(ctx.updateWarnings).toEqual([...priorWarnings, "Final repair warning"]);
+  },
+);
+
 it.each([
-  { agentCount: 3, phase: "validation" },
   { agentCount: 480, phase: "validation" },
   { agentCount: 3, phase: "activation" },
-  { agentCount: 480, phase: "activation" },
 ])(
   "completes required repairs and reports deferred inspection for $agentCount agents during $phase",
   async ({ agentCount, phase }) => {

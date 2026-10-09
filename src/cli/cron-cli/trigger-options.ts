@@ -10,6 +10,14 @@ import { CronCliError } from "./cron-cli-error.js";
 
 const MAX_CRON_TRIGGER_SCRIPT_BYTES = 65_536;
 
+function decodeCronInput(bytes: Buffer, label: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new CronCliError(`${label} must be valid UTF-8`, { cause: error });
+  }
+}
+
 async function readCronInput(
   source: string,
   stdin: AsyncIterable<unknown> | undefined,
@@ -42,7 +50,11 @@ async function readScriptStream(
     maxBytes: MAX_CRON_TRIGGER_SCRIPT_BYTES,
     onOverflow: () => new CronCliError(`${label} exceeds ${MAX_CRON_TRIGGER_SCRIPT_BYTES} bytes`),
   });
-  return bytes.toString("utf8");
+  const script = decodeCronInput(bytes, label).trim();
+  if (!script) {
+    throw new CronCliError(`${label} must not be empty`);
+  }
+  return script;
 }
 
 /** Reads a trigger script locally before sending the cron RPC. */
@@ -52,12 +64,7 @@ export async function readCronTriggerScript(
     stdin?: AsyncIterable<unknown>;
   },
 ): Promise<string> {
-  const raw = await readScriptStream(source, deps?.stdin, "Trigger script");
-  const script = raw.trim();
-  if (!script) {
-    throw new CronCliError("Trigger script must not be empty");
-  }
-  return script;
+  return await readScriptStream(source, deps?.stdin, "Trigger script");
 }
 
 /** Reads a script payload locally before sending the cron RPC. */
@@ -65,12 +72,7 @@ export async function readCronPayloadScript(
   source: string,
   deps?: { stdin?: AsyncIterable<unknown> },
 ): Promise<string> {
-  const raw = await readScriptStream(source, deps?.stdin, "Script payload");
-  const script = raw.trim();
-  if (!script) {
-    throw new CronCliError("Script payload must not be empty");
-  }
-  return script;
+  return await readScriptStream(source, deps?.stdin, "Script payload");
 }
 
 /** Reads exact scratch content locally; empty content is a meaningful value. */
@@ -82,5 +84,5 @@ export async function readCronScratchContent(
     maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
     onOverflow: () => new CronCliError(`Cron scratch exceeds ${CRON_JOB_SCRATCH_MAX_BYTES} bytes`),
   });
-  return bytes.toString("utf8");
+  return decodeCronInput(bytes, "Cron scratch");
 }

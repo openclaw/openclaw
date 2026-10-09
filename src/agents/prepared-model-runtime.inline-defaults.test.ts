@@ -37,56 +37,20 @@ const alias: AuthoredModelRow = {
   input: ["text", "image"],
 };
 const exact = { id: "selected", name: "Exact", contextWindow: 96_000 };
-const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const expectedDefaults: ProducerCase["expected"] = {
+  name: "Exact",
+  reasoning: false,
+  input: ["text"],
+  contextWindow: 96_000,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
 
 describe("prepared inline row defaults", () => {
   it.each<ProducerCase>([
     {
       name: "sparse exact after alias",
       rows: [alias, exact],
-      expected: {
-        name: "Exact",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 96_000,
-        cost: defaultCost,
-      },
-    },
-    {
-      name: "sparse exact before alias",
-      rows: [exact, alias],
-      expected: {
-        name: "Exact",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 96_000,
-        cost: defaultCost,
-      },
-    },
-    {
-      name: "explicit false exact",
-      rows: [alias, { ...exact, reasoning: false, input: ["text"] }],
-      expected: {
-        name: "Exact",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 96_000,
-        cost: defaultCost,
-      },
-    },
-    {
-      name: "explicit true exact",
-      rows: [
-        { ...alias, reasoning: false, input: ["text"] },
-        { ...exact, reasoning: true, input: ["text", "image"] },
-      ],
-      expected: {
-        name: "Exact",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 96_000,
-        cost: defaultCost,
-      },
+      expected: expectedDefaults,
     },
     {
       name: "same-spelling cost and capability omissions",
@@ -102,22 +66,10 @@ describe("prepared inline row defaults", () => {
         },
       ],
       expected: {
-        name: "Exact",
+        ...expectedDefaults,
         reasoning: true,
         input: ["image"],
-        contextWindow: 96_000,
         cost: { input: 7, output: 8, cacheRead: 0.5, cacheWrite: 0 },
-      },
-    },
-    {
-      name: "one raw row",
-      rows: [exact],
-      expected: {
-        name: "Exact",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 96_000,
-        cost: defaultCost,
       },
     },
   ])("selects $name before capabilities become runtime defaults", ({ rows, expected }) => {

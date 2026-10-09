@@ -1,23 +1,25 @@
-import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   assertUpdateCandidatePluginLinkTarget,
   publishUpdateCandidatePluginTreeLinks,
   resolveUpdateCandidatePluginTreeTargets,
-  type UpdateCandidatePluginTreeEntry,
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
-import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree.js";
-import { relocateRuntimeEntry } from "./update-runtime-relocation.js";
-
-// Relocation rewrites these members in place; a hard link would edit the live package.
-const isRelocatedFile = (file: string) =>
-  path.basename(file) === ".modules.yaml" ||
-  (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe"));
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
+import {
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
+} from "./update-runtime-relocation.js";
 
 const isLinkUnsupported = (error: unknown) =>
   ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].some((code) =>
@@ -29,7 +31,7 @@ const isLinkUnsupported = (error: unknown) =>
  *
  * Retention only needs the inventoried inodes to outlive the installer's rename or
  * unlink, so files share their inode with the source and bytes are copied only when
- * the filesystem refuses the link or the member must be rewritten for relocation.
+ * the filesystem cannot preserve identity, a plugin boundary checks it, or relocation rewrites it.
  * One walk performs the inventory check, publication, relocation, and escape check
  * for every entry.
  */
@@ -38,102 +40,167 @@ export async function linkUpdateCandidatePluginTrees(
   params: {
     targetStateDir: string;
     candidateRoot: string;
+    assertCurrent: () => void;
     onProgress?: () => void | Promise<void>;
+    onMaterialized?: () => void;
   },
 ): Promise<{ linked: number; copied: number }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
-  // Linking bumps the source inode's change time. Later entries that share that
-  // inode (pnpm store hard links) must match the recorded post-link fingerprint.
-  const linkedInodes = new Map<string, string>();
-  const assertEntryStat = (entry: UpdateCandidatePluginTreeEntry, current: BigIntStats) => {
-    const expected =
-      entry.kind === "file" && linkedInodes.has(`${entry.dev}:${entry.ino}`)
-        ? { ...entry, ctimeNs: linkedInodes.get(`${entry.dev}:${entry.ino}`)! }
-        : entry;
-    assertUpdateCandidatePluginEntryStat(expected, current);
-  };
-  const assertEntry = async (entry: UpdateCandidatePluginTreeEntry) => {
+  const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
-    assertEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
+    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
+  for (const entry of plan.entries) {
+    if (path.basename(entry.path) === "openclaw.plugin.json") {
+      await assertEntry(entry);
+    }
+  }
+  const pluginFiles = collectPluginSafetyInspectedFiles(plan.entries);
   await targets.assertBindings();
+  params.assertCurrent();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
-  let destinationRoot: Awaited<ReturnType<typeof openRoot>> | undefined;
+  const preparedDirectories = new Map<string, Promise<string | undefined>>([
+    [privateRoot, Promise.resolve(undefined)],
+  ]);
+  const prepareDirectory = (directory: string, mode: number) => {
+    let preparing = preparedDirectories.get(directory);
+    if (!preparing) {
+      params.assertCurrent();
+      preparing = fs.mkdir(directory, { recursive: true, mode });
+      preparedDirectories.set(directory, preparing);
+    }
+    return preparing;
+  };
+  let destinationRoot: ReturnType<typeof openRoot> | undefined;
   const copyEntry = async (
-    entry: Extract<UpdateCandidatePluginTreeEntry, { kind: "file" }>,
+    entry: Extract<UpdateCandidatePluginEntry, { kind: "file" }>,
     destination: string,
   ) => {
-    destinationRoot ??= await openRoot(privateRoot);
-    // copyIn owns portable create-only publication; recheck the inventory before
-    // its private stage is published.
-    await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
-      overwrite: false,
-      maxBytes: entry.size,
-      mode: entry.mode | 0o600,
-      sourceHardlinks: "allow",
-      assertBeforeMutation: () =>
-        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
+    const root = await (destinationRoot ??= openRoot(privateRoot));
+    await copyUpdateCandidatePluginFileBytes({ entry, privateRoot, destination }, root, {
+      assertBeforeMutation: params.assertCurrent,
+      assertAfterCopy: () => assertEntry(entry),
     });
-    await assertEntry(entry);
-    await relocateRuntimeEntry(destination, entry.path, destination, "file", relocations);
+    const relocate = resolveRuntimeFileRelocator(destination);
+    if (relocate) {
+      await relocate(destination, entry.path, destination, relocations, params.assertCurrent);
+    }
     if ((entry.mode & 0o600) !== 0o600) {
+      params.assertCurrent();
       await fs.chmod(destination, entry.mode);
     }
   };
+  // OverlayFS hard links can copy lower-layer files up, changing birthtime (or
+  // inode identity). Copy instead of relaxing the admitted file fingerprint.
+  const copyDevices = new Map<string, boolean>();
+  const requiresCopy = async (entry: UpdateCandidatePluginEntry) => {
+    if (process.platform !== "linux") {
+      return false;
+    }
+    let copy = copyDevices.get(entry.dev);
+    if (copy === undefined) {
+      copy = (await fs.statfs(entry.path)).type === 0x794c7630;
+      copyDevices.set(entry.dev, copy);
+    }
+    return copy;
+  };
   const counts = { linked: 0, copied: 0 };
-  const directories: Array<Extract<UpdateCandidatePluginTreeEntry, { kind: "directory" }>> = [];
-  for (const entry of plan.entries) {
+  const directories: Array<Extract<UpdateCandidatePluginEntry, { kind: "directory" }>> = [];
+  const materialize = async (entry: UpdateCandidatePluginEntry) => {
     await assertEntry(entry);
     const destination = destinationFor(entry.path);
+    const directory = entry.kind === "directory" ? destination : path.dirname(destination);
+    // A file may precede its parent's inventory entry; reuse only completed creation.
+    await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
     if (entry.kind === "directory") {
-      await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
       directories.push(entry);
-      continue;
-    }
-    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-    if (entry.kind === "symlink") {
+    } else if (entry.kind === "symlink") {
+      params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
-      await relocateRuntimeEntry(destination, entry.path, destination, "symlink", relocations);
+      await relocateRuntimeSymlink(
+        destination,
+        entry.path,
+        destination,
+        relocations,
+        params.assertCurrent,
+      );
       assertUpdateCandidatePluginLinkTarget(
         destination,
         path.resolve(path.dirname(destination), await fs.readlink(destination)),
         { privateRoot, candidateRoot },
       );
-      continue;
-    }
-    if (isRelocatedFile(destination)) {
-      await copyEntry(entry, destination);
-      counts.copied += 1;
-      continue;
-    }
-    try {
-      await fs.link(entry.path, destination);
-    } catch (error) {
-      if (!isLinkUnsupported(error)) {
-        throw error;
+    } else {
+      let copy =
+        pluginFiles.has(entry.path) ||
+        Boolean(resolveRuntimeFileRelocator(destination)) ||
+        (await requiresCopy(entry));
+      if (!copy) {
+        params.assertCurrent();
+        try {
+          await fs.link(entry.path, destination);
+        } catch (error) {
+          if (!isLinkUnsupported(error)) {
+            throw error;
+          }
+          copy = true;
+        }
       }
-      await copyEntry(entry, destination);
-      counts.copied += 1;
-      continue;
+      if (copy) {
+        await copyEntry(entry, destination);
+        counts.copied += 1;
+      } else {
+        // The private name must reference the inventoried inode, never a newer file.
+        const linked = await fs.lstat(destination, { bigint: true });
+        if (
+          !linked.isFile() ||
+          linked.dev.toString() !== entry.dev ||
+          linked.ino.toString() !== entry.ino
+        ) {
+          throw new Error(
+            `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
+          );
+        }
+        assertUpdateCandidatePluginEntryStat(entry, linked);
+        counts.linked += 1;
+      }
     }
-    // The private name must reference the inventoried inode, never a newer file.
-    const linked = await fs.lstat(destination, { bigint: true });
-    if (
-      !linked.isFile() ||
-      linked.dev.toString() !== entry.dev ||
-      linked.ino.toString() !== entry.ino
-    ) {
-      throw new Error(
-        `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
-      );
+    params.onMaterialized?.();
+  };
+  const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
+  const inodes = new Set<string>();
+  const drain = async () => {
+    const result = await runTasksWithConcurrency({
+      tasks: files.map((entry) => () => materialize(entry)),
+      limit: 4,
+      errorMode: "stop",
+    });
+    // Cleanup must never race an admitted filesystem write, including on failure.
+    if (result.hasError) {
+      throw result.firstError;
     }
-    assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
-    linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
-    counts.linked += 1;
+    files.length = 0;
+    inodes.clear();
+  };
+  for (const entry of plan.entries) {
+    const inode = `${entry.dev}:${entry.ino}`;
+    // A link changes its inode's ctime even when the next occurrence needs a copy.
+    // Keep shared inodes and directory/symlink barriers in inventory order.
+    if (files.length && (entry.kind !== "file" || files.length === 4 || inodes.has(inode))) {
+      await drain();
+    }
+    if (entry.kind === "file") {
+      files.push(entry);
+      inodes.add(inode);
+    } else {
+      await materialize(entry);
+    }
+  }
+  if (files.length) {
+    await drain();
   }
   await targets.assertBindings();
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({
@@ -141,12 +208,15 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot,
     hostLinks,
     aliases: targets.aliases,
+    assertBeforeMutation: params.assertCurrent,
   });
   for (const alias of privateAliases) {
     await verifyUpdateCandidatePluginTree(alias, { privateRoot, candidateRoot, hostLinks });
   }
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
+    params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
+    params.onMaterialized?.();
   }
   return counts;
 }

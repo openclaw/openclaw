@@ -21,6 +21,7 @@ import {
   loadCommandLaneDiagnostics,
   type CommandLaneDiagnostics,
 } from "../../lib/gateway-diagnostics.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   DEBUG_OVERLAY_SECTION_HEADERS,
   type DebugOverlaySectionId,
@@ -55,6 +56,7 @@ function defineDebugOverlaySection<T>(
 
 export type DebugOverlayStatusSnapshot = GatewayStatusSnapshot & {
   pingMs: number;
+  sampledAt: number;
   disks?: SystemInfoResult["disks"];
   uptimeMs?: number;
 };
@@ -72,7 +74,7 @@ export function renderDebugOverlayWidget(
   history: readonly DebugOverlayStatusSample[],
 ): TemplateResult {
   return html`<div class="debug-overlay__widget">
-    ${renderGatewayCpuVital(status, history)}
+    ${renderGatewayCpuVital(status, history)} ${renderGatewayMemoryVital(status, history)}
     <openclaw-sparkline
       class="gateway-vital gateway-vital--ping"
       data-degraded=${status.pingMs > PING_DEGRADED_THRESHOLD_MS ? "" : nothing}
@@ -82,7 +84,6 @@ export function renderDebugOverlayWidget(
       .format=${formatPingMs}
       .floorMax=${20}
     ></openclaw-sparkline>
-    ${renderGatewayMemoryVital(status, history)}
   </div>`;
 }
 
@@ -201,9 +202,8 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
   defineDebugOverlaySection({
     ...DEBUG_OVERLAY_SECTION_HEADERS.status,
     load: async (context, signal): Promise<DebugOverlayStatusSnapshot> => {
-      const startedAt = performance.now();
-      const status = await context.client.request<SystemInfoResult>("system.info", {}, { signal });
-      return { ...status, pingMs: performance.now() - startedAt };
+      const sample = await readSystemInfo(context.gateway, signal);
+      return { ...sample.value, pingMs: sample.roundTripMs, sampledAt: sample.at };
     },
     render: renderStatus,
   }),

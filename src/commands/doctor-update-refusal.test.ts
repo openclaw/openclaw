@@ -2,12 +2,16 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
 import { formatCliFailureLines } from "../cli/failure-output.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import * as tmpRoot from "../infra/tmp-openclaw-dir.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
@@ -39,9 +43,10 @@ vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
   shouldManageGatewayService: async () => true,
 }));
-vi.mock("../infra/update-run-ledger.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-run-ledger.js")>()),
-  listUpdateRuns: () => [],
+// These cases exercise service/schema refusal after update admission, not ledger admission.
+vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
+  createUpdateRunAdmissionReader: () => () => [],
 }));
 
 const activationReason =
@@ -51,7 +56,13 @@ const maintenanceSuffix =
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  const directory = fs.realpathSync(tempDirs.make("doctor-refusal-handoff-"));
+  const binding = createManagedHandoffTestBinding(directory);
+  vi.spyOn(tmpRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
+  vi.stubEnv("NODE_OPTIONS", `${process.env.NODE_OPTIONS ?? ""} ${binding.nodeOption}`.trim());
+  binding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
   mockSystemAccountHome();
 });
@@ -61,6 +72,7 @@ afterEach(async () => {
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 type History =
@@ -371,10 +383,10 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
   it("retains npm schema recovery and omits direct Doctor recovery for an update child", async () => {
     await withFixture("npm", async ({ root, schemas, state }) => {
       const expectedSchema =
-        "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely. " +
+        "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely.\n" +
         `agent database ${state.path("agent.sqlite")}: on-disk schema 1, this build's schema 2. ` +
-        "The blocked schema change was not applied. Let the updater restore the previous package, then update manually: " +
-        `openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start. ` +
+        "The blocked schema change was not applied.\nLet the updater restore the previous package and exit. Then use an independent shell with the original service account, package prefix, profile, and state/config overrides.\n" +
+        `Manual update: openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start.\n` +
         `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`;
       expect(
         (await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }))).message,

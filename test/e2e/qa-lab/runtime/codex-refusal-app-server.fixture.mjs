@@ -47,6 +47,22 @@ runFakeCodexAppServer({
         }),
       ),
     "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
+    "model/list": ({ sendResult }) =>
+      sendResult({
+        data: ["gpt-5.6-terra", "gpt-5.6-luna"].map((model) => ({
+          id: model,
+          model,
+          displayName: model,
+          description: "Synthetic refusal proof model",
+          hidden: false,
+          isDefault: model === "gpt-5.6-terra",
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+          multiAgentVersion: "v2",
+          inputModalities: ["text"],
+        })),
+        nextCursor: null,
+      }),
     "account/rateLimits/read": ({ sendResult }) =>
       sendResult({
         rateLimits: {

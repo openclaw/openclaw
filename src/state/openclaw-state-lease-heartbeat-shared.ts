@@ -1,9 +1,11 @@
-import type { StateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 
-export const LEASE_HEARTBEAT_START_TIMEOUT_MS = 5_000;
+// Allow headroom over observed 38 s cold Gateway boots under load; committed lease expiry still bounds startup.
+export const LEASE_HEARTBEAT_START_TIMEOUT_MS = 60_000;
+export const LEASE_CONTENTION_RETRY_MS = 25;
+export const LEASE_CONTENTION_RETRY_TIMEOUT_MS = 2_000;
 
 export const leaseHeartbeatState = {
   status: 0,
@@ -36,23 +38,24 @@ export type LeaseHeartbeatRenewalFailure = {
   elapsedMs: number;
 };
 
+export type LeaseHeartbeatLoss = {
+  path: "automatic-renewal" | "activation" | "explicit-verify" | "explicit-renew";
+  outcome: "no-current-owned-unexpired-row" | "operation-error";
+};
+
 export type LeaseHeartbeatWorkerData = {
   path: string;
-  existingOnly?: boolean;
-  /** Private parent retains the actual lifecycle coordinator until native worker exit. */
-  parentCoordinatorRetained?: true;
+  expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
   deferActivation?: true;
-  retainedStartup?: {
-    expectedIdentity: string;
-    coordinatorRuntime: StateDatabaseCoordinatorRuntime;
-  };
   identity: OpenClawStateLeaseIdentity;
   leaseMs: number;
   acquiredAt: number;
   heartbeatMs: number;
   processOwner?: { identity: StateLeaseProcessOwner; env: NodeJS.ProcessEnv };
   shared: SharedArrayBuffer;
+  /** Odd while native renewal is in flight; progress is never lease authority. */
+  renewalProgress: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {
@@ -64,6 +67,7 @@ export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "ac
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
+  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

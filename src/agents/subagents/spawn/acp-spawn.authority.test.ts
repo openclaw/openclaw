@@ -2,9 +2,8 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createBackgroundTaskRecord } from "../../../acp/control-plane/manager.background-task.js";
 import {
   getAcpSessionManager,
   testing as managerTesting,
@@ -15,13 +14,17 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../../acp/runtime/registry.js";
+import * as acpSessionEntry from "../../../acp/runtime/session-meta-entry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../../../config/config.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  recordSessionParticipant,
+} from "../../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
@@ -42,9 +45,9 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { listTasksForRelatedSessionKey } from "../../../tasks/task-registry-query.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -77,6 +80,7 @@ vi.mock("../../runtime-plugins.js", () => ({
 }));
 
 const parentSessionKey = "agent:main:main";
+const parentScope = { agentId: "main", sessionKey: parentSessionKey };
 const parentRunId = "acp-spawn-parent";
 const backendId = "spawn-authority-fixture";
 const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
@@ -118,8 +122,7 @@ beforeEach(async () => {
     artifactBasename: "browser-maintenance.js",
   });
   managerTesting.resetAcpSessionManagerForTests();
-  resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -131,8 +134,7 @@ afterEach(async () => {
     managerTesting.resetAcpSessionManagerForTests();
     unregisterAcpRuntimeBackend(backendId);
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
@@ -150,374 +152,360 @@ afterEach(async () => {
   await rm(stateDir, { recursive: true, force: true });
 });
 
-describe("pending ACP spawn authority", () => {
-  it.each([
-    ["runtime", "abort"],
-    ["runtime", "admission close"],
-    ["runtime", "live"],
-    ["row", "admission close"],
-    ["transcript", "admission close"],
-    ["thread", "admission close"],
-    ["thread", "live"],
-    ["actor", "admission close"],
-    ["metadata", "admission close"],
-    ["initialized", "admission close"],
-  ] as const)(
-    "transfers initialized ACP work only from its live parent: %s / %s",
-    async (stage, closure) => {
-      const cfg = getRuntimeConfig();
-      await writeSubagentSessionEntry({
-        stateDir,
-        agentId: "main",
-        sessionKey: parentSessionKey,
-        defaultSessionId: "parent-session",
+it.each([
+  ["runtime", "abort"],
+  ["row", "admission close"],
+  ["thread", "admission close"],
+  ["thread", "live"],
+  ["actor", "admission close"],
+  ["metadata", "admission close"],
+  ["initialized", "admission close"],
+] as const)(
+  "pending ACP spawn transfers work only from its live parent: %s / %s",
+  async (stage, closure) => {
+    const cfg = getRuntimeConfig();
+    await writeSubagentSessionEntry({
+      stateDir,
+      ...parentScope,
+      defaultSessionId: "parent-session",
+    });
+    const live = closure === "live";
+    const thread = stage === "thread";
+    const readChild = (sessionKey: string) => loadSessionEntry({ sessionKey, agentId: "fixture" });
+    if (live) {
+      await recordSessionParticipant(parentScope, {
+        identity: { type: "profile", id: "human-contributor" },
+        promptedAt: 1,
       });
-      const context = withLocalGatewayRequestScope(
-        { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
-        () => getPluginRuntimeGatewayRequestScope()!.context!,
-      );
-      const work = new AsyncWorkScope();
-      const trackExecution = context.trackExecution;
-      context.trackExecution = (run) => work.track(() => trackExecution(run));
-      const admission = prepareAgentRunAdmission({
-        cfg,
-        operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
-        facts: {
-          runId: parentRunId,
-          agentId: "main",
-          ingress: { kind: "system", boundary: "acp-authority-test", state: "present" },
-        },
-      });
-      const parent = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
+    }
+    const context = withLocalGatewayRequestScope(
+      { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
+      () => getPluginRuntimeGatewayRequestScope()!.context!,
+    );
+    const work = new AsyncWorkScope();
+    const trackExecution = context.trackExecution;
+    context.trackExecution = (run) => work.track(() => trackExecution(run));
+    const admission = prepareAgentRunAdmission({
+      cfg,
+      operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
+      facts: {
         runId: parentRunId,
-        sessionKey: parentSessionKey,
-        sessionId: "parent-session",
         agentId: "main",
-        ownerConnId: "owner-connection",
-        timeoutMs: 60_000,
-        operationalRunInstance: admission.operationalRunInstance,
+        ingress: { kind: "system", boundary: "acp-authority-test", state: "present" },
+      },
+    });
+    const parent = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId: parentRunId,
+      ...parentScope,
+      sessionId: "parent-session",
+      ownerConnId: "owner-connection",
+      timeoutMs: 60_000,
+      operationalRunInstance: admission.operationalRunInstance,
+    });
+    const admitted = await admission.admit("embedded");
+    bindGatewayContextResolver(admitted, () => context);
+    parent.bindAgentRunDelegatedAuthority(getAdmittedRunDelegatedAuthority(admitted)!);
+    expect(admitted.executionIdentityToken).toBeUndefined();
+    const entered = createDeferred<string>();
+    const release = createDeferred();
+    const pause = async (sessionKey: string) => {
+      entered.resolve(sessionKey);
+      await release.promise;
+    };
+    let childKey: string | undefined;
+    const upsert = sessionAccessor.upsertSessionEntryCore;
+    vi.spyOn(sessionAccessor, "upsertSessionEntryCore").mockImplementation(async (...args) => {
+      const entry = await upsert(...args);
+      childKey = args[0].sessionKey;
+      if (stage === "row") {
+        await pause(childKey);
+      }
+      return entry;
+    });
+    if (stage === "actor") {
+      const run = vi.spyOn(SessionActorQueue.prototype, "run");
+      run.mockImplementationOnce(function (this: SessionActorQueue, key, op) {
+        run.mockRestore();
+        return this.run(key, async (isCurrent) => {
+          if (!childKey) {
+            throw new Error("ACP actor started before its child entry existed");
+          }
+          await pause(childKey);
+          return await op(isCurrent);
+        });
       });
-      const admitted = await admission.admit("embedded");
-      bindGatewayContextResolver(admitted, () => context);
-      parent.bindAgentRunDelegatedAuthority(getAdmittedRunDelegatedAuthority(admitted)!);
-      expect(admitted.executionIdentityToken).toBeUndefined();
-      const entered = createDeferred<string>();
-      const release = createDeferred();
-      const pause = async (sessionKey: string) => {
-        entered.resolve(sessionKey);
-        await release.promise;
-      };
-      let childKey: string | undefined;
-      const upsert = sessionAccessor.upsertSessionEntryCore;
-      vi.spyOn(sessionAccessor, "upsertSessionEntryCore").mockImplementation(async (...args) => {
-        const entry = await upsert(...args);
-        childKey = args[0].sessionKey;
-        if (stage === "row") {
+    } else if (stage === "initialized" || stage === "metadata") {
+      const initialize = acpSpawnRuntime.initializeAcpSpawnRuntime;
+      vi.spyOn(acpSpawnRuntime, "initializeAcpSpawnRuntime").mockImplementationOnce(
+        async (params) => {
+          const initialized = await initialize(params);
+          if (stage === "initialized") {
+            await pause(params.sessionKey);
+          } else if (!getAdmittedRunDelegatedAuthority(admitted)) {
+            lateMetadata(initialized.initialized.meta);
+          }
+          return initialized;
+        },
+      );
+    }
+    const lateMetadata = vi.fn();
+    if (stage === "metadata") {
+      const update = acpSessionEntry.updateAcpSessionStoreEntry;
+      let held = false;
+      vi.spyOn(acpSessionEntry, "updateAcpSessionStoreEntry").mockImplementation(async (params) => {
+        const updated = await update(params);
+        if (
+          !held &&
+          params.mutation.kind === "touch" &&
+          params.scope.sessionKey === childKey &&
+          ensuredSessions.includes(childKey)
+        ) {
+          held = true;
           await pause(childKey);
         }
-        return entry;
+        return updated;
       });
-      if (stage === "transcript") {
-        const resolve = sessionAccessor.resolveSessionTranscriptRuntimeTarget;
-        vi.spyOn(sessionAccessor, "resolveSessionTranscriptRuntimeTarget").mockImplementation(
-          async (...args) => {
-            const target = await resolve(...args);
-            await pause(target.sessionKey);
-            return target;
-          },
-        );
-      } else if (stage === "actor") {
-        const run = vi.spyOn(SessionActorQueue.prototype, "run");
-        run.mockImplementationOnce(function (this: SessionActorQueue, key, op) {
-          run.mockRestore();
-          return this.run(key, async (isCurrent) => {
-            if (!childKey) {
-              throw new Error("ACP actor started before its child entry existed");
-            }
-            await pause(childKey);
-            return await op(isCurrent);
-          });
-        });
-      } else if (stage === "initialized" || stage === "metadata") {
-        const initialize = acpSpawnRuntime.initializeAcpSpawnRuntime;
-        vi.spyOn(acpSpawnRuntime, "initializeAcpSpawnRuntime").mockImplementationOnce(
-          async (params) => {
-            const initialized = await initialize(params);
-            if (stage === "initialized") {
-              await pause(params.sessionKey);
-            } else if (!getAdmittedRunDelegatedAuthority(admitted)) {
-              lateMetadata(initialized.initialized.meta);
-            }
-            return initialized;
-          },
-        );
-      }
-      const lateMetadata = vi.fn();
-      if (stage === "metadata") {
-        const patch = sessionAccessor.patchSessionEntryWithKey;
-        let held = false;
-        vi.spyOn(sessionAccessor, "patchSessionEntryWithKey").mockImplementation(
-          async (...args) => {
-            const patched = await patch(...args);
-            if (!held && ensuredSessions.length > 0 && childKey) {
-              held = true;
-              await pause(childKey);
-            }
-            return patched;
-          },
-        );
-      }
-      const bindThread = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => ({
-        bindingId: "default:child-thread",
-        targetSessionKey: input.targetSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "child-thread",
-          parentConversationId: "parent-channel",
-        },
-        status: "active",
-        boundAt: Date.now(),
-        metadata: input.metadata,
-      }));
-      const bindingAdapter: SessionBindingAdapter = {
+    }
+    const bindThread = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => ({
+      bindingId: "default:child-thread",
+      targetSessionKey: input.targetSessionKey,
+      targetKind: "session",
+      conversation: {
         channel: "discord",
         accountId: "default",
-        capabilities: { placements: ["child"], bindSupported: true, unbindSupported: true },
-        bind: bindThread,
-        listBySession: () => [],
-        resolveByConversation: () => null,
-        unbind: async () => [],
-      };
-      if (stage === "thread") {
-        registerSessionBindingAdapter(bindingAdapter);
-      }
-      const pausesRuntime = stage === "runtime" || stage === "thread";
-      const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
-      const ensuredSessions: string[] = [];
-      const closeRuntime = vi.fn(async () => {});
-      const runtime: AcpRuntime = {
-        ownerAwareSessions: 1,
-        async ensureSession(input) {
-          ensuredSessions.push(input.sessionKey);
-          if (pausesRuntime) {
-            await pause(input.sessionKey);
-          }
-          return {
-            sessionKey: input.sessionKey,
-            agentId: input.agentId,
-            backend: backendId,
-            runtimeSessionName: input.sessionKey,
-            backendSessionId: `fixture:${input.sessionKey}`,
-          };
-        },
-        runTurn() {
-          throw new Error("No external harness turn belongs in this boundary test");
-        },
-        async cancel() {},
-        close: closeRuntime,
-      };
-      registerAcpRuntimeBackend({ id: backendId, runtime });
-      const dispatch = vi.fn();
-      let acceptedTaskId: string | undefined;
-      spawnTesting.setDepsForTest({
-        dispatchGatewayMethodInProcess: async <T>(
-          method: string,
-          params: Record<string, unknown>,
-        ) => {
-          if (method !== "agent") {
-            throw new Error(`Unexpected spawn RPC ${method}`);
-          }
-          dispatch(params);
-          if (typeof params.sessionKey !== "string" || typeof params.idempotencyKey !== "string") {
-            throw new Error("Accepted ACP work requires session and run identities");
-          }
-          const task = createBackgroundTaskRecord(
-            {
-              agentId: "fixture",
-              requesterAgentId: "main",
-              requesterSessionKey: parentSessionKey,
-              childSessionKey: params.sessionKey,
-              runId: params.idempotencyKey,
-              task: "bounded child",
-            },
-            Date.now(),
-            `accepted:${params.idempotencyKey}`,
-          );
-          if (!task) {
-            throw new Error("The accepting Gateway must own its ACP task");
-          }
-          acceptedTaskId = task.taskId;
-          return { runId: params.idempotencyKey, status: "accepted" } as T;
-        },
-      });
-      const socket = vi.spyOn(gatewayCall, "callGateway").mockImplementation(async (request) => {
-        if (request.method === "agent.wait") {
-          return await new Promise<never>(() => {});
+        conversationId: "child-thread",
+        parentConversationId: "parent-channel",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: input.metadata,
+    }));
+    const bindingAdapter: SessionBindingAdapter = {
+      channel: "discord",
+      accountId: "default",
+      capabilities: { placements: ["child"], bindSupported: true, unbindSupported: true },
+      bind: bindThread,
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      unbind: async () => [],
+    };
+    if (thread) {
+      registerSessionBindingAdapter(bindingAdapter);
+    }
+    const pausesRuntime = stage === "runtime" || thread;
+    const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
+    const ensuredSessions: string[] = [];
+    const closeRuntime = vi.fn(async () => {});
+    const runtime: AcpRuntime = {
+      ownerAwareSessions: 1,
+      async ensureSession(input) {
+        if (live) {
+          const entry = readChild(input.sessionKey);
+          expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
+          expect(entry?.participants ?? []).toEqual([]);
         }
-        throw new Error("Raw WebSocket transport is unavailable");
-      });
-      const source = createSessionsSpawnTool({
-        config: cfg,
-        agentSessionKey: parentSessionKey,
-        requesterRunId: parentRunId,
-        requesterTurnRunId: parentRunId,
-        ...(stage === "thread"
-          ? {
-              agentChannel: "discord",
-              agentAccountId: "default",
-              agentTo: "channel:parent-channel",
-            }
-          : {}),
-      });
-      let forwarded: Promise<unknown> | undefined;
-      const observed: AnyAgentTool = copyAgentToolMetadata(source, {
-        ...source,
-        execute: (...args) => {
-          const pending = source.execute!(...args);
-          forwarded = pending.then(
-            (result) => result,
-            (error: unknown) => error,
-          );
-          return pending;
-        },
-      });
-      const [tool] = finalizeAgentTools({
-        tools: [observed],
-        hookContext: {
-          config: cfg,
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          runId: parentRunId,
-        },
-        abortSignal: parent.controller.signal,
-      });
-      const wrapped = withPluginRuntimeGatewayRequestScope(
-        { context, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext: admitted,
-              agentId: "main",
-              sessionKey: parentSessionKey,
-            }),
-            () =>
-              tool!.execute!("pending-acp", {
-                task: "bounded child",
-                runtime: "acp",
-                agentId: "fixture",
-                mode: "run",
-                expectsCompletionMessage: false,
-                ...(stage === "thread" ? { thread: true } : {}),
-              }),
-          ),
-      );
-      const wrappedOutcome = wrapped.then(
-        (result) => result,
-        (error: unknown) => error,
-      );
-      try {
-        const childSessionKey = await Promise.race([
-          entered.promise,
-          wrapped.then(() => {
-            throw new Error("ACP spawn settled before runtime initialization");
-          }),
-        ]);
-        expect(subagentRuns.size).toBe(0);
-        expect(loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" })).toBeDefined();
-        if (closure === "abort") {
-          const reply = vi.fn();
-          const request = { sessionKey: parentSessionKey, runId: parentRunId };
-          await handleChatAbortRequest({
-            req: { type: "req", id: "abort-parent", method: "chat.abort", params: request },
-            params: request,
-            context,
-            respond: reply,
-            client: { ...createSyntheticPluginRuntimeClient(), connId: "owner-connection" },
-            isWebchatConnect: () => false,
-          });
-          expect(reply).toHaveBeenCalledWith(true, {
-            ok: true,
-            aborted: true,
-            runIds: [parentRunId],
-          });
-          expect(await wrappedOutcome).toBeInstanceOf(Error);
-        } else if (closure === "admission close") {
-          admission.close();
-          expect(parent.controller.signal.aborted).toBe(false);
+        ensuredSessions.push(input.sessionKey);
+        if (pausesRuntime) {
+          await pause(input.sessionKey);
         }
-        expect(getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(closure === "live");
-        release.resolve();
-        const result = await forwarded;
-        const sourceBoundary = {
-          entry: loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }),
-          closes: closeRuntime.mock.calls.length,
+        return {
+          sessionKey: input.sessionKey,
+          agentId: input.agentId,
+          backend: backendId,
+          runtimeSessionName: input.sessionKey,
+          backendSessionId: `fixture:${input.sessionKey}`,
         };
-        await wrappedOutcome;
-        await work.drain();
-        expect
-          .soft(lateMetadata, "closed parent must not publish ACP metadata after async planning")
-          .not.toHaveBeenCalled();
-        expect
-          .soft(
-            ensuredSessions,
-            "only live initialization may ensure once; cleanup must not reopen",
-          )
-          .toEqual(initializesRuntime ? [childSessionKey] : []);
-        expect
-          .soft(bindThread, "a closed parent must not create an external thread")
-          .toHaveBeenCalledTimes(stage === "thread" && closure === "live" ? 1 : 0);
-        if (closure === "live") {
-          expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
-          expect(dispatch).toHaveBeenCalledOnce();
-          expect(subagentRuns.size).toBe(1);
-          expect(
-            listTasksForRelatedSessionKey(childSessionKey).map((task) => ({
-              taskId: task.taskId,
-              runtime: task.runtime,
-            })),
-          ).toEqual([{ taskId: acceptedTaskId, runtime: "acp" }]);
-          expect(closeRuntime).not.toHaveBeenCalled();
-        } else {
-          expect
-            .soft(dispatch, "closed parent must never dispatch new ACP work")
-            .not.toHaveBeenCalled();
-          expect.soft(subagentRuns.size, "closed parent must never register runnable work").toBe(0);
-          expect.soft(socket).not.toHaveBeenCalled();
-          expect
-            .soft(sourceBoundary.entry, "cleanup completes before spawn returns")
-            .toBeUndefined();
-          expect
-            .soft(sourceBoundary.closes, "runtime closes before spawn returns")
-            .toBe(initializesRuntime ? 1 : 0);
-          expect
-            .soft(loadSessionEntry({ sessionKey: childSessionKey, agentId: "fixture" }))
-            .toBeUndefined();
-          expect
-            .soft(closeRuntime, "cleanup only disposes the runtime this spawn created")
-            .toHaveBeenCalledTimes(initializesRuntime ? 1 : 0);
-          expect.soft(result).toMatchObject({ details: { status: "error" } });
+      },
+      runTurn() {
+        throw new Error("No external harness turn belongs in this boundary test");
+      },
+      async cancel() {},
+      close: closeRuntime,
+    };
+    registerAcpRuntimeBackend({ id: backendId, runtime });
+    const dispatch = vi.fn();
+    let acceptedRunId: string | undefined;
+    spawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
+        if (method !== "agent") {
+          throw new Error(`Unexpected spawn RPC ${method}`);
         }
-      } finally {
-        release.resolve();
-        await forwarded;
-        await wrappedOutcome;
-        admission.close();
-        parent.cleanup();
-        await work.drain();
-        const projection = getSessionRowProjection(context);
-        projection?.dispose();
-        await projection?.ensureMaterialized();
-        if (stage === "thread") {
-          unregisterSessionBindingAdapter({
-            channel: "discord",
-            accountId: "default",
-            adapter: bindingAdapter,
-          });
+        dispatch(params);
+        if (typeof params.sessionKey !== "string" || typeof params.idempotencyKey !== "string") {
+          throw new Error("Accepted ACP work requires session and run identities");
         }
+        acceptedRunId = params.idempotencyKey;
+        return { runId: params.idempotencyKey, status: "accepted" } as T;
+      },
+    });
+    const socket = vi.spyOn(gatewayCall, "callGateway").mockImplementation(async (request) => {
+      if (request.method === "agent.wait") {
+        return await new Promise<never>(() => {});
       }
-    },
-  );
-});
+      throw new Error("Raw WebSocket transport is unavailable");
+    });
+    const source = createSessionsSpawnTool({
+      config: cfg,
+      agentSessionKey: parentSessionKey,
+      // Trusted tool construction facts the ACP child records in its lineage receipt.
+      senderIsOwner: true,
+      expectedParentSessionId: "parent-session",
+      requesterRunId: parentRunId,
+      requesterTurnRunId: parentRunId,
+      ...(thread
+        ? {
+            agentChannel: "discord",
+            agentAccountId: "default",
+            agentTo: "channel:parent-channel",
+          }
+        : {}),
+    });
+    let forwarded: Promise<unknown> | undefined;
+    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
+      ...source,
+      execute: (...args) => {
+        const pending = source.execute!(...args);
+        forwarded = pending.catch((error: unknown) => error);
+        return pending;
+      },
+    });
+    const [tool] = finalizeAgentTools({
+      tools: [observed],
+      hookContext: { ...parentScope, config: cfg, runId: parentRunId },
+      abortSignal: parent.controller.signal,
+    });
+    const wrapped = withPluginRuntimeGatewayRequestScope(
+      { context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(
+          createAdmittedGatewayToolCallerIdentity({
+            ...parentScope,
+            admittedRunContext: admitted,
+          }),
+          () =>
+            tool!.execute!("pending-acp", {
+              task: "bounded child",
+              runtime: "acp",
+              agentId: "fixture",
+              mode: "run",
+              expectsCompletionMessage: false,
+              ...(thread ? { thread: true } : {}),
+            }),
+        ),
+    );
+    const wrappedOutcome = wrapped.catch((error: unknown) => error);
+    try {
+      const childSessionKey = await Promise.race([
+        entered.promise,
+        wrapped.then(() => {
+          throw new Error("ACP spawn settled before runtime initialization");
+        }),
+      ]);
+      expect(subagentRuns.size).toBe(0);
+      expect(readChild(childSessionKey)).toBeDefined();
+      if (closure === "abort") {
+        const reply = vi.fn();
+        const request = { sessionKey: parentSessionKey, runId: parentRunId };
+        await handleChatAbortRequest({
+          req: { type: "req", id: "abort-parent", method: "chat.abort", params: request },
+          params: request,
+          context,
+          respond: reply,
+          client: { ...createSyntheticPluginRuntimeClient(), connId: "owner-connection" },
+          isWebchatConnect: () => false,
+        });
+        expect(reply).toHaveBeenCalledWith(true, {
+          ok: true,
+          aborted: true,
+          runIds: [parentRunId],
+        });
+        expect(await wrappedOutcome).toBeInstanceOf(Error);
+      } else if (closure === "admission close") {
+        admission.close();
+        expect(parent.controller.signal.aborted).toBe(false);
+      }
+      expect(getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(live);
+      release.resolve();
+      const result = await forwarded;
+      const sourceBoundary = {
+        entry: readChild(childSessionKey),
+        closes: closeRuntime.mock.calls.length,
+      };
+      await wrappedOutcome;
+      await work.drain();
+      expect.soft(lateMetadata, "closed parent cannot publish metadata").not.toHaveBeenCalled();
+      expect
+        .soft(ensuredSessions, "cleanup cannot reopen the runtime")
+        .toEqual(initializesRuntime ? [childSessionKey] : []);
+      expect
+        .soft(bindThread, "closed parent cannot create a thread")
+        .toHaveBeenCalledTimes(thread && live ? 1 : 0);
+      if (live) {
+        expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+        const events = (await listSessionStateEventsSince(childSessionKey, "fixture", 0)).events;
+        expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
+        const spawned = events[1]!;
+        expect(spawned).toMatchObject({ actorId: parentSessionKey, runId: acceptedRunId });
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              `SELECT last_seen_sequence, notified_sequence, material_sequence
+             FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+            )
+            .get(parentSessionKey, childSessionKey),
+        ).toEqual({
+          last_seen_sequence: spawned.sequence,
+          notified_sequence: spawned.sequence,
+          material_sequence: spawned.sequence,
+        });
+        expect(sourceBoundary.entry).toMatchObject({
+          spawnedBy: parentSessionKey,
+          parentSessionKey,
+          spawnedBySessionId: "parent-session",
+          spawnedBySenderIsOwner: true,
+        });
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(subagentRuns.size).toBe(1);
+        expect(subagentRuns.get(acceptedRunId!)).toMatchObject({
+          childSessionKey,
+          requesterSessionKey: parentSessionKey,
+        });
+        expect(closeRuntime).not.toHaveBeenCalled();
+      } else {
+        expect.soft(dispatch, "closed parent cannot dispatch work").not.toHaveBeenCalled();
+        expect.soft(subagentRuns.size, "closed parent cannot register work").toBe(0);
+        expect.soft(socket).not.toHaveBeenCalled();
+        expect.soft(sourceBoundary.entry, "cleaned before return").toBeUndefined();
+        expect
+          .soft(sourceBoundary.closes, "runtime closed before return")
+          .toBe(initializesRuntime ? 1 : 0);
+        expect.soft(readChild(childSessionKey)).toBeUndefined();
+        expect
+          .soft(closeRuntime, "dispose only the created runtime")
+          .toHaveBeenCalledTimes(initializesRuntime ? 1 : 0);
+        expect.soft(result).toMatchObject({ details: { status: "error" } });
+      }
+    } finally {
+      release.resolve();
+      await forwarded;
+      await wrappedOutcome;
+      admission.close();
+      parent.cleanup();
+      await work.drain();
+      const projection = getSessionRowProjection(context);
+      projection?.dispose();
+      await projection?.ensureMaterialized();
+      if (thread) {
+        unregisterSessionBindingAdapter({
+          channel: "discord",
+          accountId: "default",
+          adapter: bindingAdapter,
+        });
+      }
+    }
+  },
+);

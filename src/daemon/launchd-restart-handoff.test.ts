@@ -220,25 +220,6 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the service target for start-after-exit mode", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
-
-    scheduleDetachedLaunchdRestartHandoff({
-      env: {
-        HOME: "/Users/test",
-        OPENCLAW_PROFILE: "default",
-      },
-      mode: "start-after-exit",
-    });
-
-    const [, args] = requireSpawnCall();
-    expect(args[1]).toContain('if launchctl kickstart "$service_target"; then');
-    expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    expect(args[1]).not.toContain('kickstart -k "$service_target"');
-    expect(args[1]).not.toContain('if launchctl start "$label"; then');
-    expect(args[1]).not.toContain('basename "$service_target"');
-  });
-
   it("kickstarts after exit without replacing a running KeepAlive process", async () => {
     const result = await executeHandoff(
       "start-after-exit",
@@ -304,8 +285,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
     // The unload poll must outlast launchd's ExitTimeOut SIGKILL ceiling plus
-    // margin (#110137): 35 × 1s vs the old 15 × 0.2s stop window.
-    expect(args[1]).toContain('bootout_wait_count="35"');
+    // margin (#110137): 345 × 1s vs the old 15 × 0.2s stop window.
+    expect(args[1]).toContain('bootout_wait_count="345"');
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("sleep 1");
     // Bootstrap failures retry; kickstart -k only fires while the label is

@@ -1,13 +1,4 @@
-/**
- * Agent harness lifecycle diagnostics wrapper.
- *
- * This module wraps harness attempts with context-engine support checks,
- * diagnostic events, trace propagation, and result classification.
- */
-import {
-  assertContextEngineHostSupport,
-  type ContextEngineHostSupport,
-} from "../../context-engine/host-compat.js";
+import { assertContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
@@ -45,29 +36,16 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
 
-type AgentHarnessCanonicalAttemptResult = EmbeddedRunAttemptResult;
-
 type AgentHarnessLifecycleFinalizationOutcome =
   | { outcome: "answered"; result: AgentHarnessSettledTurnFinalizationResult }
   | { outcome: "empty"; result: AgentHarnessSettledTurnFinalizationResult };
 
 type AgentHarnessLifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
-type AgentRunCompletedOutcome = "completed" | "aborted" | "blocked" | "error";
 type AgentRunCompletion = {
-  outcome: AgentRunCompletedOutcome;
+  outcome: "completed" | "aborted" | "blocked" | "error";
   blockedBy?: string;
   error?: unknown;
 };
-
-function buildAgentHarnessContextEngineHostSupport(
-  harness: AgentHarness,
-): ContextEngineHostSupport {
-  return {
-    id: `agent-harness:${harness.id}`,
-    label: `agent harness "${harness.id}"`,
-    capabilities: harness.contextEngineHostCapabilities ?? [],
-  };
-}
 
 function assertAgentHarnessContextEngineSupport(
   harness: AgentHarness,
@@ -79,7 +57,11 @@ function assertAgentHarnessContextEngineSupport(
   assertContextEngineHostSupport({
     contextEngine: params.contextEngine,
     operation: "agent-run",
-    host: buildAgentHarnessContextEngineHostSupport(harness),
+    host: {
+      id: `agent-harness:${harness.id}`,
+      label: `agent harness "${harness.id}"`,
+      capabilities: harness.contextEngineHostCapabilities ?? [],
+    },
   });
 }
 
@@ -89,7 +71,7 @@ function agentHarnessDiagnosticBase(
   trace?: DiagnosticTraceContext,
 ) {
   const diagnosticTrace = trace ?? getActiveDiagnosticTraceContext();
-  const channel = diagnosticChannel(params);
+  const channel = params.messageChannel ?? params.messageProvider;
   return {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -107,7 +89,7 @@ function agentHarnessDiagnosticBase(
 
 function normalizeAgentHarnessAttemptResult(
   result: AgentHarnessAttemptResult,
-): AgentHarnessCanonicalAttemptResult {
+): EmbeddedRunAttemptResult {
   const {
     aborted,
     externalAbort,
@@ -148,32 +130,12 @@ function normalizeAgentHarnessAttemptResult(
   return { ...canonicalWithAttemptProvenance, terminal };
 }
 
-function agentHarnessRunOutcome(
-  result: AgentHarnessCanonicalAttemptResult,
-): DiagnosticHarnessRunOutcome {
-  const terminal = projectAgentRunAttemptTerminal(result.terminal);
-  if (terminal.timedOut) {
-    return "timed_out";
-  }
-  if (terminal.externalAbort || terminal.aborted) {
-    return "aborted";
-  }
-  if (terminal.promptErrorSource !== null) {
-    return "error";
-  }
-  return "completed";
-}
-
 function shouldEmitAgentRunDiagnostics(harness: AgentHarness): boolean {
   return harness.id !== "openclaw";
 }
 
-function diagnosticChannel(params: AgentHarnessAttemptParams): string | undefined {
-  return params.messageChannel ?? params.messageProvider;
-}
-
 function agentRunDiagnosticBase(params: AgentHarnessAttemptParams, trace: DiagnosticTraceContext) {
-  const channel = diagnosticChannel(params);
+  const channel = params.messageChannel ?? params.messageProvider;
   return {
     runId: params.runId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -187,7 +149,33 @@ function agentRunDiagnosticBase(params: AgentHarnessAttemptParams, trace: Diagno
   };
 }
 
-function agentRunCompletion(result: AgentHarnessCanonicalAttemptResult): AgentRunCompletion {
+function emitAgentRunCompleted(
+  params: AgentHarnessAttemptParams,
+  trace: DiagnosticTraceContext | undefined,
+  startedAt: number,
+  completion: AgentRunCompletion,
+  classifyMissingError = false,
+): void {
+  if (!trace) {
+    return;
+  }
+  const failed =
+    completion.outcome === "error" && (completion.error != null || classifyMissingError);
+  const errorMessage = failed ? diagnosticErrorMessage(completion.error) : undefined;
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "run.completed",
+      ...agentRunDiagnosticBase(params, trace),
+      durationMs: Date.now() - startedAt,
+      outcome: completion.outcome,
+      ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
+      ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
+    },
+    errorMessage ? { errorMessage } : undefined,
+  );
+}
+
+function agentRunCompletion(result: EmbeddedRunAttemptResult): AgentRunCompletion {
   const terminal = projectAgentRunAttemptTerminal(result.terminal);
   if (terminal.timedOut || terminal.externalAbort || terminal.aborted) {
     return { outcome: "aborted" };
@@ -202,9 +190,9 @@ function agentRunCompletion(result: AgentHarnessCanonicalAttemptResult): AgentRu
 }
 
 function withFallbackDiagnosticTrace(
-  result: AgentHarnessCanonicalAttemptResult,
+  result: EmbeddedRunAttemptResult,
   trace: DiagnosticTraceContext | undefined,
-): AgentHarnessCanonicalAttemptResult {
+): EmbeddedRunAttemptResult {
   if (result.diagnosticTrace || !trace) {
     return result;
   }
@@ -212,19 +200,6 @@ function withFallbackDiagnosticTrace(
     ...result,
     diagnosticTrace: freezeDiagnosticTraceContext(trace),
   });
-}
-
-function withFallbackFinalizationDiagnosticTrace(
-  result: AgentHarnessSettledTurnFinalizationResult,
-  trace: DiagnosticTraceContext | undefined,
-): AgentHarnessSettledTurnFinalizationResult {
-  if (result.diagnosticTrace || !trace) {
-    return result;
-  }
-  return {
-    ...result,
-    diagnosticTrace: freezeDiagnosticTraceContext(trace),
-  };
 }
 
 function emitAgentHarnessRunStarted(
@@ -241,13 +216,18 @@ function emitAgentHarnessRunStarted(
 function emitAgentHarnessRunCompleted(params: {
   harness: AgentHarness;
   attemptParams: AgentHarnessAttemptParams;
-  result: AgentHarnessCanonicalAttemptResult;
+  result: EmbeddedRunAttemptResult;
   startedAt: number;
   trace?: DiagnosticTraceContext;
 }): void {
   const { harness, attemptParams, result, startedAt, trace } = params;
-  const outcome = agentHarnessRunOutcome(result);
+  const completion = agentRunCompletion(result);
   const terminal = projectAgentRunAttemptTerminal(result.terminal);
+  const outcome: DiagnosticHarnessRunOutcome = terminal.timedOut
+    ? "timed_out"
+    : completion.outcome === "blocked"
+      ? "error"
+      : completion.outcome;
   // A classified (non-thrown) failure carries its error on result.terminal;
   // forward the message so the error span shows more than a bare category.
   const errorMessage =
@@ -290,40 +270,19 @@ function emitAgentHarnessRunError(params: {
   );
 }
 
-/** Runs one harness attempt with diagnostics, tracing, and result classification. */
 export async function runAgentHarnessLifecycleAttempt(
   harness: AgentHarness,
   params: AgentHarnessAttemptParamsV2,
   execute: (params: AgentHarnessAttemptParamsV2) => Promise<AgentHarnessAttemptResult> = (
     attemptParams,
   ) => harness.runAttempt(attemptParams),
-): Promise<AgentHarnessCanonicalAttemptResult> {
-  let result: AgentHarnessCanonicalAttemptResult;
+): Promise<EmbeddedRunAttemptResult> {
+  let result: EmbeddedRunAttemptResult;
   let phase: AgentHarnessLifecyclePhase = "prepare";
   const startedAt = Date.now();
   const activeHarnessTrace = getActiveDiagnosticTraceContext();
   let agentRunTrace: DiagnosticTraceContext | undefined;
   let agentRunStartedAt = 0;
-  let agentRunCompleted = false;
-  const emitAgentRunCompleted = (completion: AgentRunCompletion): void => {
-    if (!agentRunTrace || agentRunCompleted) {
-      return;
-    }
-    agentRunCompleted = true;
-    const failed = completion.outcome === "error" && completion.error != null;
-    const errorMessage = failed ? diagnosticErrorMessage(completion.error) : undefined;
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "run.completed",
-        ...agentRunDiagnosticBase(params, agentRunTrace),
-        durationMs: Date.now() - agentRunStartedAt,
-        outcome: completion.outcome,
-        ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
-        ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
-      },
-      errorMessage ? { errorMessage } : undefined,
-    );
-  };
 
   emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
   const unsubscribeCommentary = subscribeAgentCommentaryDiagnostics(
@@ -331,7 +290,6 @@ export async function runAgentHarnessLifecycleAttempt(
     agentHarnessDiagnosticBase(harness, params, activeHarnessTrace),
   );
   try {
-    phase = "prepare";
     assertAgentHarnessContextEngineSupport(harness, params);
     if (shouldEmitAgentRunDiagnostics(harness) && activeHarnessTrace) {
       // Non-OpenClaw harnesses get a child run trace so provider/harness spans
@@ -372,13 +330,13 @@ export async function runAgentHarnessLifecycleAttempt(
       error,
       trace: activeHarnessTrace,
     });
-    emitAgentRunCompleted({ outcome: "error", error });
+    emitAgentRunCompleted(params, agentRunTrace, agentRunStartedAt, { outcome: "error", error });
     throw error;
   } finally {
     unsubscribeCommentary();
   }
 
-  emitAgentRunCompleted(agentRunCompletion(result));
+  emitAgentRunCompleted(params, agentRunTrace, agentRunStartedAt, agentRunCompletion(result));
   emitAgentHarnessRunCompleted({
     harness,
     attemptParams: params,
@@ -389,7 +347,6 @@ export async function runAgentHarnessLifecycleAttempt(
   return result;
 }
 
-/** Runs one isolated finalization with diagnostics and its narrow result validator. */
 export async function runAgentHarnessLifecycleFinalization(
   harness: AgentHarness,
   params: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
@@ -436,16 +393,15 @@ export async function runAgentHarnessLifecycleFinalization(
       : await runAndValidate();
     const result = {
       ...rawResult,
-      result: withFallbackFinalizationDiagnosticTrace(rawResult.result, activeHarnessTrace),
+      result:
+        rawResult.result.diagnosticTrace || !activeHarnessTrace
+          ? rawResult.result
+          : {
+              ...rawResult.result,
+              diagnosticTrace: freezeDiagnosticTraceContext(activeHarnessTrace),
+            },
     };
-    if (agentRunTrace) {
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        ...agentRunDiagnosticBase(params, agentRunTrace),
-        durationMs: Date.now() - startedAt,
-        outcome: "completed",
-      });
-    }
+    emitAgentRunCompleted(params, agentRunTrace, startedAt, { outcome: "completed" });
     emitTrustedDiagnosticEvent({
       type: "harness.run.completed",
       ...agentHarnessDiagnosticBase(
@@ -467,19 +423,7 @@ export async function runAgentHarnessLifecycleFinalization(
       error,
       trace: activeHarnessTrace,
     });
-    if (agentRunTrace) {
-      const errorMessage = diagnosticErrorMessage(error);
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "run.completed",
-          ...agentRunDiagnosticBase(params, agentRunTrace),
-          durationMs: Date.now() - startedAt,
-          outcome: "error",
-          errorCategory: diagnosticErrorCategory(error),
-        },
-        errorMessage ? { errorMessage } : undefined,
-      );
-    }
+    emitAgentRunCompleted(params, agentRunTrace, startedAt, { outcome: "error", error }, true);
     throw error;
   } finally {
     unsubscribeCommentary();

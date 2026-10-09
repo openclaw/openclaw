@@ -15,7 +15,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
-import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "../../limits.js";
+import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import {
   buildSlackProgressStreamChunks,
   buildSlackProgressTextBlocks,
@@ -25,10 +25,7 @@ import {
 } from "../../progress-blocks.js";
 import { applyAppendOnlyStreamUpdate } from "../../stream-mode.js";
 import { appendSlackStream } from "../../streaming.js";
-import {
-  resolveExplicitSlackProgressTitle,
-  resolveSlackProgressStyle,
-} from "./dispatch-helpers.js";
+import { resolveExplicitSlackProgressTitle } from "./dispatch-helpers.js";
 import {
   createSlackDraftProgressCardRuntime,
   formatSlackProgressDraftLine,
@@ -36,6 +33,7 @@ import {
 import { createSlackNativeProgressTransport } from "./dispatch-progress-native.js";
 import {
   combineProgressHeadlineAndExplanation,
+  isSlackProgressTitleText,
   resolveNativeProgressLines,
   resolveNativeProgressNarration,
 } from "./dispatch-progress-render.js";
@@ -60,6 +58,8 @@ export function createSlackProgressRuntime(runtimeParams: {
     slackIdentity,
     slackMessageMetadata,
     slackStreaming,
+    slackProgressStyle,
+    quietProgress,
     shouldUseDraftStream,
     useStreaming,
     previewStreamingEnabled,
@@ -98,8 +98,8 @@ export function createSlackProgressRuntime(runtimeParams: {
       slackStreaming.mode !== "progress",
       slackStreaming.mode,
     );
-  let shouldYieldDraftProgress: () => boolean = () => false;
   const suppressDefaultToolProgressMessages =
+    quietProgress ||
     resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {
       draftStreamActive: Boolean(draftStream) || useNativeProgressStreaming,
       mode: slackStreaming.mode,
@@ -110,9 +110,12 @@ export function createSlackProgressRuntime(runtimeParams: {
   // reconciler diffs each snapshot against it and terminalizes ids that drop
   // out (plan shrinks, summary <-> plan source switches).
   let nativeStreamSnapshot: SlackNativeStreamSnapshot = EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT;
+  let nativeSnapshotSession = delivery.streamSession;
   let appendRenderedText = "";
   let appendSourceText = "";
   let nativeProgressCompletionSent = false;
+  // A requested card post may still be queued or in flight without a message id.
+  let cardPostRequested = false;
   // Terminal status of the turn's final payload; completion retries and
   // queued rotation must not repaint an errored turn as complete.
   let nativeProgressTerminalStatus: "complete" | "error" = "complete";
@@ -129,7 +132,6 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
   const progressWorkCounter = createChannelProgressWorkCounter();
   const progressSeed = `${account.accountId}:${message.channel}`;
-  const slackProgressStyle = resolveSlackProgressStyle(account.config);
   // Compact quiet Slack is the latest model preamble, not the shared progress
   // card's summary. Keep reasoning and tool telemetry (including failures and
   // edit counters) out of this lane when refactoring channel presentation.
@@ -145,8 +147,8 @@ export function createSlackProgressRuntime(runtimeParams: {
     setup: { account, cfg, ctx, prepared, slackClient },
     draftStream,
     enabled: useDraftProgressCard,
+    detailed: previewToolProgressEnabled,
     progressWorkCounter: previewToolProgressEnabled ? progressWorkCounter : undefined,
-    progressSeed,
     explicitTitle: explicitProgressTitle,
     maxLineChars: progressDraftMaxLineChars,
     getSnapshot: () => progressDraft.getSnapshot(),
@@ -199,25 +201,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       snapshot.planExplanation,
     );
 
-  const normalizeProgressText = (text: string | undefined) =>
-    text?.replace(/\s+/gu, " ").trim() ?? "";
-
-  const isRenderedAsProgressTitle = (text: string | undefined): boolean => {
-    const candidate = normalizeProgressText(text);
-    if (!candidate) {
-      return false;
-    }
-    const snapshot = progressDraft.getSnapshot();
-    const title = normalizeProgressText(
-      combineProgressHeadlineAndExplanation(
-        explicitProgressTitle ??
-          (snapshot.statusHeadlineFormat === "plain" ? undefined : snapshot.statusHeadline),
-        snapshot.planExplanationFormat === "plain" ? undefined : snapshot.planExplanation,
-      ),
-    );
-    return title.length > 0 && title.includes(candidate);
-  };
-
   const resolveNarrationUpdate = (incoming: string | undefined) => {
     const next = applyAppendOnlyStreamUpdate({
       incoming: incoming ?? "",
@@ -231,8 +214,6 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
 
   const updateNativeProgressStreamNow = async (): Promise<boolean> => {
-    const snapshot = progressDraft.getSnapshot();
-    const narrationUpdate = resolveNarrationUpdate(resolveNativeProgressNarration(snapshot));
     if (!useNativeProgressStreaming || delivery.streamFailed || nativeUpdatesStopped) {
       return false;
     }
@@ -240,6 +221,14 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (!canContinue) {
       return false;
     }
+    await delivery.rotateInterruptedStream();
+    if (nativeSnapshotSession !== delivery.streamSession) {
+      // Task IDs belong to the stream that rendered them, even when another
+      // delivery path consumed the interruption before this progress update.
+      nativeStreamSnapshot = EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT;
+    }
+    const snapshot = progressDraft.getSnapshot();
+    const narrationUpdate = resolveNarrationUpdate(resolveNativeProgressNarration(snapshot));
     const reconciled = reconcileSlackNativeTaskChunks({
       previous: nativeStreamSnapshot,
       chunks: buildSlackProgressStreamChunks({
@@ -256,21 +245,26 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
     try {
       const hadSession = Boolean(delivery.streamSession);
+      const retainedThreadTs = delivery.interruptedThreadTs;
       const streamUpdate = {
         ...(narrationUpdate.delta ? { text: narrationUpdate.delta } : {}),
         ...(chunks?.length ? { chunks } : {}),
       };
       const accepted = hadSession
         ? await nativeTransport.append(streamUpdate)
-        : await nativeTransport.start(streamUpdate);
+        : await nativeTransport.start(streamUpdate, retainedThreadTs);
+      if (accepted === "rotated") {
+        return await updateNativeProgressStreamNow();
+      }
       if (!accepted) {
         return false;
       }
       // Commit transport identity and task state together. Buffered or failed
       // chunks must leave the identical render eligible for another attempt.
-      if (!hadSession) {
+      if (!hadSession && !retainedThreadTs) {
         replyPlan.markSent();
       }
+      nativeSnapshotSession = delivery.streamSession;
       if (narrationUpdate.next.changed) {
         nativeNarrationRenderedText = narrationUpdate.next.rendered;
         nativeNarrationSourceText = narrationUpdate.next.source;
@@ -313,38 +307,36 @@ export function createSlackProgressRuntime(runtimeParams: {
     payload: ReplyPayload,
     kind: ReplyDispatchKind,
   ): Promise<LivePreviewDeliveryResult> =>
-    withNativeStreamOrder(() => appendNativeNarrationNow(payload, kind));
-
-  const appendNativeNarrationNow = async (
-    payload: ReplyPayload,
-    kind: ReplyDispatchKind,
-  ): Promise<LivePreviewDeliveryResult> => {
-    // The same preamble reaches us as a reply payload and as the compositor
-    // headline behind the card title. The card updates it in place, so
-    // streaming it as text too would print the line twice.
-    if (isRenderedAsProgressTitle(payload.text)) {
-      return { visibleReplySent: false };
-    }
-    const narrationUpdate = resolveNarrationUpdate(payload.text?.trimEnd());
-    if (!narrationUpdate.delta) {
-      return { visibleReplySent: false };
-    }
-    const result = await delivery.deliverWithStreaming({
-      payload,
-      kind,
-      streamText: narrationUpdate.delta,
-      appendSeparator: false,
-      taskDisplayMode: "plan",
+    withNativeStreamOrder(async () => {
+      // The same preamble reaches us as a reply payload and as the compositor
+      // headline behind the card title. The card updates it in place, so
+      // streaming it as text too would print the line twice.
+      if (
+        isSlackProgressTitleText(payload.text, progressDraft.getSnapshot(), explicitProgressTitle)
+      ) {
+        return { visibleReplySent: false };
+      }
+      const narrationUpdate = resolveNarrationUpdate(payload.text?.trimEnd());
+      if (!narrationUpdate.delta) {
+        return { visibleReplySent: false };
+      }
+      const result = await delivery.deliverWithStreaming({
+        payload,
+        kind,
+        streamText: narrationUpdate.delta,
+        appendSeparator: false,
+        taskDisplayMode: "plan",
+      });
+      if (result.visibleReplySent && !delivery.streamFailed) {
+        nativeNarrationRenderedText = narrationUpdate.next.rendered;
+        nativeNarrationSourceText = narrationUpdate.next.source;
+      }
+      return result;
     });
-    if (result.visibleReplySent && !delivery.streamFailed) {
-      nativeNarrationRenderedText = narrationUpdate.next.rendered;
-      nativeNarrationSourceText = narrationUpdate.next.source;
-    }
-    return result;
-  };
 
   const resetProgressTurnState = () => {
     progressWorkCounter.reset();
+    cardPostRequested = false;
     nativeNarrationRenderedText = "";
     nativeNarrationSourceText = "";
   };
@@ -385,7 +377,19 @@ export function createSlackProgressRuntime(runtimeParams: {
         // draft between deltas, leaving a word fragment visible until cleanup.
         return false;
       }
-      progressCard.setFallbackText(previewText);
+      const cardBlocks = useDraftProgressCard
+        ? progressCard.resolvePresentation(snapshot, "working")
+        : undefined;
+      if (cardBlocks?.length === 0) {
+        // Hidden state (e.g. a plan in the default card) can outlive the last visible
+        // row; delete the card rather than leave a resolved approval on screen.
+        if (cardPostRequested || draftStream.messageId()) {
+          cardPostRequested = false;
+          await draftStream.clear();
+          draftStream.forceNewMessage();
+        }
+        return false;
+      }
       draftStream.update(
         preambleOnlyProgress
           ? {
@@ -395,15 +399,18 @@ export function createSlackProgressRuntime(runtimeParams: {
                 ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
                 : {}),
             }
-          : useDraftProgressCard
+          : cardBlocks
             ? {
-                text: previewText,
-                blocks: progressCard.resolvePresentation(snapshot, "working"),
+                text: progressCard.resolveCardText(cardBlocks),
+                blocks: cardBlocks,
               }
             : snapshot.preparedBlocks
               ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
               : previewText,
       );
+      if (cardBlocks) {
+        cardPostRequested = true;
+      }
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -415,6 +422,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         nativeUpdates.update(true);
         await nativeUpdates.flush();
       } else {
+        cardPostRequested = false;
         await draftStream?.clear();
         draftStream?.forceNewMessage();
       }
@@ -462,14 +470,11 @@ export function createSlackProgressRuntime(runtimeParams: {
 
   const deliverNativeFinalNow = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
     const streamReady = await nativeTransport.waitForStart();
-    const finalThreadTs = delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs;
+    await delivery.rotateInterruptedStream();
+    const finalThreadTs = delivery.nativeFinalThreadTs();
     // Optional progress may still be buffered locally. Join its stream so
     // final delivery cannot leave a second message to be flushed by stop.
-    const canFinishInStream =
-      payload.isError !== true &&
-      streamReady &&
-      Boolean(delivery.streamSession) &&
-      delivery.isStreamingEligible(payload, { maxTextBytes: SLACK_EDIT_TEXT_MAX_BYTES });
+    const canFinishInStream = delivery.canFinishNativeFinal(payload, streamReady);
     if (canFinishInStream) {
       // Flush the terminal task row before buffering the answer so Slack
       // preserves narration -> plan -> final answer ordering.
@@ -488,7 +493,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   const buildNativeProgressCompletionChunks = (finalInProgressStatus: "complete" | "error") => {
     const snapshot = progressDraft.getSnapshot();
     const lines = resolveNativeProgressLines(snapshot);
-    const sessionUrl = progressCard.resolveSessionUrl();
+    const sessionLinks = progressCard.resolveSessionLinks();
     const narrationUpdate = resolveNarrationUpdate(resolveNativeProgressNarration(snapshot));
     const hasRetirableNativeTasks = [...nativeStreamSnapshot.tasks.values()].some(
       (task) => task.status !== "complete" && task.status !== "error",
@@ -499,7 +504,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       !hasRetirableNativeTasks &&
       !snapshot.diffStat &&
       !narrationUpdate.delta &&
-      !sessionUrl
+      sessionLinks.length === 0
     ) {
       return undefined;
     }
@@ -507,16 +512,14 @@ export function createSlackProgressRuntime(runtimeParams: {
       previous: nativeStreamSnapshot,
       finalStatus: finalInProgressStatus,
       chunks: buildSlackProgressStreamChunks({
-        title:
-          resolveNativeProgressTitle(snapshot) ??
-          (lines.length === 0 && !snapshot.plan?.length ? "Working" : undefined),
+        title: resolveNativeProgressTitle(snapshot),
         lines,
         plan: snapshot.plan,
         maxLineChars: progressDraftMaxLineChars,
         summaryRow: !previewToolProgressEnabled,
         finalInProgressStatus,
         diffStat: snapshot.diffStat,
-        sessionUrl,
+        sessionLinks,
       }),
     }).chunks;
     // Terminal appends, silent closeout, and queued rotation share this
@@ -626,7 +629,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       await cancelNativeUpdates();
     }
     const priorSnapshot = progressDraft.getSnapshot();
-    const priorFallbackText = progressCard.resolveText(priorSnapshot);
     const completionChunks =
       useNativeProgressStreaming && !nativeProgressCompletionSent
         ? buildNativeProgressCompletionChunks(nativeProgressTerminalStatus)
@@ -639,7 +641,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (useNativeProgressStreaming) {
       await finishNativeProgressTurn(completionChunks);
     } else {
-      await progressCard.finalize("success", priorSnapshot, priorFallbackText);
+      await progressCard.finalize("success", { snapshot: priorSnapshot });
       await previewLifecycle.cleanup();
       draftStream?.forceNewMessage();
       await dropDetachedProgressCards();
@@ -724,7 +726,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     useDraftProgressCard,
     useNativeProgressStreaming,
     progressDraftActive,
-    previewToolProgressEnabled,
     preambleOnlyProgress,
     suppressDefaultToolProgressMessages,
     progressDraft,
@@ -748,15 +749,12 @@ export function createSlackProgressRuntime(runtimeParams: {
     deliverNativeFinal,
     dropDetachedProgressCards,
     finalizeDraftProgressCard: progressCard.finalize,
+    onVisibleWorkSessions: progressCard.onVisibleWorkSessions,
     onDraftBoundary,
     onQueuedFollowupAdmitted,
     onQueuedFollowupSettled,
     pushPlanProgress,
     pushReasoningProgress,
     updateDraftFromPartial,
-    setShouldYieldDraftProgress: (value: () => boolean) => {
-      shouldYieldDraftProgress = value;
-    },
-    shouldYieldDraftProgress: () => shouldYieldDraftProgress(),
   };
 }

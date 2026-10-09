@@ -1,6 +1,9 @@
 // Gateway control-plane audit helpers.
 // Extracts stable actor identity and compact changed-path summaries for audit logs.
-import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { GatewayClient } from "./server-methods/types.js";
 
 /** Stable actor fields included in control-plane audit and rate-limit logs. */
@@ -14,16 +17,31 @@ export type ControlPlaneActor = {
 /** Extracts audit identity from a possibly missing or partially connected client. */
 export function resolveControlPlaneActor(client: GatewayClient | null): ControlPlaneActor {
   return {
-    actor: normalizeControlPlaneIdentityPart(client?.connect?.client?.id, "unknown-actor"),
-    deviceId: normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device"),
-    clientIp: normalizeControlPlaneIdentityPart(client?.clientIp, "unknown-ip"),
-    connId: normalizeControlPlaneIdentityPart(client?.connId, "unknown-conn"),
+    actor: normalizeOptionalString(client?.connect?.client?.id) ?? "unknown-actor",
+    deviceId: normalizeOptionalString(client?.connect?.device?.id) ?? "unknown-device",
+    clientIp: normalizeOptionalString(client?.clientIp) ?? "unknown-ip",
+    connId: normalizeOptionalString(client?.connId) ?? "unknown-conn",
   };
 }
 
 /** Formats actor identity as compact key/value text for structured gateway logs. */
 export function formatControlPlaneActor(actor: ControlPlaneActor): string {
   return `actor=${actor.actor} device=${actor.deviceId} ip=${actor.clientIp} conn=${actor.connId}`;
+}
+
+/** Run abort diagnostics record only the stop reason; this names who requested the stop. */
+export function formatStopRequest(
+  method: "chat.abort" | "sessions.abort",
+  client: GatewayClient | null,
+  params: Record<string, unknown>,
+): string {
+  const flags = ["discardPendingInput", "clearQueued"].filter((flag) => params[flag] === true);
+  return (
+    `${method} requested: ${formatControlPlaneActor(resolveControlPlaneActor(client))} ` +
+    `session=${readStringValue(params.sessionKey ?? params.key) ?? "none"} ` +
+    `runId=${readStringValue(params.runId) ?? "none"}` +
+    flags.map((flag) => ` ${flag}`).join("")
+  );
 }
 
 /** Summarizes changed config/state paths without letting audit logs grow unbounded. */

@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedRunTrigger } from "../agents/run-trigger.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
@@ -6,10 +7,13 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import {
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -63,17 +67,10 @@ function normalizeTaskNames(taskNames: readonly string[]): string[] {
 }
 
 function parseTaskNames(value: string | null): string[] {
-  if (!value) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed)
-      ? normalizeTaskNames(parsed.filter((item): item is string => typeof item === "string"))
-      : [];
-  } catch {
-    return [];
-  }
+  const parsed = safeParseJson(value ?? "");
+  return Array.isArray(parsed)
+    ? normalizeTaskNames(parsed.filter((item): item is string => typeof item === "string"))
+    : [];
 }
 
 function rowToOutcome(row: HeartbeatOutcomeRow): PersistedHeartbeatOutcome | undefined {
@@ -114,6 +111,7 @@ export async function persistHeartbeatOutcome(params: {
   wakeReason?: string;
   occurredAt: number;
   env?: NodeJS.ProcessEnv;
+  incognito?: SessionCollaborationScope["incognito"];
 }): Promise<void> {
   if (params.response.notify || params.response.outcome === "no_change") {
     return;
@@ -150,20 +148,30 @@ export async function claimHeartbeatOutcomeForRun(params: {
   runId: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  incognito?: SessionCollaborationScope["incognito"];
 }): Promise<PersistedHeartbeatOutcome | undefined> {
+  const { assertCurrent } = params;
+  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
   const row = await runHeartbeatOutcomeOperation(
-    params,
+    { ...params, incognito },
     {
       type: "claim",
       input: { sessionKey: params.sessionKey, runId: params.runId },
     },
-    params.assertCurrent,
+    assertCurrent,
   );
+  if (incognito) {
+    assertCurrent?.();
+    incognito.authority.assertCurrent();
+    incognito.actor.assertReadable();
+  }
   return row ? rowToOutcome(row) : undefined;
 }
 
 async function runHeartbeatOutcomeOperation(
-  params: Parameters<typeof resolveSqliteScope>[0],
+  params: Parameters<typeof resolveSqliteScope>[0] & {
+    incognito?: SessionCollaborationScope["incognito"];
+  },
   command: SqliteWorkerCommand<HeartbeatOutcomeWorkerOperations>,
   assertCurrent: () => void = () => undefined,
 ): Promise<HeartbeatOutcomeRow | undefined> {
@@ -171,6 +179,46 @@ async function runHeartbeatOutcomeOperation(
   const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = { ...resolved, env, path: resolveOpenClawAgentSqlitePath({ ...resolved, env }) };
+  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
+  if (incognito) {
+    const { actor, authority } = incognito;
+    if (actor.agentId !== options.agentId || actor.path !== options.path) {
+      throw new Error("Heartbeat outcome target differs from its captured incognito actor");
+    }
+    const claim = actor.sessions.captureCurrent(params.sessionKey);
+    const expected = actor.sessions.readSharing(params.sessionKey)?.entry;
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {
+        assertCurrent();
+        authority.assertCurrent();
+        actor.assertCurrent();
+      },
+      authorize(stage, facts) {
+        if (
+          facts.sharing?.entry?.sessionId !== expected?.sessionId ||
+          facts.sharing?.entry?.lifecycleRevision !== expected?.lifecycleRevision
+        ) {
+          throw new Error("Heartbeat outcome session changed; retry");
+        }
+        return authority.authorize?.(stage, facts);
+      },
+    };
+    current.assertCurrent();
+    return actor.sessions.withSharedState(async () => {
+      const result = await (command.type === "persist"
+        ? actor.sessions.sideData(current, {
+            type: "session.heartbeat.persist",
+            input: command.input,
+          })
+        : actor.sessions.sideData(current, {
+            type: "session.heartbeat.claim",
+            input: command.input,
+          }));
+      current.assertCurrent();
+      claim.assertCurrent();
+      return result;
+    });
+  }
   if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
     // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
     return runOpenClawAgentWriteAdmission(
@@ -201,7 +249,7 @@ async function runHeartbeatOutcomeOperation(
     return await runOpenClawAgentWriteAdmission(
       options,
       () =>
-        withOpenClawAgentDatabaseAsync(
+        withOpenClawAgentDatabaseRuntime(
           options,
           async ({ db }) => {
             assertQueuedCurrent();
@@ -217,7 +265,7 @@ async function runHeartbeatOutcomeOperation(
                 },
               );
             try {
-              return await worker.run((scope) => scope.execute(command), assertQueuedCurrent);
+              return await worker.execute(command, assertQueuedCurrent);
             } finally {
               await worker.close();
             }
@@ -270,11 +318,19 @@ export async function claimHeartbeatContextForUserRun(
   if (params.trigger !== "user" || params.detached || !params.sessionKey) {
     return undefined;
   }
-  if (!params.assertCurrent) {
+  const { assertCurrent } = params;
+  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
+  if (!assertCurrent) {
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }
-  params.assertCurrent();
-  const outcome = await claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey });
-  params.assertCurrent();
+  assertCurrent();
+  const outcome = await claimHeartbeatOutcomeForRun({
+    ...params,
+    sessionKey: params.sessionKey,
+    incognito,
+  });
+  assertCurrent();
+  incognito?.authority.assertCurrent();
+  incognito?.actor.assertReadable();
   return buildHeartbeatOutcomeContext(outcome);
 }

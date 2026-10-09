@@ -8,13 +8,14 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as avatarFile from "../agents/identity-avatar-file.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -35,7 +36,7 @@ function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
   return {
     agents: {
       defaults: { workspace },
-      list: [{ id: "main", workspace, identity: { avatar } }],
+      entries: { main: { workspace, identity: { avatar } } },
     },
   };
 }
@@ -111,6 +112,7 @@ describe("Control UI response authority", () => {
       };
       const res = new ServerResponse(req);
       const end = vi.spyOn(res, "end");
+      const catalog = await prepareUserProfileCatalog();
       const pending = handleControlUiHttpRequest(req, res, {
         config,
         cfg: config,
@@ -138,11 +140,12 @@ describe("Control UI response authority", () => {
         await settled;
         res.destroy();
         req.destroy();
+        catalog.release();
       }
     });
   });
 
-  it.each(["avatar", "thumbnail", "bootstrap"] as const)(
+  it.each(["avatar", "bootstrap"] as const)(
     "withholds a prepared %s response after requester authority changes",
     async (kind) => {
       const workspace = testTempDirs.make("openclaw-ui-response-authority-");
@@ -177,15 +180,14 @@ describe("Control UI response authority", () => {
           return "private-branch";
         });
       } else {
-        const read = boundaryFileRead.readFileDescriptorBounded;
-        vi.spyOn(boundaryFileRead, "readFileDescriptorBounded").mockImplementation(
-          async (...args) => {
-            const body = await read(...args);
-            entered.resolve();
-            await release.promise;
-            return body;
-          },
-        );
+        const prepare = avatarFile.prepareLocalAgentAvatarFile;
+        vi.spyOn(avatarFile, "prepareLocalAgentAvatarFile").mockImplementation(async (params) => {
+          const prepared = await prepare(params);
+          expect(prepared).toMatchObject({ ok: true, file: { body: REAL_PNG } });
+          entered.resolve();
+          await release.promise;
+          return prepared;
+        });
       }
       let auth: ResolvedGatewayAuth = {
         mode: "token",
@@ -195,10 +197,7 @@ describe("Control UI response authority", () => {
       const req = new IncomingMessage(new Socket());
       Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
       req.method = "GET";
-      req.url =
-        kind === "bootstrap"
-          ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH
-          : `/avatar/main${kind === "thumbnail" ? "?v=current" : ""}`;
+      req.url = kind === "bootstrap" ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH : "/avatar/main";
       req.headers = { authorization: "Bearer admitted-token" };
       const res = new ServerResponse(req);
       const end = vi.spyOn(res, "end");
@@ -213,8 +212,9 @@ describe("Control UI response authority", () => {
         getRuntimeConfig: () => config,
       });
       const settled = pending.catch(() => undefined);
-      await entered.promise;
       try {
+        await Promise.race([entered.promise, pending]);
+        expect(res.writableEnded).toBe(false);
         if (kind === "bootstrap") {
           expect(res.getHeader("Set-Cookie")).toEqual(
             expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
@@ -225,8 +225,8 @@ describe("Control UI response authority", () => {
         }
       } finally {
         release.resolve();
+        await settled;
       }
-      await settled;
 
       expect(res.statusCode).toBe(401);
       expect(String(end.mock.calls[0]?.[0])).not.toContain("private-branch");

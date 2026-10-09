@@ -1,3 +1,5 @@
+// Register worker mocks before loading the production module graph.
+import "./session-history-worker-errors.test-support.js";
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
@@ -5,182 +7,35 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-delta.js";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
-import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
-import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import * as sqliteScope from "./session-accessor.sqlite-scope.js";
-import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
 import {
-  createVisibilityFailureDelta,
-  typedFailures,
-} from "./session-history-worker-errors.test-support.js";
+  canonicalSessionKeyMigrationRequiredError,
+  SessionCanonicalKeyMigrationRequiredError,
+} from "./session-canonical-row.js";
 import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  historyLane,
+  rotateDatabaseWorkers,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-type Request = {
-  input: unknown;
-  taskId: number;
-  interactive?: boolean;
-  nativeSections: SharedArrayBuffer;
-};
-type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
-type QuarantineDatabase = {
-  isOpen: boolean;
-  exec: () => void;
-  prepare: () => { get: () => unknown };
-  close: () => void;
-};
-const observed = vi.hoisted(() => ({
-  handler: undefined as ((input: unknown) => unknown) | undefined,
-  receive: undefined as ((message: Request) => void) | undefined,
-  post: vi.fn<(message: unknown) => void>(),
-  read: vi.fn<() => unknown>(),
-  delta: vi.fn<() => SessionTranscriptDisplayDeltaResult>(),
-  lookup: vi.fn<() => boolean>(),
-  close: vi.fn<() => void>(),
-  run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
-  closeResources: vi.fn<(key?: string) => Promise<void>>(),
-  deferredRun: undefined as
-    | ((prepare: () => unknown, options: { inputBytes?: number }) => Promise<unknown>)
-    | undefined,
-  quarantineRead: vi.fn<() => unknown>(),
-  quarantineClose: vi.fn<() => void>(),
-  quarantineOpen: vi.fn<() => QuarantineDatabase>(),
-  quarantinePaths: new Set<string>(),
-  hydrate: vi.fn<() => unknown>(),
-  rotate: vi.fn<() => Promise<void>>(),
-  unregister: vi.fn<() => void>(),
-  resources: [] as Resource[],
-  nativeWorker: vi.fn(() => {
-    throw new Error("Native workers are forbidden in these pure controls");
-  }),
+const closeCapabilities = vi.hoisted(() => ({ explicitSqliteCloseReleasesNativeResources: true }));
+vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/bun-sqlite-library.js")>()),
+  ensureSqliteLibrarySelected: () => ({ source: "runtime" }),
+  captureSqliteWorkerClosePolicy: () =>
+    closeCapabilities.explicitSqliteCloseReleasesNativeResources,
+  getSqliteRuntimeCapabilities: () => ({ ...closeCapabilities, reason: "test policy" }),
 }));
 
-vi.mock("node:worker_threads", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:worker_threads")>()),
-  Worker: observed.nativeWorker,
-  parentPort: {
-    on: (_event: string, receive: (message: Request) => void) => {
-      observed.receive = receive;
-    },
-    postMessage: (message: unknown) => observed.post(message),
-  },
-}));
-vi.mock("../../infra/runtime-worker-url.js", () => ({
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/session-history.worker.mjs"),
-  resolveRuntimeWorkerArgv: () => [],
-  resolveRuntimeWorkerThreadExecArgv: () => [],
-}));
-vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
-  return {
-    ...actual,
-    createOwnedWorkerTaskPool: () => ({
-      run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        if (observed.deferredRun) {
-          return observed.deferredRun(prepare, options);
-        }
-        return observed.run(prepare(), options);
-      },
-      rotate: observed.rotate,
-      closeResources: observed.closeResources,
-    }),
-    WorkerTaskPool: class {
-      run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        return observed.run(prepare(), options);
-      }
-      rotate() {
-        return observed.rotate();
-      }
-    },
-  };
-});
-vi.mock("../../infra/worker-task-server.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/worker-task-server.js")>();
-  return {
-    ...actual,
-    serveOwnedWorkerTasks: (handler: (input: unknown) => unknown) => {
-      observed.handler = handler;
-      actual.serveOwnedWorkerTasks(handler);
-    },
-  };
-});
-vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
-  matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
-    candidate.path === targetPath,
-  registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
-    observed.resources.push(resource);
-    return observed.unregister;
-  },
-  registerOpenClawAgentDatabaseAsyncResource: (resource: Resource) => {
-    observed.resources.push(resource);
-    return observed.unregister;
-  },
-}));
-vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
-  closeOpenClawAgentDatabaseReadOnlyCandidates: vi.fn(),
-  OpenClawAgentDatabaseReadOnlyScope: class {
-    hasRetainedConnection = true;
-    run(_database: unknown, operation: () => unknown) {
-      return operation();
-    }
-    close() {
-      observed.close();
-    }
-  },
-}));
-vi.mock("../../infra/node-sqlite.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/node-sqlite.js")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) =>
-      observed.quarantinePaths.has(args[0])
-        ? observed.quarantineOpen()
-        : actual.openNodeSqliteDatabase(...args),
-  };
-});
-// Keep the history fixture's fake pool out of the process-wide disk-scan singleton.
-vi.mock("./disk-budget-runtime.js", () => ({
-  measureSessionPhysicalDiskUsage: () => {
-    throw new Error("Disk scans are forbidden in these pure controls");
-  },
-  drainSessionDiskBudgetWorkers: async () => {},
-}));
-vi.mock("./session-transcript-hydration.worker.js", () => ({
-  streamSessionTranscriptHydration: observed.hydrate,
-}));
-vi.mock("./session-accessor.sqlite-entry.js", () => ({
-  loadSessionEntryReadOnlyInScope: () => observed.read(),
-}));
-vi.mock("./session-sharing-store.js", () => ({
-  listSessionMembers: () => {
-    throw new Error("Native membership reads are forbidden in these pure controls");
-  },
-}));
-vi.mock("../../gateway/session-history-readonly-reader.js", () => ({
-  createReadonlySessionHistoryReader: () => ({
-    readTranscriptDisplayDelta: observed.delta,
-    subagentCoordination: {
-      isSubagentSession: observed.lookup,
-      isSubagentRunMessage: observed.lookup,
-    },
-  }),
-}));
-vi.mock("./session-cold-storage-read.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-cold-storage-read.js")>();
-  return {
-    ...actual,
-    readRestoredSessionTranscript: (
-      ...args: Parameters<typeof actual.readRestoredSessionTranscript>
-    ) =>
-      args[0].sessionId === "delta" ? args[1]() : actual.readRestoredSessionTranscript(...args),
-  };
-});
-
+const { createVisibilityFailureDelta, observed, typedFailures } =
+  await import("./session-history-worker-errors.test-support.js");
 await import("./session-transcript.worker.js");
 let sequence = 0;
 function input() {
@@ -196,11 +51,6 @@ function input() {
     },
   };
 }
-function invoke(request: ReturnType<typeof input>) {
-  assert(observed.handler);
-  return Promise.resolve(observed.handler(request));
-}
-
 function installWorkerTransport() {
   observed.run.mockImplementation(async (request, options) => {
     const posted = createDeferredCore<unknown>();
@@ -211,6 +61,7 @@ function installWorkerTransport() {
       taskId: 7,
       interactive: Boolean(options.onRequest),
       nativeSections: new SharedArrayBuffer(4),
+      taskContext: [],
     });
     const reply = await posted.promise;
     assert(reply && typeof reply === "object" && "status" in reply);
@@ -233,6 +84,7 @@ async function readThroughWorker() {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  closeCapabilities.explicitSqliteCloseReleasesNativeResources = true;
   // Synthetic targets keep discovery outside the error-transfer worker controls.
   vi.spyOn(sqliteScope, "prepareSqliteTranscriptReadScope").mockImplementation(async (scope) =>
     sqliteScope.resolveSqliteTranscriptReadScope(scope),
@@ -251,7 +103,7 @@ beforeEach(() => {
   observed.quarantineRead.mockReset().mockReturnValue({ user_version: 0 });
   observed.quarantineClose.mockReset();
   observed.quarantineOpen.mockReset().mockImplementation(() => {
-    const database: QuarantineDatabase = {
+    const database: ReturnType<typeof observed.quarantineOpen> = {
       isOpen: true,
       exec() {},
       prepare: () => ({ get: observed.quarantineRead }),
@@ -271,17 +123,9 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+  await rotateDatabaseWorkers(historyLane);
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
-});
-
-it("preserves the worker read failure through transfer when closing succeeds", async () => {
-  const primary = new Error("read failed");
-  observed.read.mockImplementation(() => {
-    throw primary;
-  });
-  await expect(readThroughWorker()).rejects.toMatchObject({ message: primary.message });
-  expect(observed.close).toHaveBeenCalledTimes(1);
 });
 
 function failingVisibilityDelta(resetFirst: boolean) {
@@ -305,11 +149,22 @@ function failingVisibilityDelta(resetFirst: boolean) {
     });
 }
 
-it.each([true, false])(
-  "preserves lazy visibility error ordering after retirement (reset first: %s)",
-  async (resetFirst) => {
+it.each([
+  { resetFirst: true, closeFails: false },
+  { resetFirst: false, closeFails: false },
+  { resetFirst: true, closeFails: true },
+])(
+  "preserves visibility ordering (reset=$resetFirst, close failure=$closeFails)",
+  async ({ resetFirst, closeFails }) => {
     const read = failingVisibilityDelta(resetFirst);
-    if (resetFirst) {
+    if (closeFails) {
+      observed.close.mockImplementation(() => {
+        throw new Error("primary close failed");
+      });
+      await expect(read()).rejects.toMatchObject({
+        message: expect.stringContaining("primary close failed"),
+      });
+    } else if (resetFirst) {
       await expect(read()).resolves.toEqual({ kind: "reset" });
     } else {
       await expect(read()).rejects.toThrow("openclaw doctor --fix");
@@ -375,17 +230,6 @@ it.each(["revocation", "retirement-failure", "auxiliary-close"])(
   },
 );
 
-it("keeps primary close failures fatal even when an earlier delta row resets", async () => {
-  const read = failingVisibilityDelta(true);
-  observed.close.mockImplementation(() => {
-    throw new Error("primary close failed");
-  });
-  await expect(read()).rejects.toMatchObject({
-    message: expect.stringContaining("primary close failed"),
-  });
-  expect(observed.rotate).toHaveBeenCalledOnce();
-});
-
 it("rejects primary revocation between delta acquisition and consumption", async () => {
   failingVisibilityDelta(true);
   observed.lookup.mockReturnValue(false);
@@ -409,88 +253,75 @@ it("rejects primary revocation between delta acquisition and consumption", async
   await resource.close();
 });
 
-it("retains both worker errors through transfer when the read and close fail", async () => {
-  const primary = new Error("read failed");
-  const cleanup = new Error("database close failed");
-  observed.read.mockImplementation(() => {
-    throw primary;
-  });
-  observed.close.mockImplementation(() => {
-    throw cleanup;
-  });
-  const failure: unknown = await readThroughWorker().catch((error: unknown) => error);
-  assert(failure instanceof AggregateError);
-  expect(failure.errors).toMatchObject([
-    { message: primary.message },
-    { message: cleanup.message },
-  ]);
-  expect(failure.cause).toBe(failure.errors[1]);
-  expect(failure.message).toContain(primary.message);
-  expect(failure.message).toContain(cleanup.message);
-});
+const readFailures: Array<{ error: Error; reply?: (typeof typedFailures)[number]["reply"] }> = [
+  { error: new Error("read failed") },
+  { error: canonicalSessionKeyMigrationRequiredError("invalid source metadata") },
+  ...typedFailures,
+  {
+    error: new SessionMetadataUnavailableError(
+      "table-missing",
+      {
+        cause: Object.assign(new Error("synthetic SQLite read failure"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 1,
+        }),
+      },
+      ["transcript_events"],
+    ),
+  },
+];
 
-it.each(typedFailures)(
-  "keeps typed $reply.kind recovery when closing succeeds",
-  async ({ error, reply }) => {
+it.each(
+  readFailures.flatMap(({ error, reply }) =>
+    [false, true].map((fails) => ({ error, reply, fails })),
+  ),
+)(
+  "retains $error.message through the worker round trip (close failure=$fails)",
+  async ({ error, reply, fails }) => {
+    const cleanup = new Error("database close failed");
     observed.read.mockImplementation(() => {
       throw error;
-    });
-    await expect(invoke(input())).resolves.toEqual({ ok: false, error: reply });
-    expect(observed.close).toHaveBeenCalledTimes(1);
-  },
-);
-it.each(typedFailures)(
-  "does not recover typed $reply.kind reads when close also fails",
-  async ({ error }) => {
-    const cleanup = new Error("close failed");
-    observed.read.mockImplementation(() => {
-      throw error;
-    });
-    observed.close.mockImplementation(() => {
-      throw cleanup;
-    });
-    const failure: unknown = await readThroughWorker().catch((caught: unknown) => caught);
-    assert(failure instanceof AggregateError);
-    expect(failure.errors).toMatchObject([
-      { name: error.name, message: error.message },
-      { message: cleanup.message },
-    ]);
-    expect(failure.cause).toBe(failure.errors[1]);
-  },
-);
-
-it.each([false, true])(
-  "retains typed metadata refusal and SQLite cause across worker transfer with cleanup failure=%s",
-  async (fails) => {
-    const cause = Object.assign(new Error("synthetic SQLite read failure"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 1,
-    });
-    const primary = new SessionMetadataUnavailableError("table-missing", { cause }, [
-      "transcript_events",
-    ]);
-    const cleanup = new Error("synthetic database close failure");
-    observed.read.mockImplementation(() => {
-      throw primary;
     });
     if (fails) {
       observed.close.mockImplementation(() => {
         throw cleanup;
       });
     }
-    const failure: unknown = await readThroughWorker().catch((error: unknown) => error);
-    const unavailable: unknown = failure instanceof AggregateError ? failure.errors[0] : failure;
-    expect(unavailable).toBeInstanceOf(SessionMetadataUnavailableError);
-    expect(unavailable).toMatchObject({
-      reason: "table-missing",
-      missingTables: ["transcript_events"],
-      cause: { message: cause.message, code: "ERR_SQLITE_ERROR", errcode: 1 },
-    });
+    const failure: unknown = await readThroughWorker().catch((caught: unknown) => caught);
+    const primary: unknown = failure instanceof AggregateError ? failure.errors[0] : failure;
+    if (
+      !fails ||
+      error instanceof SessionMetadataUnavailableError ||
+      error instanceof SessionCanonicalKeyMigrationRequiredError
+    ) {
+      expect(primary).toBeInstanceOf(error.constructor);
+    }
+    expect(primary).toMatchObject({ name: error.name, message: error.message });
+    if (error instanceof SessionMetadataUnavailableError) {
+      expect(primary).toMatchObject({
+        reason: "table-missing",
+        missingTables: ["transcript_events"],
+        cause: { message: "synthetic SQLite read failure", code: "ERR_SQLITE_ERROR", errcode: 1 },
+      });
+    }
     if (fails) {
       assert(failure instanceof AggregateError);
-      expect(failure.errors[1]).toMatchObject({ message: cleanup.message });
+      expect(failure.errors).toMatchObject([
+        { name: error.name, message: error.message },
+        { message: cleanup.message },
+      ]);
       expect(failure.cause).toBe(failure.errors[1]);
+      expect(failure.message).toContain(error.message);
+      expect(failure.message).toContain(cleanup.message);
+    } else if (reply) {
+      expect(observed.post).toHaveBeenCalledWith({
+        status: "ok",
+        taskId: 7,
+        value: { ok: false, error: reply },
+      });
     }
+    expect(observed.close).toHaveBeenCalledOnce();
+    expect(observed.rotate).toHaveBeenCalledOnce();
   },
 );
 
@@ -518,44 +349,31 @@ it("retires idle history workers under critical pressure after active scopes rel
   expect(observed.unregister).toHaveBeenCalledTimes(1);
 });
 
-it("settles an already-retired read without waiting for a healthy successor rotation", async () => {
-  const primary = new WorkerTaskError("retired read cancelled", "unavailable");
-  const rotationStarted = createDeferredCore();
-  const successorRelease = createDeferredCore();
-  observed.run.mockImplementation(async (_request, options) => {
-    options.onExecutionSettled?.({ retired: true });
-    throw primary;
-  });
-  observed.rotate.mockImplementation(() => {
-    rotationStarted.resolve();
-    return successorRelease.promise;
-  });
-  const request = input();
-  const pending = withSessionHistoryWorkerDatabase(request.database, (owner) =>
-    owner.readEntryPresence(request.scope),
-  ).catch((error: unknown) => error);
-  try {
-    expect(
-      await Promise.race([
-        pending.then(() => "settled"),
-        rotationStarted.promise.then(() => "rotating successor"),
-      ]),
-    ).toBe("settled");
-    expect(await pending).toBe(primary);
-  } finally {
-    successorRelease.resolve();
-    await pending;
-  }
-});
-
-it.each([false, true])(
-  "awaits retirement and preserves both failures when retirement fails=%s",
-  async (fails) => {
-    const primary = new WorkerTaskError("worker response failed", "failed");
+it.each([
+  { retired: true, fails: false },
+  { retired: false, fails: false },
+  { retired: false, fails: true },
+])(
+  "settles failed reads after pool retirement (already retired=$retired, failure=$fails)",
+  async ({ retired, fails }) => {
+    const earlier = input();
+    observed.run.mockResolvedValueOnce({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(earlier.database, (owner) =>
+      owner.readEntryPresence(earlier.scope),
+    );
+    const primary = new WorkerTaskError(
+      "worker response failed",
+      retired ? "unavailable" : "failed",
+    );
     const cleanup = new Error("retirement failed");
     const entered = createDeferredCore();
     const retirement = createDeferredCore();
-    observed.run.mockRejectedValue(primary);
+    observed.run.mockImplementation(async (_request, options) => {
+      if (retired) {
+        options.onExecutionSettled?.({ retired: true });
+      }
+      throw primary;
+    });
     observed.rotate.mockImplementation(() => {
       entered.resolve();
       return retirement.promise;
@@ -569,7 +387,14 @@ it.each([false, true])(
       .finally(() => {
         settled = true;
       });
-    await entered.promise;
+    try {
+      expect(
+        await Promise.race([pending.then(() => "settled"), entered.promise.then(() => "rotating")]),
+      ).toBe("rotating");
+    } catch (error) {
+      retirement.resolve();
+      throw error;
+    }
     expect(settled).toBe(false);
     expect(observed.unregister).not.toHaveBeenCalled();
     if (fails) {
@@ -587,80 +412,181 @@ it.each([false, true])(
       expect(observed.unregister).not.toHaveBeenCalled();
     } else {
       expect(failure).toBe(primary);
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
+      expect(observed.unregister).toHaveBeenCalledTimes(2);
     }
   },
 );
 
-it.each(typedFailures)(
-  "preserves typed $reply.kind errors after successful parent retirement",
-  async ({ error, reply }) => {
-    observed.run.mockResolvedValue({ ok: false, error: reply });
-    const request = input();
-    const failure: unknown = await withSessionHistoryWorkerDatabase(request.database, (owner) =>
-      owner.readEntryPresence(request.scope),
-    ).catch((caught: unknown) => caught);
-    expect(failure).toBeInstanceOf(error.constructor);
-    expect(failure).toMatchObject({ message: error.message });
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
-  },
-);
-
-it.runIf(!process.versions.bun)(
-  "retains aliases until native cleanup and preserves later read custody",
-  async () => {
-    const request = input();
-    const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
-    const cleanupEntered = createDeferredCore();
-    const cleanup = createDeferredCore();
-    observed.run.mockResolvedValue({ ok: true, value: false });
-    observed.closeResources.mockImplementation(() => {
-      cleanupEntered.resolve();
-      return cleanup.promise;
+it("retains aliases until native cleanup and preserves later read custody", async () => {
+  const request = input();
+  const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
+  const cleanupEntered = createDeferredCore();
+  const cleanup = createDeferredCore();
+  observed.run.mockResolvedValue({ ok: true, value: false });
+  observed.closeResources.mockImplementation(() => {
+    cleanupEntered.resolve();
+    return cleanup.promise;
+  });
+  const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
+    observed.run.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        kind: "session-store-target",
+        logicalAgentId: "main",
+        sourcePath: request.database.path,
+        database: request.database,
+      },
     });
-    const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
-      observed.run.mockResolvedValueOnce({
-        ok: true,
-        value: {
-          kind: "session-store-target",
-          sourcePath: request.database.path,
-          database: request.database,
-        },
-      });
-      await scope.readStoreTarget({
-        agentId: "main",
-        storePath: request.database.path,
-        env: {},
-        registeredDatabases: [],
-      });
-      await withSessionHistoryWorkerDatabase(request.database, (owner) =>
-        owner.readEntryPresence(request.scope),
-      );
-      candidates[0]!.physicalPath = "/synthetic/replacement.sqlite";
+    await scope.readStoreTarget({
+      agentId: "main",
+      storePath: request.database.path,
+      env: {},
+      registeredDatabases: [],
     });
-    await cleanupEntered.promise;
-    expect(observed.unregister).not.toHaveBeenCalled();
-    expect(observed.rotate).not.toHaveBeenCalled();
-    // This read is newer than the captured cleanup sequence, even on the same physical path.
     await withSessionHistoryWorkerDatabase(request.database, (owner) =>
       owner.readEntryPresence(request.scope),
     );
-    cleanup.resolve();
-    await discovery;
+    candidates[0]!.physicalPath = "/synthetic/replacement.sqlite";
+  });
+  await cleanupEntered.promise;
+  expect(observed.unregister).not.toHaveBeenCalled();
+  expect(observed.rotate).not.toHaveBeenCalled();
+  // This read is newer than the captured cleanup sequence, even on the same physical path.
+  await withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.readEntryPresence(request.scope),
+  );
+  cleanup.resolve();
+  await discovery;
+  expect(decodeAgentDatabaseReaderRequest(observed.closeResources.mock.calls[0]?.[0])).toEqual({
+    kind: "close",
+    candidates: [{ path: request.database.path }],
+    retainedPaths: [request.database.path],
+    deleted: false,
+  });
+  expect(observed.unregister).toHaveBeenCalledTimes(1);
+  const retained = observed.resources.find((resource) => resource.agentId === "main");
+  assert(retained);
+  await retained.close();
+  expect(observed.closeResources).toHaveBeenCalledTimes(2);
+  expect(observed.rotate).not.toHaveBeenCalled();
+});
+
+it.each([
+  { fails: false, capable: false },
+  { fails: false, capable: true },
+  { fails: true, capable: false },
+  { fails: true, capable: true },
+])(
+  "joins idle cleanup and retains failed custody (fails=$fails, capable=$capable)",
+  async ({ fails, capable }) => {
+    closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
+    const request = input();
+    observed.run.mockResolvedValue({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
+    );
+    const resource = observed.resources.find((entry) => entry.agentId === "main");
+    assert(resource);
+    const failure = new Error("idle database native close failed");
+    const retirementFailure = new Error("idle database worker retirement failed");
+    const retirementEntered = createDeferredCore();
+    const retirement = createDeferredCore();
+    observed.closeResources.mockRejectedValueOnce(failure);
+    observed.rotate.mockImplementationOnce(() => {
+      retirementEntered.resolve();
+      return retirement.promise;
+    });
+    resource.revoke();
+    const closing = resource.close().catch((error: unknown) => error);
+    await retirementEntered.promise;
+    expect(observed.unregister).not.toHaveBeenCalled();
+    if (!capable) {
+      if (fails) {
+        retirement.reject(retirementFailure);
+        expect(await closing).toBe(retirementFailure);
+        expect(observed.unregister).not.toHaveBeenCalled();
+        await resource.close();
+      } else {
+        retirement.resolve();
+        expect(await closing).toBeUndefined();
+      }
+      expect(observed.closeResources).not.toHaveBeenCalled();
+      expect(observed.unregister).toHaveBeenCalledOnce();
+      return;
+    }
+    if (fails) {
+      retirement.reject(retirementFailure);
+      const result = await closing;
+      assert(result instanceof AggregateError);
+      expect(result.errors).toEqual([failure, retirementFailure]);
+      expect(observed.unregister).not.toHaveBeenCalled();
+      await resource.close();
+    } else {
+      retirement.resolve();
+      expect(await closing).toBe(failure);
+    }
+    expect(observed.unregister).toHaveBeenCalledOnce();
     expect(observed.closeResources).toHaveBeenCalledWith(
       JSON.stringify([{ path: request.database.path }]),
     );
-    expect(observed.unregister).toHaveBeenCalledTimes(1);
-    const retained = observed.resources.find((resource) => resource.agentId === "main");
-    assert(retained);
-    await retained.close();
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
   },
 );
 
-it.runIf(!process.versions.bun).each([false, true])(
-  "joins candidate cleanup retirement and retains custody when retirement fails=%s",
-  async (fails) => {
+it("settles candidate handles before registry continuation without retiring the worker", async () => {
+  const request = input();
+  const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
+  const cleanupEntered = createDeferredCore();
+  const cleanup = createDeferredCore();
+  observed.run
+    .mockResolvedValueOnce({ ok: true, value: { kind: "session-target-registry-required" } })
+    .mockResolvedValueOnce({ ok: true, value: { kind: "session-target-inventory", agents: [] } });
+  observed.closeResources.mockImplementationOnce(() => {
+    cleanupEntered.resolve();
+    return cleanup.promise;
+  });
+  let continued = false;
+  const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
+    const inventory = { config: {}, agentIds: ["main"], env: {}, paths: new Map() };
+    expect(
+      await scope.readTargetInventory({
+        ...inventory,
+        registeredDatabases: { status: "deferred" },
+      }),
+    ).toEqual({ kind: "session-target-registry-required" });
+    continued = true;
+    expect(
+      await scope.readTargetInventory({
+        ...inventory,
+        registeredDatabases: [],
+      }),
+    ).toEqual({ kind: "session-target-inventory", agents: [] });
+  });
+  try {
+    await Promise.race([cleanupEntered.promise, discovery]);
+    expect(continued).toBe(false);
+    expect(observed.unregister).not.toHaveBeenCalled();
+    expect(observed.rotate).not.toHaveBeenCalled();
+  } finally {
+    cleanup.resolve();
+    await discovery;
+  }
+  expect(continued).toBe(true);
+  expect(observed.closeResources).toHaveBeenCalledTimes(2);
+  expect(observed.closeResources).toHaveBeenCalledWith(
+    JSON.stringify([{ path: request.database.path }]),
+  );
+  expect(observed.rotate).not.toHaveBeenCalled();
+  expect(observed.unregister).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  { fails: false, capable: true },
+  { fails: true, capable: true },
+  { fails: false, capable: false },
+])(
+  "joins candidate cleanup retirement (failure=$fails, native close=$capable)",
+  async ({ fails, capable }) => {
+    closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
     const request = input();
     const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
     const failure = new Error("candidate native close failed");
@@ -670,6 +596,7 @@ it.runIf(!process.versions.bun).each([false, true])(
       ok: true,
       value: {
         kind: "session-store-target",
+        logicalAgentId: "main",
         sourcePath: request.database.path,
         database: request.database,
       },
@@ -699,74 +626,50 @@ it.runIf(!process.versions.bun).each([false, true])(
       expect(observed.unregister).not.toHaveBeenCalled();
     } else {
       retirement.resolve();
-      expect(await settled).toBe(failure);
+      expect(await settled).toBe(capable ? failure : undefined);
       expect(observed.unregister).toHaveBeenCalledTimes(1);
     }
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(observed.closeResources).toHaveBeenCalledTimes(capable ? 1 : 0);
   },
 );
 
-it("keeps native worker retirement for Bun candidate cleanup", async () => {
+it.each([
+  { reason: "read-failed", capable: true },
+  { reason: "database-missing", capable: false },
+  { reason: "database-missing", capable: true },
+  { reason: "registry-required-after-failure", capable: true },
+])("settles inventory readers for $reason (capable=$capable)", async ({ reason, capable }) => {
+  closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
   const request = input();
   const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
-  const descriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
-  if (!descriptor) {
-    Object.defineProperty(process.versions, "bun", { value: "synthetic-bun", configurable: true });
-  }
   observed.run.mockResolvedValue({
     ok: true,
-    value: {
-      kind: "session-store-target",
-      sourcePath: request.database.path,
-      database: request.database,
-    },
+    value:
+      reason === "registry-required-after-failure"
+        ? { kind: "session-target-registry-required", readFailed: true }
+        : {
+            kind: "session-target-inventory",
+            agents: [{ agentId: "main", result: { available: false, reason }, reads: [] }],
+          },
   });
-  try {
-    await withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
-      await scope.readStoreTarget({
-        agentId: "main",
-        storePath: request.database.path,
-        env: {},
-        registeredDatabases: [],
-      });
+  await withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
+    await scope.readTargetInventory({
+      config: {},
+      agentIds: ["main"],
+      env: {},
+      paths: new Map(),
+      registeredDatabases: [],
     });
-    expect(observed.closeResources).not.toHaveBeenCalled();
-    expect(observed.rotate).toHaveBeenCalledTimes(1);
-    expect(observed.unregister).toHaveBeenCalledTimes(1);
-  } finally {
-    if (!descriptor) {
-      Reflect.deleteProperty(process.versions, "bun");
-    }
-  }
+  });
+  const retired = reason !== "database-missing" || !capable;
+  expect(observed.closeResources).toHaveBeenCalledTimes(retired ? 0 : 1);
+  expect(observed.rotate).toHaveBeenCalledTimes(
+    reason === "registry-required-after-failure" ? 2 : retired ? 1 : 0,
+  );
 });
 
-it.each(["read-failed", "database-missing"] as const)(
-  "settles inventory readers for %s",
-  async (reason) => {
-    const request = input();
-    const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
-    observed.run.mockResolvedValue({
-      ok: true,
-      value: {
-        kind: "session-target-inventory",
-        agents: [{ agentId: "main", result: { available: false, reason }, reads: [] }],
-      },
-    });
-    await withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
-      await scope.readTargetInventory({
-        config: {},
-        agentIds: ["main"],
-        env: {},
-        paths: new Map(),
-        registeredDatabases: [],
-      });
-    });
-    const retired = reason === "read-failed" || Boolean(process.versions.bun);
-    expect(observed.closeResources).toHaveBeenCalledTimes(retired ? 0 : 1);
-    expect(observed.rotate).toHaveBeenCalledTimes(retired ? 1 : 0);
-  },
-);
-
-it.runIf(!process.versions.bun).each([false, true])(
+it.each([false, true])(
   "keeps alias custody through overlapping retirement when retirement fails=%s",
   async (fails) => {
     const request = input();
@@ -779,6 +682,7 @@ it.runIf(!process.versions.bun).each([false, true])(
       ok: true,
       value: {
         kind: "session-store-target",
+        logicalAgentId: "main",
         sourcePath: request.database.path,
         database: request.database,
       },
@@ -799,7 +703,12 @@ it.runIf(!process.versions.bun).each([false, true])(
         registeredDatabases: [],
       });
     });
-    const result = discovery.catch((error: unknown) => error);
+    let settled = false;
+    const result = discovery
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     await cleanupEntered.promise;
     const alias = observed.resources.find((resource) => !resource.agentId);
     assert(alias?.revoke);
@@ -808,18 +717,24 @@ it.runIf(!process.versions.bun).each([false, true])(
     await retirementEntered.promise;
     try {
       cleanup.resolve();
-      expect(await result).toMatchObject({ message: "Session target discovery was revoked" });
+      await cleanup.promise;
+      expect(settled).toBe(false);
       expect(observed.unregister).not.toHaveBeenCalled();
+      const revoked = { message: "Session reader custody was revoked during discovery cleanup" };
       if (fails) {
         const failure = new Error("overlapping retirement failed");
         retirement.reject(failure);
         expect(await closing).toBe(failure);
+        const error = await result;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error).toMatchObject({ errors: [revoked, failure], cause: failure });
         expect(observed.unregister).not.toHaveBeenCalled();
         observed.rotate.mockResolvedValueOnce(undefined);
         await alias.close();
       } else {
         retirement.resolve();
         await closing;
+        expect(await result).toMatchObject(revoked);
       }
       expect(observed.unregister).toHaveBeenCalledTimes(1);
     } finally {
@@ -830,9 +745,13 @@ it.runIf(!process.versions.bun).each([false, true])(
   },
 );
 
-it.each(["store", "inventory"] as const)(
-  "binds queued %s discovery and byte accounting to its admitted candidates",
-  async (kind) => {
+it.each([
+  { kind: "store", capable: false },
+  { kind: "inventory", capable: true },
+])(
+  "binds queued $kind discovery and byte accounting to admitted candidates (capable=$capable)",
+  async ({ kind, capable }) => {
+    closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
     const admitted = {
       path: "/synthetic/admitted.sqlite",
       physicalPath: "/synthetic/physical.sqlite",
@@ -856,7 +775,7 @@ it.each(["store", "inventory"] as const)(
     const storeRequest = {
       agentId: "main",
       storePath: foreign.path,
-      env: {},
+      env: { OPENCLAW_STATE_DIR: path.resolve("/synthetic/state") },
       registeredDatabases: [],
       candidates: [foreign],
     };
@@ -869,7 +788,7 @@ it.each(["store", "inventory"] as const)(
     const inventoryRequest = {
       config: {},
       agentIds: ["main"],
-      env: {},
+      env: { OPENCLAW_STATE_DIR: path.resolve("/synthetic/state") },
       paths,
       registeredDatabases: [],
       candidates: [foreign],
@@ -905,6 +824,7 @@ it.each(["store", "inventory"] as const)(
           kind === "store"
             ? {
                 kind: "session-store-target",
+                logicalAgentId: "main",
                 sourcePath: original.physicalPath,
                 database: { agentId: "main", path: original.physicalPath },
               }
@@ -912,10 +832,13 @@ it.each(["store", "inventory"] as const)(
       });
       await discovery;
     }
-    if (!process.versions.bun) {
+    if (capable) {
       expect(observed.closeResources).toHaveBeenCalledWith(
         JSON.stringify([{ path: original.physicalPath, scope: original.scope }]),
       );
+    } else {
+      expect(observed.closeResources).not.toHaveBeenCalled();
+      expect(observed.rotate).toHaveBeenCalledOnce();
     }
   },
 );
@@ -936,26 +859,14 @@ function hydrateThroughWorker() {
   }).read();
 }
 
-it("hydrates after an ordinary quarantine metadata failure whose native close succeeds", async () => {
-  observed.quarantineRead.mockImplementation(() => {
-    throw new Error("quarantine metadata unavailable");
-  });
-  await expect(hydrateThroughWorker()).resolves.toMatchObject({
-    kind: "full",
-    snapshot: { events: [] },
-  });
-  expect(observed.quarantineClose).toHaveBeenCalledOnce();
-  expect(observed.hydrate).toHaveBeenCalledOnce();
-  expect(observed.rotate).not.toHaveBeenCalled();
-});
-
 it.each([
-  { readFails: false, retirementFails: false },
-  { readFails: true, retirementFails: false },
-  { readFails: true, retirementFails: true },
+  { readFails: true, closeFails: false, retirementFails: false },
+  { readFails: false, closeFails: true, retirementFails: false },
+  { readFails: true, closeFails: true, retirementFails: false },
+  { readFails: true, closeFails: true, retirementFails: true },
 ])(
-  "retains hydration quarantine cleanup custody and graph (read=$readFails, retirement=$retirementFails)",
-  async ({ readFails, retirementFails }) => {
+  "settles hydration quarantine (read=$readFails, close=$closeFails, retirement=$retirementFails)",
+  async ({ readFails, closeFails, retirementFails }) => {
     const readFailure = new Error("quarantine metadata read failed");
     const closeFailure = Object.assign(new Error("quarantine native close failed"), {
       code: "ERR_SQLITE_ERROR",
@@ -966,6 +877,16 @@ it.each([
       observed.quarantineRead.mockImplementation(() => {
         throw readFailure;
       });
+    }
+    if (!closeFails) {
+      await expect(hydrateThroughWorker()).resolves.toMatchObject({
+        kind: "full",
+        snapshot: { events: [] },
+      });
+      expect(observed.quarantineClose).toHaveBeenCalledOnce();
+      expect(observed.hydrate).toHaveBeenCalledOnce();
+      expect(observed.rotate).not.toHaveBeenCalled();
+      return;
     }
     observed.quarantineClose.mockImplementation(() => {
       throw closeFailure;

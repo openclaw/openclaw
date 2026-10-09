@@ -1,38 +1,10 @@
 // Codex tests cover plugin metadata cache behavior.
 import { describe, expect, it, vi } from "vitest";
+import { pluginList as catalog, pluginSummary } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin metadata cache", () => {
-  it("coalesces and reuses the full successful snapshot", async () => {
-    const cache = new CodexPluginMetadataCache();
-    let release: ((response: v2.PluginListResponse) => void) | undefined;
-    const request = vi.fn(
-      async () =>
-        await new Promise<v2.PluginListResponse>((resolve) => {
-          release = resolve;
-        }),
-    );
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    const first = cache.load(params);
-    const second = cache.load(params);
-    const response = pluginList("openai-curated-remote", "calendar");
-    release?.(response);
-
-    const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(firstSnapshot).toBe(secondSnapshot);
-    expect(firstSnapshot.response).toBe(response);
-    await expect(cache.load(params)).resolves.toBe(firstSnapshot);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
   it("coalesces installed plugins through the canonical endpoint", async () => {
     const cache = new CodexPluginMetadataCache();
     let release: ((response: v2.PluginInstalledResponse) => void) | undefined;
@@ -58,7 +30,7 @@ describe("Codex plugin metadata cache", () => {
 
     const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
     expect(firstSnapshot).toBe(secondSnapshot);
-    expect(firstSnapshot.response).toBe(response);
+    expect(firstSnapshot).toBe(response);
     expect(cache.read("runtime-a", "installed", requestParams)).toBe(firstSnapshot);
     expect(cache.read("runtime-a", "installed")).toBeUndefined();
     await expect(cache.load(params)).resolves.toBe(firstSnapshot);
@@ -191,8 +163,8 @@ describe("Codex plugin metadata cache", () => {
       request,
     });
 
-    expect(company.response.marketplaces[0]?.name).toBe("company-tools");
-    expect(curated.response.marketplaces[0]?.name).toBe("openai-curated-remote");
+    expect(company.marketplaces[0]?.name).toBe("company-tools");
+    expect(curated.marketplaces[0]?.name).toBe("openai-curated-remote");
     expect(request).toHaveBeenCalledTimes(2);
     expect(cache.read("runtime", "curated-global", requestParams, "company-tools")).toBe(company);
     expect(cache.read("runtime", "curated-global", requestParams)).toBe(curated);
@@ -293,8 +265,8 @@ describe("Codex plugin metadata cache", () => {
 
     await expect(cache.load(params)).rejects.toThrow("installed plugins unavailable");
     expect(cache.read("runtime-a", "installed", requestParams)).toBeUndefined();
-    await expect(cache.load(params)).resolves.toMatchObject({ response });
-    expect(cache.read("runtime-a", "installed", requestParams)?.response).toBe(response);
+    await expect(cache.load(params)).resolves.toMatchObject(response);
+    expect(cache.read("runtime-a", "installed", requestParams)).toBe(response);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -318,10 +290,10 @@ describe("Codex plugin metadata cache", () => {
       request,
     };
 
-    await expect(cache.load(params)).resolves.toMatchObject({ response: incomplete });
+    await expect(cache.load(params)).resolves.toMatchObject(incomplete);
     expect(cache.read("runtime-a", "installed", requestParams)).toBeUndefined();
-    await expect(cache.load(params)).resolves.toMatchObject({ response: healthy });
-    expect(cache.read("runtime-a", "installed", requestParams)?.response).toBe(healthy);
+    await expect(cache.load(params)).resolves.toMatchObject(healthy);
+    expect(cache.read("runtime-a", "installed", requestParams)).toBe(healthy);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -366,10 +338,10 @@ describe("Codex plugin metadata cache", () => {
         response.marketplaces.some((entry) => entry.name === "openai-curated-remote"),
     };
 
-    await expect(cache.load(params)).resolves.toMatchObject({ response: failOpen });
+    await expect(cache.load(params)).resolves.toMatchObject(failOpen);
     expect(cache.read("runtime-a", "curated-global")).toBeUndefined();
-    await expect(cache.load(params)).resolves.toMatchObject({ response: healthy });
-    expect(cache.read("runtime-a", "curated-global")?.response).toBe(healthy);
+    await expect(cache.load(params)).resolves.toMatchObject(healthy);
+    expect(cache.read("runtime-a", "curated-global")).toBe(healthy);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -415,51 +387,6 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache failed requests", async () => {
-    const cache = new CodexPluginMetadataCache();
-    const request = vi
-      .fn<() => Promise<v2.PluginListResponse>>()
-      .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce(pluginList("openai-curated-remote"));
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    await expect(cache.load(params)).rejects.toThrow("catalog unavailable");
-    await expect(cache.load(params)).resolves.toMatchObject({
-      response: { marketplaces: [{ name: "openai-curated-remote" }] },
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache responses with marketplace load errors", async () => {
-    const cache = new CodexPluginMetadataCache();
-    const incomplete = pluginList("openai-curated-remote");
-    incomplete.marketplaceLoadErrors = [
-      { marketplacePath: "/marketplaces/openai-curated", message: "catalog unavailable" },
-    ];
-    const request = vi
-      .fn<() => Promise<v2.PluginListResponse>>()
-      .mockResolvedValueOnce(incomplete)
-      .mockResolvedValueOnce(pluginList("openai-curated-remote", "calendar"));
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    await expect(cache.load(params)).resolves.toMatchObject({ response: incomplete });
-    expect(cache.read("runtime-a", "curated-global")).toBeUndefined();
-    await expect(cache.load(params)).resolves.toMatchObject({
-      response: { marketplaces: [{ plugins: [{ id: "calendar" }] }] },
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it("starts a fresh load after invalidation while an older load is pending", async () => {
     const cache = new CodexPluginMetadataCache();
     const releases: Array<(response: v2.PluginListResponse) => void> = [];
@@ -483,10 +410,10 @@ describe("Codex plugin metadata cache", () => {
     await vi.waitFor(() => expect(releases).toHaveLength(2));
     const current = pluginList("openai-curated-remote", "calendar");
     releases[1]?.(current);
-    await expect(afterInstall).resolves.toMatchObject({ response: current });
+    await expect(afterInstall).resolves.toMatchObject(current);
     releases[0]?.(pluginList("openai-curated-remote"));
     await expect(beforeInstall).resolves.toBeDefined();
-    expect(cache.read("runtime-a", "curated-global")?.response).toBe(current);
+    expect(cache.read("runtime-a", "curated-global")).toBe(current);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -513,7 +440,7 @@ describe("Codex plugin metadata cache", () => {
     rejectOwner?.(new Error("owner cancelled"));
     await expect(ownerResult).resolves.toBeInstanceOf(Error);
     await expect(joining).resolves.toMatchObject({
-      response: { marketplaces: [{ plugins: [{ id: "calendar" }] }] },
+      marketplaces: [{ plugins: [{ id: "calendar" }] }],
     });
     expect(ownerRequest).toHaveBeenCalledTimes(1);
     expect(joiningRequest).toHaveBeenCalledTimes(1);
@@ -542,7 +469,7 @@ describe("Codex plugin metadata cache", () => {
     release?.(response);
     await pending;
 
-    await expect(cache.load(params)).resolves.toMatchObject({ response });
+    await expect(cache.load(params)).resolves.toMatchObject(response);
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -571,32 +498,7 @@ describe("Codex plugin metadata cache", () => {
 });
 
 function pluginList(marketplaceName: string, pluginId?: string): v2.PluginListResponse {
-  return {
-    marketplaces: [
-      {
-        name: marketplaceName,
-        path: null,
-        interface: null,
-        plugins: pluginId
-          ? [
-              {
-                id: pluginId,
-                name: pluginId,
-                source: { type: "remote" },
-                installed: false,
-                enabled: false,
-                installPolicy: "AVAILABLE",
-                authPolicy: "ON_USE",
-                availability: "AVAILABLE",
-                interface: null,
-              },
-            ]
-          : [],
-      },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
+  return catalog(pluginId ? [pluginSummary(pluginId)] : [], { name: marketplaceName, path: null });
 }
 
 function installedPlugins(marketplaceName: string, pluginId?: string): v2.PluginInstalledResponse {

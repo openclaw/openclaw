@@ -13,8 +13,15 @@ function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "
 
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   private fileWatcher: MemoryFileWatcher | undefined;
+  protected memoryWatcherReady: Promise<void> = Promise.resolve();
+  private remoteWatchRetirement: Promise<void> | undefined;
+  private remoteWatchCloseFailure: { error: unknown } | undefined;
   protected get memoryWatchCapacityDegraded(): boolean {
     return this.fileWatcher?.capacityDegraded ?? false;
+  }
+
+  protected get memoryWatcherHealth() {
+    return this.fileWatcher?.health();
   }
 
   protected ensureWatcher() {
@@ -31,12 +38,12 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         if (subscription.signal.aborted || this.closed) {
           return;
         }
-        this.dirty = true;
+        this.markMemoryWatchDirty();
         this.memoryWatchUnavailable ||= event === "unavailable";
         // Remote notifications have already passed native file settling on the host.
         runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
       };
-      void this.memoryFiles
+      this.remoteWatchRetirement = this.memoryFiles
         .watch(
           {
             agentId: this.agentId,
@@ -55,6 +62,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
             markDirty("unavailable");
             if (!subscription.signal.aborted) {
               log.warn(`memory workspace watcher unavailable: ${String(error)}`);
+            } else if (error !== subscription.signal.reason) {
+              // Cancellation is expected; a distinct transport retirement failure
+              // must survive shutdown instead of being mistaken for a joined worker.
+              this.remoteWatchCloseFailure = { error };
             }
           },
         );
@@ -67,22 +78,65 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       workspaceDir: this.workspaceDir,
       agentId: this.agentId,
       settings: this.settings,
-      onDirty: () => {
-        this.dirty = true;
+      onDirty: () => this.markMemoryWatchDirty(),
+      onChange: () => {
+        this.markMemoryWatchDirty();
+        return this.sync({ reason: "watch" });
       },
-      onChange: () => this.sync({ reason: "watch" }),
       onUnavailable: () => {
+        this.memoryWatchUnavailable = true;
         this.dirty = true;
       },
     });
-    this.fileWatcher.start();
+    this.memoryWatcherReady = this.fileWatcher.start().catch((error: unknown) => {
+      if (!this.closed) {
+        this.memoryWatchUnavailable = true;
+        this.dirty = true;
+        log.warn(`memory workspace watcher unavailable: ${String(error)}`);
+      }
+    });
   }
 
-  protected async closeMemoryWatcher(): Promise<void> {
+  protected async closeWatchResources(): Promise<void> {
+    if (this.sessionWatchTimer) {
+      clearTimeout(this.sessionWatchTimer);
+      this.sessionWatchTimer = null;
+    }
+    if (this.intervalTimer) {
+      clearInterval(this.intervalTimer);
+      this.intervalTimer = null;
+    }
     this.memoryWatchSubscription?.abort();
     this.memoryWatchSubscription = undefined;
-    await this.fileWatcher?.close();
-    this.fileWatcher = undefined;
+    const results = await Promise.allSettled([
+      (async () => {
+        // Abort only requests remote cancellation. Its transport owns and joins
+        // the worker; retain the subscription until that physical join settles.
+        await this.remoteWatchRetirement;
+        if (this.remoteWatchCloseFailure) {
+          throw this.remoteWatchCloseFailure.error;
+        }
+        this.remoteWatchRetirement = undefined;
+      })(),
+      (async () => {
+        await this.fileWatcher?.close();
+        // A failed observer retains its rejected retirement join.
+        this.fileWatcher = undefined;
+      })(),
+      (async () => {
+        this.sessionUnsubscribe?.();
+        this.sessionUnsubscribe = null;
+      })(),
+    ]);
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Memory watch resources cleanup failed");
+    }
   }
 
   protected ensureIntervalSync() {

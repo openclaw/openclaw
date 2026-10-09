@@ -1,7 +1,3 @@
-import { Session } from "node:inspector/promises";
-import { performance } from "node:perf_hooks";
-import { queryObjects } from "node:v8";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -17,15 +13,8 @@ import * as visibility from "../shared/session-list-visibility.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import {
-  requestContext,
-  sessionReadHandlers,
-} from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { projectSessionPeople } from "./session-identity-projection.js";
-import type { SessionListDiagnostics, SessionListPhase } from "./session-list-diagnostics.types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
@@ -44,242 +33,6 @@ function viewer(profileId: string): GatewayClient {
     preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
   };
 }
-
-test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
-  "benchmarks the resident list and serialization for 50 distinct viewers",
-  async () => {
-    await withStateDirEnv("openclaw-list-viewers-", async () => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
-        agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" as const } },
-      };
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      const clients = Array.from({ length: 50 }, (_, index) =>
-        viewer(ensureProfileForEmail(`viewer-${index}@example.com`).id),
-      );
-      const includePeople = process.env.OPENCLAW_BENCH_SESSION_PEOPLE === "1";
-      const store: Record<string, SessionEntry> = Object.fromEntries(
-        Array.from({ length: 5_000 }, (_, index) => [
-          `agent:main:viewer-row-${index}`,
-          {
-            sessionId: `viewer-row-${index}`,
-            updatedAt: index + 1,
-            lastInteractionAt: index + 1,
-            visibility: index % 10 === 0 ? "draft" : "shared",
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: clients[index % clients.length]!.authenticatedUserProfile!.profileId,
-            },
-            ...(includePeople
-              ? {
-                  participants: [1, 2, 3].map((offset) => ({
-                    identity: {
-                      type: "profile" as const,
-                      id: clients[(index + offset) % clients.length]!.authenticatedUserProfile!
-                        .profileId,
-                    },
-                    promptedAt: 1,
-                  })),
-                }
-              : {}),
-            ...(index >= 2_300 ? { archivedAt: 1 } : {}),
-          },
-        ]),
-      );
-      writeResidentEntries(store);
-      const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const opts = includePeople
-        ? {
-            archived: "all" as const,
-            includeGlobal: true,
-            includeUnknown: true,
-            includePeople: true,
-            excludeSubagents: true,
-            includeActivitySummary: true,
-            includeDerivedTitles: true,
-            sortBy: "activity" as const,
-            limit: 100,
-          }
-        : { limit: 60, ownerFirst: true, excludeCron: true, excludeSystem: true };
-      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-      const rpcSamples: number[] = [];
-      const rpc = async (client: GatewayClient) => {
-        let replied = false;
-        await sessionReadHandlers["sessions.list"]!({
-          req: { type: "req", id: "benchmark", method: "sessions.list" },
-          params: opts,
-          client,
-          context,
-          isWebchatConnect: () => false,
-          respond(ok, result) {
-            if (!ok) {
-              throw new Error("sessions.list benchmark failed");
-            }
-            JSON.stringify(result);
-            replied = true;
-          },
-        });
-        if (!replied) {
-          throw new Error("sessions.list did not reply");
-        }
-      };
-      try {
-        await projection.ensureMaterialized();
-        if (includePeople) {
-          const identity = expectDefined(
-            projection.state.rowContext.identityProjection,
-            "resident identity projection",
-          );
-          const cachedPeople = identity.people;
-          const comparison = [];
-          let uncachedHeap = 0;
-          try {
-            for (const cached of [false, true, false, true]) {
-              identity.people = cached ? cachedPeople : projectSessionPeople;
-              for (const client of clients) {
-                await rpc(client);
-              }
-              queryObjects(Session);
-              const retainedHeap = process.memoryUsage().heapUsed;
-              if (comparison.length === 0) {
-                uncachedHeap = retainedHeap;
-              }
-              const times = [];
-              const cpu = process.cpuUsage();
-              for (const client of clients) {
-                const start = performance.now();
-                await rpc(client);
-                times.push(performance.now() - start);
-              }
-              const used = process.cpuUsage(cpu);
-              comparison.push({
-                cached,
-                medianMs: times.toSorted((a, b) => a - b)[Math.floor(times.length / 2)],
-                cpuMsPerCall: (used.user + used.system) / 1000 / times.length,
-                retainedHeapDeltaBytes: retainedHeap - uncachedHeap,
-              });
-            }
-          } finally {
-            identity.people = cachedPeople;
-          }
-          console.log(JSON.stringify({ peopleComparison: comparison }));
-        }
-        for (const client of clients) {
-          await rpc(client);
-        }
-        const rpcCpuStarted = process.threadCpuUsage();
-        for (let round = 0; round < 5; round++) {
-          for (const client of clients) {
-            const start = performance.now();
-            await rpc(client);
-            rpcSamples.push(performance.now() - start);
-          }
-        }
-        const rpcCpu = process.threadCpuUsage(rpcCpuStarted);
-        const samples: number[] = [];
-        const phases = new Map<SessionListPhase | "serialize" | "total", number>();
-        for (let round = 0; round < 5; round++) {
-          for (const client of clients) {
-            let last = performance.now();
-            const started = last;
-            const diagnostics: SessionListDiagnostics = {
-              startSyncCpu: () => undefined,
-              finishSyncCpu: () => {},
-              mark(phase) {
-                const now = performance.now();
-                phases.set(phase, (phases.get(phase) ?? 0) + now - last);
-                last = now;
-              },
-              projection: {
-                prepareSyncMs: 0,
-                rowSyncMs: 0,
-                yieldWaitMs: 0,
-                yieldCount: 0,
-                selectedRowCount: 0,
-                dirtyRowCount: 0,
-                materializedRowCount: 0,
-                reusedRowCount: 0,
-              },
-            };
-            const result = await listProjectedSessions({ projection, client, opts, diagnostics });
-            expect(result.count).toBeGreaterThanOrEqual(60);
-            const serialize = performance.now();
-            JSON.stringify(result);
-            phases.set("serialize", (phases.get("serialize") ?? 0) + performance.now() - serialize);
-            samples.push(performance.now() - started);
-          }
-        }
-        const inspector = new Session();
-        inspector.connect();
-        let cloneMs = 0;
-        const clone = globalThis.structuredClone;
-        const clones = vi
-          .spyOn(globalThis, "structuredClone")
-          .mockImplementation((value, options) => {
-            const start = performance.now();
-            try {
-              return clone(value, options);
-            } finally {
-              cloneMs += performance.now() - start;
-            }
-          });
-        try {
-          await inspector.post("Profiler.enable");
-          await inspector.post("Profiler.start");
-          for (let round = 0; round < 4; round++) {
-            for (const client of clients) {
-              JSON.stringify(await listProjectedSessions({ projection, client, opts }));
-            }
-          }
-          const { profile } = await inspector.post("Profiler.stop");
-          const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
-          const self = new Map<string, number>();
-          profile.samples?.forEach((id, index) => {
-            const name = nodes.get(id)?.callFrame.functionName || "(anonymous)";
-            self.set(name, (self.get(name) ?? 0) + (profile.timeDeltas?.[index] ?? 0) / 1_000);
-          });
-          console.log(
-            JSON.stringify({
-              rows: 5_000,
-              includePeople,
-              liveRows: 2_300,
-              viewers: clients.length,
-              calls: samples.length,
-              meanMs: samples.reduce((sum, value) => sum + value, 0) / samples.length,
-              medianMs: samples.toSorted((a, b) => a - b)[Math.floor(samples.length / 2)],
-              rpcMeanMs: rpcSamples.reduce((sum, value) => sum + value, 0) / rpcSamples.length,
-              rpcMedianMs: rpcSamples.toSorted((a, b) => a - b)[Math.floor(rpcSamples.length / 2)],
-              rpcThreadCpuMsPerCall: (rpcCpu.user + rpcCpu.system) / 1_000 / rpcSamples.length,
-              phaseMs: Object.fromEntries(
-                [...phases].map(([key, ms]) => [key, ms / samples.length]),
-              ),
-              profiledCalls: 200,
-              cloneCalls: clones.mock.calls.length,
-              cloneMsPerCall: cloneMs / 200,
-              profileSelfMsPerCall: Object.fromEntries(
-                [...self]
-                  .toSorted((a, b) => b[1] - a[1])
-                  .slice(0, 20)
-                  .map(([name, ms]) => [name, ms / 200]),
-              ),
-            }),
-          );
-        } finally {
-          clones.mockRestore();
-          inspector.disconnect();
-        }
-      } finally {
-        projection.dispose();
-        release();
-      }
-    });
-  },
-  120_000,
-);
 
 test("preserves viewer pages across publications while bounding shared predicate work", async () => {
   await withStateDirEnv("openclaw-list-viewer-golden-", async () => {
@@ -305,7 +58,11 @@ test("preserves viewer pages across publications while bounding shared predicate
       },
     });
     const store = {
-      "agent:main:a": entry("a", 0, 1),
+      "agent:main:a": {
+        ...entry("a", 0, 1),
+        heartbeatIsolatedBaseSessionKey: "agent:main:heartbeat",
+        label: "Operator lane",
+      },
       "agent:main:b": { ...entry("b", 0, 9), visibility: "draft" as const },
       "agent:main:c": entry("c", 1, 8),
       "agent:main:d": { ...entry("d", 1, 10), archivedAt: 1 },
@@ -341,6 +98,7 @@ test("preserves viewer pages across publications while bounding shared predicate
     ];
     try {
       for (let revision = 0; revision < 2; revision++) {
+        await projection.ensureMaterialized();
         // The first viewer primes only viewer-independent membership.
         await listProjectedSessions({ projection, client: clients[0], opts });
         predicate.mockClear();
@@ -437,17 +195,26 @@ test("preserves viewer pages across publications while bounding shared predicate
           client: clients[0],
           opts: { ...opts, ownerFirst: false, archived: true },
         });
-        expect(archived.sessions.map((row) => row.sessionId)).toEqual([revision === 0 ? "d" : "a"]);
-        expect(archived.totalCount).toBe(1);
-        expect(predicate).toHaveBeenCalled();
+        // Removing a heartbeat's operator label changes its accepted classification.
+        const archivedIds = revision === 0 ? ["d"] : [];
+        expect(archived.sessions.map((row) => row.sessionId)).toEqual(archivedIds);
+        expect(archived.totalCount).toBe(archivedIds.length);
+        // Cold archives can acquire metadata; warm reads and filter changes reuse those facts.
         predicate.mockClear();
+        const warmArchive = await listProjectedSessions({
+          projection,
+          client: clients[0],
+          opts: { ...opts, ownerFirst: false, archived: true },
+        });
+        expect(warmArchive.sessions.map((row) => row.sessionId)).toEqual(archivedIds);
+        expect(predicate).not.toHaveBeenCalled();
         const unarchived = await listProjectedSessions({ projection, client: clients[0], opts });
         expect(unarchived.sessions.map((row) => row.sessionId)).toEqual(golden[revision]![0]!.ids);
-        expect(predicate).toHaveBeenCalled();
+        expect(predicate).not.toHaveBeenCalled();
         if (revision === 0) {
           replaceSessionEntrySync(
             { agentId: "main", sessionKey: "agent:main:a" },
-            { ...store["agent:main:a"], archivedAt: 2 },
+            { ...store["agent:main:a"], label: undefined, archivedAt: 2 },
           );
           replaceSessionEntrySync(
             { agentId: "main", sessionKey: "agent:main:b" },
@@ -504,8 +271,11 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
     const empty: WorkerSessionPlacementProjection = {
       placements: new Map(),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     let entered = createDeferredCore();
     let paused = createDeferredCore<WorkerSessionPlacementProjection>();

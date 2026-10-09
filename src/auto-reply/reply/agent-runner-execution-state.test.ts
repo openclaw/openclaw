@@ -3,6 +3,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -35,7 +36,7 @@ describe("executeAgentTurn: session state", () => {
     });
     const settle = vi
       .spyOn(subagentRegistry, "settleRequesterAfterSessionSpawns")
-      .mockReturnValue(true);
+      .mockResolvedValue(true);
     onTestFinished(() => settle.mockRestore());
     state.runEmbeddedAgentEntryMock.mockImplementation(async (params, delegate) => {
       await params.preparedRunAdmission.admit("embedded");
@@ -66,6 +67,7 @@ describe("executeAgentTurn: session state", () => {
       requesterTurnRunId: expect.any(String),
       requesterYielded: false,
       acceptedSessionSpawns,
+      assertCurrent: expect.any(Function),
     });
     expect(state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0].harness.sessionKey).toBe(policyKey);
   });
@@ -288,15 +290,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -347,15 +341,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -420,15 +406,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -480,15 +458,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",
@@ -543,15 +513,7 @@ describe("executeAgentTurn: session state", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      isHeartbeat: false,
-      sessionKey: "main",
+      ...createAgentTurnExecutionDefaults(),
       getActiveSessionEntry: () => sessionEntry,
       activeSessionStore: sessionStore,
       resolvedVerboseLevel: "off",

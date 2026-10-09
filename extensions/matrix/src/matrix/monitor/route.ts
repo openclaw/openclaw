@@ -129,7 +129,7 @@ export function resolveMatrixInboundRoute(params: {
           fallbackSessionKey: effectiveRoute.sessionKey,
         })
       : effectiveRoute.sessionKey;
-  const routeWithDmScope =
+  let routeWithDmScope =
     dmSessionKey === effectiveRoute.sessionKey
       ? effectiveRoute
       : {
@@ -145,20 +145,14 @@ export function resolveMatrixInboundRoute(params: {
       threadId: params.threadId,
       parentSessionKey: routeWithDmScope.sessionKey,
     });
-    return {
-      route: {
-        ...routeWithDmScope,
+    routeWithDmScope = {
+      ...routeWithDmScope,
+      sessionKey: threadKeys.sessionKey,
+      mainSessionKey: threadKeys.parentSessionKey ?? routeWithDmScope.sessionKey,
+      lastRoutePolicy: deriveLastRoutePolicy({
         sessionKey: threadKeys.sessionKey,
         mainSessionKey: threadKeys.parentSessionKey ?? routeWithDmScope.sessionKey,
-        lastRoutePolicy: deriveLastRoutePolicy({
-          sessionKey: threadKeys.sessionKey,
-          mainSessionKey: threadKeys.parentSessionKey ?? routeWithDmScope.sessionKey,
-        }),
-      },
-      configuredBinding,
-      bindingOwnerAvailable: runtimeRoute.bindingOwnerAvailable ?? true,
-      runtimeBindingId: runtimeBinding?.bindingId ?? null,
-      pluginId: runtimeRoute.pluginId,
+      }),
     };
   }
 

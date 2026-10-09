@@ -7,9 +7,12 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -27,15 +30,7 @@ async function createGitTransfer() {
   await requireGit(localPath, ["commit", "--quiet", "-m", "captured base"]);
   const service = createNodeWorkspaceTransferService({
     temporaryRoot,
-    getOwner: () => ({
-      credential: { ownerEpoch: 1, sessionId: "session" },
-      environment: {
-        ownerEpoch: 1,
-        attachedSessionIds: ["session"],
-        destroyRequestedAtMs: null,
-        state: "attached",
-      },
-    }),
+    getOwner: () => transferOwner("session"),
   });
   const prepared = await service.prepareSync({
     environmentId: "environment",
@@ -156,7 +151,7 @@ describe("node workspace Git pack downloads", () => {
       expect(newer.code).not.toBe(0);
 
       await fs.writeFile(path.join(localPath, "result.txt"), "accepted result\n");
-      const accepted = await readActualWorkspaceManifest({
+      const accepted = await captureWorkspaceManifest({
         root: localPath,
         baseCommit: prepared.snapshot.manifest.baseCommit,
       });
@@ -170,7 +165,7 @@ describe("node workspace Git pack downloads", () => {
       expect(Buffer.from(await response.arrayBuffer())).toEqual(packs[0]);
       expect(await fixture.packs()).toHaveLength(1);
 
-      const changedBase = await readActualWorkspaceManifest({
+      const changedBase = await captureWorkspaceManifest({
         root: localPath,
         baseCommit: nextCommit,
       });

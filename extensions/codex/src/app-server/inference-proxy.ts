@@ -1,6 +1,6 @@
-import { createServer, type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { Writable, type Duplex } from "node:stream";
-import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createDeferred, createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
@@ -21,18 +21,23 @@ import {
   createCodexInferenceDispatch,
   isTerminalResponse,
   readProxyBody,
-  readProxyWebSocketBody,
   type CodexInferenceModelExecution,
   type CodexInferenceModelRequest,
 } from "./inference-dispatch.js";
+import {
+  OVERLOAD_BODY,
+  OVERLOAD_HEADERS,
+  rejectBusyUpgrade,
+  relayHeaders,
+} from "./inference-proxy-http.js";
 import {
   createUploadAdmission,
   MAX_BODY_BYTES,
   MAX_PENDING_REQUESTS,
   MAX_UPLOADS,
 } from "./inference-upload.js";
-
-export { CodexInferenceAuthorizationError } from "./inference-dispatch.js";
+import type { CodexResponsesOAuth } from "./responses-oauth.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_WEBSOCKETS = 64;
@@ -41,27 +46,6 @@ const MAX_RESIDENTS = MAX_WEBSOCKETS + MAX_UPLOADS;
 const REQUEST_TIMEOUT_MS = 30_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const IDLE_WEBSOCKET_MS = 60_000;
-const OVERLOADED = "Codex inference relay is busy; retry on a fresh connection.";
-const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-after": "1" };
-const OVERLOAD_BODY = JSON.stringify({
-  type: "error",
-  status: 503,
-  // Native treats backend server_is_overloaded as terminal; local saturation must retry.
-  error: { type: "server_error", code: "inference_relay_busy", message: OVERLOADED },
-  headers: { "retry-after": "1" },
-});
-const HOP_HEADERS = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "host",
-  "content-length",
-]);
 
 type ResidentTicket = {
   signal: AbortSignal;
@@ -75,6 +59,7 @@ type ResidentTicket = {
 export async function createCodexInferenceProxy(params: {
   upstream: URL;
   assertCurrent: () => void;
+  oauth?: CodexResponsesOAuth;
   preserveAzureUrlFeatures?: boolean;
   preserveCodexBackendRoutes?: boolean;
   bindModelExecution?: (
@@ -84,6 +69,9 @@ export async function createCodexInferenceProxy(params: {
   const upstream = new URL(params.upstream);
   if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.hash) {
     throw new Error("Codex inference requires a credential-free HTTPS upstream URL");
+  }
+  if (params.oauth && upstream.href.replace(/\/$/, "") !== "https://api.openai.com/v1") {
+    throw new Error("ChatGPT subscription sharing requires the public Responses endpoint");
   }
   const lifetime = new AbortController();
   const assertCurrent = () => {
@@ -211,6 +199,9 @@ export async function createCodexInferenceProxy(params: {
     }
     const target = new URL(upstream);
     const incoming = new URL(suffix, "http://localhost");
+    if (params.oauth && (incoming.pathname !== "/responses" || incoming.search)) {
+      throw new Error(FAILURE);
+    }
     target.pathname = upstreamPath + incoming.pathname;
     for (const [key, value] of incoming.searchParams) {
       target.searchParams.append(key, value);
@@ -218,13 +209,13 @@ export async function createCodexInferenceProxy(params: {
     return {
       target,
       path: incoming.pathname,
-      sampling: incoming.pathname === "/responses",
     };
   };
   const { prepare, prepareHttp } = createCodexInferenceDispatch({
     context,
     assertCurrent,
     bindModelExecution: params.bindModelExecution,
+    requireAdmission: Boolean(params.oauth),
   });
   const server = createServer((req, res) => {
     const socket = req.socket;
@@ -243,7 +234,7 @@ export async function createCodexInferenceProxy(params: {
     res.once("close", abort);
     void (async () => {
       try {
-        const { target, sampling, path } = resolveTarget(req);
+        const { target, path } = resolveTarget(req);
         if (req.method !== "POST") {
           throw new Error(FAILURE);
         }
@@ -262,25 +253,65 @@ export async function createCodexInferenceProxy(params: {
           res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
           return;
         }
-        upload = await prepareHttp(req, sampling, path, signal, releasePermit);
-        const init: RequestInit & { duplex: "half" } = {
-          method: "POST",
-          headers: { ...relayHeaders(req.headers), "content-length": String(upload.length) },
-          body: upload.body,
-          signal: upload.signal,
-          duplex: "half",
-        };
-        guarded = await fetchWithSsrFGuard({
-          url: target.toString(),
-          init,
-          signal: upload.signal,
-          beforeRequest: upload.assertCurrent,
-          requireHttps: true,
-          maxRedirects: 0,
-          capture: false,
-          mode: "trusted_env_proxy",
-          auditContext: "codex-parent-local-inference",
-        });
+        upload = await prepareHttp(req, path, signal, releasePermit, Boolean(params.oauth));
+        const preparedUpload = upload;
+        let body = upload.body;
+        for (let attempt = 0; attempt < (params.oauth ? 2 : 1); attempt++) {
+          const headers: Record<string, string> = {
+            ...relayHeaders(req.headers),
+            "content-length": String(upload.length),
+          };
+          const auth = await params.oauth?.resolve(attempt === 1);
+          const assertAuthorized = () => {
+            preparedUpload.assertCurrent();
+            auth?.assertCurrent();
+          };
+          assertAuthorized();
+          if (auth) {
+            for (const key of [
+              "authorization",
+              "chatgpt-account-id",
+              "openai-organization",
+              "openai-project",
+            ]) {
+              delete headers[key];
+            }
+            headers.authorization = `Bearer ${auth.token}`;
+            // Required by the OSS preview; remove when OpenAI retires this header.
+            headers["x-openai-chatpass-test"] = "codex-direct";
+          }
+          const init: RequestInit & { duplex: "half" } = {
+            method: "POST",
+            headers,
+            body,
+            signal: upload.signal,
+            duplex: "half",
+          };
+          guarded = await fetchWithSsrFGuard({
+            url: target.toString(),
+            init,
+            signal: upload.signal,
+            // Refresh and DNS/proxy preparation await; revalidate both owners at physical I/O.
+            beforeRequest: assertAuthorized,
+            requireHttps: true,
+            maxRedirects: 0,
+            capture: false,
+            mode: "trusted_env_proxy",
+            auditContext: "codex-parent-local-inference",
+          });
+          assertAuthorized();
+          if (!upload.retry || guarded.response.status !== 401 || attempt === 1) {
+            upload.commit?.();
+            break;
+          }
+          await guarded.response.body?.cancel();
+          await guarded.release();
+          guarded = undefined;
+          body = upload.retry();
+        }
+        if (!guarded) {
+          throw new Error(FAILURE);
+        }
         upload.assertCurrent();
         // fetch decodes response content encodings. Never forward stale encoding/length headers.
         const headers = Object.fromEntries(guarded.response.headers);
@@ -325,10 +356,7 @@ export async function createCodexInferenceProxy(params: {
       let local: WebSocket | undefined;
       let proxyAgent: ReturnType<typeof createNodeProxyAgent>;
       let upstreamClosed = Promise.resolve();
-      let finishSetup = () => {};
-      const setupSettled = new Promise<void>((resolve) => {
-        finishSetup = resolve;
-      });
+      const { promise: setupSettled, resolve: finishSetup } = createDeferred();
       let resident: ReturnType<typeof reserveResident> = null;
       const controller = new AbortController();
       const deadlineAtMs = Date.now() + HANDSHAKE_TIMEOUT_MS;
@@ -377,8 +405,11 @@ export async function createCodexInferenceProxy(params: {
       const close = () => finish();
       const failHandshake = () => finish(Date.now() >= deadlineAtMs ? 504 : 502);
       try {
-        const { target, sampling, path } = resolveTarget(req);
-        if (!sampling && path !== "/guardian" && path !== "/guardian-classifier") {
+        const { target, path } = resolveTarget(req);
+        if (params.oauth) {
+          throw new Error(FAILURE);
+        }
+        if (path !== "/responses" && path !== "/guardian" && path !== "/guardian-classifier") {
           throw new Error(FAILURE);
         }
         if (connections.size >= MAX_WEBSOCKETS) {
@@ -576,8 +607,7 @@ export async function createCodexInferenceProxy(params: {
                       throw new Error(FAILURE);
                     }
                     prepared = await prepare(
-                      readProxyWebSocketBody(data),
-                      sampling,
+                      codexWebSocketDataToBuffer(data),
                       path,
                       req.headers,
                       signal,
@@ -614,14 +644,14 @@ export async function createCodexInferenceProxy(params: {
               remote!.on("message", (data: RawData, binary: boolean) => {
                 if (
                   accepted.readyState !== WebSocket.OPEN ||
-                  accepted.bufferedAmount + readProxyWebSocketBody(data).length > MAX_BODY_BYTES
+                  accepted.bufferedAmount + codexWebSocketDataToBuffer(data).length > MAX_BODY_BYTES
                 ) {
                   close();
                   return;
                 }
                 // Upload completion does not prove response quiescence. Only a
                 // delivered terminal event makes this retained transport reclaimable.
-                const terminal = !binary && isTerminalResponse(readProxyWebSocketBody(data));
+                const terminal = !binary && isTerminalResponse(codexWebSocketDataToBuffer(data));
                 const releaseCompletedFrame = terminal ? settleFrame : undefined;
                 accepted.send(data, { binary }, (error) => {
                   if (error) {
@@ -684,28 +714,6 @@ export async function createCodexInferenceProxy(params: {
     close();
     throw error;
   }
-}
-
-function rejectBusyUpgrade(socket: Duplex) {
-  rejectWebSocketUpgrade(socket, {
-    status: 503,
-    headers: { "Retry-After": "1" },
-    body: { contentType: "application/json", text: OVERLOAD_BODY },
-  });
-}
-
-function relayHeaders(input: IncomingHttpHeaders): Record<string, string> {
-  const excluded = new Set(HOP_HEADERS);
-  for (const token of (input.connection ?? "").split(",")) {
-    excluded.add(token.trim().toLowerCase());
-  }
-  const output: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (value !== undefined && !excluded.has(key.toLowerCase())) {
-      output[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
-    }
-  }
-  return output;
 }
 
 export type CodexInferenceProxy = Awaited<ReturnType<typeof createCodexInferenceProxy>>;

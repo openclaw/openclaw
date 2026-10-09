@@ -7,19 +7,9 @@ import SwiftUI
 struct GlowingOpenClawIcon: View {
     @Environment(\.colorScheme) private var colorScheme
 
-    let size: CGFloat
-    let mood: OpenClawMascotMood
-    let accessory: OpenClawMascotAccessory
-
-    init(
-        size: CGFloat = 148,
-        mood: OpenClawMascotMood = .idle,
-        accessory: OpenClawMascotAccessory = .none)
-    {
-        self.size = size
-        self.mood = mood
-        self.accessory = accessory
-    }
+    var size: CGFloat = 148
+    var mood: OpenClawMascotMood = .idle
+    var accessory: OpenClawMascotAccessory = .none
 
     var body: some View {
         // The large vector hero is decorative; 30 fps burns a core while setup sits idle.

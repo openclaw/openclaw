@@ -11,14 +11,15 @@ import {
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
+import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
+import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
-  hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isPathWithinRoot,
-  isWindowsAbsolutePath,
+  isAvatarWorkspacePath,
 } from "../shared/avatar-policy.js";
 import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
@@ -27,11 +28,8 @@ import {
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
-import {
-  inheritLegacyDefaultAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "./legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
+import { findLegacyConfigRuleIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import {
   createModelPolicyRefValidator,
@@ -150,7 +148,7 @@ function collectMcpServerNameIssues(raw: unknown): ConfigValidationIssue[] {
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
-  return isPathWithinRoot(workspaceRoot, resolved);
+  return isPathInside(workspaceRoot, resolved);
 }
 
 function createIdentityAvatarIssue(
@@ -169,9 +167,6 @@ function validateIdentityAvatar(
   env?: NodeJS.ProcessEnv,
 ): ConfigValidationIssue[] {
   const agents = listAgentEntriesWithSource(config);
-  if (agents.length === 0) {
-    return [];
-  }
   const issues: ConfigValidationIssue[] = [];
   for (const { entry, source } of agents) {
     const avatarRaw = entry.identity?.avatar;
@@ -182,16 +177,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~")) {
-      issues.push(
-        createIdentityAvatarIssue(
-          source,
-          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-        ),
-      );
-      continue;
-    }
-    if (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar)) {
+    if (!isAvatarWorkspacePath(avatar)) {
       issues.push(
         createIdentityAvatarIssue(
           source,
@@ -403,24 +389,13 @@ export function validateConfigObjectRaw(
     homedir?: () => string;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyDefaultAgentId = isRecord(raw)
-    ? tryGetLegacyDefaultAgentId(raw as OpenClawConfig)
-    : undefined;
-  let normalizedRaw = stripPreservedLegacyRootKeysForValidation(raw, opts?.preservedLegacyRootKeys);
-  let syntheticLegacyOwnership = false;
-  if (legacyDefaultAgentId && isRecord(normalizedRaw) && isRecord(normalizedRaw.agents)) {
-    const entries = normalizedRaw.agents.entries;
-    if (
-      isRecord(entries) &&
-      Object.keys(entries).length > 1 &&
-      normalizedRaw.agents.ownership === undefined
-    ) {
-      normalizedRaw = {
-        ...normalizedRaw,
-        agents: { ...normalizedRaw.agents, ownership: "explicit" },
-      };
-      syntheticLegacyOwnership = true;
-    }
+  const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
+    raw,
+    opts?.preservedLegacyRootKeys,
+  );
+  const rosterIssues = findLegacyConfigRuleIssues(normalizedRaw, LEGACY_AGENT_ROSTER_RULES);
+  if (rosterIssues.length > 0) {
+    return { ok: false, issues: rosterIssues };
   }
   // Generic config transforms can rebuild records before schema validation, so
   // validate authored MCP names from the parsed source when it is available.
@@ -432,6 +407,10 @@ export function validateConfigObjectRaw(
   const mcpServerNameIssues = collectMcpServerNameIssues(opts?.sourceRaw).filter(
     (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
   );
+  const senderPolicyIssues = collectLegacyToolsBySenderIssues(normalizedRaw);
+  if (senderPolicyIssues.length > 0) {
+    return { ok: false, issues: senderPolicyIssues };
+  }
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success || mcpServerNameIssues.length > 0) {
@@ -443,15 +422,9 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
-  let parsedConfig = validated.data as OpenClawConfig;
-  if (syntheticLegacyOwnership && parsedConfig.agents) {
-    const agents = { ...parsedConfig.agents };
-    delete agents.ownership;
-    parsedConfig = { ...parsedConfig, agents };
-  }
-  const validatedConfig = inheritLegacyDefaultAgentId(
-    raw as OpenClawConfig,
-    attachAgentListProjection(materializeBundledModelProviderOverlays(parsedConfig)),
+  const parsedConfig = validated.data as OpenClawConfig;
+  const validatedConfig = attachAgentListProjection(
+    materializeBundledModelProviderOverlays(parsedConfig),
   );
   const channelIssues =
     policyIssues.length > 0 || opts?.validateBundledChannels
@@ -480,21 +453,16 @@ export function validateConfigObjectRaw(
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
-  if (avatarIssues.length > 0) {
-    return { ok: false, issues: avatarIssues };
-  }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
-  if (gatewayTailscaleBindIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleBindIssues };
-  }
-  const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
-  if (gatewayTailscaleAuthIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleAuthIssues };
-  }
-  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
-  if (modelPolicyAllowIssues.length > 0) {
-    return { ok: false, issues: modelPolicyAllowIssues };
+  for (const validate of [
+    () => validateIdentityAvatar(validatedConfig, opts?.env),
+    () => validateGatewayTailscaleBind(validatedConfig),
+    () => validateGatewayTailscaleAuth(validatedConfig),
+    () => collectModelPolicyAllowIssues(validatedConfig),
+  ]) {
+    const issues = validate();
+    if (issues.length > 0) {
+      return { ok: false, issues };
+    }
   }
   return { ok: true, config: validatedConfig };
 }
@@ -506,7 +474,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(migratePersistedImplicitMainRoster(raw).config, opts);
+  const result = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(raw), opts);
   if (!result.ok) {
     return result;
   }

@@ -78,15 +78,13 @@ export function resolveMatrixEnvAuthReadiness(
     };
   }
 
-  const defaultScoped = resolveScopedMatrixEnvConfig(DEFAULT_ACCOUNT_ID, env);
   const global = resolveGlobalMatrixEnvConfig(env);
-  const defaultScopedReady = hasReadyMatrixEnvAuth(defaultScoped);
   const globalReady = hasReadyMatrixEnvAuth(global);
   const defaultKeys = getMatrixScopedEnvVarNames(DEFAULT_ACCOUNT_ID);
   return {
-    ready: defaultScopedReady || globalReady,
-    homeserver: defaultScoped.homeserver || global.homeserver || undefined,
-    userId: defaultScoped.userId || global.userId || undefined,
+    ready: scopedReady || globalReady,
+    homeserver: scoped.homeserver || global.homeserver || undefined,
+    userId: scoped.userId || global.userId || undefined,
     sourceHint: "MATRIX_* or MATRIX_DEFAULT_*",
     missingMessage:
       `Set Matrix env vars for the default account ` +

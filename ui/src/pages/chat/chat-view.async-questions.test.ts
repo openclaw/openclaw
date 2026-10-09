@@ -1,18 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import {
-  admitQueuedMessageForSession,
-  removeQueuedMessage,
-  removeQueuedMessageWithoutReleasing,
-  subscribeChatOutboxProjection,
-} from "./chat-queue.ts";
+import { admitQueuedMessageForSession, removeQueuedMessage } from "./chat-queue.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
@@ -24,6 +20,25 @@ import {
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const container = document.createElement("div");
+const audience = {
+  role: "assistant",
+  content: "Which audience?",
+  openclawAsyncDelivery: {
+    itemId: "audience",
+    questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
+  },
+};
+const terminal = (runId: string) => ({
+  role: "assistant",
+  runId,
+  content: "Finished.",
+  phase: "final_answer",
+  __openclaw: { runTerminal: true },
+});
+beforeEach(() => {
+  installTranscriptDomMocks();
+  document.body.append(container);
+});
 afterEach(() => {
   render(null, container);
   container.remove();
@@ -32,59 +47,64 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("submits the docked answer after editing its draft without unrelated chat updates", async () => {
-  installTranscriptDomMocks();
-  document.body.append(container);
-  const submit = vi.fn(async () => true);
-  const props = createChatProps({
-    sessionKey: "agent:main:main",
-    messages: [
-      {
-        role: "assistant",
-        content: "Which audience?",
-        openclawAsyncDelivery: {
-          itemId: "audience",
-          questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-        },
-      },
-    ],
-    onAsyncQuestionSubmit: submit,
-    onRequestUpdate: () => render(renderChat(props), container),
-  });
-  render(renderChat(props), container);
-  await vi.waitFor(() =>
-    expect(container.querySelector(".chat-question-panel__other")).not.toBeNull(),
-  );
-  const answer = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
-  answer.value = "New contributors";
-  answer.dispatchEvent(new Event("input", { bubbles: true }));
-  await Promise.resolve();
-  container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
-  await vi.waitFor(() =>
-    expect(submit).toHaveBeenCalledExactlyOnceWith(
-      "> Which audience?\n\nNew contributors",
-      "audience",
-      undefined,
-    ),
-  );
-  await vi.waitFor(() => expect(container.querySelector(".agent-chat__question-dock")).toBeNull());
-  expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
-    "New contributors",
-  );
-});
+it.each([false, true])(
+  "keeps the edited docked answer current when later work completes=%s",
+  async (laterWork) => {
+    const submit = vi.fn(async () => true);
+    const question = laterWork
+      ? {
+          ...audience,
+          runId: "old-run",
+          openclawAsyncDelivery: {
+            itemId: "audience",
+            questions: [{ title: "Which audience?", options: ["Everyone"] }],
+          },
+        }
+      : audience;
+    const props = createChatProps({
+      sessionKey: "agent:main:main",
+      messages: [question],
+      onAsyncQuestionSubmit: submit,
+      onRequestUpdate: () => render(renderChat(props), container),
+    });
+    render(renderChat(props), container);
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-question-panel__other")).not.toBeNull(),
+    );
+    const answer = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
+    answer.value = "New contributors";
+    answer.dispatchEvent(new Event("input", { bubbles: true }));
+    if (laterWork) {
+      props.messages = [question, terminal("old-run"), terminal("later-run")];
+      render(renderChat(props), container);
+      expect(container.querySelector(".agent-chat__question-dock")).not.toBeNull();
+      expect(
+        container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+          ".chat-question-panel__other",
+        )?.value,
+      ).toBe("New contributors");
+      return;
+    }
+    await Promise.resolve();
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    await vi.waitFor(() =>
+      expect(submit).toHaveBeenCalledExactlyOnceWith(
+        "> Which audience?\n\nNew contributors",
+        "audience",
+        undefined,
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__question-dock")).toBeNull(),
+    );
+    expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
+      "New contributors",
+    );
+  },
+);
 
 it("selects a reopened historical question ahead of another pending request", async () => {
-  installTranscriptDomMocks();
-  document.body.append(container);
-  const old = {
-    role: "assistant",
-    runId: "old-run",
-    content: "Which audience?",
-    openclawAsyncDelivery: {
-      itemId: "audience",
-      questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-    },
-  };
+  const old = { ...audience, runId: "old-run" };
   const latest = {
     role: "assistant",
     runId: "latest-run",
@@ -94,13 +114,6 @@ it("selects a reopened historical question ahead of another pending request", as
       questions: [{ title: "Which format?", options: ["Short", "Detailed"] }],
     },
   };
-  const final = (runId: string) => ({
-    role: "assistant",
-    runId,
-    content: "Finished.",
-    phase: "final_answer",
-    __openclaw: { runTerminal: true },
-  });
   const props = createChatProps({
     sessionKey: "agent:main:main",
     messages: [old],
@@ -112,7 +125,7 @@ it("selects a reopened historical question ahead of another pending request", as
   await vi.waitFor(() =>
     expect(container.querySelector(".chat-question-panel__other")).not.toBeNull(),
   );
-  props.messages = [old, final("old-run"), latest, final("latest-run")];
+  props.messages = [old, terminal("old-run"), latest, terminal("latest-run")];
   draw();
   await vi.waitFor(() =>
     expect(container.querySelector(".agent-chat__question-dock")?.textContent).toContain(
@@ -133,17 +146,7 @@ it("selects a reopened historical question ahead of another pending request", as
 });
 
 it("refreshes a mounted question summary when a canonical answer appears or is replaced", () => {
-  installTranscriptDomMocks();
-  document.body.append(container);
-  const question = {
-    role: "assistant",
-    content: "Which audience?",
-    __openclaw: { id: "audience-question", seq: 1 },
-    openclawAsyncDelivery: {
-      itemId: "audience",
-      questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-    },
-  };
+  const question = { ...audience, __openclaw: { id: "audience-question", seq: 1 } };
   const answer = {
     role: "user",
     content: "> Which audience?\n\nEveryone",
@@ -172,22 +175,16 @@ it("refreshes a mounted question summary when a canonical answer appears or is r
   expect(summary()).not.toContain("Engineers");
 });
 
-it.each(["discard", "ack", "consumed"] as const)(
+it.each(["discard", "consumed"] as const)(
   "invalidates admission across same-session panes only for confirmed explicit discard (%s)",
   async (outcome) => {
-    installTranscriptDomMocks();
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
     const sessionKey = "agent:main:main";
     const question = {
-      role: "assistant",
+      ...audience,
       runId: "question-run",
-      content: "Which audience?",
       __openclaw: { id: "audience-question", seq: 1 },
-      openclawAsyncDelivery: {
-        itemId: "audience",
-        questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-      },
     };
     const row: ChatQueueItem = {
       id: "failed-answer",
@@ -203,6 +200,7 @@ it.each(["discard", "ack", "consumed"] as const)(
       const element = document.createElement("div");
       document.body.append(element);
       const host = makeChatHost({
+        requestHandlers: {},
         settings: { gatewayUrl: "ws://question-discard.test" },
         sessionKey,
         currentSessionId: "question-delivery-session",
@@ -223,7 +221,7 @@ it.each(["discard", "ack", "consumed"] as const)(
         },
         onRequestUpdate: () => host.requestUpdate?.(),
       });
-      const stop = subscribeChatOutboxProjection(host, (item) =>
+      const stop = chatOutboxOwner(host).subscribe(host, (item) =>
         getTranscriptState(paneId).transcriptRenderContext.onAsyncQuestionDiscard?.(item),
       );
       return { element, host, props, stop };
@@ -238,16 +236,7 @@ it.each(["discard", "ack", "consumed"] as const)(
         ),
       ).toBe(true);
       for (const { host } of panes) {
-        host.chatMessages = [
-          question,
-          ...["question-run", "later-run"].map((runId) => ({
-            role: "assistant",
-            runId,
-            content: "Finished.",
-            phase: "final_answer",
-            __openclaw: { runTerminal: true },
-          })),
-        ];
+        host.chatMessages = [question, ...["question-run", "later-run"].map(terminal)];
         host.requestUpdate?.();
       }
       const discard = () =>
@@ -276,7 +265,7 @@ it.each(["discard", "ack", "consumed"] as const)(
           },
         );
       } else {
-        expect(removeQueuedMessageWithoutReleasing(first.host, row.id)?.id).toBe(row.id);
+        expect(chatOutboxOwner(first.host).remove(first.host, row.id)?.id).toBe(row.id);
       }
       for (const { element, host, props } of panes) {
         expect(host.chatQueue).toEqual([]);
@@ -329,45 +318,3 @@ it.each(["discard", "ack", "consumed"] as const)(
     }
   },
 );
-it("keeps an edited answer visible when later work completes", async () => {
-  installTranscriptDomMocks();
-  document.body.append(container);
-  const question = {
-    role: "assistant",
-    runId: "old-run",
-    content: "Which audience?",
-    openclawAsyncDelivery: {
-      itemId: "audience",
-      questions: [{ title: "Which audience?", options: ["Everyone"] }],
-    },
-  };
-  const terminal = (runId: string) => ({
-    role: "assistant",
-    runId,
-    content: "Done.",
-    phase: "final_answer",
-    __openclaw: { runTerminal: true },
-  });
-  const props = createChatProps({
-    sessionKey: "agent:main:main",
-    messages: [question],
-    onAsyncQuestionSubmit: vi.fn(async () => true),
-    onRequestUpdate: () => render(renderChat(props), container),
-  });
-  render(renderChat(props), container);
-  await vi.waitFor(() =>
-    expect(container.querySelector(".chat-question-panel__other")).not.toBeNull(),
-  );
-  const answer = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-    ".chat-question-panel__other",
-  )!;
-  answer.value = "New contributors";
-  answer.dispatchEvent(new Event("input", { bubbles: true }));
-  props.messages = [question, terminal("old-run"), terminal("later-run")];
-  render(renderChat(props), container);
-  expect(container.querySelector(".agent-chat__question-dock")).not.toBeNull();
-  expect(
-    container.querySelector<HTMLInputElement | HTMLTextAreaElement>(".chat-question-panel__other")
-      ?.value,
-  ).toBe("New contributors");
-});

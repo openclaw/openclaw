@@ -24,16 +24,18 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
-import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
+  bindWorkerTurnCapabilities,
   getWorkerTurnExecutionIdentityCapability,
-  signalWorkerTurnClaimClosed,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import {
@@ -128,7 +130,7 @@ export const testState = {} as {
   nowMs: number;
   providersEnabled: boolean;
   reuseReadWorkers: boolean;
-  releaseTurnOwners: Array<() => void>;
+  releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
@@ -177,7 +179,7 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
       await testState.service?.stop();
     } finally {
       for (const release of testState.releaseTurnOwners) {
-        release();
+        await release();
       }
     }
     await closeWorkerEnvironmentDatabase();
@@ -230,7 +232,9 @@ export function createService(
       | "applyTranscriptCommit"
       | "bootstrapCallTimeoutMs"
       | "executeInference"
-      | "executeSessionTool"
+      | "inferenceStore"
+      | "closeNodeBootstrapArtifacts"
+      | "createGatewayTools"
       | "executeComputer"
       | "providerCallTimeoutMs"
       | "projectNamespace"
@@ -249,6 +253,7 @@ export function createService(
       | "generateWorkerCredential"
       | "liveEvents"
       | "maintainProviders"
+      | "scheduler"
       | "logger"
       | "now"
       | "nodeTunnelManager"
@@ -260,6 +265,7 @@ export function createService(
   > = {},
 ) {
   testState.service = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>
@@ -277,7 +283,7 @@ export function createService(
       message: "Inference cancelled",
     }),
     inferenceStore: createWorkerInferenceStore({
-      database: testState.stateDb,
+      path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,
@@ -302,7 +308,6 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
 export function createLiveEvents(overrides: Record<string, unknown> = {}) {
   return {
     apply: vi.fn(async () => LIVE_EVENT_ACK),
-    bindSession: vi.fn(() => true),
     clear: vi.fn(),
     clearEnvironment: vi.fn(),
     rotateCredential: vi.fn(() => true),
@@ -315,23 +320,33 @@ export async function seedBootstrapping(
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    ...(install ? { install } : {}),
+    settings: { region: "test" },
   });
   return testState.store.transition({
     environmentId,
     from: provisioning.state,
     to: "bootstrapping",
     patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
+  });
+}
+
+async function seedProvisioning(
+  environmentId: string,
+  profileSnapshot: Parameters<WorkerEnvironmentStore["createIntent"]>[0]["profileSnapshot"],
+) {
+  const intent = await testState.store.createIntent({
+    environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot,
+    provisionOperationId: `provision:${environmentId}`,
+  });
+  return testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
   });
 }
 
@@ -353,17 +368,8 @@ export async function seedReadyDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   const bootstrapping = await testState.store.transition({
     environmentId,
@@ -387,17 +393,8 @@ export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   return testState.store.transition({
     environmentId,
@@ -591,13 +588,13 @@ export async function placementHarness(
   return bindPlacementHarness(identity, serviceOptions, sessionTarget);
 }
 
-export function bindPlacementHarness(
+export async function bindPlacementHarness(
   identity: WorkerConnectionIdentity,
   serviceOptions: Parameters<typeof createService>[1] = {},
   target?: BoundAgentRunSessionTarget,
 ) {
   const sessionId = expectDefined(identity.sessionId, "worker fixture session identity");
-  const claim = expectDefined(identity.turnClaim, "worker fixture turn claim");
+  const claim = structuredClone(expectDefined(identity.turnClaim, "worker fixture turn claim"));
   const sessionTarget = target ?? {
     agentId: "main",
     sessionId,
@@ -605,11 +602,64 @@ export function bindPlacementHarness(
     storePath: path.join(testState.root, "sessions.json"),
   };
   const validateWorkerTurn = vi.fn<(claim: WorkerSessionTurnClaim) => boolean>(() => true);
-  const executionStore = { validateTurnClaim: validateWorkerTurn };
+  let sourceReleased = false;
+  const retainedClaims = new Set<() => void>();
+  const executionStore = {
+    async prepareTurnClaimAuthority(
+      requested: WorkerSessionTurnClaim,
+    ): Promise<PlacementTurnClaimAuthority> {
+      const captured = structuredClone(requested);
+      Object.freeze(captured.owner);
+      Object.freeze(captured);
+      let released = false;
+      let revoked = false;
+      const listeners = new Set<() => void>();
+      const revoke = () => {
+        if (revoked) {
+          return;
+        }
+        revoked = true;
+        const pending = [...listeners];
+        listeners.clear();
+        for (const listener of pending) {
+          listener();
+        }
+      };
+      const isCurrent = () =>
+        !released &&
+        !revoked &&
+        !sourceReleased &&
+        sameWorkerSessionTurnClaim(captured, claim) &&
+        validateWorkerTurn(captured);
+      retainedClaims.add(revoke);
+      return {
+        claim: captured,
+        identity: Object.freeze({
+          agentId: sessionTarget.agentId,
+          sessionKey: sessionTarget.sessionKey,
+        }),
+        isCurrent,
+        onRevoked(listener) {
+          if (!isCurrent()) {
+            listener();
+            return () => {};
+          }
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        release() {
+          released = true;
+          listeners.clear();
+          retainedClaims.delete(revoke);
+        },
+      };
+    },
+  };
   const databasePath = testState.stateDb.path;
   attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
-    assertWorkerRuntimeRefresh: vi.fn(() => {
+    fenceWorkerTurnForRecovery: vi.fn(),
+    prepareWorkerRuntimeRefresh: vi.fn(async () => {
       throw new Error("Cannot refresh a worker runtime while its turn is active");
     }),
     readWorkerTurnClaim: vi.fn(() => claim),
@@ -618,8 +668,8 @@ export function bindPlacementHarness(
     getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
-    updateAckCursors: vi.fn(),
-    prepareWorkspaceResultOwnerRevocation: vi.fn(),
+    updateAckCursors: vi.fn(async () => {}),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const instance = createOperationalRunInstanceRef(claim.runId);
@@ -633,25 +683,37 @@ export function bindPlacementHarness(
     },
     authority.claimId,
   );
-  let sourceReleased = false;
   const releaseSource = () => {
     if (sourceReleased) {
       return;
     }
     sourceReleased = true;
-    signalWorkerTurnClaimClosed(databasePath, claim);
+    for (const revoke of retainedClaims) {
+      revoke();
+    }
     releaseAgentRunDelegatedAuthority(authority);
   };
   testState.releaseTurnOwners.push(releaseSource);
-  bindWorkerTurnOwner(executionStore, claim, undefined, instance, sessionTarget, () => {
-    if (!validateWorkerTurn(claim)) {
-      throw new Error("Worker fixture claim is no longer current");
-    }
-  });
-  const source = expectDefined(
-    getWorkerTurnExecutionIdentityCapability(executionStore, claim),
-    "worker fixture source capability",
+  const { capability: source } = await bindWorkerTurnOwner(
+    executionStore,
+    claim,
+    undefined,
+    instance,
+    sessionTarget,
+    () => {
+      if (!validateWorkerTurn(claim)) {
+        throw new Error("Worker fixture claim is no longer current");
+      }
+    },
   );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService, source, releaseSource };
+  return {
+    identity,
+    placementStore,
+    workerService,
+    source,
+    releaseSource,
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+  };
 }

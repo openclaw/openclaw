@@ -68,17 +68,6 @@ export class MemorySourceIndexKernel {
     private readonly state: SourceIndexState,
   ) {}
 
-  replace(params: MemorySourceIndexReplacement): void {
-    this.replaceRows(
-      params,
-      (function* () {
-        for (const [index, chunk] of params.chunks.entries()) {
-          yield { chunk, embedding: params.embeddings[index] ?? [] };
-        }
-      })(),
-    );
-  }
-
   replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
     const { entry, source, model, now, vectorReady } = params;
     this.clear(entry.path, source);

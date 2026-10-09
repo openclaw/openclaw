@@ -14,10 +14,6 @@ import type { DaemonLifecycleOptions } from "./types.js";
 
 const SAFE_RESTART_METADATA_REFRESH_TIMEOUT_MS = 5_000;
 
-function formatSafeRestartWarnings(result: SafeGatewayRestartRequestResult): string[] | undefined {
-  return result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary];
-}
-
 export function resolveGatewayRestartIntentOptions(
   opts: DaemonLifecycleOptions,
 ): GatewayRestartIntent | undefined {
@@ -46,23 +42,16 @@ export async function runSafeGatewayRestart(
     throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
   }
   const skipDeferral = opts.skipDeferral === true;
-  const params: {
-    reason: string;
-    safe?: true;
-    skipDeferral?: true;
-    target?: SafeRestartTarget;
-  } = { reason: "gateway.restart.safe" };
-  if (target) {
-    params.safe = true;
-    params.target = {
-      pid: target.pid,
-      ownerId: target.ownerId,
-      port: target.port,
-    };
-  }
-  if (skipDeferral) {
-    params.skipDeferral = true;
-  }
+  const params = {
+    reason: "gateway.restart.safe",
+    ...(target
+      ? {
+          safe: true as const,
+          target: { pid: target.pid, ownerId: target.ownerId, port: target.port },
+        }
+      : {}),
+    ...(skipDeferral ? { skipDeferral: true as const } : {}),
+  };
   if (process.platform === "linux") {
     const reportRefreshError = (error: unknown) => {
       defaultRuntime.error(
@@ -123,7 +112,7 @@ export async function runSafeGatewayRestart(
     message,
     preflight: result.preflight,
     restart: result.restart,
-    warnings: formatSafeRestartWarnings(result),
+    warnings: result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary],
   };
   if (opts.json) {
     writeRuntimeJson(defaultRuntime, payload);

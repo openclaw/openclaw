@@ -141,6 +141,33 @@ describe("telegram actions contract", () => {
     },
   );
 
+  it("owns one formatting contract, chosen by the delivering account's richMessages", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            rich: { botToken: "tok-rich", richMessages: true },
+            plain: { botToken: "tok-plain" },
+          },
+        },
+      },
+    };
+    const agentPrompt = telegramPlugin.agentPrompt;
+    const rich = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "rich" });
+    const plain = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "plain" });
+
+    expect(rich?.text_markup).toBe("markdown_telegram_rich");
+    expect(rich?.rules.join("\n")).toContain("<details>");
+    expect(plain?.text_markup).toBe("markdown");
+    expect(plain?.rules[0]).toMatch(/^Telegram rich OFF\./);
+    // `<details>` guidance lives only in the contract, not in a second capability route.
+    for (const accountId of ["rich", "plain"]) {
+      expect(agentPrompt?.messageToolCapabilities?.({ cfg, accountId })).not.toContain(
+        "markdownDetails",
+      );
+    }
+  });
+
   it("exposes Telegram thread create CLI remapping through the exported plugin", () => {
     const request = telegramPlugin.actions?.resolveCliActionRequest?.({
       action: "thread-create",

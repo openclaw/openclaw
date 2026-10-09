@@ -31,10 +31,6 @@ function renderBareShellToken(value: string): string {
     : shellEscapeSingleArg(value);
 }
 
-function renderSourcePreservingArgv(argv: readonly string[]): string {
-  return argv.map((token) => renderBareShellToken(token)).join(" ");
-}
-
 function hasUnquotedShellExpansionSource(value: string): boolean {
   let quote: "single" | "double" | null = null;
   let escaped = false;
@@ -127,23 +123,6 @@ function sourceStepSlice(params: {
   return params.candidate.sourceStep.text.slice(relativeStart, relativeEnd);
 }
 
-function shouldRewriteCandidate(params: {
-  mode: AuthorizedShellRenderMode;
-  satisfiedBy: ExecSegmentSatisfiedBy | undefined;
-}): boolean {
-  if (params.mode === "enforced") {
-    // Safe builtins (cd, :, true, false, pwd, test) are handled by the shell itself, not by an
-    // external executable. Rewriting them to a resolved path (e.g. /usr/bin/cd) is semantically
-    // wrong and does not strengthen PATH-shadowing protection, so enforced mode leaves them as-is.
-    return params.satisfiedBy !== "safeBuiltins";
-  }
-  return params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
-}
-
-function hasDispatchWrapper(segment: ExecAuthorizationCandidate["sourceSegment"]): boolean {
-  return (segment.resolution?.wrapperChain?.length ?? 0) > 0;
-}
-
 function replacementForCandidate(params: {
   command: string;
   candidate: ExecAuthorizationCandidate;
@@ -153,7 +132,12 @@ function replacementForCandidate(params: {
   if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
     return { ok: false, reason: "shell expansion in enforced arguments" };
   }
-  if (!shouldRewriteCandidate({ mode: params.mode, satisfiedBy: params.satisfiedBy })) {
+  // Shell builtins must stay in the shell; rewriting them to paths changes their semantics.
+  const shouldRewrite =
+    params.mode === "enforced"
+      ? params.satisfiedBy !== "safeBuiltins"
+      : params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
+  if (!shouldRewrite) {
     return null;
   }
   const plannedArgv = resolvePlannedSegmentArgv(params.candidate.sourceSegment);
@@ -166,7 +150,7 @@ function replacementForCandidate(params: {
   if (params.mode === "enforced" && params.candidate.transport.kind === "shell-wrapper") {
     return { ok: false, reason: "shell quoting required in wrapper payload" };
   }
-  if (hasDispatchWrapper(params.candidate.sourceSegment)) {
+  if (params.candidate.sourceSegment.resolution?.wrapperChain?.length) {
     const spanResult = validateSpan({
       command: params.command,
       span: params.candidate.sourceStep.span,
@@ -178,7 +162,7 @@ function replacementForCandidate(params: {
     return {
       startIndex: params.candidate.sourceStep.span.startIndex,
       endIndex: params.candidate.sourceStep.span.endIndex,
-      text: renderSourcePreservingArgv(plannedArgv),
+      text: plannedArgv.map(renderBareShellToken).join(" "),
     };
   }
   const executable = plannedArgv[0];
@@ -209,31 +193,6 @@ function replacementForCandidate(params: {
     endIndex: params.candidate.sourceStep.executableSpan.endIndex,
     text: renderedExecutable,
   };
-}
-
-function collectCandidateReplacements(params: {
-  command: string;
-  candidates: readonly ExecAuthorizationCandidate[];
-  mode: AuthorizedShellRenderMode;
-  segmentSatisfiedBy: readonly ExecSegmentSatisfiedBy[];
-}): AuthorizedShellRenderResult | SourceReplacement[] {
-  const replacements: SourceReplacement[] = [];
-  for (const [index, candidate] of params.candidates.entries()) {
-    const replacement = replacementForCandidate({
-      command: params.command,
-      candidate,
-      mode: params.mode,
-      satisfiedBy: params.segmentSatisfiedBy[index],
-    });
-    if (!replacement) {
-      continue;
-    }
-    if ("ok" in replacement) {
-      return replacement;
-    }
-    replacements.push(replacement);
-  }
-  return replacements;
 }
 
 function applyReplacements(params: {
@@ -277,14 +236,21 @@ export function buildAuthorizedShellCommandFromPlan(params: {
     return { ok: false, reason: "segment metadata mismatch" };
   }
 
-  const replacements = collectCandidateReplacements({
-    command: params.plan.originalCommand,
-    candidates,
-    mode: params.mode,
-    segmentSatisfiedBy,
-  });
-  if ("ok" in replacements) {
-    return replacements;
+  const replacements: SourceReplacement[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const replacement = replacementForCandidate({
+      command: params.plan.originalCommand,
+      candidate,
+      mode: params.mode,
+      satisfiedBy: segmentSatisfiedBy[index],
+    });
+    if (!replacement) {
+      continue;
+    }
+    if ("ok" in replacement) {
+      return replacement;
+    }
+    replacements.push(replacement);
   }
   return applyReplacements({
     command: params.plan.originalCommand,

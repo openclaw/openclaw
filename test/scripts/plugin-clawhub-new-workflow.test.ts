@@ -1,5 +1,8 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -82,7 +85,6 @@ describe("Plugin ClawHub New workflow", () => {
     expect(checkout.with?.ref).toBe("${{ github.sha }}");
     const guard = step(resolve, "Require trusted workflow source").run ?? "";
     expect(guard).toContain('WORKFLOW_REF}" == "refs/heads/main"');
-    expect(guard).toContain('GITHUB_ACTOR}" == "github-actions[bot]"');
     expect(guard).toContain("refs/tags/release-publish/");
     expect(guard).toContain(
       "Plugin ClawHub New workflow SHA does not match the parent-approved trusted-main SHA.",
@@ -94,6 +96,58 @@ describe("Plugin ClawHub New workflow", () => {
       "Plugin ClawHub bootstrap target ${TARGET_REF} does not match ${RELEASE_TAG} (${tag_sha}).",
     );
     expect(target).toContain("refs/remotes/origin/release");
+  });
+
+  it("admits direct human recovery from trusted main that contains the approved SHA", () => {
+    const guard = step(job("resolve_bootstrap_plan"), "Require trusted workflow source").run ?? "";
+    const repo = mkdtempSync(path.join(tmpdir(), "plugin-clawhub-new-guard-"));
+    try {
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", repo, ...args], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "t",
+            GIT_AUTHOR_EMAIL: "t@example.com",
+            GIT_COMMITTER_NAME: "t",
+            GIT_COMMITTER_EMAIL: "t@example.com",
+          },
+        }).trim();
+      git("init", "-q");
+      const tree = git("mktree");
+      const approved = git("commit-tree", "--no-gpg-sign", tree, "-m", "approved");
+      const head = git("commit-tree", "--no-gpg-sign", tree, "-p", approved, "-m", "recovery");
+      git("update-ref", "HEAD", head);
+      const run = (actor: string, approvedSha: string, workflowRef = "refs/heads/main") =>
+        spawnSync("bash", ["-c", guard], {
+          cwd: repo,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            APPROVED_WORKFLOW_SHA: approvedSha,
+            GITHUB_ACTOR: actor,
+            PRETAG_VALIDATION: "false",
+            WORKFLOW_REF: workflowRef,
+            WORKFLOW_SHA: head,
+          },
+        });
+
+      const recovery = run("steipete", approved);
+      expect(recovery.status, recovery.stderr).toBe(0);
+      const parentDispatch = run("github-actions[bot]", head);
+      expect(parentDispatch.status, parentDispatch.stderr).toBe(0);
+      expect(run("github-actions[bot]", approved).stderr).toContain(
+        "does not match the parent-approved trusted-main SHA",
+      );
+      expect(run("steipete", "f".repeat(40)).stderr).toContain(
+        "requires trusted main to contain the parent-approved SHA",
+      );
+      expect(run("steipete", approved, "refs/heads/release/2026.9.6").stderr).toContain(
+        "requires trusted main or the protected SHA-pinned release-publish tag",
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("supports a secretless pre-tag validation mode without tag or parent approval", () => {
@@ -144,7 +198,7 @@ describe("Plugin ClawHub New workflow", () => {
     const validation = step(approval, "Validate release publish approval run");
     expect(validation.env).toMatchObject({
       RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-      CHILD_WORKFLOW_SHA: "${{ github.sha }}",
+      CHILD_WORKFLOW_SHA: "${{ inputs.bootstrap_workflow_sha }}",
       RELEASE_PACKAGES: "${{ inputs.plugins }}",
       RELEASE_TAG: "${{ inputs.release_tag }}",
       RELEASE_TARGET_SHA: "${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}",
@@ -166,7 +220,7 @@ describe("Plugin ClawHub New workflow", () => {
       job("validate_release_publish_approval"),
       "Validate release publish approval run",
     );
-    expect(validation.env?.CHILD_WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expect(validation.env?.CHILD_WORKFLOW_SHA).toBe("${{ inputs.bootstrap_workflow_sha }}");
     expect(readFileSync("scripts/validate-release-publish-approval.mjs", "utf8")).toContain(
       "bootstrapWorkflowSha: childWorkflowSha",
     );
@@ -309,6 +363,9 @@ describe("Plugin ClawHub New workflow", () => {
     );
     expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
       "OPENCLAW_CLAWHUB_TARGET_SHA",
+    );
+    expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
+      "OPENCLAW_CLAWHUB_PACKAGE_FAMILY",
     );
   });
 

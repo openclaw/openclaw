@@ -1,74 +1,45 @@
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import {
+  resolveWorkerPoolSize,
+  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+} from "../../infra/worker-pool-sizing.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
-import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
-  SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
+  SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
-  SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
 
-// Bun loads one SQLite library per process; workers must inherit the parent's selection.
-function prepareSqliteReadWorker() {
-  ensureSqliteLibrarySelected();
-  return { options: {} };
-}
-
-const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-const modelContextReads = new WorkerTaskPool<
-  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput,
-  SessionTranscriptWorkerReply<"model-context" | "sqlite-target">
->({
-  workerUrl,
-  prepareWorker: prepareSqliteReadWorker,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  // Preserve context-read admission order and avoid multiplying large SQLite scans.
-  maxWorkers: 1,
-});
+// Callers retain writer admission and validate snapshots before consuming parallel reads.
+const modelContextReads = createSessionTranscriptReadPool<
+  | SessionModelContextWorkerInput
+  | SessionSqliteTargetWorkerInput
+  | SessionContextMessagesWorkerInput
+>(SESSION_TRANSCRIPT_FOREGROUND_WORKERS);
 
 // Background transcript exports cannot occupy the foreground context worker.
-const sessionEntries = new WorkerTaskPool<
-  SessionEntryWorkerInput,
-  SessionTranscriptWorkerReply<"session-entry">
->({
-  workerUrl,
-  prepareWorker: prepareSqliteReadWorker,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  maxWorkers: 1,
-  sharedCompute: true,
-});
+const sessionEntries = createSessionTranscriptReadPool<
+  SessionEntryWorkerInput | SessionResetRecallWorkerInput
+>(resolveWorkerPoolSize("singleton"), true);
 
-// Branch scans share background compute admission without delaying foreground history or context.
-const branchSummaries = new WorkerTaskPool<
-  SessionBranchSummaryWorkerInput,
-  SessionTranscriptWorkerReply<"branch-summaries">
->({
-  workerUrl,
-  prepareWorker: prepareSqliteReadWorker,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  maxWorkers: 1,
-  sharedCompute: true,
-});
-
-export async function readSessionTranscriptModelContextAsync(
+export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,
   admission: SessionModelContextWorkerInput["admission"],
   signal?: AbortSignal,
   through?: SessionModelContextWorkerInput["through"],
   limits?: SessionModelContextWorkerInput["limits"],
+  expectedIdentity?: SessionModelContextWorkerInput["expectedIdentity"],
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
-  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
+  const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads.run(
-      { kind: "model-context", target, admission, through, limits },
+      { kind: "model-context", target, admission, through, limits, expectedIdentity },
       { timeoutMs: 60_000, signal },
     ),
   );
@@ -83,7 +54,7 @@ export async function resolveSessionSqliteTargetInWorker(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
+  const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads.run(
       { kind: "sqlite-target", ...input },
       { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
@@ -95,13 +66,32 @@ export async function resolveSessionSqliteTargetInWorker(
   return value.target;
 }
 
+export async function readSessionTranscriptContextMessagesInWorker(
+  target: SessionTranscriptRuntimeTarget,
+  admission: SessionContextMessagesWorkerInput["admission"],
+  signal?: AbortSignal,
+  expectedIdentity?: SessionContextMessagesWorkerInput["expectedIdentity"],
+) {
+  signal?.throwIfAborted();
+  const value = unwrapSessionTranscriptWorkerReply(
+    await modelContextReads.run(
+      { kind: "context-messages", target, admission, expectedIdentity },
+      { timeoutMs: 60_000, signal },
+    ),
+  );
+  if (!("messages" in value)) {
+    throw new Error("Session context worker returned a different context operation");
+  }
+  return value;
+}
+
 export async function prepareSessionEntryInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
   redaction: SensitiveTextRedactionSnapshot,
 ) {
   const receipt = resolveSessionTranscriptReadFence(options);
-  return unwrapSessionTranscriptWorkerReply<"session-entry">(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-entry",
@@ -122,27 +112,28 @@ export async function prepareSessionEntryInWorker(
       },
     ),
   );
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned reset metadata instead of an export");
+  }
+  return result;
 }
 
-export async function runSessionBranchSummaryWorkerRequest(
-  request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
+export async function readSessionResetRecallCutoffInWorker(
+  scope: SessionResetRecallWorkerInput["scope"],
 ) {
-  return unwrapSessionTranscriptWorkerReply<"branch-summaries">(
-    await branchSummaries.run(
-      { kind: "branch-summaries", request },
+  const receipt = resolveSessionTranscriptReadFence(scope);
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+    await sessionEntries.run(
       {
-        inputBytes:
-          2 *
-          (request.database.agentId.length +
-            request.database.path.length +
-            request.databaseIdentity.length +
-            request.sessionKey.length +
-            request.sessionId.length +
-            (request.lifecycleRevision?.length ?? 0)),
-        timeoutMs: 60_000,
-        signal,
+        kind: "session-reset-recall",
+        scope,
+        ...(receipt ? { admission: { ...receipt } } : {}),
       },
+      { inputBytes: JSON.stringify(scope).length * 2 },
     ),
   );
+  if (!("cutoff" in result)) {
+    throw new Error("Session transcript worker returned an export instead of reset metadata");
+  }
+  return result.cutoff;
 }

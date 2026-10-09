@@ -20,6 +20,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderSystemsBackups } from "./systems-backups.ts";
 import { SystemsController } from "./systems-controller.ts";
 import type { SystemsRouteData } from "./systems-controller.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
@@ -136,23 +137,34 @@ class SystemsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: SystemsRouteData;
   @property({ type: Boolean }) presented = true;
   private activeController: SystemsController | undefined;
-  private readonly poll = new PollController(this, 15_000, () => {
-    if (
-      this.presented &&
-      document.visibilityState !== "hidden" &&
-      (this.routeData?.controller.showStats || this.routeData?.controller.showDetails)
-    ) {
-      void this.routeData?.controller.refreshTelemetry();
-    }
-  });
+  private readonly poll = new PollController(
+    this,
+    15_000,
+    () => {
+      const controller = this.routeData?.controller;
+      if (!this.presented || !controller) {
+        return;
+      }
+      if (controller.needsInventoryRefresh) {
+        void controller.refresh();
+      } else if (controller.showStats || controller.showDetails) {
+        void controller.refreshTelemetry();
+      }
+      if (
+        (!controller.selected || controller.selectedId === "gateway") &&
+        !controller.needsInventoryRefresh
+      ) {
+        void controller.refreshBackups();
+      }
+    },
+    true,
+    "visible",
+  );
 
   constructor() {
     super();
     void this.poll;
-    new SubscriptionsController(this).watch(
-      () => this.routeData?.controller,
-      (controller, notify) => controller.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.routeData?.controller);
   }
 
   override connectedCallback(): void {
@@ -211,7 +223,7 @@ class SystemsPage extends OpenClawLightDomElement {
         <button
           class="systems-icon-button"
           aria-label=${t("systems.closeDetails")}
-          @click=${() => controller.toggleDetails()}
+          @click=${() => controller.updatePresentation({ showDetails: !controller.showDetails })}
         >
           ${icons.x}
         </button>
@@ -249,7 +261,8 @@ class SystemsPage extends OpenClawLightDomElement {
                   event.preventDefault();
                   controller.context.navigate(face, target.options);
                 }}
-                ><strong>${session.displayName ?? session.label ?? session.key}</strong
+                ><strong class="systems-session-link__title"
+                  >${session.displayName ?? session.label ?? session.key}</strong
                 ><span>${t("systems.relations." + relation.kind)}</span></a
               >`;
             })
@@ -278,17 +291,11 @@ class SystemsPage extends OpenClawLightDomElement {
     const ready = setup?.state === "ready" || setup?.state === "managed";
     const title = enabled
       ? "systems.desktopSetupEnabled"
-      : setup?.state === "managed"
-        ? "systems.managedDesktopConfigured"
-        : setup?.state === "ready"
-          ? isMac
-            ? "systems.screenSharingDetected"
-            : "systems.desktopDetected"
-          : setup?.state === "needs-server"
-            ? isMac
-              ? "systems.screenSharingNeeded"
-              : "systems.desktopServerNeeded"
-            : "systems.desktopSetupAttention";
+      : ([
+          ["managed", "systems.managedDesktopConfigured"],
+          ["ready", isMac ? "systems.screenSharingDetected" : "systems.desktopDetected"],
+          ["needs-server", isMac ? "systems.screenSharingNeeded" : "systems.desktopServerNeeded"],
+        ].find(([kind]) => kind === setup?.state)?.[1] ?? "systems.desktopSetupAttention");
     const hint = enabled
       ? "systems.desktopSetupConnecting"
       : ready
@@ -318,7 +325,7 @@ class SystemsPage extends OpenClawLightDomElement {
             `
           : nothing
       }
-      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh()}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
+      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh("manual")}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
     </div>`;
   }
 
@@ -388,7 +395,7 @@ class SystemsPage extends OpenClawLightDomElement {
           title=${t(controller.showStats ? "systems.hideStats" : "systems.stats")}
           aria-label=${t(controller.showStats ? "systems.hideStats" : "systems.stats")}
           aria-pressed=${controller.showStats}
-          @click=${() => controller.toggleStats()}
+          @click=${() => controller.updatePresentation({ showStats: !controller.showStats })}
         >
           ${icons.activity}
         </button>
@@ -398,12 +405,12 @@ class SystemsPage extends OpenClawLightDomElement {
           aria-label=${t("systems.details")}
           aria-pressed=${controller.showDetails}
           ?disabled=${!row}
-          @click=${() => controller.toggleDetails()}
+          @click=${() => controller.updatePresentation({ showDetails: !controller.showDetails })}
         >
           ${icons.panelRightOpen}
         </button>
       </header>
-      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh()} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
+      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh("manual")} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
       ${!controller.connected ? html`<div class="systems-callout" role="status">${t("systems.offlineGateway")}</div>` : nothing}
       ${
         auxiliaryErrors.length
@@ -414,6 +421,7 @@ class SystemsPage extends OpenClawLightDomElement {
           : nothing
       }
       ${controller.showStats && row ? renderMeasurements(row, controller) : nothing}
+      ${!row || row.environment.id === "gateway" ? renderSystemsBackups(controller) : nothing}
       <div class="systems-body">
         <div class="systems-desktop">
           ${
@@ -441,7 +449,7 @@ class SystemsPage extends OpenClawLightDomElement {
                     <span class="systems-state__icon" aria-hidden="true">${icons.monitor}</span>
                     <h2>${emptyTitle}</h2>
                     <p>${emptyHint}</p>
-                    ${row ? html`<button class="systems-text-button" @click=${() => controller.toggleDetails()}>${t("systems.details")}</button>` : nothing}
+                    ${row ? html`<button class="systems-text-button" @click=${() => controller.updatePresentation({ showDetails: !controller.showDetails })}>${t("systems.details")}</button>` : nothing}
                   </div>`
           }
         </div>

@@ -1,4 +1,3 @@
-// Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
 // Raw launchers meet the repo's Node 24.16.0 minimum, where native TS stripping is enabled.
 import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
@@ -96,17 +95,14 @@ export function writeRequestLogEntryOrFail(
   res,
   { requestLog, entry, label = "mock-openai", required = false },
 ) {
-  if (!requestLog) {
-    if (!required) {
-      return false;
-    }
-    const message = "MOCK_REQUEST_LOG is not configured";
-    console.error(`${label} request log write failed: ${message}`);
-    writeJson(res, 500, { error: { message: `mock OpenAI request log write failed: ${message}` } });
-    return true;
+  if (!requestLog && !required) {
+    return false;
   }
 
   try {
+    if (!requestLog) {
+      throw new Error("MOCK_REQUEST_LOG is not configured");
+    }
     fs.appendFileSync(requestLog, `${JSON.stringify(entry)}\n`);
     return false;
   } catch (error) {

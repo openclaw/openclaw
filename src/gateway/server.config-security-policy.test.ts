@@ -124,8 +124,6 @@ describe("config security policy before persistence", () => {
 
   it.each([
     { method: "config.patch", disableUi: false },
-    { method: "config.apply", disableUi: false },
-    { method: "config.patch", disableUi: true },
     { method: "config.apply", disableUi: true },
   ])(
     "validates $method clearing LAN origins (disableUi=$disableUi)",

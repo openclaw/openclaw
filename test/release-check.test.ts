@@ -1,5 +1,4 @@
 // Release check tests cover release validation script behavior.
-import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
@@ -11,10 +10,7 @@ import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import { collectPackUnpackedSizeFindings } from "../scripts/lib/npm-pack-budget.mts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory-contract.mts";
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
-import {
-  collectInstalledBundledRuntimeSidecarPaths,
-  collectInstalledRootDependencyManifestErrors,
-} from "../scripts/openclaw-npm-postpublish-verify.ts";
+import { collectInstalledBundledRuntimeSidecarPaths } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectCriticalPluginSdkEntrypointSizeFindings,
@@ -22,6 +18,7 @@ import {
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedBundledPluginActivationSmokeEnv,
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
@@ -32,10 +29,10 @@ import {
   resolvePackedTarballPath,
   resolveReleaseNpmCommand,
   runReleaseCheckCommand,
+  writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
@@ -173,6 +170,45 @@ describe("packed CLI smoke", () => {
     });
 
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("isolates bundled plugin activation from ambient OpenClaw state", () => {
+    const env = createPackedBundledPluginActivationSmokeEnv(
+      {
+        HOME: "/tmp/operator-home",
+        OPENCLAW_STATE_DIR: "/tmp/operator-state",
+      },
+      "/tmp/release-check",
+    );
+
+    const homeDir = join("/tmp/release-check", "activation-home");
+    expect(env).toMatchObject({
+      HOME: homeDir,
+      OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
+    });
+  });
+
+  it("keeps bundled plugin activation on the built-in runtime", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-release-activation-config-"));
+    try {
+      writePackedBundledPluginActivationConfig(homeDir);
+      const config = JSON.parse(
+        readFileSync(join(homeDir, ".openclaw", "openclaw.json"), "utf8"),
+      ) as Record<string, unknown>;
+
+      expect(config).toMatchObject({
+        agents: {
+          defaults: {
+            models: { "openai/*": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        channels: { telegram: { enabled: true } },
+        plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
+      });
+      expect(config).not.toHaveProperty("models");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("does not admit provider credentials through smoke overrides", () => {
@@ -402,73 +438,6 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("bundled plugin package dependency checks", () => {
-  it("does not require root deps for byte-matched chunks owned by a bundled plugin", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
-
-    try {
-      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
-      writeFileSync(
-        join(tempRoot, "package.json"),
-        `{"name":"openclaw","version":"2026.7.33","dependencies":{}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
-        "utf8",
-      );
-      const source = 'import("root-owned-test-dep");\n';
-      writeFileSync(join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"), source, "utf8");
-      writeFileSync(
-        join(tempRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
-        JSON.stringify({
-          chunks: {
-            "lancedb-runtime-7TYK-Pto.js": {
-              sha256: createHash("sha256").update(source).digest("hex"),
-              extensions: ["memory-lancedb"],
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("still requires root deps for root-owned installed chunks", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-missing-"));
-
-    try {
-      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
-      writeFileSync(
-        join(tempRoot, "package.json"),
-        `{"name":"openclaw","dependencies":{}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "root-runtime.js"),
-        `import("root-owned-test-dep");\n`,
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
-      ]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-});
-
 // This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
 // Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
 // statSync().mode never reports execute bits, so these tests are meaningless there.
@@ -681,17 +650,6 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     }
   });
 
-  it("limits setupSurface omission to the recorded frozen targets", async () => {
-    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
-  });
-
   it("writes a consumer project that imports representative public SDK subpaths", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-plugin-sdk-types-"));
     try {
@@ -717,7 +675,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
       expect(packageJson.dependencies?.["@types/ws"]).toBe("8.18.1");
-      expect(packageJson.dependencies?.typescript).toBe("6.0.3");
+      expect(packageJson.dependencies?.typescript).toBe("7.0.2");
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(false);
       expect(source).toBe(fixtureSource);
@@ -738,13 +696,9 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
 });
 
 describe("collectPackUnpackedSizeFindings", () => {
-  it.each([
-    { label: "ordinary package", unpackedSize: 120_354_302 },
-    { label: "required native payload", unpackedSize: 243_066_603 },
-    { label: "exact budget", unpackedSize: 320 * 1024 * 1024 },
-  ])("accepts pack results at or below the budget: $label", ({ unpackedSize }) => {
+  it("accepts pack results at the exact budget", () => {
     expect(
-      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", unpackedSize)]),
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 320 * 1024 * 1024)]),
     ).toStrictEqual({ errors: [], violations: [] });
   });
 

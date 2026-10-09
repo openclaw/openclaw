@@ -1,4 +1,3 @@
-// Matrix plugin entrypoint registers its OpenClaw integration.
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -81,21 +80,16 @@ function resolveMatrixStreamingMode(streaming: MatrixStreamingInput): MatrixStre
   return "off";
 }
 
-function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): boolean {
-  if (!streaming) {
-    return true;
-  }
-  if (resolveMatrixStreamingMode(streaming) === "progress") {
-    // Progress drafts are quiet unless the operator opts into the tool log.
-    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? false;
-  }
-  return streaming.preview?.toolProgress ?? true;
-}
-
 function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput): boolean {
-  return (
-    resolveMatrixStreamingMode(streaming) !== "off" && resolveMatrixPreviewToolProgress(streaming)
-  );
+  const mode = resolveMatrixStreamingMode(streaming);
+  if (mode === "off") {
+    return false;
+  }
+  if (mode === "progress") {
+    // Progress drafts are quiet unless the operator opts into the tool log.
+    return streaming?.progress?.toolProgress ?? streaming?.preview?.toolProgress ?? false;
+  }
+  return streaming?.preview?.toolProgress ?? true;
 }
 
 const DEFAULT_MEDIA_MAX_MB = 20;
@@ -112,13 +106,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   }
 
   const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
-  const formatRuntimeMessage = (...args: Parameters<RuntimeEnv["log"]>) => format(...args);
   const runtime: RuntimeEnv = opts.runtime ?? {
     log: (...args) => {
-      logger.info(formatRuntimeMessage(...args));
+      logger.info(format(...args));
     },
     error: (...args) => {
-      logger.error(formatRuntimeMessage(...args));
+      logger.error(format(...args));
     },
     exit: (code: number): never => {
       throw new Error(`exit ${code}`);
@@ -137,7 +130,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   });
   const effectiveAccountId = authContext.accountId;
 
-  // Resolve account-specific config for multi-account support
   const accountConfig = resolveMatrixAccountConfig({
     cfg,
     accountId: effectiveAccountId,
@@ -272,11 +264,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
-  const globalGroupChatHistoryLimit = (
-    cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
-  )?.groupChat?.historyLimit;
   const historyLimit = resolvePromptHistoryLimit(
-    accountConfig.historyLimit ?? globalGroupChatHistoryLimit,
+    accountConfig.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
     0,
   );
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
@@ -287,11 +276,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   );
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(accountConfig) === true;
   const startupMs = Date.now();
-  const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
   let healthySyncSinceMs: number | undefined;
-  const noteSyncHealthState = (state: MatrixSyncState, at = Date.now()) => {
+  const onSyncState = (state: MatrixSyncState) => {
+    const at = Date.now();
     if (isMatrixReadySyncState(state)) {
       healthySyncSinceMs ??= at;
       return;
@@ -299,9 +288,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     if (isMatrixDisconnectedSyncState(state)) {
       healthySyncSinceMs = undefined;
     }
-  };
-  const onSyncState = (state: MatrixSyncState) => {
-    noteSyncHealthState(state);
   };
   const monitorRetirement = {
     closeTaskAdmission: () => {
@@ -362,25 +348,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         }).matchSource === "direct"
       );
     };
+    const canPromoteRecentInvite = async (roomId: string) =>
+      shouldPromoteRecentInviteRoom({
+        roomId,
+        roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+        rooms: roomsConfig,
+      });
     const directTracker = createDirectRoomTracker(client, {
       log: logVerboseMessage,
       isExplicitlyConfiguredRoom,
-      canPromoteRecentInvite: async (roomId) =>
-        shouldPromoteRecentInviteRoom({
-          roomId,
-          roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
-          rooms: roomsConfig,
-        }),
-      ...(dmSessionScope === "per-room"
-        ? {
-            canPromoteUnmappedStrictRoom: async (roomId) =>
-              shouldPromoteRecentInviteRoom({
-                roomId,
-                roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
-                rooms: roomsConfig,
-              }),
-          }
-        : {}),
+      canPromoteRecentInvite,
+      canPromoteUnmappedStrictRoom:
+        dmSessionScope === "per-room" ? canPromoteRecentInvite : undefined,
       shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
         try {
           const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
@@ -435,7 +414,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       mediaMaxBytes,
       historyLimit,
       startupMs,
-      startupGraceMs,
       dropPreStartupMessages,
       inboundDeduper,
       directTracker,
@@ -488,7 +466,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
-      startupGraceMs,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       onRoomMessage: handleRoomMessage,

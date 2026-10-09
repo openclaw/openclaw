@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Config mutation helpers used by chat commands that edit OpenClaw config. */
+import type { ChannelAllowlistAdapter } from "../../channels/plugins/types.adapters.js";
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../config/config-paths.js";
 import {
   mutateConfigFileWithRetry,
@@ -17,11 +18,6 @@ export class AutoReplyConfigMutationError extends Error {}
 
 class AutoReplyConfigNoopMutation extends Error {}
 
-/** Extracts user-facing mutation error text from config command failures. */
-export function formatAutoReplyConfigMutationError(error: unknown): string | null {
-  return error instanceof AutoReplyConfigMutationError ? error.message : null;
-}
-
 function assertValidConfig(next: Record<string, unknown>, action: string): OpenClawConfig {
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
@@ -34,9 +30,10 @@ function assertValidConfig(next: Record<string, unknown>, action: string): OpenC
   return next;
 }
 
-/** Removes a config path and returns whether anything changed. */
-export async function unsetConfigPath(
+/** Applies a source-config path edit; a missing unset path skips the write. */
+export async function mutateConfigPath(
   path: string[],
+  mutation: { action: "set"; value: unknown } | { action: "unset" },
   assertCurrent?: () => void,
 ): Promise<boolean> {
   try {
@@ -45,11 +42,12 @@ export async function unsetConfigPath(
       afterWrite: { mode: "auto" },
       writeOptions: { assertCurrent },
       mutate: (next) => {
-        const removed = unsetConfigValueAtPath(next, path);
-        if (!removed) {
+        if (mutation.action === "set") {
+          setConfigValueAtPath(next, path, mutation.value);
+        } else if (!unsetConfigValueAtPath(next, path)) {
           throw new AutoReplyConfigNoopMutation();
         }
-        assertValidConfig(next, "unset");
+        assertValidConfig(next, mutation.action);
       },
     });
     return true;
@@ -61,27 +59,9 @@ export async function unsetConfigPath(
   }
 }
 
-/** Sets and validates a config path in the source config file. */
-export async function setConfigPath(
-  path: string[],
-  value: unknown,
-  assertCurrent?: () => void,
-): Promise<void> {
-  await mutateConfigFileWithRetry({
-    base: "source",
-    afterWrite: { mode: "auto" },
-    writeOptions: { assertCurrent },
-    mutate: (next) => {
-      setConfigValueAtPath(next, path, value);
-      assertValidConfig(next, "set");
-    },
-  });
-}
-
 /** Toggles plugin enablement from a chat command. */
 export async function setPluginEnabledFromCommand(params: {
   pluginId: string;
-  enabled: boolean;
   action: "enable" | "disable";
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   assertCurrent?: () => void;
@@ -90,7 +70,8 @@ export async function setPluginEnabledFromCommand(params: {
     afterWrite: { mode: "auto" },
     writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
-      if (params.enabled) {
+      const enabled = params.action === "enable";
+      if (enabled) {
         await resolvePluginCapabilityConsent({
           config: currentConfig,
           pluginId: params.pluginId,
@@ -101,40 +82,20 @@ export async function setPluginEnabledFromCommand(params: {
       const next = setPluginEnabledInConfig(
         structuredClone(currentConfig),
         params.pluginId,
-        params.enabled,
+        enabled,
       );
       return { nextConfig: assertValidConfig(next, `/plugins ${params.action}`) };
     },
   });
 }
 
-type AllowlistConfigEditResult =
-  | {
-      kind?: "ok" | "invalid-entry";
-      changed?: boolean;
-    }
-  | null
-  | undefined;
-
-type MaybePromise<T> = T | Promise<T>;
-
-type ApplyAllowlistConfigEdit = (params: {
-  cfg: OpenClawConfig;
-  parsedConfig: Record<string, unknown>;
-  accountId?: string | null;
-  scope: "dm" | "group";
-  action: "add" | "remove";
-  entry: string;
-}) => MaybePromise<AllowlistConfigEditResult>;
-
 /** Applies a channel allowlist edit through a plugin-provided config mutation hook. */
 export async function applyAllowlistConfigMutation(params: {
-  cfg: OpenClawConfig;
   accountId?: string | null;
   scope: "dm" | "group";
   action: "add" | "remove";
   entry: string;
-  applyConfigEdit: ApplyAllowlistConfigEdit;
+  applyConfigEdit: NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]>;
   assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({

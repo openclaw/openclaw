@@ -22,13 +22,7 @@ export type ProviderUsageSnapshot =
   | { state: "pending" }
   | { state: "settled"; result: ProviderUsageRequestResult };
 
-export type UsageSnapshotResult = Result<UsageSnapshotValue, UsageSnapshotFailure>;
-
-export function providerUsageFromSnapshotResult(
-  result: UsageSnapshotResult,
-): ProviderUsageSnapshot {
-  return result.ok ? result.value.providerUsage : result.error.providerUsage;
-}
+type UsageSnapshotResult = Result<UsageSnapshotValue, UsageSnapshotFailure>;
 
 export async function requestUsageSnapshot(
   client: GatewayBrowserClient,
