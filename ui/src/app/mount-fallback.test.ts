@@ -38,7 +38,18 @@ function installStartupPaintShell(window: TestWindow, html: string): void {
   window.eval(startupScript.textContent);
 }
 
-function installFallbackShell(window: TestWindow, html: string): void {
+function installFallbackShell(
+  window: TestWindow,
+  html: string,
+  { moduleScripts = true }: { moduleScripts?: boolean } = {},
+): void {
+  // JSDOM lacks `noModule`; browsers expose it exactly when module scripts run.
+  const scriptPrototype = window.HTMLScriptElement.prototype as { noModule?: boolean };
+  if (moduleScripts) {
+    Object.defineProperty(scriptPrototype, "noModule", { value: false, configurable: true });
+  } else {
+    delete scriptPrototype.noModule;
+  }
   const parsed = new window.DOMParser().parseFromString(html, "text/html");
   window.document.head.innerHTML = parsed.head.innerHTML;
   window.document.body.innerHTML = parsed.body.innerHTML;
@@ -137,6 +148,30 @@ describe("Control UI mount fallback", () => {
 
     await vi.advanceTimersByTimeAsync(mountTimeoutMs);
     expect(fallback.hidden).toBe(false);
+  });
+
+  it("explains an unsupported browser at once when module scripts are unavailable", async () => {
+    const frameWindow = createIsolatedWindow();
+    installFallbackShell(frameWindow, await readIndexHtml(), { moduleScripts: false });
+
+    const fallback = requireElementById(
+      frameWindow,
+      "openclaw-mount-fallback",
+      frameWindow.HTMLElement,
+    );
+    expect(fallback.hidden).toBe(false);
+    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+    expect(fallback.querySelector("h1")?.textContent?.trim()).toBe("This browser is not supported");
+    expect(
+      requireElementById(frameWindow, "openclaw-mount-retry", frameWindow.HTMLButtonElement).hidden,
+    ).toBe(true);
+    expect(
+      requireElementById(frameWindow, "openclaw-mount-wait", frameWindow.HTMLButtonElement).hidden,
+    ).toBe(true);
+    const visibleHints = Array.from(fallback.querySelectorAll("li")).filter((item) => !item.hidden);
+    expect(visibleHints.map((item) => item.querySelector("a")?.textContent?.trim())).toEqual([
+      "Control UI troubleshooting",
+    ]);
   });
 
   it("keeps the fallback visible until the app completes its first render", async () => {
