@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as mutationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
+  type PluginStateActionAuthority,
 } from "../../../plugin-state/plugin-state-store.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
-import { createNativeSessionBindingLeases } from "./binding-leases.js";
+import { createNativeSessionBindingLeasesV2 } from "./binding-leases.js";
 import {
   bindingTestOptions,
   prepareBindingTestLease,
@@ -23,10 +24,26 @@ function bindingStores(env: NodeJS.ProcessEnv) {
     overflowPolicy: "reject-new" as const,
     env,
   };
-  const asyncState = createPluginStateKeyedStore<TestBindingRecord>("binding-proof", options);
+  const asyncState = createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, {
+    assertCurrent() {},
+  });
   const syncState = createPluginStateSyncKeyedStore<TestBindingRecord>("binding-proof", options);
-  const state = { ...syncState, withCurrent: asyncState.withCurrent!.bind(asyncState) };
-  return { state, asyncState, owner: createNativeSessionBindingLeases(state, bindingTestOptions) };
+  const state = {
+    withCurrent(authority: PluginStateActionAuthority) {
+      return createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, authority);
+    },
+    assertLeaseCurrent(key: string, token: string) {
+      const lease = syncState.lookup(key)?.lease;
+      if (lease?.token !== token || lease.expiresAt <= Date.now()) {
+        throw bindingTestOptions.errors.lostLease(key);
+      }
+    },
+  };
+  return {
+    state,
+    asyncState,
+    owner: createNativeSessionBindingLeasesV2(state, bindingTestOptions),
+  };
 }
 
 afterEach(() => {

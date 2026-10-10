@@ -7,7 +7,8 @@ import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
@@ -28,7 +29,6 @@ import { recordQuietCronEvaluation } from "./run-history.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
 import {
   type CronJobRunResult,
-  type CronTriggerEvalOutcome,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
@@ -51,7 +51,7 @@ type CronTriggerOwnership = "current" | "stale";
 function resolveCronRunScheduleOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
-  activeJobMarker?: CronActiveJobMarker;
+  activeJobMarker?: Pick<CronActiveJobMarker, "scheduleMutated">;
 }): CronScheduleOwnership {
   return typeof params.currentJob.state.runningScheduleChangeId === "string" ||
     params.activeJobMarker?.scheduleMutated === true ||
@@ -64,7 +64,7 @@ function resolveCronRunScheduleOwnership(params: {
 function resolveCronRunTriggerOwnership(params: {
   admittedJob: CronJob;
   currentJob: CronJob;
-  activeJobMarker?: CronActiveJobMarker;
+  activeJobMarker?: Pick<CronActiveJobMarker, "triggerMutated">;
 }): CronTriggerOwnership {
   return params.activeJobMarker?.triggerMutated === true ||
     params.admittedJob.trigger?.script !== params.currentJob.trigger?.script ||
@@ -668,9 +668,9 @@ export async function applyOutcomeToStoredJob(
 
 /** Applies one outcome to a row already re-read under the runtime write transaction. */
 export function applyOutcomeToAuthoritativeJob(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
-  result: TimedCronRunOutcome,
+  result: CronRunFinalizationOutcome,
   opts: {
     deferredNotifications: DeferredCronNotifications;
     triggerStateRetired?: boolean;

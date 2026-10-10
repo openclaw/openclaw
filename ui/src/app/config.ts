@@ -34,6 +34,7 @@ type ApplicationConfig = {
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
+  pluginControlUiModules: NonNullable<ControlUiBootstrapConfig["pluginControlUiModules"]>;
 };
 
 export type ApplicationConfigCapability = ReturnType<typeof createApplicationConfigCapability>;
@@ -62,6 +63,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   cliAgentsEnabled: false,
   pluginAssetsRequireAuth: true,
   pluginFrameGrants: [],
+  pluginControlUiModules: [],
 };
 
 function loadControlUiPresentation(
@@ -109,6 +111,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     uploadsEnabled: parsed.uploadsEnabled !== false,
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
+    pluginControlUiModules: parsed.pluginControlUiModules ?? [],
     pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
       .filter(
         (grant): grant is ControlUiPluginFrameGrantAck =>

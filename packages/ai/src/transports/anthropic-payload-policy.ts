@@ -334,16 +334,19 @@ function applyAnthropicCacheControlToMessages(
     return;
   }
 
-  let fallbackToolResult: Record<string, unknown> | undefined;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    const record = message as Record<string, unknown>;
-    if (record.role !== "user" || cacheBreakpointOptOutMessageIndexes.has(i)) {
+  let stableEnd = messages.length;
+  for (const index of cacheBreakpointOptOutMessageIndexes) {
+    stableEnd = Math.min(stableEnd, index);
+  }
+  let marked = 0;
+  for (let i = messages.length - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
+    const record = messages[i];
+    if (
+      !isRecord(record) ||
+      record.role !== "user" ||
+      cacheBreakpointOptOutMessageIndexes.has(i) ||
+      (marked > 0 && i >= stableEnd)
+    ) {
       continue;
     }
 
@@ -354,34 +357,24 @@ function applyAnthropicCacheControlToMessages(
     }
 
     for (let j = blocks.length - 1; j >= 0; j--) {
-      const block = blocks[j];
-      if (!block || typeof block !== "object") {
+      const blockRecord = blocks[j];
+      if (!isRecord(blockRecord)) {
         continue;
       }
-
-      const blockRecord = block as Record<string, unknown>;
-      if (blockRecord.type === "text" || blockRecord.type === "image") {
-        if (fallbackToolResult && markerLimit === 1) {
-          fallbackToolResult.cache_control = cacheControl;
-          return;
-        }
+      if (
+        blockRecord.type === "text" ||
+        blockRecord.type === "image" ||
+        blockRecord.type === "tool_result"
+      ) {
+        // Keep a prior write reachable beyond the 20-block lookback, before transient context.
         blockRecord.cache_control = cacheControl;
         if (typeof content === "string") {
           record.content = blocks;
         }
-        if (fallbackToolResult && markerLimit > 1) {
-          fallbackToolResult.cache_control = cacheControl;
-        }
-        return;
-      }
-      if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
-        fallbackToolResult = blockRecord;
+        marked++;
+        break;
       }
     }
-  }
-
-  if (fallbackToolResult) {
-    fallbackToolResult.cache_control = cacheControl;
   }
 }
 

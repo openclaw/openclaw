@@ -228,6 +228,8 @@ export async function assertSessionSectionCountAlignment(
 }
 
 export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
+  // The hook loads its readiness module on first read, so the first read can be undefined.
+  await page.waitForFunction(() => window.openclawControlUi !== undefined);
   const expectedPathname = await page.evaluate((sessionPath) => {
     const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
     if (!app) {
