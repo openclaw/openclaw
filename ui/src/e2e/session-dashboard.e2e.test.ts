@@ -16,12 +16,16 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 import {
   boardSnapshot,
@@ -70,6 +74,7 @@ async function createProofContext(name: string) {
   }
   const viewport = { height: 900, width: 1280 };
   const context = await suite.browser.newContext({
+    ...createControlUiE2eContextOptions(),
     viewport,
     ...(proofDir ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
   });
@@ -482,6 +487,11 @@ suite.define(() => {
           .evaluate((element) => getComputedStyle(element).opacity),
       )
       .toBe("0.6");
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin-failure", "pin-ready.png"),
+      });
+    }
     await expect
       .poll(() =>
         pin.evaluate((element) => {
@@ -491,6 +501,9 @@ suite.define(() => {
         }),
       )
       .toBe(true);
+    const details = await openChatDetails(page);
+    await details.getByRole("button", { name: "Close details", exact: true }).click();
+    await expect.poll(() => details.isVisible()).toBe(false);
     await pin.focus();
     await pin.click();
 
@@ -515,7 +528,7 @@ suite.define(() => {
   });
 
   it("pins an inline MCP App using only its session-bound view identity", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey,
