@@ -1520,23 +1520,24 @@ async function planChildRerun(child, target, client, operationDeadline) {
     ? await client.getVariable("OPENCLAW_CI_RUNNER_BACKEND").catch(() => "unknown")
     : "unknown";
   // The producer rerun also reruns every dependent consumer in the same new attempt.
-  const job =
-    plan.mode === "producer"
-      ? await selectedRerunJob(
-          child,
-          { childKey: child.key, name: plan.producer },
-          client,
-          operationDeadline,
-        )
-      : undefined;
+  const job = plan.producer
+    ? await selectedRerunJob(
+        child,
+        { childKey: child.key, name: plan.producer },
+        client,
+        operationDeadline,
+      )
+    : undefined;
   return { ...plan, failedJobs, job, runnerBackend };
 }
 
 function reportChildRerun(child, rerun, log) {
   log(
-    rerun.mode === "producer"
-      ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
-      : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
+    rerun.mode === "receipt"
+      ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning only failed receipt "${rerun.producer}"; passing workloads are retained`
+      : rerun.mode === "producer"
+        ? `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning green producer "${rerun.producer}" and its dependents; its consumers bind the producer's run attempt`
+        : `[frv] ${child.key} run ${child.runId} attempt ${child.effectiveRunAttempt}: rerunning failed jobs`,
   );
   for (const job of rerun.failedJobs) {
     log(
