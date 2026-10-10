@@ -411,13 +411,14 @@ describe("native SQLite schema snapshots and callbacks", () => {
       try {
         if (expected === 1) {
           writer.exec("CREATE TABLE after_return(id)");
-          expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
+          expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
           expect(tableExists(reader, "after_return")).toBe(true);
         }
         expect(current.next().value?.id).toBe(expected);
       } finally {
         current.return?.();
       }
+      expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
     },
   );
 
@@ -476,13 +477,14 @@ describe("native SQLite schema snapshots and callbacks", () => {
       // the newer iterator's generation; its next step can start the query again.
       old.return?.();
       reader.exec("CREATE TABLE after_old_return(id)");
-      expect(hasPendingSqliteDatabaseSchemaMutation(sibling)).toBe(false);
+      expect(hasPendingSqliteDatabaseSchemaMutation(sibling)).toBe(true);
       expect(tableExists(sibling, "after_old_return")).toBe(true);
       expect(current.next().value).toEqual({ id: 1 });
     } finally {
       current.return?.();
       old.return?.();
     }
+    expect(hasPendingSqliteDatabaseSchemaMutation(sibling)).toBe(false);
   });
 
   it.skipIf(typeof StatementSync.prototype.close !== "function")(

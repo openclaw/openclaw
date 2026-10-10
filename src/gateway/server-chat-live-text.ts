@@ -1,5 +1,5 @@
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
@@ -106,12 +106,20 @@ export function assistantWireProjection(
 }
 
 export function prepareAgentWirePayload(
-  event: AgentEventPayload,
+  event: AgentEventRuntimePayload,
   clientRunId: string,
   state: ChatRunState,
   isCurrent: () => boolean,
 ): AgentEventPayload {
   let payload = event.runId === clientRunId ? event : { ...event, runId: clientRunId };
+  if (event.stream === "item" && event.data.kind === "preamble") {
+    payload = {
+      ...payload,
+      preamble: event.assistantProjection?.replace
+        ? { retainedText: event.assistantProjection.text }
+        : {},
+    };
+  }
   if (event.stream === "assistant") {
     const input = resolveAssistantTextInput(event.data);
     if (input) {
@@ -136,7 +144,16 @@ export function mergeAgentTextPayload(previous: unknown, next: unknown): AgentEv
   // SAFETY: this callback only merges the same typed agent producer and stream/item key.
   const payload = next as AgentEventPayload;
   // SAFETY: the coalescing key prevents mixing agent payloads with other event shapes.
-  const delta = (previous as AgentEventPayload).data.delta;
+  const prior = previous as AgentEventPayload;
+  if (
+    payload.stream === "item" &&
+    payload.data.kind === "preamble" &&
+    payload.preamble?.retainedText === undefined &&
+    prior.preamble?.retainedText !== undefined
+  ) {
+    return { ...payload, preamble: prior.preamble };
+  }
+  const delta = prior.data.delta;
   const nextDelta = payload.data.delta;
   return payload.stream !== "item" && typeof delta === "string" && typeof nextDelta === "string"
     ? { ...payload, data: { ...payload.data, delta: `${delta}${nextDelta}` } }

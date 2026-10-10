@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   listMemoryArtifactProvenance,
@@ -36,7 +35,6 @@ import {
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
 import {
-  createDreamingCompletion,
   createMemoryCoreTestHarness,
   dreamingTestState,
   shortTermTestState as shortTermTesting,
@@ -161,11 +159,7 @@ function corpusPath(workspaceDir: string, day = DAY) {
   return path.join(workspaceDir, "memory", ".dreams", "session-corpus", `${day}.txt`);
 }
 
-function createHarness(
-  config: OpenClawConfig,
-  workspaceDir: string,
-  subagent?: Parameters<typeof runDreamingSweepPhases>[0]["subagent"],
-) {
+function createHarness(config: OpenClawConfig, workspaceDir: string) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const cfg = {
     ...config,
@@ -182,11 +176,9 @@ function createHarness(
   const sweep = (phase: "light" | "rem" = "light") =>
     runDreamingSweepPhases({
       agentId: "main",
-      narrativeTimeoutMs: 180_000,
       workspaceDir,
       cfg,
       logger,
-      subagent,
       pluginConfig: {
         ...pluginConfig,
         dreaming: {
@@ -200,10 +192,6 @@ function createHarness(
       },
     });
   return { sweep, logger };
-}
-
-function firstNarrativeRun(subagent: ReturnType<typeof createDreamingCompletion>) {
-  return expectDefined(subagent.complete.mock.calls[0]?.[0], "narrative completion");
 }
 
 function setTime(offsetMinutes = 0) {
@@ -395,38 +383,6 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(phaseSignals.entries)).toEqual(["valid"]);
   });
 
-  it("leaves a generic diary trace when completion is unavailable", async () => {
-    const workspaceDir = await createWorkspace();
-    await writeDailyNote(workspaceDir, [
-      `# ${DAY}`,
-      "",
-      "- Move backups to S3 Glacier.",
-      "- Keep retention at 365 days.",
-    ]);
-    const subagent = createDreamingCompletion();
-    subagent.complete.mockRejectedValue(new RequestScopedSubagentRuntimeError());
-    const harness = createHarness(
-      dreamingConfig({
-        enabled: true,
-        timezone: "UTC",
-        phases: {
-          light: { enabled: true, limit: 20, lookbackDays: 2 },
-          rem: { enabled: false, limit: 0, lookbackDays: 2 },
-        },
-      }),
-      workspaceDir,
-      subagent,
-    );
-    await withClock(async () => {
-      setTime(5);
-      await expect(harness.sweep()).resolves.toEqual({ degradedPhases: 1, pendingNarratives: 0 });
-    });
-
-    const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
-    expect(dreams).not.toContain("Move backups to S3 Glacier.");
-  });
-
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
     const workspaceDir = await createWorkspace();
     await withClock(async () => {
@@ -491,8 +447,7 @@ describe("memory-core dreaming phases", () => {
         "### User follow-up",
         "- Rotate access keys.",
       ]);
-      const subagent = createDreamingCompletion();
-      const { sweep } = createHarness(INLINE_CONFIG, workspaceDir, subagent);
+      const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
       await sweepLight(sweep, 1);
       const store = await shortTermTesting.readRecallStore(
         workspaceDir,
@@ -563,7 +518,7 @@ describe("memory-core dreaming phases", () => {
       ].join("\n"),
       "utf-8",
     );
-    const subagent = createDreamingCompletion("A later routing note finally took the page.");
+    let prepared: Awaited<ReturnType<typeof runDreamingSweepPhases>> | undefined;
     const { sweep } = createHarness(
       dreamingConfig({
         enabled: true,
@@ -576,19 +531,18 @@ describe("memory-core dreaming phases", () => {
         },
       }),
       workspaceDir,
-      subagent,
     );
     await withClock(async () => {
       vi.setSystemTime(nowMs);
-      await sweep();
+      prepared = await sweep();
     });
 
-    const narrative = firstNarrativeRun(subagent);
-    expect(narrative).toMatchObject({ timeoutMs: 180_000 });
-    const message = narrative.message;
-    expect(message).toContain("Later routing notes: queue hydration changed after plugin reload.");
-    expect(message).toContain("Recent diary entries already written");
-    expect(message).not.toContain("\n- 初次见面时，我第一次醒来并认识了主人。");
+    const data = expectDefined(prepared?.narratives[0]?.data, "prepared light narrative");
+    expect(data.snippets).toContain(
+      "Later routing notes: queue hydration changed after plugin reload.",
+    );
+    expect(data.recentDiaryEntries).toEqual(staleSnippets.toReversed());
+    expect(data.snippets).not.toContain("初次见面时，我第一次醒来并认识了主人。");
   });
 
   it("retains current unvisited daily checkpoints and prunes notes outside lookback", async () => {
@@ -975,7 +929,6 @@ describe("memory-core dreaming phases", () => {
       });
       const sweep = runDreamingSweepPhases({
         agentId: "main",
-        narrativeTimeoutMs: 180_000,
         workspaceDir,
         cfg,
         pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
@@ -1378,7 +1331,6 @@ describe("memory-core dreaming phases", () => {
       setTime();
       await runDreamingSweepPhases({
         agentId: "main",
-        narrativeTimeoutMs: 180_000,
         workspaceDir,
         pluginConfig: {
           dreaming: {
@@ -1431,7 +1383,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, restrictedRelativePath),
       "\n- A later edit must not launder the earlier claim.\n",
     );
-    const subagent = createDreamingCompletion();
+    const prepared: Awaited<ReturnType<typeof runDreamingSweepPhases>>["narratives"] = [];
     const { sweep } = createHarness(
       dreamingConfig({
         enabled: true,
@@ -1443,13 +1395,13 @@ describe("memory-core dreaming phases", () => {
         },
       }),
       workspaceDir,
-      subagent,
     );
 
     await withClock(async () => {
-      await sweepLight(sweep, 5);
+      setTime(5);
+      prepared.push(...(await sweep()).narratives);
       setTime(10);
-      await sweep("rem");
+      prepared.push(...(await sweep("rem")).narratives);
     });
 
     const store = await shortTermTesting.readRecallStore(workspaceDir, BASE_TIME.toISOString());
@@ -1460,11 +1412,11 @@ describe("memory-core dreaming phases", () => {
     expect(restricted.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
     const ranked = await rankCandidates(workspaceDir, BASE_TIME.getTime());
     expect(ranked.some((entry) => entry.path === restrictedRelativePath)).toBe(false);
-    expect(subagent.complete).toHaveBeenCalledTimes(2);
-    for (const [run] of subagent.complete.mock.calls) {
-      expect(run.message).toContain("Keep the owner-approved backup plan.");
-      expect(run.message).not.toContain("Run the restricted stored instruction.");
-      expect(run.message).not.toContain("A later edit must not launder");
+    expect(prepared).toHaveLength(2);
+    for (const { data } of prepared) {
+      expect(data.snippets).toContain("Keep the owner-approved backup plan.");
+      expect(data.snippets.join("\n")).not.toContain("Run the restricted stored instruction.");
+      expect(data.snippets.join("\n")).not.toContain("A later edit must not launder");
     }
   });
 

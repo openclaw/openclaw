@@ -267,6 +267,80 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
 
   afterEach(() => vi.restoreAllMocks());
 
+  function enableRetention(publish: boolean, compatibleCandidate = true) {
+    for (const generation of [
+      descriptor.current.path,
+      ...(compatibleCandidate ? [candidate.path] : []),
+    ]) {
+      const file = path.join(generation, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      manifest.openclaw.immutableInstallDescriptorVersion = 3;
+      fs.writeFileSync(file, JSON.stringify(manifest));
+    }
+    const current = read();
+    const upgraded = updateImmutableInstallRecord(
+      current,
+      {
+        ...current,
+        descriptor: {
+          ...current.descriptor,
+          version: 3,
+          releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+        },
+        prepared: publish ? null : current.prepared,
+      },
+      () => {},
+    );
+    if (publish) {
+      recordImmutablePreparedGeneration(upgraded, candidate, () => {});
+    }
+  }
+
+  it.each([
+    { publish: true, outcome: "succeeded" },
+    { publish: true, outcome: "rolled-back" },
+    { publish: false, outcome: "succeeded" },
+  ] as const)(
+    "records only native publication accepted by activation ($publish, $outcome)",
+    async ({ publish, outcome }) => {
+      enableRetention(publish);
+      const published = read().releases?.[0];
+      if (outcome === "rolled-back") {
+        outcomes = ["failed", "verified"];
+      }
+      const result = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+      expect(result.status).toBe(outcome);
+      const completed = read();
+      expect(completed.releases).toEqual(
+        publish
+          ? [
+              {
+                ...published,
+                verifiedRevision: outcome === "succeeded" ? completed.revision : null,
+              },
+            ]
+          : [],
+      );
+      expect(fs.existsSync(candidate.path)).toBe(true);
+      expect(fs.existsSync(descriptor.current.path)).toBe(true);
+    },
+  );
+
+  it("refuses an older candidate reader before drain on a version-3 installation", async () => {
+    enableRetention(true, false);
+    const before = read();
+    const pid = serving?.pid;
+    await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
+      "cannot read this control format",
+    );
+    expect(mocks.drain).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.prepareRecovery).not.toHaveBeenCalled();
+    expect(serving?.pid).toBe(pid);
+    expect(read()).toEqual(before);
+    expect(selectedSha()).toBe(previousSha);
+  });
+
   it("activates a prepared generation in lifecycle order and retires only verified success", async () => {
     const receipts: string[] = [];
     const result = await activateImmutableUpdate({
