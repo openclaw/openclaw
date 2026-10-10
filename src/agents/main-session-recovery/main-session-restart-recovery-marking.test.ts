@@ -37,6 +37,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -283,7 +285,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
   });
 });
 
-it("marks only the closing Gateway's exact active admissions", async () => {
+it("marks only the closing Gateway's exact durable admissions and leaves host incognito volatile", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
@@ -308,6 +310,26 @@ it("marks only the closing Gateway's exact active admissions", async () => {
         }),
       );
     }
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const incognitoTarget = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:dashboard:incognito-closing",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+    };
+    await replaceSessionEntry(incognitoTarget, {
+      sessionId: "volatile",
+      updatedAt: Date.now(),
+      incognito: true,
+    });
+    admissions.push(
+      await beginSessionWorkAdmission({
+        scope: incognitoTarget.storePath,
+        identities: [incognitoTarget.sessionKey, "volatile"],
+        resolveGatewayContext,
+        assertAllowed() {},
+      }),
+    );
     await markRestartAbortedMainSessions({
       cfg: { session: { store: storePath } },
       stateDir,
@@ -320,6 +342,8 @@ it("marks only the closing Gateway's exact active admissions", async () => {
     expect(
       loadSessionEntry({ storePath, sessionKey: "agent:main:other" })?.abortedLastRun,
     ).toBeUndefined();
+    expect(loadSessionEntry(incognitoTarget)?.abortedLastRun).toBeUndefined();
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
   } finally {
     admissions.forEach((admission) => admission.release());
   }

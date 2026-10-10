@@ -103,6 +103,15 @@ See [Video generation](/tools/video-generation) for the shared tool parameters,
 provider selection, and failover behavior.
 </Tip>
 
+## Prompt caching
+
+Together automatically reuses matching prompt prefixes. OpenClaw sends a stable
+`prompt_cache_key` on native Together requests to improve routing across turns.
+Cache usage is read from both `usage.prompt_tokens_details.cached_tokens` and
+`usage.cached_tokens`, depending on the model's response format. Keep the model,
+tool definitions, reasoning settings, and earlier messages stable for the best
+reuse. See [Together prompt caching](https://docs.together.ai/docs/inference/chat/prompt-caching).
+
 <AccordionGroup>
   <Accordion title="Environment note">
     If the Gateway runs as a daemon (launchd/systemd), make sure

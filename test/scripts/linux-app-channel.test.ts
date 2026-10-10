@@ -23,7 +23,7 @@ type Asset = {
   label?: string;
   size: number;
   state: string;
-  digest: string;
+  digest?: string;
   browser_download_url: string;
   bytes: string;
 };
@@ -63,6 +63,14 @@ type AuthorityChange =
   | "new-request-attempt"
   | "cancel-writer"
   | "new-writer-attempt";
+type StaleDownload = {
+  tag: string;
+  name: string;
+  bytes: string;
+  remaining: number;
+  skip?: number;
+  legacy?: boolean;
+};
 type State = {
   releases: Release[];
   latest: string | null;
@@ -70,6 +78,9 @@ type State = {
   calls: Call[];
   verifierExit: number;
   publicDownloadCache?: Record<string, string>;
+  staleAfterUpload?: StaleDownload;
+  staleDownloads?: StaleDownload[];
+  wrongUpload?: { tag: string; name: string };
   fault?: Fault;
   corruptDownload?: { tag: string; name: string };
   replaceReleaseAfterDownload?: { tag: string; name: string };
@@ -327,6 +338,11 @@ try {
         changeAuthority(change);
       }
       answer(response);
+    } else if (/^releases\/assets\/\d+$/.test(route)) {
+      const id = Number(route.split("/").at(-1));
+      const entry = state.releases.flatMap((owner) => owner.assets).find((entry) => entry.id === id);
+      if (!entry) fail("HTTP 404: asset not found");
+      answer(publicAsset(entry));
     } else if (/^releases\/\d+$/.test(route)) {
       const owner = state.releases.find((entry) => entry.id === Number(route.slice("releases/".length)));
       if (!owner) fail("HTTP 404: release not found");
@@ -391,13 +407,18 @@ try {
       if (fault("upload-before", tag, name)) fail("fixture upload refused");
       const owner = release(tag);
       if (owner.assets.some((entry) => entry.name === name)) fail("HTTP 422: asset already exists");
-      const bytes = fs.readFileSync(file);
+      const bytes = state.wrongUpload?.tag === tag && state.wrongUpload.name === name
+        ? Buffer.alloc(fs.readFileSync(file).length, 120) : fs.readFileSync(file);
       owner.assets.push({
         id: state.nextId++, name, label, size: bytes.length, state: "uploaded",
         digest: "sha256:" + createHash("sha256").update(bytes).digest("hex"),
         browser_download_url: "https://github.com/openclaw/openclaw/releases/download/" + tag + "/" + name,
         bytes: bytes.toString("base64"),
       });
+      if (state.staleAfterUpload?.tag === tag && state.staleAfterUpload.name === name) {
+        (state.staleDownloads ??= []).push(state.staleAfterUpload);
+        delete state.staleAfterUpload;
+      }
       if (state.latestAfterUpload) {
         state.latest = state.latestAfterUpload;
         delete state.latestAfterUpload;
@@ -431,6 +452,9 @@ try {
       delete state.corruptDownload;
       bytes = Buffer.alloc(bytes.length, 120);
     }
+    const stale = state.staleDownloads?.find((entry) => entry.tag === tag && entry.name === name && Boolean(entry.legacy) === legacy && entry.remaining > 0);
+    if (stale?.skip) stale.skip--;
+    else if (stale) { bytes = Buffer.from(stale.bytes, "base64"); stale.remaining--; }
     assert(bytes.length <= Number(flag("--max-filesize")), "Fixture download exceeds limit");
     fs.writeFileSync(flag("--output"), bytes);
     if (state.replaceReleaseAfterDownload?.tag === tag &&
@@ -445,6 +469,10 @@ try {
       delete state.authorityAfterDownload;
       changeAuthority(change);
     }
+    answer();
+  } else if (tool === "sleep") {
+    assert(args.length === 1 && ["2", "5", "10"].includes(args[0]));
+    state.calls.push({ tool, action: "wait" });
     answer();
   } else if (tool === "minisign") {
     state.calls.push({ tool, action: "verify" });
@@ -1118,6 +1146,7 @@ it("rejects corrupted public bundle readback before publishing channel metadata"
   });
   failed(f.run("publish"), "Public asset digest mismatch");
   expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
+  expect(f.state().calls.filter((call) => call.tool === "sleep")).toEqual([]);
 });
 
 it("does not adopt a replacement release ID between immutable bundle uploads", () => {
@@ -1465,3 +1494,123 @@ it.each([
     ]);
   },
 );
+
+it.each(["canonical", "canonical reread", "existing feed reread", "legacy asset", "latest alias"])(
+  "waits for stale %s feed bytes without repeating publication",
+  (surface) => {
+    const f = fixture();
+    succeeded(f.run("publish"));
+    const bundles = releaseFrom(f.state(), tag).assets.filter(
+      (entry) => !entry.name.endsWith(".json"),
+    );
+    f.addRelease(nextTag, true);
+    const publishing = surface.startsWith("canonical") || surface === "existing feed reread";
+    const target = publishing ? channel : nextTag;
+    f.update((state) => {
+      state.calls = [];
+      const stale = {
+        tag: target,
+        name: "latest.json",
+        bytes: legacyManifest("v2026.9.2").toString("base64"),
+        remaining: 2,
+        skip: surface.endsWith("reread") ? 1 : 0,
+        legacy: surface === "latest alias",
+      };
+      if (surface === "latest alias" || surface === "existing feed reread") {
+        state.staleDownloads = [stale];
+      } else {
+        state.staleAfterUpload = stale;
+      }
+    });
+    succeeded(f.run(publishing ? "publish" : "mirror", nextTag));
+    expect(f.state().calls.filter((call) => call.tool === "sleep")).toHaveLength(2);
+    expect(
+      f
+        .mutations()
+        .filter(
+          (call) => call.action === "upload" && call.tag === target && call.name === "latest.json",
+        ),
+    ).toHaveLength(1);
+    expect(
+      releaseFrom(f.state(), tag).assets.filter((entry) => !entry.name.endsWith(".json")),
+    ).toEqual(bundles);
+    expect(f.state().calls.filter((call) => call.tool === "minisign")).toHaveLength(
+      publishing ? 1 : 0,
+    );
+  },
+);
+
+it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
+  "stops feed readback on %s with no repeat upload",
+  (failure) => {
+    const f = fixture();
+    succeeded(f.run("publish"));
+    f.addRelease(nextTag, true);
+    const staleBytes = legacyManifest("v2026.9.2");
+    f.update((state) => {
+      state.calls = [];
+      if (failure === "wrong uploaded bytes") {
+        state.wrongUpload = { tag: nextTag, name: "latest.json" };
+      } else {
+        state.staleAfterUpload = {
+          tag: nextTag,
+          name: "latest.json",
+          bytes: staleBytes.toString("base64"),
+          remaining: 100,
+        };
+        if (failure === "asset replaced") {
+          state.replaceReleaseAfterDownload = { tag: nextTag, name: "latest.json" };
+        }
+      }
+    });
+    const result = f.run("mirror", nextTag);
+    failed(
+      result,
+      failure === "wrong uploaded bytes"
+        ? "Uploaded asset digest mismatch"
+        : failure === "asset replaced"
+          ? "HTTP 404: asset not found"
+          : "Public asset digest mismatch",
+    );
+    expect(f.mutations().filter((call) => call.action === "upload")).toEqual([
+      { tool: "gh", action: "upload", tag: nextTag, name: "latest.json" },
+    ]);
+    expect(f.state().calls.some((call) => call.tool === "minisign")).toBe(false);
+    if (failure === "stale public bytes") {
+      const uploaded = releaseFrom(f.state(), nextTag).assets.find(
+        (entry) => entry.name === "latest.json",
+      );
+      assert.ok(uploaded);
+      expect(result.stderr).toContain(`asset=${uploaded.id}`);
+      expect(result.stderr).toContain(`expected=${hash(f.bytes(channel, "latest.json"))}`);
+      expect(result.stderr).toContain(`observed=${hash(staleBytes)}`);
+      expect(f.state().calls.filter((call) => call.tool === "sleep")).toHaveLength(3);
+    } else if (failure === "wrong uploaded bytes") {
+      expect(f.state().calls.some((call) => call.tool === "sleep")).toBe(false);
+    }
+  },
+);
+
+it("does not converge stale feed bytes without an API digest", () => {
+  const f = fixture();
+  succeeded(f.run("publish"));
+  f.update((state) => {
+    const published = releaseFrom(state, channel).assets.find(
+      (asset) => asset.name === "latest.json",
+    );
+    assert.ok(published);
+    delete published.digest;
+    state.calls = [];
+    state.staleDownloads = [
+      {
+        tag: channel,
+        name: "latest.json",
+        bytes: legacyManifest("v2026.9.2").toString("base64"),
+        remaining: 2,
+      },
+    ];
+  });
+  failed(f.run("publish"), "Public asset digest mismatch");
+  expect(f.state().calls.filter((call) => call.tool === "sleep")).toEqual([]);
+  expect(f.mutations()).toEqual([]);
+});

@@ -659,28 +659,34 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   );
 
   it.each([
-    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true },
-    { verbose: "full", mode: "progress", toolProgress: undefined, visible: true },
-    { verbose: "off", mode: "progress", toolProgress: undefined, visible: false },
-    { verbose: "on", mode: "progress", toolProgress: false, visible: false },
-    { verbose: "full", mode: "progress", toolProgress: true, visible: true },
-    { verbose: "on", mode: "partial", toolProgress: undefined, visible: true },
-    { verbose: "on", mode: "off", toolProgress: undefined, visible: false },
+    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "full", mode: "progress", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "off", mode: "progress", toolProgress: undefined, visible: false, preamble: true },
+    { verbose: "on", mode: "progress", toolProgress: false, visible: false, preamble: true },
+    { verbose: "full", mode: "progress", toolProgress: true, visible: true, preamble: true },
+    { verbose: "on", mode: "partial", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "on", mode: "off", toolProgress: undefined, visible: false, preamble: true },
+    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true, preamble: false },
   ] as const)(
-    "keeps verbose $verbose diagnostics separate from $mode drafts (toolProgress=$toolProgress)",
-    async ({ verbose, mode, toolProgress, visible }) => {
+    "keeps verbose $verbose diagnostics separate from $mode drafts (toolProgress=$toolProgress, preamble=$preamble)",
+    async ({ verbose, mode, toolProgress, visible, preamble }) => {
       const diagnostic =
         verbose === "full" ? "fixture stdout line one\nfixture stdout line two" : "Exec";
       await dispatchProgressTurn(
         async (options) => {
-          await options?.onItemEvent?.({
-            kind: "preamble",
-            itemId: "verbose-commentary",
-            phase: "end",
-            progressText: "Inspecting the requested files",
-          });
+          if (preamble) {
+            await options?.onItemEvent?.({
+              kind: "preamble",
+              itemId: "verbose-commentary",
+              phase: "end",
+              progressText: "Inspecting the requested files",
+            });
+          }
           await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "stdout" });
           await options?.onToolResult?.({ text: diagnostic });
+          if (mode === "progress") {
+            await vi.advanceTimersByTimeAsync(2_000);
+          }
         },
         {
           mode,
@@ -697,7 +703,19 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       );
       expect([...visibleMessages.values()]).toContain("Inspection complete.");
       if (mode === "progress") {
+        expect(
+          acceptedCalls.some((call) =>
+            String(call.fields.text).includes("Inspecting the requested files"),
+          ),
+        ).toBe(preamble);
         expect([...visibleMessages.values()]).not.toContain("Inspecting the requested files");
+        if (!preamble) {
+          expect(
+            acceptedCalls
+              .filter((call) => call.method === "sendMessage")
+              .map((call) => call.fields.text),
+          ).toEqual([diagnostic, "Inspection complete."]);
+        }
       }
     },
   );
