@@ -19,6 +19,7 @@ export function seedLegacyAgentDeletionFixture(
     const database = new DatabaseSync(file);
     try {
       database.exec(sql);
+      database.exec("PRAGMA journal_mode = WAL");
     } finally {
       database.close();
     }

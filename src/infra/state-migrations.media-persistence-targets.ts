@@ -18,7 +18,7 @@ import {
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
+import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 export type AgentDatabaseMigrationTarget = {
@@ -131,13 +131,22 @@ export function discoverAgentDatabaseMigrationTargets(params: {
       ...entry,
       source: "registry" as const,
     })),
-    ...retainedDeletions.flatMap((entry) =>
-      entry.databasePaths.map((pathname) => ({
-        agentId: entry.agentId,
-        path: pathname,
-        source: "disk" as const,
-      })),
-    ),
+    ...retainedDeletions.flatMap((entry) => {
+      const recordedPaths = new Set(entry.databasePaths);
+      return entry.databasePaths
+        .filter(
+          (pathname) =>
+            !SQLITE_SIDECAR_SUFFIXES.some(
+              (suffix) =>
+                pathname.endsWith(suffix) && recordedPaths.has(pathname.slice(0, -suffix.length)),
+            ),
+        )
+        .map((pathname) => ({
+          agentId: entry.agentId,
+          path: pathname,
+          source: "disk" as const,
+        }));
+    }),
     ...(knownDeletions?.held ?? []).map((target) => ({
       agentId: target.agentId,
       path: target.path,
