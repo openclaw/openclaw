@@ -57,6 +57,16 @@ Gateway sharing operations are outside this run-audit boundary.
 
 `sessions_list` is a metadata inventory, not a transcript search. Rows include session key and ID, agent, kind, channel, title/label, sidebar group, current owner and original creator, stored project/workspace associations, visible parent/child links, archive/pin state, state version, model/token counts, and run status. Unknown associations remain absent; a stored worktree association does not prove that its checkout still exists.
 
+The `status` field describes run state: `queued` and `running` reflect current
+work, while `done` (success), `failed` (error), `timeout` (time limit), and
+`killed` (cancellation) describe the last run's outcome. These outcomes do not
+establish that the overall task is complete or that the session is unusable.
+
+For unfinished work, inspect the existing session's history and consider a
+same-session follow-up with `sessions_send` before spawning replacement work.
+Continuation still requires current access and lifecycle checks to admit new
+work; a listed session or its last-run status does not guarantee acceptance.
+
 Use the filters together to narrow the inventory before paging:
 
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.
