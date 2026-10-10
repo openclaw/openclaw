@@ -36,6 +36,17 @@ const enNewSessionSetup = {
     autoDeviceSub: "Least-busy device",
     autoDeviceSubEligible: "First eligible device",
     cloud: "Cloud",
+    hosted: "Hosted workspaces",
+    hostedWorkspace: "Hosted workspace",
+    hostedHint:
+      "Runs in the provider’s workspace. Send files as chat attachments; local folders and repositories are not copied.",
+    hostedUnavailable:
+      "No available model for this hosted workspace. Check the runtime setup and API-key account in model settings.",
+    hostModelRequired:
+      "Choose a model with an available local runtime before selecting a device or cloud worker.",
+    hostedSetup: "Agents API setup",
+    hostedSetupHint:
+      "Requires the enabled Agents API plugin, a compatible API-key model, and a hosted environment. ChatGPT subscriptions are not supported.",
     machine: "Machine",
     operatingSystem: "Operating system",
     runsOn: "Runs on {place}",
@@ -44,6 +55,14 @@ const enNewSessionSetup = {
     checkingGit: "Checking Git availability…",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
+    followUps: "Follow-up messages",
+    followUpCommandsUnavailable: "Commands are available after the session is created.",
+    followUpReloadBlocked:
+      "Finish starting the session or remove its follow-up messages and draft before reloading.",
+    followUpsPaused:
+      "The first message was not sent. Review it before retrying these follow-up messages.",
+    followUpsAdmissionFailed:
+      "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed:

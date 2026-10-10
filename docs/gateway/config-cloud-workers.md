@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Cloud worker profiles under cloudWorkers, including Crabbox and static SSH development"
 read_when:
   - Defining a cloud worker environment
@@ -138,6 +139,15 @@ Crabbox setup uses an environment-owned one-use pairing credential and the confi
   AWS admission requires `providerMetadata.instanceProfileAttached` to be false.
 </Note>
 
+#### Crabbox machine catalog
+
+OpenClaw projects the Crabbox catalog into machine options as follows:
+
+- **Source and architecture:** read `classCatalog.profiles` from `crabbox providers --json` only when `classCatalog.disposition` is `mapped`. For each target, prefer amd64 entries when available; otherwise retain mixed or arm64 entries.
+- **Order and defaults:** include at most 64 options, ordered by enrollable operating system and then catalog order. Mark the configured class as the default separately for each operating system. A classless profile has no invented default.
+- **Dimensions:** report vCPU and RAM independently. RAM accepts positive integer GB/GiB values under Crabbox's summary contract; other units, fractional values, and missing dimensions stay unknown. macOS entries with `mixed` architecture and missing dimensions remain selectable. Never infer dimensions from native type names.
+- **Unavailable metadata:** unmapped, missing, unknown, failed, empty, or unusable metadata yields no machine selector, even when legacy `classes` are present. The profile remains selectable; dispatch or Move without an override preserves its configuration.
+
 ### Static SSH development profile
 
 ```json5
@@ -172,7 +182,7 @@ Crabbox setup uses an environment-owned one-use pairing credential and the confi
 
 A supported Node runtime (24.16+ or 26.1+) with WAL-reset-safe SQLite must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
 
-Node-backed `worker-turn` launches the self-contained worker loop and proxies model inference through the Gateway. Node-backed or SSH-backed `remote-exec` keeps the model loop on the Gateway and routes sandbox operations to the remote host. Node-backed Codex accepts process, filesystem, capability, and credential-free HTTP operations; authenticated HTTP is rejected before reaching the node. Both modes reconcile the session workspace and transcript through the durable placement lifecycle. A disconnected node-backed Codex attempt is terminal; reconnect permits only a fresh attempt, never process or stream resumption.
+Node-backed `worker-turn` launches the self-contained worker loop and proxies model inference through the Gateway by default. A device-provider profile with `settings.inference: "worker"` instead uses [worker-local native inference](/gateway/cloud-workers/native-inference) and node-local provider credentials. Node-backed or SSH-backed `remote-exec` keeps the model loop on the Gateway and routes sandbox operations to the remote host. Node-backed Codex accepts process, filesystem, capability, and credential-free HTTP operations; authenticated HTTP is rejected before reaching the node. Both modes reconcile the session workspace and transcript through the durable placement lifecycle. A disconnected node-backed Codex attempt is terminal; reconnect permits only a fresh attempt, never process or stream resumption.
 
 Each durable environment record retains its validated provider settings and resolved install method in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 

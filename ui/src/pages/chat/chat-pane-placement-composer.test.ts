@@ -164,11 +164,14 @@ describe("chat placement composer presentation", () => {
     expect(result.busyMessage).toBe(message);
   });
 
-  it("keeps an unfinished New Session submission blocked during setup", () => {
-    expect(presentation(placementSession("syncing"), { startupPending: true }).blocksSend).toBe(
-      true,
-    );
-  });
+  it.each(["provisioning", "syncing", "starting"] as const)(
+    "allows queued follow-ups while New Session setup is %s",
+    (state) => {
+      const result = presentation(placementSession(state), { startupPending: true });
+      expect(result.state.kind).toBe("setup");
+      expect(result.blocksSend).toBe(false);
+    },
+  );
 
   it.each(["local", undefined] as const)(
     "blocks a repository-only session with %s placement and offers worker dispatch",

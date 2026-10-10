@@ -90,6 +90,14 @@ refreshes the page you are reading without changing your selection. A long messa
 uses the normal full-message reader without becoming a transcript reply, fork,
 or rewind target.
 
+The composer stays available while a new chat starts. You can keep typing and
+queue follow-up messages; they wait behind the initial prompt and keep their order.
+Before the Gateway confirms the new session, these follow-ups stay in the current
+tab, so keep it open. If creation fails, the original prompt, queued follow-ups,
+and unfinished follow-up draft remain available for retry. Once creation succeeds,
+follow-ups use the confirmed conversation’s normal outbox. A failed initial prompt
+keeps its follow-ups paused for review rather than sending them ahead of it.
+
 Browser drafts and unsent messages remain in the local queue. Once the Gateway
 accepts an ordinary browser message, it owns the approved input in durable
 custody. Collect mode consumes the accepted sources with their combined
@@ -477,6 +485,16 @@ The destination picker opens with **Search environments** focused. Its compact, 
 **Auto** is the first selectable row under **Your devices**, shown when more than one device is known. Its information icon explains how the device is chosen. Selecting Local, a device, or a cloud profile turns Auto off. When no devices are known, administrators see **Connect a device** in that section instead. Closing and reopening the picker clears its search.
 
 Hover a configurable cloud profile or focus its row to open its operating-system and machine options. Unavailable operating systems are omitted. Before selecting a profile, dashed outlines identify the defaults; choosing any option selects that profile and activates the defaults for the other setting. The selected profile shows its operating system and machine as muted text beside its name in the menu. The closed selector keeps only the profile name. Options use equal-width tiles, up to four columns, with long catalogs scrollable.
+
+**Hosted workspaces** lists provider-managed environments advertised by the
+Gateway’s model catalog, including **OpenAI (Agents API)** when configured.
+Choosing one selects its eligible model and runtime together; the model picker
+and environment picker show the same selection. Hosted workspaces do not mount
+or clone local folders, projects, or worktrees. Those controls are hidden while
+hosted execution is selected, and their draft choices remain available when
+switching back. Use chat attachments for files. Unavailable choices explain
+their setup requirements; Agents API requires an OpenAI API key, not a ChatGPT
+subscription. See [Agents API setup](/plugins/agentsapi).
 
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing a device or cloud profile with a Gateway folder selected uses a managed worktree. With a GitHub repository selected, **Remote checkout** sends its URL and optional ref directly to the runner without creating a Gateway checkout.
 

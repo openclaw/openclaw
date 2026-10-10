@@ -530,6 +530,10 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
+For ordinary embedding requests, a recognized error with one explicit item cap
+sizes the retry batches directly. Unusable or conflicting caps fall back to
+halving the rejected batch. Successful slices retain their input order and cache entries.
+
 ---
 
 <a id="session-memory-search-experimental" />

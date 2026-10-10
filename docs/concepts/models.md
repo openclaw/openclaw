@@ -131,7 +131,9 @@ In chat apps, `/models` and model picker buttons reuse the newest completed prov
 list. First use of an idle native agent can take a few seconds to start its harness
 and discover models. Pending providers show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
-edit a list that was already sent.
+edit a list that was already sent. If optional native discovery fails, ordinary
+catalog requests keep the published rows and report `refreshFailed`; selecting a
+native model or explicitly refreshing still reports the discovery error.
 
 Refreshing a selected account also keeps its last completed catalog available to
 other readers until discovery succeeds. Failed refreshes retain that catalog;
@@ -320,9 +322,9 @@ Additional choices must also support explicit session runtime selection; a
 registered harness that cannot be selected explicitly remains disabled here.
 ACP sessions keep their existing model controls; they cannot select a different
 harness here.
-Catalog preparation and explicit Refresh acquire the requested native inventories
-once per runtime while preserving the configured default.
-Opening the picker reuses prepared catalog facts; explicit Refresh owns discovery.
+Opening the picker acquires missing native inventories once per runtime while
+preserving the configured default, then reuses current observations. Explicit
+Refresh reacquires the requested inventories.
 Session-scoped pickers evaluate model and runtime choices together after checking
 session access, and recheck access before returning the catalog.
 

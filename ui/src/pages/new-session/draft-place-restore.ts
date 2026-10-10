@@ -3,7 +3,11 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
-import type { NewSessionPreference, NewSessionWhere } from "./preferences.ts";
+import {
+  resolveNewSessionWhere,
+  type NewSessionPreference,
+  type NewSessionWhere,
+} from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
 export type DraftPlaceRestoreState = {
@@ -38,6 +42,42 @@ export function createDraftPlaceRestoreState(): DraftPlaceRestoreState {
     projectSelectedByUser: false,
     requiredModelDefaults: false,
   };
+}
+
+export function resolveDraftPlacePreferenceSelection(
+  state: DraftPlaceRestoreState,
+  browser: DraftPlaceBrowser,
+  repository: DraftRepositoryController,
+  workspace: string,
+  folder: string,
+): NewSessionPreference {
+  // Remember selection intent, not temporary hosted or required-placement projections.
+  const where = state.preferredWhereRestore ?? resolveNewSessionWhere(state);
+  return {
+    workspace,
+    folder,
+    projectId: state.preferredProjectRestore || browser.projectId,
+    remoteProject: state.preferredRemoteProjectRestore ?? browser.remoteProject,
+    defaultRepositoryOptOut: state.configuredDefaultRepositoryOptOut,
+    where,
+    worktree:
+      (where.kind !== "local" || repository.preferenceWorktree) && !repository.remoteRepository,
+    freshWorkspace: state.freshWorkspace,
+    baseRef: repository.baseRef,
+    worktreeName: repository.worktreeName,
+  };
+}
+
+export function canAdoptDraftPlaceDefaults(
+  state: DraftPlaceRestoreState,
+  repository: DraftRepositoryController,
+): boolean {
+  return (
+    !state.folderSelectedByUser &&
+    !state.whereSelectedByUser &&
+    !state.projectSelectedByUser &&
+    !repository.hasUserSelection
+  );
 }
 
 export function markDraftPlaceProjectChoice(state: DraftPlaceRestoreState, optOut: boolean) {

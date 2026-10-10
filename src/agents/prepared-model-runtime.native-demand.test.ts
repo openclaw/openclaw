@@ -3,6 +3,7 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { invalidateOperatorRolePolicy } from "../gateway/operator-role-policy.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createModelsListTestContext } from "../gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
@@ -19,11 +20,36 @@ import type {
 import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
+
+function createPicker(config: OpenClawConfig) {
+  const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
+  registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+    loadDeferred: (params) =>
+      loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => config }),
+    readPrepared: (params) =>
+      readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig: () => config }),
+  });
+  context.readPreparedModelsList = (request) =>
+    buildModelsListResult({ source: { kind: "gateway", context }, ...request });
+  return async (refresh = false) => {
+    const respond = vi.fn();
+    await modelsHandlers["models.list"]!({
+      req: { type: "req", id: "native-demand", method: "models.list" },
+      params: { agentId: "pro", view: "all", includeDefaultModels: false, refresh },
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context,
+    });
+    return respond;
+  };
+}
 
 it("defers native discovery until agent catalog demand and reacquires retired observations", async () => {
   const agentIds = ["default", "pro", "unused"];
@@ -91,25 +117,9 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
       agentId: "pro",
       config,
     });
-  const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
-  registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-    loadDeferred: (params) =>
-      loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => config }),
-    readPrepared: (params) =>
-      readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig: () => config }),
-  });
-  context.readPreparedModelsList = (request) =>
-    buildModelsListResult({ source: { kind: "gateway", context }, ...request });
+  const requestPicker = createPicker(config);
   const pick = async () => {
-    const respond = vi.fn();
-    await modelsHandlers["models.list"]!({
-      req: { type: "req", id: "native-demand", method: "models.list" },
-      params: { agentId: "pro", view: "all", includeDefaultModels: false },
-      respond,
-      client: null,
-      isWebchatConnect: () => false,
-      context,
-    });
+    const respond = await requestPicker();
     const [ok, result, error] = respond.mock.calls[0] ?? [];
     expect(error).toBeUndefined();
     expect(ok).toBe(true);
@@ -148,3 +158,84 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
   expect((await read()).entries).toContainEqual(expect.objectContaining(native));
   expect(loadNative).toHaveBeenCalledTimes(4);
 });
+
+it.each(["discovery failure", "superseded owner", "changed authorization"])(
+  "preserves the models.list publication contract after native %s",
+  async (outcome) => {
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    mocks.configuredAgentIds = ["pro"];
+    const failure = new Error("Native model/list unavailable");
+    const loadNative = vi.fn(async () => {
+      if (outcome === "superseded owner") {
+        markPreparedModelRuntimeSnapshotsStale();
+      } else if (outcome === "changed authorization") {
+        invalidateOperatorRolePolicy("synthetic-picker-user");
+      }
+      throw failure;
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "native-test",
+        source: "fixture",
+        harness: {
+          id: "native-test",
+          label: "Native test",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          loadModelCatalog: loadNative,
+        },
+      });
+      return registry;
+    });
+    const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [saved],
+      routeVariants: [saved],
+      providerOutcomes: [{ provider: saved.provider, status: "ready" }],
+    });
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
+    await owner.loadFullModelCatalog!({ changedOnly: true });
+    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(saved));
+    expect(loadNative).not.toHaveBeenCalled();
+    const pick = createPicker(config);
+    const respond = await pick();
+    expect(loadNative).toHaveBeenCalledOnce();
+    if (outcome !== "discovery failure") {
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining(
+            outcome === "superseded owner" ? "superseded" : "access changed",
+          ),
+        }),
+      );
+      return;
+    }
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      expect.objectContaining({
+        models: expect.arrayContaining([expect.objectContaining(saved)]),
+        refreshFailed: true,
+      }),
+      undefined,
+    );
+    await pick();
+    expect(loadNative).toHaveBeenCalledOnce();
+    await expect(
+      owner.loadNativeModelCatalog!({
+        provider: "custom",
+        modelId: "native",
+        runtime: "native-test",
+      }),
+    ).rejects.toBe(failure);
+    await expect(pick(true)).rejects.toBe(failure);
+    expect(loadNative).toHaveBeenCalledTimes(3);
+  },
+);
