@@ -331,9 +331,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
-      (input.command.type === "userGitHubConnections.read" &&
-        typeof input.command.owner === "string") ||
-      input.command.type === "userGitHubConnections.list" ||
       (input.command.type === "userModelAccounts.links" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "userModelAccounts.summary" &&
