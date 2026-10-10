@@ -228,6 +228,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/mcp-http.runtime.portal-readiness.test.ts",
   "src/gateway/server-methods/chat-history-worker.test.ts",
   "src/gateway/session-history.subagent-visibility.test.ts",
+  "src/gateway/session-row-projection.runtime-ownership.test.ts",
   "src/gateway/session-row-projection.worker-read.test.ts",
   "src/gateway/session-runtime-selection-projection.test.ts",
   "src/plugins/runtime/runtime-agent.acp-binding.test.ts",
