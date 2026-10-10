@@ -90,14 +90,6 @@ function fixture() {
   const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: { gateway },
-    addController() {},
-    removeController() {},
-    updateComplete: Promise.resolve(true),
-    requestUpdate() {
-      if (controller.saved) {
-        saved.resolve();
-      }
-    },
     captureSidebarSnapshot: capture,
     sidebarSnapshotSettled: () => settled,
     restoreSidebarSnapshot(value) {
@@ -112,6 +104,11 @@ function fixture() {
     },
   };
   const controller = new SidebarSnapshotController(host);
+  controller.subscribe(() => {
+    if (controller.saved) {
+      saved.resolve();
+    }
+  });
   return {
     gateway,
     capture,
@@ -165,9 +162,9 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-      () => test.controller.hostDisconnected(),
+      () => test.controller.disconnect(),
     );
-    test.controller.hostConnected();
+    test.controller.connect();
     expect(test.controller.pending).toBe(true);
     await test.restored;
     return { ...test, store };
@@ -219,9 +216,9 @@ describe("sidebar snapshot lifecycle", () => {
     );
     disposers.push(
       () => sessions.dispose(),
-      () => test.controller.hostDisconnected(),
+      () => test.controller.disconnect(),
     );
-    test.controller.hostConnected();
+    test.controller.connect();
     await Promise.all([test.restored, sessions.whenCachedRosterSettled()]);
     expect(sessions.state.result?.sessions).toEqual(roster.result.sessions);
     expect(sessions.state.resultCached).toBe(true);
@@ -238,9 +235,9 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-      () => test.controller.hostDisconnected(),
+      () => test.controller.disconnect(),
     );
-    test.controller.hostConnected();
+    test.controller.connect();
     expect(test.controller.pending).toBe(true);
     void test.settle();
     test.publish();
@@ -256,14 +253,14 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.gateway.snapshot.phase).toBe("connecting");
     expect(test.controller.pending).toBe(false);
     test.publish();
-    test.controller.hostUpdated();
+    test.controller.capture();
     expect(test.host.sidebarSnapshot).toEqual(model);
     const live = { ...model, brand: { ...model.brand, name: "Updated workspace" } };
     const saved = test.settle(live);
-    test.controller.hostUpdated();
+    test.controller.capture();
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(test.capture).not.toHaveBeenCalled();
-    test.controller.hostUpdated();
+    test.controller.capture();
     await saved;
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
@@ -278,14 +275,14 @@ describe("sidebar snapshot lifecycle", () => {
       issued.resolve();
       return written.promise;
     });
-    test.controller.hostConnected();
-    disposers.push(() => test.controller.hostDisconnected());
+    test.controller.connect();
+    disposers.push(() => test.controller.disconnect());
     test.publish();
     const saved = test.settle();
-    test.controller.hostUpdated();
+    test.controller.capture();
     await issued.promise;
     try {
-      test.controller.hostUpdated();
+      test.controller.capture();
       expect(test.controller.saved).toBe(false);
     } finally {
       written.resolve(true);
@@ -304,13 +301,13 @@ describe("sidebar snapshot lifecycle", () => {
     });
     test.publish();
     void test.settle({ ...model, onlineExpanded: false });
-    test.controller.hostUpdated();
-    test.controller.hostUpdated();
+    test.controller.capture();
+    test.controller.capture();
     await issued.promise;
     const saved = test.settle(model);
     try {
-      test.controller.hostUpdated();
-      test.controller.hostUpdated();
+      test.controller.capture();
+      test.controller.capture();
       expect(test.controller.saved).toBe(false);
     } finally {
       written.resolve(true);
@@ -349,8 +346,8 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
-    test.controller.hostConnected();
-    disposers.push(() => test.controller.hostDisconnected());
+    test.controller.connect();
+    disposers.push(() => test.controller.disconnect());
     expect(test.controller.pending).toBe(false);
     expect(test.host.sidebarSnapshot).toBeNull();
   });
@@ -362,8 +359,8 @@ describe("sidebar snapshot lifecycle", () => {
     disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
     const clearing = deleteStoredChatSnapshot(sessionKey);
     try {
-      test.controller.hostConnected();
-      disposers.push(() => test.controller.hostDisconnected());
+      test.controller.connect();
+      disposers.push(() => test.controller.disconnect());
       expect(test.controller.pending).toBe(false);
     } finally {
       stop();
@@ -378,7 +375,7 @@ describe("sidebar snapshot lifecycle", () => {
     clearBootRecords(scope.gatewayScope, { recoveryScope: "previous-account" });
     expect(test.host.sidebarSnapshot).toEqual(model);
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
-    test.controller.hostUpdate();
+    test.controller.synchronize();
     expect(test.gateway.snapshot.phase).toBe("connecting");
     expect(test.gateway.snapshot.lastErrorAuthReason).toBeUndefined();
     expect(test.host.sidebarSnapshot).toBeNull();
@@ -409,11 +406,11 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toEqual(model);
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
     const saved = test.settle();
-    test.controller.hostUpdate();
-    test.controller.hostUpdated();
+    test.controller.synchronize();
+    test.controller.capture();
     expect(test.capture).not.toHaveBeenCalled();
     test.publish();
-    test.controller.hostUpdated();
+    test.controller.capture();
     await saved;
     expect(test.controller.saved).toBe(true);
     expect(
@@ -423,14 +420,14 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("does not hold a cold render and can save again after remount", async () => {
     const test = fixture();
-    disposers.push(() => test.controller.hostDisconnected());
-    test.controller.hostConnected();
+    disposers.push(() => test.controller.disconnect());
+    test.controller.connect();
     expect(test.controller.pending).toBe(false);
-    test.controller.hostDisconnected();
-    test.controller.hostConnected();
+    test.controller.disconnect();
+    test.controller.connect();
     test.publish();
     const saved = test.settle();
-    test.controller.hostUpdated();
+    test.controller.capture();
     await saved;
     const store = new SessionSnapshotStore();
     store.connect();

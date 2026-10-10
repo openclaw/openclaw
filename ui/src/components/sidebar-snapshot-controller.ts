@@ -1,5 +1,4 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   sidebarSnapshotInvalidationMatches,
@@ -14,7 +13,7 @@ import {
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type SidebarSnapshotHost = ReactiveControllerHost & {
+type SidebarSnapshotHost = {
   sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sessionDataContext?: { gateway: ApplicationGateway };
   captureSidebarSnapshot(): SidebarSnapshotModel | null;
@@ -24,7 +23,8 @@ type SidebarSnapshotHost = ReactiveControllerHost & {
   clearSidebarSnapshot(): void;
 };
 
-export class SidebarSnapshotController implements ReactiveController {
+export class SidebarSnapshotController {
+  private readonly listeners = new Set<() => void>();
   pending = false;
   saved = false;
   private readonly store = new SessionSnapshotStore();
@@ -38,11 +38,20 @@ export class SidebarSnapshotController implements ReactiveController {
   private stopGateway: (() => void) | undefined;
   private retiredHello: ApplicationGateway["snapshot"]["hello"] | undefined;
 
-  constructor(private readonly host: SidebarSnapshotHost) {
-    host.addController(this);
+  constructor(private readonly host: SidebarSnapshotHost) {}
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
-  hostConnected(): void {
+  private notify(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  connect(): void {
     this.store.connect();
     this.cleanup = [
       subscribeSnapshotInvalidation((event) => {
@@ -61,10 +70,10 @@ export class SidebarSnapshotController implements ReactiveController {
         },
       ),
     ];
-    this.hostUpdate();
+    this.synchronize();
   }
 
-  hostUpdate(): void {
+  synchronize(): void {
     if (!this.cleanup.length) {
       return;
     }
@@ -82,7 +91,7 @@ export class SidebarSnapshotController implements ReactiveController {
           this.pending = true;
           const current = this.captureScope();
           void boot.snapshot.then((model) => {
-            this.hostUpdate();
+            this.synchronize();
             if (!current()) {
               return;
             }
@@ -92,12 +101,12 @@ export class SidebarSnapshotController implements ReactiveController {
               this.serialized = JSON.stringify(model);
               this.saved = true;
             }
-            this.host.requestUpdate();
+            this.notify();
           });
         }
         this.stopGateway = gateway.subscribe(() => {
-          this.hostUpdate();
-          this.host.requestUpdate();
+          this.synchronize();
+          this.notify();
         });
       }
     }
@@ -133,7 +142,7 @@ export class SidebarSnapshotController implements ReactiveController {
     }
   }
 
-  hostUpdated(): void {
+  capture(): void {
     if (
       !this.cleanup.length ||
       this.pending ||
@@ -147,7 +156,7 @@ export class SidebarSnapshotController implements ReactiveController {
       this.host.releaseSidebarSnapshot();
       this.saved = false;
       this.serialized = null;
-      this.host.requestUpdate();
+      this.notify();
       return;
     }
     const model = this.host.captureSidebarSnapshot();
@@ -169,12 +178,12 @@ export class SidebarSnapshotController implements ReactiveController {
       const written = await this.store.writeSidebar(key, model, parseSidebarSnapshot);
       if (written && current() && serialized === this.serialized) {
         this.saved = true;
-        this.host.requestUpdate();
+        this.notify();
       }
     });
   }
 
-  hostDisconnected(): void {
+  disconnect(): void {
     this.cleanup.splice(0).forEach((stop) => stop());
     this.stopGateway?.();
     this.store.disconnect();
@@ -211,6 +220,6 @@ export class SidebarSnapshotController implements ReactiveController {
     this.pending = this.saved = false;
     this.serialized = null;
     this.host.clearSidebarSnapshot();
-    this.host.requestUpdate();
+    this.notify();
   }
 }

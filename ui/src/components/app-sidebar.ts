@@ -211,6 +211,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private readonly sidebarContext = new SidebarContextController(this);
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
+      () => this.sidebarSnapshotController,
+      (snapshot) => {
+        snapshot.connect();
+        return () => snapshot.disconnect();
+      },
+    )
+    .watchStore(() => this.sidebarSnapshotController)
+    .effect(
       () => this.context?.gateway,
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
@@ -282,6 +290,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    this.sidebarSnapshotController.synchronize();
     if (this.context?.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
     }
@@ -315,6 +324,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
+    this.sidebarSnapshotController.capture();
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();

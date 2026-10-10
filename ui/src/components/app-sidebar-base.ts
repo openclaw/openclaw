@@ -54,8 +54,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdateNavigationScope?: (scope: "mine" | "all") => void;
   @state() navigationView: "pages" | "sessions" | "online" = "sessions";
   personalNavigationEpoch = 0;
-  @state() sidebarSnapshot: SidebarSnapshotModel | null = null;
-  @state() sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
+  sidebarSnapshot: SidebarSnapshotModel | null = null;
+  sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
   private liveSidebarAgentsMode: "chip" | "roster" = "chip";
   @property({ attribute: false })
   get sidebarAgentsMode(): "chip" | "roster" {
