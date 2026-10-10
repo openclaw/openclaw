@@ -223,6 +223,22 @@ describe("root memory repair", () => {
       expect.stringContaining(`- preserved archive: ${archivedLegacyPath}`),
       "Doctor changes",
     );
+    // The legacy file is already archived, so the guidance must report the move
+    // and recover through a converted copy instead of claiming nothing changed.
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `was moved to ${archivedLegacyPath} before this refusal; ${canonicalPath} was not rewritten`,
+      ),
+      "Doctor changes",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`save the converted copy as ${legacyPath}`),
+      "Doctor changes",
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Nothing was modified"),
+      "Doctor changes",
+    );
   });
 
   it("refuses a canonical file that turns malformed while the legacy file is archived", async () => {
@@ -251,6 +267,18 @@ describe("root memory repair", () => {
     await expectArchivedLegacyMemory();
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(`- not valid UTF-8: ${canonicalPath}`),
+      "Doctor changes",
+    );
+    // The canonical file was refused in place, so recovery re-encodes it there
+    // and restores the legacy file from the archive before rerunning.
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `save it back to ${canonicalPath} and copy the archive to ${legacyPath}`,
+      ),
+      "Doctor changes",
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Nothing was modified"),
       "Doctor changes",
     );
   });

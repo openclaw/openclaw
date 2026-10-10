@@ -368,7 +368,15 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
             ? `- preserved archive: ${migration.archivedLegacyPath}`
             : null,
           migration.invalidUtf8
-            ? "Nothing was modified. Keep a byte-for-byte copy of that file, re-encode it as UTF-8 (or edit a copy converted with its original encoding), then run doctor --fix again."
+            ? migration.archivedLegacyPath
+              ? // The refusal happened after the archive rename, so the live
+                // legacy path is already gone and a plain rerun would no-op.
+                `${LEGACY_ROOT_MEMORY_FILENAME} was moved to ${migration.archivedLegacyPath} before this refusal; ${migration.canonicalPath} was not rewritten. Convert a copy of ${migration.invalidUtf8Path} to UTF-8 with its original encoding, then ${
+                  migration.invalidUtf8Path === migration.canonicalPath
+                    ? `save it back to ${migration.canonicalPath} and copy the archive to ${migration.legacyPath}`
+                    : `save the converted copy as ${migration.legacyPath}`
+                }, and run "openclaw doctor --fix" again. Keep ${migration.archivedLegacyPath} untouched as the byte-for-byte backup; if a new ${LEGACY_ROOT_MEMORY_FILENAME} appeared since the move, merge the converted copy by hand instead of overwriting it.`
+              : "Nothing was modified. Keep a byte-for-byte copy of that file, re-encode it as UTF-8 (or edit a copy converted with its original encoding), then run doctor --fix again."
             : null,
         ]
           .filter((line): line is string => Boolean(line))
