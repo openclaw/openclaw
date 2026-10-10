@@ -498,6 +498,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {
+    if (!runId || host.chatReasoning?.runId === runId) {
+      host.chatReasoning = null;
+    }
     if (host.chatRunId) {
       host.chatRunLifecycleGeneration = (host.chatRunLifecycleGeneration ?? 0) + 1;
     }

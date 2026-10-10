@@ -256,6 +256,7 @@ export function createPageState(
     chatRunError: null,
     agentsError: null,
     chatStreamSegments: [],
+    chatReasoning: null,
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
