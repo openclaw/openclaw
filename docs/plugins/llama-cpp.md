@@ -342,13 +342,19 @@ Local memory embeddings require managed mode:
 }
 ```
 
-The plugin preserves the historical `local` embedding provider and index
-identity. Run `openclaw memory status --index` after intentionally changing the
-embedding model.
+The default EmbeddingGemma model automatically receives different task prefixes
+for search queries and indexed documents. Existing indexes built without these
+prefixes rebuild once on the next search or sync, without `--force`. Cached raw
+embeddings are not reused, and keyword search remains available during recovery.
+Run `openclaw memory status --index` after intentionally changing the embedding
+model.
 
 ## Troubleshooting
 
 - Managed setup: run `openclaw doctor` and `openclaw memory status --deep`.
+- Managed runtime status requires healthy `/health`, `/models`, and `/props`
+  endpoints and no model-load error. Optional `/metrics` can be `unavailable`
+  when a custom server omits `--metrics`; this does not make the runtime failed.
 - Existing server: inspect `/health`, `/models`, and `/props`. HTTP 503 means
   the model is still loading.
 - Missing tools: verify both tool capability flags in `/props` and use a

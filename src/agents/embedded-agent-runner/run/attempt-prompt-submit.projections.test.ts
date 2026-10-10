@@ -40,6 +40,7 @@ import {
   sessionId as modelPromptSessionId,
 } from "./attempt-prompt-submit.test-support.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 registerAgentSessionLoopTestLifecycle();
 const toolProjectionSessionId = "projection-dispatch";
@@ -182,6 +183,134 @@ describe("durable model prompt projection at provider dispatch", () => {
         if (redactHook) {
           expect(JSON.stringify(requests)).not.toContain("hidden");
           expect(JSON.stringify(users)).not.toContain("hidden");
+        }
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "keeps a dispatched user's projection across model fallback (enriched=%s)",
+    async (enriched) => {
+      await withOpenClawTestState({ label: "fallback-model-projection" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:fallback-model-projection",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+        const original = "Keep the original user request.";
+        const firstProjection = enriched ? "Original request with captured context." : original;
+        const retry = "[Retry after the previous model attempt failed or timed out]\n\n" + original;
+        const recorder = createUserTurnTranscriptRecorder({
+          input: { text: original, timestamp: 1, idempotencyKey: "fallback:user" },
+          target: { ...target, sessionEntry: undefined },
+        });
+        const requests: Context["messages"][] = [];
+        streamMocks.streamSimple.mockImplementation((model, context) => {
+          requests.push(structuredClone(context.messages));
+          return createAssistantResultStream({
+            ...createAssistant(
+              model,
+              [{ type: "text", text: requests.length === 1 ? "" : "done" }],
+              requests.length === 1 ? "error" : "stop",
+            ),
+            ...(requests.length === 1 ? { errorMessage: "429 synthetic rate limit" } : {}),
+          });
+        });
+        for (const stage of ["initial", "fallback"] as const) {
+          const fallback = stage === "fallback";
+          await using promptState = await createEmbeddedRunSessionPromptState({
+            runParams: {
+              ...target,
+              sessionFile: target.sessionKey,
+              workspaceDir: state.workspaceDir,
+              prompt: fallback ? retry : original,
+              runId: "fallback-projection-run",
+              timeoutMs: 30_000,
+              userTurnTranscriptRecorder: recorder,
+              suppressNextUserMessagePersistence: recorder.hasPersisted(),
+              modelRoutingProvenance: fallback
+                ? {
+                    requestedProvider: "test-provider",
+                    requestedModel: "primary",
+                    stage,
+                    fallbackReason: "rate_limit",
+                  }
+                : { requestedProvider: "test-provider", requestedModel: "primary", stage },
+            },
+            sessionAgentId: target.agentId,
+            resolvedSessionKey: target.sessionKey,
+            lifecycleGeneration: "test-generation",
+            onInterrupt: () => {},
+          });
+          const internal = promptState.activePrompt.internal;
+          const contexts = createUserTranscriptContextRegistry();
+          const manager = guardSessionManager(
+            await SessionManager.openAsync(target, state.workspaceDir),
+            {
+              preparedUserTurnMessage: internal ? undefined : recorder.message,
+              preparedUserTurnTranscriptRecorder: internal ? undefined : recorder,
+              suppressNextUserMessagePersistence: promptState.suppressNextUserMessagePersistence,
+              onUserMessagePersisted: (message, runtimeMessage) => {
+                if (runtimeMessage) {
+                  contexts.record(runtimeMessage, message);
+                }
+              },
+            },
+          );
+          const { session } = await createTestSession({
+            sessionManager: manager,
+            model: { ...testModel, id: fallback ? "backup" : "primary" },
+          });
+          const convert = session.agent.convertToLlm;
+          session.agent.convertToLlm = (messages) =>
+            convert(
+              normalizeMessagesForLlmBoundary(messages, {
+                userTranscriptContexts: contexts.list(),
+                includeTimestamp: false,
+              }),
+            );
+          await submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            attempt: {
+              sessionId,
+              userTurnTranscriptRecorder: recorder,
+              skipPreparedUserTurnMessage: internal,
+            },
+            activeSession: session,
+            transcriptPrompt: internal ? retry : original,
+            modelPrompt: fallback ? retry : firstProjection,
+            prependContext: undefined,
+            appendContext: undefined,
+            getUserTranscriptContexts: () => contexts.list(),
+            withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
+            promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+          });
+          const outcome = session.messages.at(-1);
+          session.dispose();
+          expect(outcome, JSON.stringify(outcome)).toMatchObject({
+            role: "assistant",
+            stopReason: fallback ? "stop" : "error",
+          });
+        }
+        expect(requests).toHaveLength(2);
+        const userText = (messages: Context["messages"]) =>
+          messages.filter((message) => message.role === "user").map((message) => message.content);
+        expect(userText(requests[0]!)).toEqual([firstProjection]);
+        expect(userText(requests[1]!)).toEqual([firstProjection, retry]);
+        const users = (await readTranscriptMessages(target)).filter(
+          (message) => message.role === "user",
+        );
+        expect(users).toHaveLength(1);
+        expect(users[0]).toMatchObject({ content: original, idempotencyKey: "fallback:user" });
+        if (enriched) {
+          expect(users[0]).toHaveProperty("__openclaw.modelPromptProjection", {
+            version: 1,
+            text: firstProjection,
+          });
+        } else {
+          expect(users[0]).not.toHaveProperty("__openclaw.modelPromptProjection");
         }
       });
     },

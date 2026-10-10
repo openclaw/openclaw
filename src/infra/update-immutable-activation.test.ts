@@ -55,8 +55,6 @@ vi.mock("./package-update-activation-immutable-recovery.js", async (importOrigin
   ...(await importOriginal<typeof import("./package-update-activation-immutable-recovery.js")>()),
   prepareImmutableRecoveryRuntime: mocks.prepareRecovery,
   verifyImmutableRecoveryRuntime: mocks.verifyRecovery,
-  resolveImmutableRecoveryCommand: (reference: { helperPath: string }) =>
-    `synthetic-node ${reference.helperPath}`,
 }));
 vi.mock("./update-immutable-install-record.js", () => ({ readImmutableInstallRecord: mocks.read }));
 vi.mock("./update-immutable-install.js", async (importOriginal) => ({
@@ -67,7 +65,8 @@ vi.mock("./update-immutable-owner.js", () => ({ withImmutableUpdateOwner: mocks.
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
   captureUpdateCommandExecutorAuthority: mocks.authority,
 }));
-vi.mock("./update-immutable-generation.js", () => ({
+vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-generation.js")>()),
   verifyImmutableGeneration: mocks.generation,
 }));
 vi.mock("./update-candidate-canary.js", () => ({ validateUpdateCandidateCanary: mocks.canary }));

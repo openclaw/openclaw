@@ -282,12 +282,16 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       <openclaw-session-menu
         .session=${{
           label: session.label,
+          target: { key: session.key, agentId: session.agentId },
           sessionId: session.sessionId ?? null,
           isChild: session.isChild,
+          hasChildren: session.childSessionKeys.length > 0,
           pinned: session.pinned,
           pinnable: session.pinnable,
           unread: allUnread,
           hiddenFromInvolvingMe: session.hiddenFromInvolvingMe,
+          communication: session.communication,
+          effectiveCommunication: session.effectiveCommunication,
           archived: allArchived,
           snoozedUntil: session.snoozedUntil ?? null,
           archiving: rows.some((row) => context?.sessions.archiveVisibility(row.key) === "pending"),
@@ -390,6 +394,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             case "set-icon":
               void host.sessionOrganizer.patchSession(session, { icon: action.icon });
               break;
+            case "set-communication":
+              void host.sessionOrganizer.patchSession(session, {
+                communication: action.communication,
+              });
+              break;
             case "reset-appearance":
               void host.sessionOrganizer.patchSession(session, { icon: null, color: null });
               break;
@@ -414,6 +423,12 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
                   }
                 });
               }
+              break;
+            case "move-to-top-level":
+              void host.sessionOrganizer.promoteSession(session);
+              break;
+            case "archive-tree":
+              void host.sessionOrganizer.archiveSessionTreeWithUndo(session);
               break;
             case "move-to-group":
               if (action.category === null || session.category !== action.category) {

@@ -109,9 +109,12 @@ export function buildOllamaModelsConfig(
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    return buildOllamaModelDefinition(name, discovered?.contextWindow, discovered?.capabilities, {
-      showInspectionFailed: discovered?.showInspectionFailed,
-    });
+    return buildOllamaModelDefinition(
+      name,
+      discovered?.contextWindow,
+      discovered?.capabilities,
+      discovered,
+    );
   });
 }
 

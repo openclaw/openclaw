@@ -48,6 +48,7 @@ describe("display media without Markdown image scanning", () => {
       truncated: false,
       latestUrl: "/share/session?token=synthetic",
       cardUrl: "https://example.test/share/card.png",
+      assetBasePath: "",
     });
     expect(html).toContain("Visible reply");
     expect(html).toContain("[Image omitted]");
