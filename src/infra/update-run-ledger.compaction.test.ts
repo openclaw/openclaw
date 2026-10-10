@@ -55,6 +55,13 @@ describe("update run ledger compaction", () => {
         "openclaw doctor",
         "pre-plugin doctor",
         "post-plugin doctor",
+        "updater-runtime-retention",
+        "diagnostic:updater-runtime-retention",
+        "managed-service-executor-check",
+        "managed-service-install",
+        "managed-service-restart",
+        "update-driver-handoff",
+        "diagnostic:update-driver-handoff",
       ].map((step) => ({
         step,
         status:
