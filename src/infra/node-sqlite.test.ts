@@ -248,37 +248,24 @@ describe("node SQLite safety", () => {
   );
 
   it.each([
-    { version: "3.51.3", jsonb: true, walNoop: false },
-    { version: "3.52.0", jsonb: true, walNoop: false },
-    { version: "3.53.0", jsonb: true, walNoop: true },
-    { version: "4.0.0", jsonb: true, walNoop: true },
-    { version: "3.50.7", jsonb: true, walNoop: false },
-    { version: "3.44.6", jsonb: false, walNoop: false },
-    { version: "3.44.7", jsonb: false, walNoop: false },
+    { version: "3.51.3", jsonb: true },
+    { version: "3.52.0", jsonb: true },
+    { version: "3.53.0", jsonb: true },
+    { version: "4.0.0", jsonb: true },
+    { version: "3.50.7", jsonb: true },
+    { version: "3.44.6", jsonb: false },
+    { version: "3.44.7", jsonb: false },
   ])(
-    "accepts patched SQLite $version and reuses its JSONB and WAL capabilities",
-    async ({ version, jsonb, walNoop }) => {
+    "accepts patched SQLite $version and reuses its JSONB capability",
+    async ({ version, jsonb }) => {
       const { requireNodeSqlite, supportsNodeSqliteJsonb, prepare } =
         await loadNodeSqliteWithVersion(version);
-      const { readSqliteWalState } = await import("./sqlite-wal-checkpoint.js");
       expect(() => requireNodeSqlite()).not.toThrow();
       const queries = prepare.mock.calls.length;
       expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(prepare.mock.calls).toHaveLength(queries);
-      const database = new DatabaseSync(":memory:");
-      try {
-        for (let observation = 0; observation < 2; observation++) {
-          expect(readSqliteWalState(database) !== undefined).toBe(walNoop);
-        }
-        // WAL state remains fresh; only the already-admitted library capability is reused.
-        expect(prepare.mock.calls.slice(queries).map(([sql]) => sql)).toEqual(
-          walNoop ? ["PRAGMA main.wal_checkpoint(NOOP)", "PRAGMA main.wal_checkpoint(NOOP)"] : [],
-        );
-      } finally {
-        database.close();
-      }
     },
   );
 
@@ -369,7 +356,6 @@ describe("node SQLite safety", () => {
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
       expect(worker.supportsNodeSqliteJsonb()).toBe(changed !== "unchanged");
       expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
-      expect(worker.supportsNodeSqliteWalCheckpointNoop()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
         expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(

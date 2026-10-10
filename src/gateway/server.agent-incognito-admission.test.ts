@@ -14,6 +14,7 @@ import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incogn
 import * as preflight from "./agent-turn/agent-request-preflight.js";
 import * as operatorRun from "./operator-run-cancellation.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
+import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   installAgentAuthorityProofFixture,
@@ -26,7 +27,7 @@ const authority = { assertCurrent() {} };
 describe("bound incognito agent admission", () => {
   const fixture = installAgentAuthorityProofFixture();
 
-  it.each(["public", "internal", "create", "id"] as const)(
+  it.each(["public", "internal", "create", "id", "retry"] as const)(
     "admits %s through the recorder with configured roles",
     async (route) => {
       const f = await fixture();
@@ -73,6 +74,26 @@ describe("bound incognito agent admission", () => {
             ...(route === "id" ? { sessionKey: undefined, sessionId: runId } : { sessionKey }),
             idempotencyKey: runId,
           };
+          if (route === "retry") {
+            const read = vi
+              .spyOn(actor.sessions, "read")
+              .mockRejectedValueOnce(new Error("routing read unavailable"));
+            try {
+              await expect(
+                agentRunHandler({
+                  req: { type: "req", id: runId, method: "agent", params: request },
+                  params: request,
+                  context: f.context,
+                  client,
+                  respond: vi.fn(),
+                  isWebchatConnect: () => false,
+                }),
+              ).rejects.toThrow("routing read unavailable");
+              expect(f.context.dedupe.has(`agent:${runId}`)).toBe(false);
+            } finally {
+              read.mockRestore();
+            }
+          }
           const response =
             route === "internal"
               ? await (

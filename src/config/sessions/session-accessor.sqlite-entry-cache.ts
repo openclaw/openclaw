@@ -6,9 +6,9 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
-  readSqliteDataVersion,
   runSqliteReadOperationSync,
 } from "../../infra/sqlite-schema-facts.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
@@ -256,7 +256,7 @@ export function readSessionEntryCache(
     ) {
       return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
-    const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
+    const validityToken = readSessionEntryCacheValidityToken(database.db);
     const cached = sessionEntryCaches.get(database.db);
     if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
       return cached;
@@ -268,7 +268,11 @@ export function readSessionEntryCache(
       freezeJsonSnapshot(entry);
     }
     const next = { ...loaded, validityToken };
-    sessionEntryCaches.set(database.db, next);
+    if (cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))) {
+      sessionEntryCaches.set(database.db, next);
+    } else {
+      sessionEntryCaches.delete(database.db);
+    }
     return next;
   });
 }
@@ -278,7 +282,7 @@ function advanceSessionEntryCacheGeneration(
   writeGeneration: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   // Advance only across the bracketed row write. A raw write before/after this bracket leaves
-  // a generation gap, while the retained data_version still exposes external commits.
+  // a generation gap, while sibling writer receipts invalidate other-connection results.
   if (cached.validityToken.sessionNodesGeneration === writeGeneration.before) {
     cached.validityToken = {
       ...cached.validityToken,
@@ -301,11 +305,13 @@ function publishSqliteSessionEntryCacheUpsert(
   let entry: SessionEntry | undefined;
   try {
     // A tracked entry write leaves participants unchanged. Reuse only facts current
-    // before that write; raw DML and foreign commits still force an authoritative read.
+    // before that write; raw DML and sibling writes still force an authoritative read.
     const retained =
       update.entry &&
       owner.validityToken.sessionNodesGeneration === writeGeneration.before &&
-      owner.validityToken.dataVersion === readSqliteDataVersion(database.db)
+      owner.validityToken.siblingWriteRevision !== undefined &&
+      owner.validityToken.siblingWriteRevision ===
+        readSqliteDatabaseSiblingWriteRevision(database.db)
         ? owner.entries.get(sessionKey)
         : undefined;
     sideMetadata = readSessionEntrySideMetadata(

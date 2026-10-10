@@ -104,6 +104,10 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return current(sessionKey)?.activeLeafEntryId;
         },
+        readInitializationFingerprint(this: void, sessionKey: string) {
+          assertReadable();
+          return current(sessionKey)?.initializationFingerprint;
+        },
         readDelivery(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.delivery);

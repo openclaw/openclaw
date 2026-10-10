@@ -123,11 +123,19 @@ export function createAgentTurnService(
         assertInputCommitAllowed,
       ]),
     }).catch(async (error: unknown) => {
-      await sessionSource.release();
+      try {
+        await sessionSource.release();
+      } finally {
+        dedupeLifecycle.clearUnaccepted();
+      }
       throw error;
     });
     if (!routing) {
-      await sessionSource.release();
+      try {
+        await sessionSource.release();
+      } finally {
+        dedupeLifecycle.clearUnaccepted();
+      }
       return;
     }
     const {

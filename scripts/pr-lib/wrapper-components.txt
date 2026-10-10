@@ -1017,6 +1017,7 @@ src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
+src/infra/sqlite-file-generation-worker.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts

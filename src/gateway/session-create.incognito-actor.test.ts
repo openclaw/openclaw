@@ -11,7 +11,10 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -103,15 +106,15 @@ it("inherits from a retained parent actor in another agent namespace", async () 
     const stored = await childActor.sessions.read(authority, { sessionKey: created.key });
     expect(stored.entry?.parentSessionKey).toBe(parent.key);
     expect(stored.entry?.communication).toEqual({ receive: "always" });
-    const staleChildKey = key("stale-parent", "other");
+    let staleChildKey: string | undefined;
     await expect(
       withIncognitoSessionActor(childActor, () =>
         createGatewaySession({
           ...common,
           agentId: "other",
-          key: staleChildKey,
           parentSessionKey: parent.key,
-          prepareLifecycle: async () => {
+          prepareLifecycle: async ({ key: generatedKey }) => {
+            staleChildKey = generatedKey;
             await withIncognitoSessionActor(actor, () =>
               patchSessionEntryCore({ agentId: "main", sessionKey: parent.key }, () => ({
                 communication: { receive: "never" },
@@ -122,6 +125,7 @@ it("inherits from a retained parent actor in another agent namespace", async () 
         }),
       ),
     ).rejects.toThrow("Parent session changed before child creation");
+    if (!staleChildKey) throw new Error("Child preparation did not run");
     expect(
       (await childActor.sessions.read(authority, { sessionKey: staleChildKey })).entry,
     ).toBeUndefined();
@@ -153,11 +157,22 @@ it("refuses revoked preparation without creating a session", async () => {
 });
 
 it("keeps unbound incognito native and does not resurrect explicitly absent actors", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", label: "native-control" },
+    async (nativeState) => {
+      await nativeState.writeConfig(cfg);
+      expect(captureOpenClawAgentDatabaseExecution.listIncognito(nativeState.env)).toEqual([]);
+      const created = await createGatewaySession({
+        ...common,
+        agentId: "main",
+        key: key("native"),
+      });
+      expect(created).toMatchObject({ ok: true, entry: { incognito: true } });
+      expect(await readSessionEntryReadOnlyInWorker({ sessionKey: key("native") })).toBeDefined();
+      expect(captureOpenClawAgentDatabaseExecution.listIncognito(nativeState.env)).toEqual([]);
+    },
+  );
   const actorsBefore = captureOpenClawAgentDatabaseExecution.listIncognito(state.env);
-  const created = await createGatewaySession({ ...common, key: key("native") });
-  expect(created).toMatchObject({ ok: true, entry: { incognito: true } });
-  expect(await readSessionEntryReadOnlyInWorker({ sessionKey: key("native") })).toBeDefined();
-  expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual(actorsBefore);
   await expect(
     withIncognitoSessionBinding(
       {
@@ -174,6 +189,6 @@ it("keeps unbound incognito native and does not resurrect explicitly absent acto
           key: key("absent", "absent"),
         }),
     ),
-  ).rejects.toThrow(/missing|unavailable|absent/i);
+  ).rejects.toThrow("No incognito session owner. Create a new incognito session to continue.");
   expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual(actorsBefore);
 });
