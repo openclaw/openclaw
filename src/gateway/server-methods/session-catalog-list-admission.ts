@@ -41,7 +41,7 @@ export class SessionCatalogListAdmission {
       if (this.queue.length >= this.maxQueued) {
         throw new SessionCatalogListBusyError(this.active, this.queue.length);
       }
-      const ready = createDeferredCore<void>();
+      const ready = createDeferredCore();
       const entry = { start: () => ready.resolve() };
       const onAbort = () => {
         const index = this.queue.indexOf(entry);

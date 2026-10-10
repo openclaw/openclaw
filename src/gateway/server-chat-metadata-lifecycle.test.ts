@@ -208,7 +208,7 @@ async function createRealMetadataLifecycle(
   );
   let owner = createChatMetadataOwner(config, "before-publication");
   let ownerAvailable = options.ownerAvailable ?? true;
-  let revision = 0;
+  const revision = 0;
   let latestRefresh = Promise.resolve();
   const refresh = vi.fn<() => Promise<void>>();
   const buildCommands = vi.fn(async () => ({ commands: [] }));

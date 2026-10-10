@@ -59,10 +59,8 @@ export function createChatMetadataModelList(params: {
     }
     const facts = agents.get(request.agentId);
     if (!facts?.owner.catalogOwner || !facts.owner.isCurrent()) {
-      return Promise.reject(
-        new PreparedModelRuntimePublicationSupersededError(
-          "Model catalog changed while preparing this result. Retry the request.",
-        ),
+      throw new PreparedModelRuntimePublicationSupersededError(
+        "Model catalog changed while preparing this result. Retry the request.",
       );
     }
     const { owner, modelCatalog, authStore, authModes } = facts;
