@@ -49,6 +49,7 @@ export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
   selectedOwnerId: string | null;
+  selectedProfileId?: string;
   self?: { id: string; name?: string; avatarUrl?: string } | null;
 }): {
   rows: SidebarRecentSession[];
@@ -72,17 +73,18 @@ export function applySidebarSessionOwnerFilter(input: {
   // An absent facet is unresolved during hydration. A present facet is the
   // Gateway's complete owner inventory, even when rows are owner-filtered.
   const selectedOwnerId = input.selectedOwnerId?.trim() || null;
-  const activeOwnerId =
-    selectedOwnerId &&
-    (input.ownerFacet === undefined || ownerOptions.some((owner) => owner.id === selectedOwnerId))
-      ? selectedOwnerId
-      : null;
+  // A complete facet may omit an owner with no rows. That means an empty
+  // filtered list, never permission to broaden the selected Mine scope to All.
+  const activeOwnerId = selectedOwnerId;
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
       const ownerId = row.owner?.actor.id;
-      if (ownerId === activeOwnerId) {
+      const profileMatches =
+        !input.selectedProfileId ||
+        (row.owner?.actor.type === "human" && ownerId === input.selectedProfileId);
+      if (ownerId === activeOwnerId && profileMatches) {
         filtered.push({ ...row, children });
       } else {
         for (const child of children) {

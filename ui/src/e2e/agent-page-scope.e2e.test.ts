@@ -12,6 +12,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent page scope",
@@ -413,7 +414,7 @@ suite.define(() => {
           )
           .toBe("Writer");
 
-        await sidebar.getByRole("link", { name: "Home" }).click();
+        await openHomeFullPage(page, "writer");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar

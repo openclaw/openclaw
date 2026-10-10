@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
@@ -148,3 +149,16 @@ export function settleSqliteWorkerOperationContext(
     [],
   );
 }
+
+export type WorkerAdmissionScope = {
+  // Published SDK request helpers share these port/active carrier fields.
+  port: MessagePort;
+  owner: SqliteWorkerOperationContext;
+  active: boolean;
+};
+// Source brokers and built plugin backends can load separate module copies in
+// one Worker. Share the carrier, while each operation still owns its private port.
+export const currentSqliteWorkerOperationAdmission = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerOperationAdmission"),
+  () => new AsyncLocalStorage<WorkerAdmissionScope>(),
+);

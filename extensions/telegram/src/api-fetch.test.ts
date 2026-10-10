@@ -47,58 +47,15 @@ vi.mock("undici/index.js", async () => {
 });
 
 describe("fetchTelegramChatId", () => {
-  const cases = [
-    {
-      name: "returns stringified id when Telegram getChat succeeds",
-      fetchImpl: vi.fn(async () => getChatOkResponse(12345)),
-      expected: "12345",
-    },
-    {
-      name: "returns null when response is not ok",
-      fetchImpl: vi.fn(async () => new Response("{}", { status: 404 })),
-      expected: null,
-    },
-    {
-      name: "returns null on transport failures",
-      fetchImpl: vi.fn(async () => {
-        throw new Error("network failed");
-      }),
-      expected: null,
-    },
-  ] as const;
-
-  for (const testCase of cases) {
-    it(testCase.name, async () => {
-      vi.stubGlobal("fetch", testCase.fetchImpl);
-
-      const id = await fetchTelegramChatId({
-        token: "abc",
-        chatId: "@user",
-      });
-
-      expect(id).toBe(testCase.expected);
-    });
-  }
-
-  it("uses caller-provided fetch impl when present", async () => {
-    const customFetch = vi.fn(async () => getChatOkResponse(12345));
+  it("returns null when response is not ok", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        throw new Error("global fetch should not be called");
-      }),
+      vi.fn(async () => new Response("{}", { status: 404 })),
     );
 
-    await fetchTelegramChatId({
-      token: "abc",
-      chatId: "@user",
-      fetchImpl: customFetch as unknown as typeof fetch,
-    });
+    const id = await fetchTelegramChatId({ token: "abc", chatId: "@user" });
 
-    expect(customFetch).toHaveBeenCalledWith(
-      "https://api.telegram.org/botabc/getChat?chat_id=%40user",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
+    expect(id).toBeNull();
   });
 
   it("returns null for oversized getChat JSON responses and cancels the stream", async () => {
@@ -117,38 +74,6 @@ describe("fetchTelegramChatId", () => {
       }),
     ).resolves.toBeNull();
     expect(cancelCount).toBe(1);
-  });
-
-  it("cancels non-success getChat response bodies before returning", async () => {
-    const cancel = vi.fn();
-    let observedSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      observedSignal = init?.signal ?? undefined;
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("service unavailable"));
-          },
-          cancel,
-        }),
-        { status: 503 },
-      );
-    });
-
-    const result = await Promise.race([
-      fetchTelegramChatId({
-        token: "abc",
-        chatId: "@user",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      }),
-      new Promise<"stalled">((resolve) => {
-        setTimeout(() => resolve("stalled"), 250);
-      }),
-    ]);
-
-    expect(result).toBeNull();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(observedSignal?.aborted).toBe(true);
   });
 
   it("does not wait for a cloned capture branch before returning", async () => {

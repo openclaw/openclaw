@@ -16,7 +16,6 @@ import {
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
-  readSqliteCacheDataVersion,
   registerSqliteSchemaMutationListener,
 } from "../infra/sqlite-schema-facts.js";
 import {
@@ -203,9 +202,6 @@ function createExistingOpenClawStateWriter(
           });
           const priorVersion = admission.get(db);
           const needsAdmission = priorVersion === undefined;
-          if (!needsAdmission) {
-            readSqliteCacheDataVersion(db);
-          }
           if (needsAdmission && existingSchema) {
             assertExistingOpenClawStateRuntimeSchema(db, pathname);
           }

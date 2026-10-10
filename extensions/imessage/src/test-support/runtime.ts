@@ -59,11 +59,13 @@ export function installIMessageStateRuntimeForTest(): void {
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: ((options) =>
-        stateRuntime.createPluginStateKeyedStoreForTests("imessage", {
-          ...options,
-          env: imessageTestEnv,
-        })) as PluginRuntime["state"]["openKeyedStore"],
+      openKeyedStoreV2: ((options) =>
+        stateRuntime
+          .createPluginStateKeyedStoreForTests("imessage", {
+            ...options,
+            env: imessageTestEnv,
+          })
+          .withCurrent({ assertCurrent: () => {} })) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: ((options) =>
         createIMessagePluginStateSyncStoreForTest(
           options,
@@ -120,16 +122,18 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
           channelId: "imessage",
           stateDir: queueOptions?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: ((storeOptions) => {
-        const store = stateRuntime.createPluginStateKeyedStoreForTests("imessage", {
-          ...storeOptions,
-          env: imessageTestEnv,
-        });
+      openKeyedStoreV2: ((storeOptions) => {
+        const store = stateRuntime
+          .createPluginStateKeyedStoreForTests("imessage", {
+            ...storeOptions,
+            env: imessageTestEnv,
+          })
+          .withCurrent({ assertCurrent: () => {} });
         if (options?.reuseDatabase) {
           reusedStoreCleanups.set(storeOptions.namespace, store.clear);
         }
         return store;
-      }) as PluginRuntime["state"]["openKeyedStore"],
+      }) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: ((storeOptions) =>
         createIMessagePluginStateSyncStoreForTest(
           storeOptions,
@@ -165,9 +169,9 @@ export function installIMessageFailingStateRuntimeForTest(): void {
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: (() => {
+      openKeyedStoreV2: (() => {
         throw new Error("test plugin-state failure");
-      }) as PluginRuntime["state"]["openKeyedStore"],
+      }) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: (() => {
         throw new Error("test plugin-state failure");
       }) as PluginRuntime["state"]["openSyncKeyedStore"],

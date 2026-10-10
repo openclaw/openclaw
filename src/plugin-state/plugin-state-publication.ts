@@ -152,19 +152,24 @@ function stagePluginStateDeletions(db: DatabaseSync, rows: readonly EntryKey[]):
 }
 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
-export function withPluginStateWorkerReceipt<T>(db: DatabaseSync, write: () => T): T {
+export function withPluginStateWorkerReceipt<T>(
+  db: DatabaseSync,
+  write: () => T,
+  additionalFacts?: (result: T) => Record<string, unknown>,
+): T {
   return state.capture.run(new Map(), () => {
     const result = write();
     const facts = state.capture.getStore()!;
     // Empty receipts distinguish a confirmed no-op from missing commit evidence.
-    const receipt = captureReceipt(db, facts);
+    const metadata = additionalFacts?.(result);
+    const receipt = { ...metadata, ...captureReceipt(db, facts) };
     // Publication cannot make a previously valid large clear/import fail to commit.
     // Unbounded retained namespaces may exceed the transport even with keys alone.
     deferSqliteWorkerCommitReceipt(
       db,
       serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
         ? receipt
-        : { kind: "unknown", identity: receipt.source.identity },
+        : { ...metadata, kind: "unknown", identity: receipt.source.identity },
       facts.size === 0 ? "settlement" : "commit",
     );
     return result;
@@ -214,6 +219,7 @@ function readReceipt(value: unknown): Receipt {
 export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
+  onCommitted?: (facts: unknown) => void,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const owner = createAdmission(operation);
@@ -263,6 +269,7 @@ export function withPluginStatePublication(
         if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {
           received = true;
           install({ kind: "unknown", identity: identity() });
+          onCommitted?.(facts);
           return;
         }
         const receipt = readReceipt(facts);
@@ -282,6 +289,7 @@ export function withPluginStatePublication(
         installing = true;
         publishSqliteCommittedState(publication(current));
         received = true;
+        onCommitted?.(facts);
       } catch (error) {
         install({ kind: "unknown", identity: identity() });
         throw error;

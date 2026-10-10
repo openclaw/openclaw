@@ -23,7 +23,6 @@ import {
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
   isAssistantTextPhasePending,
-  isOpenAiCompletionsAssistantMessage,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   openReasoningStream,
@@ -196,9 +195,6 @@ export function handleMessageUpdate(
   // early unphased deltas from durable block replies until that decision exists.
   const isPhasePendingText =
     !deliveryPhase && isAssistantTextPhasePending(partialAssistant, evtType);
-  const isCompletionsAssistant = isOpenAiCompletionsAssistantMessage(partialAssistant);
-  const isReasoningCompletionsText =
-    isCompletionsAssistant && partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -299,12 +295,6 @@ export function handleMessageUpdate(
     ctx.state.assistantStream?.projection?.kind !== "final" &&
     ctx.blockChunker.consumedLength === 0;
   const finalText = evtType === "text_end";
-
-  // A completions stream cannot classify text interrupted by later reasoning
-  // until terminal. Keep that text out of live reply lanes until its phase resolves.
-  if (isReasoningCompletionsText) {
-    return undefined;
-  }
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
