@@ -63,7 +63,9 @@ describe("native completion durable receipts", () => {
         ),
       ).toHaveLength(1);
       await Promise.all(writes);
-      expect(f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+      expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
+        [],
+      );
       client.close();
       const replacement = await f.register(createClient());
       await replacement.ready;

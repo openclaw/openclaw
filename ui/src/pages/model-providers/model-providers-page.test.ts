@@ -239,11 +239,11 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
     await waitForProviders(page);
 
-    const groups = page.querySelectorAll<HTMLElement>(
-      "#settings-model-behavior .settings-segmented",
+    const groups = page.querySelectorAll(
+      '#settings-model-behavior .settings-segmented[role="radiogroup"]',
     );
     expect(groups).toHaveLength(2);
-    groups[0]!.querySelector<HTMLInputElement>('input[type="radio"][value=""]')!.click();
+    groups[0]!.querySelector<HTMLInputElement>('.settings-segmented__input[value=""]')!.click();
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {
@@ -275,13 +275,16 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForProviders(page);
 
     const behavior = page.querySelector("#settings-model-behavior")!;
-    const groups = behavior.querySelectorAll<HTMLElement>(".settings-segmented");
+    const groups = behavior.querySelectorAll('.settings-segmented[role="radiogroup"]');
     expect(
       [...groups].map(
-        (group) => group.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value,
+        (group) =>
+          group.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value,
       ),
     ).toEqual(["", ""]);
-    const defaults = behavior.querySelectorAll<HTMLInputElement>('input[type="radio"][value=""]');
+    const defaults = behavior.querySelectorAll<HTMLInputElement>(
+      '.settings-segmented__input[value=""]',
+    );
     expect(defaults).toHaveLength(2);
     defaults[0]?.click();
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
@@ -970,13 +973,15 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     expect(page.renderRoot.textContent).toContain("No agents");
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
 
-    const groups = page.querySelectorAll<HTMLElement>(
-      ".model-providers__defaults .settings-segmented",
+    const groups = page.querySelectorAll(
+      '.model-providers__defaults .settings-segmented[role="radiogroup"]',
     );
     expect(groups).toHaveLength(2);
-    const high = groups[0]!.querySelector<HTMLInputElement>('input[type="radio"][value="high"]')!;
-    expect(high.disabled).toBe(false);
-    high.click();
+    const thinkingHigh = groups[0]!.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="high"]',
+    )!;
+    expect(thinkingHigh.disabled).toBe(false);
+    thinkingHigh.click();
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {

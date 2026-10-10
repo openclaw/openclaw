@@ -22,6 +22,17 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Browser requirements
+
+Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
+or Chrome or Firefox released within the last six months (Chrome 147+ and
+Firefox 150+ as of October 2026). Embedded web views need the same browser capabilities.
+
+Browsers missing required overlay features show an update screen before the
+dashboard starts. In the native apps, **Open in browser** opens the current
+page in your default browser. Update the browser or operating system if that
+browser also shows the update screen.
+
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
 the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
 and **Circle**. Square preserves the full image; rounded and circular icons use a

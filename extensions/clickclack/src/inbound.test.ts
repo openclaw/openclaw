@@ -329,8 +329,9 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const mainSessionKey = "agent:research:main";
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       mainSessionKey,
+      undefined,
       createInboundDiscussionBinding({ sessionId: "old-session-id", archived: true }),
     );
 
@@ -370,8 +371,9 @@ describe("handleClickClackInbound", () => {
       updatedAt: 2,
       archivedAt: 1,
     });
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       "agent:research:main",
+      undefined,
       createInboundDiscussionBinding(),
     );
 
@@ -393,8 +395,9 @@ describe("handleClickClackInbound", () => {
   it("drops a persisted managed channel after discussions are disabled", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       "agent:research:main",
+      undefined,
       createInboundDiscussionBinding(),
     );
 
@@ -419,9 +422,9 @@ describe("handleClickClackInbound", () => {
       label: "Released",
     });
     const bindingStore = getClickClackDiscussionBindingStore(runtime);
-    bindingStore.set(mainSessionKey, binding);
-    markClickClackDiscussionChannelRevoked(runtime, binding);
-    bindingStore.delete(mainSessionKey);
+    await bindingStore.setIfCurrent(mainSessionKey, undefined, binding);
+    await markClickClackDiscussionChannelRevoked(runtime, mainSessionKey, binding);
+    await bindingStore.deleteIfCurrent(mainSessionKey, binding);
 
     const currentConfig = {} satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
@@ -438,8 +441,9 @@ describe("handleClickClackInbound", () => {
   it("does not lose managed ownership when the local account id changes", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       "agent:research:main",
+      undefined,
       createInboundDiscussionBinding({
         externalRef: "openclaw:test:renamed-account",
         label: "Renamed account",
@@ -499,8 +503,9 @@ describe("handleClickClackInbound", () => {
   it("drops a managed channel after the discussion workspace changes", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set(
+    await getClickClackDiscussionBindingStore(runtime).setIfCurrent(
       "agent:research:main",
+      undefined,
       createInboundDiscussionBinding(),
     );
     const account = createAgentAccount({

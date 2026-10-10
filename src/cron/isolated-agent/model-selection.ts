@@ -5,10 +5,7 @@ import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
-import {
-  needsThinkHydration,
-  normalizeThinkingCatalogProviders,
-} from "../../agents/thinking-runtime.js";
+import { normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
@@ -134,9 +131,6 @@ async function resolveCronThinkingCatalog(params: {
   agentRuntime: string;
 }): Promise<ModelCatalogEntry[]> {
   const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
-  if (!needsThinkHydration(catalog, params.provider, params.model, params.agentRuntime)) {
-    return catalog;
-  }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
   const hydration = loadProviderScopedThinkingCatalog({
     config: params.owner.config,

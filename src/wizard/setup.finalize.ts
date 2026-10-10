@@ -498,6 +498,15 @@ export async function finalizeSetupWizard(
 
   try {
     if (!opts.skipHealth) {
+      const showHealthCheckHelp = () =>
+        prompter.note(
+          [
+            t("common.docs"),
+            "https://docs.openclaw.ai/gateway/health",
+            "https://docs.openclaw.ai/gateway/troubleshooting",
+          ].join("\n"),
+          t("wizard.finalize.healthCheckHelp"),
+        );
       const probeLinks = resolveLocalControlUiProbeLinks({
         bind: nextConfig.gateway?.bind ?? "loopback",
         port: settings.port,
@@ -557,14 +566,7 @@ export async function finalizeSetupWizard(
           if (!(err instanceof ExitError)) {
             runtime.error(formatHealthCheckFailure(err));
           }
-          await prompter.note(
-            [
-              t("common.docs"),
-              "https://docs.openclaw.ai/gateway/health",
-              "https://docs.openclaw.ai/gateway/troubleshooting",
-            ].join("\n"),
-            t("wizard.finalize.healthCheckHelp"),
-          );
+          await showHealthCheckHelp();
         }
       } else if (gateway.status !== "skipped") {
         runtime.error(
@@ -574,14 +576,7 @@ export async function finalizeSetupWizard(
             ),
           ),
         );
-        await prompter.note(
-          [
-            t("common.docs"),
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          t("wizard.finalize.healthCheckHelp"),
-        );
+        await showHealthCheckHelp();
         await prompter.note(
           buildGatewayRecoveryProjection({
             gateway,
@@ -610,20 +605,15 @@ export async function finalizeSetupWizard(
 
     const controlUiBasePath =
       nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const controlUiLinkOptions = {
       bind: settings.bind,
       port: settings.port,
       customBindHost: settings.customBindHost,
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind: settings.bind,
-      port: settings.port,
-      customBindHost: settings.customBindHost,
-      basePath: controlUiBasePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
+    const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
     if (opts.skipHealth || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,

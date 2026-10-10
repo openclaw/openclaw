@@ -1,7 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { observeCronJobCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -23,7 +22,7 @@ import * as runtimeMutation from "./runtime-mutation.js";
 import { onTimer } from "./timer.test-support.js";
 
 it.each(["manual", "timer", "startup"] as const)(
-  "fences a pending %s reservation and deferred jobs when stop and restart cross worker admission",
+  "stops a committed %s reservation before execution when the scheduler restarts",
   async (entrypoint) => {
     await withOpenClawTestState({ label: "cron-reservation-lifecycle" }, async (fixture) => {
       const now = Date.now();
@@ -55,26 +54,14 @@ it.each(["manual", "timer", "startup"] as const)(
       await list(state);
       let observed = false;
       let restarted: Promise<void> | undefined;
-      // oxlint-disable-next-line typescript/unbound-method -- Preserve the actual preparation port receiver.
-      const post = MessagePort.prototype.postMessage;
-      const preparation = vi
-        .spyOn(MessagePort.prototype, "postMessage")
-        .mockImplementation(function (this: MessagePort, value, transferList) {
-          if (
-            !observed &&
-            isRecord(value) &&
-            Array.isArray(value.claims) &&
-            value.claims.some(
-              (claim) => isRecord(claim) && isRecord(claim.handle) && claim.handle.jobId === job.id,
-            )
-          ) {
-            observed = true;
-            stop(state);
-            state.deps.cronEnabled = false;
-            restarted = start(state);
-          }
-          return post.call(this, value, transferList);
-        });
+      const stopObserving = observeCronJobCommits(job.id, (committed) => {
+        if (!observed && committed.queuedAtMs !== undefined) {
+          observed = true;
+          stop(state);
+          state.deps.cronEnabled = false;
+          restarted = start(state);
+        }
+      });
       try {
         const result = await (entrypoint === "manual"
           ? prepareManualRun(state, job.id, "force")
@@ -82,9 +69,7 @@ it.each(["manual", "timer", "startup"] as const)(
             ? onTimer(state)
             : start(state));
         await restarted;
-        expect(observed, "the real entrypoint must reach reservation worker preparation").toBe(
-          true,
-        );
+        expect(observed, "the real entrypoint must commit its reservation").toBe(true);
         expect(state.stopped).toBe(false);
         if (entrypoint === "manual") {
           expect(result).toEqual({ ok: true, ran: false, reason: "stopped" });
@@ -106,7 +91,7 @@ it.each(["manual", "timer", "startup"] as const)(
         expect(state.activeTimerTicks).toBe(0);
       } finally {
         await restarted;
-        preparation.mockRestore();
+        stopObserving();
         stop(state);
         await state.op;
       }
@@ -252,14 +237,9 @@ it("keeps a sibling owner edit behind a pending manual reservation on the same s
   });
 });
 
-it.each([
-  { phase: "preparation", owner: "ambient" },
-  { phase: "commit", owner: "ambient" },
-  { phase: "preparation", owner: "explicit" },
-  { phase: "commit", owner: "explicit" },
-] as const)(
-  "rechecks the $owner job owner when the current default disappears at $phase",
-  async ({ phase, owner }) => {
+it.each(["ambient", "explicit"] as const)(
+  "rechecks the %s job owner when the current default disappears before dispatch",
+  async (owner) => {
     await withOpenClawTestState({ label: "cron-current-default-removal" }, async (fixture) => {
       const now = Date.now();
       const storePath = fixture.statePath("cron", "jobs.json");
@@ -286,30 +266,11 @@ it.each([
       const mutation = vi
         .spyOn(runtimeMutation, "runCronRuntimeMutation")
         .mockImplementation(async (params) => {
-          if (phase === "preparation" && params.type === "cron.reserveRuns" && !removed) {
+          if (params.type === "cron.reserveRuns" && !removed) {
             removed = true;
             currentDefault = undefined;
           }
           return execute(params);
-        });
-      // oxlint-disable-next-line typescript/unbound-method -- Retain the real preparation port receiver.
-      const post = MessagePort.prototype.postMessage;
-      const preparation = vi
-        .spyOn(MessagePort.prototype, "postMessage")
-        .mockImplementation(function (this: MessagePort, value, transferList) {
-          if (
-            phase === "commit" &&
-            !removed &&
-            isRecord(value) &&
-            Array.isArray(value.claims) &&
-            value.claims.some(
-              (claim) => isRecord(claim) && isRecord(claim.handle) && claim.handle.jobId === job.id,
-            )
-          ) {
-            removed = true;
-            currentDefault = undefined;
-          }
-          return post.call(this, value, transferList);
         });
       try {
         const pending = run(state, job.id, "force");
@@ -317,11 +278,7 @@ it.each([
           await expect(pending).resolves.toMatchObject({ ok: true, ran: true });
           expect(runner).toHaveBeenCalledOnce();
         } else {
-          await expect(pending).rejects.toThrow(
-            phase === "preparation"
-              ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
-              : "Cron job owner changed before reservation",
-          );
+          await expect(pending).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
           expect(runner).not.toHaveBeenCalled();
           expect((await loadCronStore(storePath)).jobs[0]?.state).toEqual(job.state);
         }
@@ -331,7 +288,6 @@ it.each([
         expect(state.runAdmission.active).toBe(0);
       } finally {
         mutation.mockRestore();
-        preparation.mockRestore();
         stop(state);
         await state.op;
       }

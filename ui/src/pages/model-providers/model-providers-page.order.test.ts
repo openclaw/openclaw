@@ -472,9 +472,9 @@ describe("ModelProvidersPage installed agents", () => {
       expect(agentRow(page, "opencode")?.textContent).not.toMatch(/sign.in/i);
     });
     expect(
-      agentRow(page, "opencode")
-        ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
-        ?.hasAttribute("disabled"),
+      agentRow(page, "opencode")?.querySelector<HTMLInputElement>(
+        '.settings-toggle__input[role="switch"]',
+      )?.disabled,
     ).toBe(false);
     page
       .querySelector<HTMLButtonElement>(
@@ -513,11 +513,13 @@ describe("ModelProvidersPage installed agents", () => {
     agentRow(page, "opencode")!.querySelector<HTMLElement>(".settings-row__title")!.click();
 
     const toggle = () =>
-      agentRow(page, "opencode")!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+      agentRow(page, "opencode")!.querySelector<HTMLInputElement>(
+        '.settings-toggle__input[role="switch"]',
+      )!;
     await waitForFast(() => {
       expect(reads).toBe(3);
       expect(toggle().checked).toBe(false);
-      expect(toggle().hasAttribute("disabled")).toBe(false);
+      expect(toggle().disabled).toBe(false);
     });
     expect(runtimeConfig.patch).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -564,7 +566,9 @@ describe("ModelProvidersPage installed agents", () => {
       await waitForFast(() => expect(agentRow(page, "opencode")?.textContent).toContain("Saving"));
       acknowledgement.resolve({ config: config(false), hash: "saved" });
       const toggle = () =>
-        agentRow(page, "opencode")!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+        agentRow(page, "opencode")!.querySelector<HTMLInputElement>(
+          '.settings-toggle__input[role="switch"]',
+        )!;
       await waitForFast(() => {
         expect(agentRow(page, "opencode")?.textContent).not.toContain("Saving");
         expect(toggle().checked).toBe(false);
@@ -612,7 +616,7 @@ describe("ModelProvidersPage installed agents", () => {
       ),
     );
     const toggle = agentRow(page, "opencode")!.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]',
+      '.settings-toggle__input[role="switch"]',
     )!;
     await waitForFast(() => expect(toggle.checked).toBe(false));
   });
@@ -629,9 +633,9 @@ describe("ModelProvidersPage installed agents", () => {
     agentRow(page, "opencode")!.querySelector<HTMLElement>(".settings-row__title")!.click();
 
     expect(
-      agentRow(page, "opencode")!
-        .querySelector<HTMLInputElement>('input[type="checkbox"]')
-        ?.hasAttribute("disabled"),
+      agentRow(page, "opencode")!.querySelector<HTMLInputElement>(
+        '.settings-toggle__input[role="switch"]',
+      )?.disabled,
     ).toBe(true);
     expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
       "Model changes require operator.admin access.",
