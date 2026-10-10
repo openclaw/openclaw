@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createMSTeamsQaTransportAdapter } from "./adapter.runtime.js";
 
+const sleep = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: sleep,
+}));
+
 const createdDirs: string[] = [];
 
 afterEach(async () => {
@@ -34,7 +40,7 @@ async function listenOnLoopback(server: Server): Promise<number> {
 }
 
 describe("Microsoft Teams QA transport adapter", () => {
-  it("creates a private bootstrap, sends real webhook-shaped inbound, and cleans up", async () => {
+  it("waits for ready ingress before sending real webhook-shaped inbound and cleans up", async () => {
     // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers; afterEach removes it.
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-qa-"));
     createdDirs.push(outputDir);
@@ -106,6 +112,29 @@ describe("Microsoft Teams QA transport adapter", () => {
         dmPolicy: "allowlist",
         allowFrom: ["00000000-0000-4000-8000-000000000002"],
       });
+      const ready = {
+        accountId: "default",
+        running: true,
+        connected: true,
+        lifecycle: "ready",
+        restartPending: false,
+      };
+      const statuses = [
+        { ...ready, lifecycle: "starting", connected: false },
+        // A new task can retain its predecessor's connected flag until it publishes readiness.
+        { ...ready, lifecycle: "starting" },
+        { ...ready, connected: false },
+        { ...ready, restartPending: true },
+        ready,
+      ];
+      const call = vi.fn().mockRejectedValue(new Error("unexpected extra readiness poll"));
+      for (const status of statuses) {
+        call.mockResolvedValueOnce({ channelAccounts: { msteams: [status] } });
+      }
+      await adapter.waitReady({ gateway: { call } });
+      expect(call).toHaveBeenCalledTimes(statuses.length);
+      expect(inboundActivity).toBeUndefined();
+
       await adapter.sendInbound({
         accountId: "default",
         conversation: { id: "qa-primary", kind: "channel" },
