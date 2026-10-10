@@ -52,6 +52,19 @@ function expectModelFields(
 }
 
 describe("resolveGoogleGeminiForwardCompatModel", () => {
+  it("resolves stable gemini 2.5 flash-lite from direct google templates for Gemini CLI when available", () => {
+    const model = resolveModel("google-gemini-cli", "gemini-2.5-flash-lite", [
+      createTemplateModel("google", "gemini-2.5-flash-lite"),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-gemini-cli",
+      id: "gemini-2.5-flash-lite",
+      api: "google-generative-ai",
+      reasoning: false,
+    });
+  });
+
   it("resolves stable gemini 2.5 flash-lite from Gemini CLI templates when direct google templates are unavailable", () => {
     const model = resolveModel("google-gemini-cli", "gemini-2.5-flash-lite", [
       createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite", {
@@ -70,6 +83,32 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("resolves gemini 3.1 pro for google aliases via an alternate template provider", () => {
+    const model = resolveModel("google-vertex", "gemini-3.1-pro-preview", [
+      createTemplateModel("google-gemini-cli", "gemini-3-pro-preview"),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-vertex",
+      id: "gemini-3.1-pro-preview",
+      api: "google-gemini-cli",
+      reasoning: false,
+    });
+  });
+
+  it("canonicalizes retired Gemini 3 Pro preview requests before cloning templates", () => {
+    const model = resolveModel("google", "gemini-3-pro-preview", [
+      createTemplateModel("google", "gemini-3-pro-preview"),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+  });
+
   it("canonicalizes provider-qualified retired Gemini 3 Pro preview requests", () => {
     const model = resolveModel("google", "google/gemini-3-pro-preview", [
       createTemplateModel("google", "gemini-3.1-pro-preview"),
@@ -81,6 +120,155 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       api: "google-generative-ai",
       reasoning: true,
     });
+  });
+
+  it("keeps Gemini CLI 3.1 clones sourced from CLI templates when both catalogs exist", () => {
+    const model = resolveModel("google-gemini-cli", "gemini-3.1-pro-preview", [
+      createTemplateModel("google-gemini-cli", "gemini-3-pro-preview", {
+        api: "google-gemini-cli",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
+        contextWindow: 1_048_576,
+      }),
+      createTemplateModel("google", "gemini-3-pro-preview", {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        contextWindow: 200_000,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-gemini-cli",
+      id: "gemini-3.1-pro-preview",
+      api: "google-gemini-cli",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      contextWindow: 1_048_576,
+    });
+  });
+
+  it("prefers current Gemini 3.1 Pro templates over retired Gemini 3 Pro templates", () => {
+    const model = resolveModel("google-gemini-cli", "gemini-3.1-pro-preview", [
+      createTemplateModel("google-gemini-cli", "gemini-3-pro-preview", {
+        contextWindow: 100_000,
+      }),
+      createTemplateModel("google-gemini-cli", "gemini-3.1-pro-preview", {
+        contextWindow: 1_048_576,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-gemini-cli",
+      id: "gemini-3.1-pro-preview",
+      contextWindow: 1_048_576,
+    });
+  });
+
+  it("preserves template reasoning metadata instead of forcing it on forward-compat clones", () => {
+    const model = resolveModel("google", "gemini-3.1-flash-preview", [
+      createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
+        reasoning: true,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3.1-flash-preview",
+      api: "google-gemini-cli",
+      reasoning: true,
+    });
+  });
+
+  it("resolves gemini 3.1 flash from direct google templates", () => {
+    const model = resolveModel("google", "gemini-3.1-flash-preview", [
+      createTemplateModel("google", "gemini-3-flash-preview", {
+        reasoning: false,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3.1-flash-preview",
+      api: "google-generative-ai",
+      reasoning: false,
+    });
+  });
+
+  it("resolves canonical gemini 3 flash from older Google flash templates when the exact row is missing", () => {
+    const model = resolveModel("google", "gemini-3-flash-preview", [
+      createTemplateModel("google", "gemini-2.5-flash", {
+        contextWindow: 1_048_576,
+        reasoning: true,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3-flash-preview",
+      api: "google-generative-ai",
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      reasoning: true,
+    });
+  });
+
+  it("resolves canonical Gemini CLI 3 flash from Google flash templates when the CLI row is missing", () => {
+    const model = resolveModel("google-gemini-cli", "gemini-3-flash-preview", [
+      createTemplateModel("google", "gemini-2.5-flash", {
+        contextWindow: 1_048_576,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-gemini-cli",
+      id: "gemini-3-flash-preview",
+      api: "google-generative-ai",
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+    });
+  });
+
+  it("resolves Gemini latest aliases from current Google templates", () => {
+    const models = [
+      createTemplateModel("google", "gemini-3-pro-preview", { reasoning: true }),
+      createTemplateModel("google", "gemini-3-flash-preview", { reasoning: true }),
+      createTemplateModel("google", "gemini-3.1-flash-lite", { reasoning: true }),
+    ];
+
+    expectModelFields(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google",
+        ctx: createContext({ provider: "google", modelId: "gemini-pro-latest", models }),
+      }),
+      {
+        provider: "google",
+        id: "gemini-pro-latest",
+        api: "google-generative-ai",
+        reasoning: true,
+      },
+    );
+    expectModelFields(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google",
+        ctx: createContext({ provider: "google", modelId: "gemini-flash-latest", models }),
+      }),
+      {
+        provider: "google",
+        id: "gemini-flash-latest",
+        api: "google-generative-ai",
+        reasoning: true,
+      },
+    );
+    expectModelFields(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google",
+        ctx: createContext({ provider: "google", modelId: "gemini-flash-lite-latest", models }),
+      }),
+      {
+        provider: "google",
+        id: "gemini-flash-lite-latest",
+        api: "google-generative-ai",
+        reasoning: true,
+      },
+    );
   });
 
   it("resolves Antigravity Gemini 3.1 pro customtools from the low template", () => {
@@ -110,6 +298,105 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("falls back to the Antigravity high template when the low template is unavailable", () => {
+    const model = resolveModel("google-antigravity", "gemini-3.1-pro-preview", [
+      createTemplateModel("google-antigravity", "gemini-3-pro-high", {
+        api: "openai-completions",
+        maxTokens: 65_536,
+        reasoning: true,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-antigravity",
+      id: "gemini-3.1-pro-preview",
+      api: "openai-completions",
+      maxTokens: 65_536,
+      reasoning: true,
+    });
+  });
+
+  it("resolves Antigravity Gemini 3.1 flash variants from the flash template", () => {
+    const models = [
+      createTemplateModel("google-antigravity", "gemini-3-flash", {
+        api: "openai-completions",
+        contextWindow: 1_048_576,
+      }),
+    ];
+
+    expectModelFields(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google-antigravity",
+        ctx: createContext({
+          provider: "google-antigravity",
+          modelId: "gemini-3.1-flash-preview",
+          models,
+        }),
+      }),
+      {
+        provider: "google-antigravity",
+        id: "gemini-3.1-flash-preview",
+        api: "openai-completions",
+        contextWindow: 1_048_576,
+      },
+    );
+
+    expectModelFields(
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: "google-antigravity",
+        ctx: createContext({
+          provider: "google-antigravity",
+          modelId: "gemini-3.1-flash-lite",
+          models,
+        }),
+      }),
+      {
+        provider: "google-antigravity",
+        id: "gemini-3.1-flash-lite",
+        api: "openai-completions",
+        contextWindow: 1_048_576,
+      },
+    );
+  });
+
+  it("returns undefined for Antigravity Gemini 3.1 models without a matching template", () => {
+    const model = resolveModel("google-antigravity", "gemini-3.1-pro-preview-customtools", [
+      createTemplateModel("google-antigravity", "claude-opus-4-6-thinking"),
+    ]);
+
+    expect(model).toBeUndefined();
+  });
+
+  it("prefers the flash-lite template before the broader flash prefix", () => {
+    const model = resolveModel("google-vertex", "gemini-3.1-flash-lite", [
+      createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
+        contextWindow: 128_000,
+      }),
+      createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite", {
+        contextWindow: 1_048_576,
+      }),
+    ]);
+
+    expectModelFields(model, {
+      provider: "google-vertex",
+      id: "gemini-3.1-flash-lite",
+      contextWindow: 1_048_576,
+      reasoning: false,
+    });
+  });
+
+  it("treats gemini 2.5 ids as modern google models", () => {
+    expect(isModernGoogleModel("gemini-2.5-pro")).toBe(true);
+    expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
+    expect(isModernGoogleModel("gemini-1.5-pro")).toBe(false);
+  });
+
+  it("treats Gemini latest aliases as modern google models", () => {
+    expect(isModernGoogleModel("gemini-pro-latest")).toBe(true);
+    expect(isModernGoogleModel("gemini-flash-latest")).toBe(true);
+    expect(isModernGoogleModel("gemini-flash-lite-latest")).toBe(true);
+  });
+
   it("treats gemma models as modern google models", () => {
     expect(isModernGoogleModel("gemma-4-26b-a4b-it")).toBe(true);
     expect(isModernGoogleModel("gemma-3-4b-it")).toBe(true);
@@ -137,6 +424,32 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google",
       id: "gemma-3-4b-it",
       reasoning: false,
+    });
+  });
+
+  it.each([
+    ["gemini-3.7-flash", "gemini-3-flash-preview"],
+    ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+  ])("resolves future Gemini 3 text family %s from %s metadata", (modelId, templateId) => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId,
+        models: [
+          createTemplateModel("google", templateId, {
+            reasoning: true,
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: modelId,
+      reasoning: true,
+      contextWindow: 1_048_576,
     });
   });
 

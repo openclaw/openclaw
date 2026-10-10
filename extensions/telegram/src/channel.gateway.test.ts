@@ -179,7 +179,7 @@ afterEach(async () => {
 });
 
 describe("telegramPlugin gateway startup", () => {
-  it.each([404] as const)(
+  it.each([401, 404] as const)(
     "stops before monitor startup when getMe rejects the token with %s",
     async (status) => {
       installTelegramRuntime();
@@ -207,6 +207,25 @@ describe("telegramPlugin gateway startup", () => {
       });
     },
   );
+
+  it("keeps existing fallback startup for non-auth probe failures", async () => {
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount();
+
+    await expect(task).resolves.toBeUndefined();
+    const monitorOptions = latestMonitorOptions();
+    expect(monitorOptions.token).toBe("123456:bad-token");
+    expect(monitorOptions.accountId).toBe("default");
+    expect(monitorOptions.useWebhook).toBe(false);
+  });
 
   it.each([
     { owner: "main", accountPattern: "*" },
@@ -263,6 +282,33 @@ describe("telegramPlugin gateway startup", () => {
     });
     expect(probeTelegram).not.toHaveBeenCalled();
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
+  });
+
+  it("caches successful startup probe botInfo for later restarts", async () => {
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: startupBotInfo.id,
+        username: startupBotInfo.username,
+      },
+      botInfo: startupBotInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(latestMonitorOptions().botInfo).toBe(startupBotInfo);
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: startupBotInfo });
   });
 
   it("refreshes cached startup botInfo before monitor startup", async () => {
@@ -376,6 +422,29 @@ describe("telegramPlugin gateway startup", () => {
     await expect(
       readTelegramUpdateOffset({ accountId: "ops", botToken: "123456:bad-token" }),
     ).resolves.toBe(42);
+  });
+
+  it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+
+    await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+      accountId: "ops",
+      prevCfg: createTelegramConfig("ops"),
+      nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
+      runtime: createRuntimeSpies(),
+    });
+
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: startupBotInfo });
   });
 
   it("deletes cached startup botInfo when the account is removed", async () => {

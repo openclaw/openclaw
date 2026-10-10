@@ -53,6 +53,43 @@ describe("recordOutboundMessageForPromptContext", () => {
     await testState.cleanup();
   });
 
+  it("uses the configured self name and drops stale Telegram display-name fields", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "  Configured Agent  " },
+      chatId: 42,
+      message: {
+        chat: { id: 42, type: "private" },
+        date: 1_736_380_700,
+        from: {
+          id: 999,
+          is_bot: true,
+          first_name: "Provisioning",
+          last_name: "Placeholder",
+          username: "openclaw_bot",
+        },
+        message_id: 700,
+        text: "Bot just replied",
+      },
+      messageId: 700,
+      text: "Bot just replied",
+    });
+
+    expect(cached).toMatchObject({
+      sender: "Configured Agent (you)",
+      senderId: "999",
+      senderUsername: "openclaw_bot",
+      sourceMessage: {
+        from: {
+          id: 999,
+          is_bot: true,
+          first_name: "Configured Agent (you)",
+          username: "openclaw_bot",
+        },
+      },
+    });
+    expect(cached?.sourceMessage.from).not.toHaveProperty("last_name");
+  });
+
   it("binds topics only when the successful provider response identifies the thread", async () => {
     const common = {
       account: { accountId: "default", name: "Configured Agent" },
@@ -88,6 +125,32 @@ describe("recordOutboundMessageForPromptContext", () => {
       },
     });
     expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
+  });
+
+  it("records the successful channel Direct Messages spec ahead of raw message_thread_id", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1002,
+      messageId: 704,
+      messageThreadId: 999,
+      successfulSendThread: { id: 77, scope: "direct-messages" },
+      message: {
+        chat: {
+          id: -1002,
+          type: "supergroup",
+          title: "Channel replies",
+        },
+        date: 1_736_380_704,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 704,
+        message_thread_id: 999,
+        direct_messages_topic: { topic_id: 77 },
+        text: "Bot replied in channel Direct Messages",
+      },
+    });
+
+    expect(cached?.threadId).toBe("77");
+    expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "direct-messages", id: 77 });
   });
 
   it("retains forum and channel Direct Messages thread provenance without exposing topicless history", async () => {
@@ -186,6 +249,42 @@ describe("recordOutboundMessageForPromptContext", () => {
       sender: "Atlas (you)",
       senderId: "999",
       senderUsername: "atlas_bot",
+    });
+  });
+
+  it("preserves the sending bot identity for Telegram Business messages", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: 42,
+      message: {
+        chat: { id: 42, type: "private" },
+        date: 1_736_380_700,
+        from: {
+          id: 777,
+          is_bot: false,
+          first_name: "Business Account",
+          username: "business_account",
+        },
+        sender_business_bot: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+        message_id: 702,
+        text: "Business reply",
+      },
+      messageId: 702,
+      text: "Business reply",
+    });
+
+    expect(cached).toMatchObject({
+      sender: "Configured Agent (you)",
+      senderId: "777",
+      senderUsername: "business_account",
+      sourceMessage: {
+        sender_business_bot: { id: 999, is_bot: true, username: "openclaw_bot" },
+      },
     });
   });
 

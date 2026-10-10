@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import "./ai-transport-runtime-host.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -37,6 +38,18 @@ function textBlock(text: string, cache_control?: { type: "ephemeral"; ttl?: "1h"
   };
 }
 
+function boundarySystemPayload(): TestPayload {
+  return {
+    system: [
+      {
+        type: "text",
+        text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic lab suffix`,
+      },
+    ],
+    messages: [{ role: "user", content: "Hello" }],
+  };
+}
+
 function simpleTextPayload(): TestPayload {
   return {
     system: [{ type: "text", text: "Follow policy." }],
@@ -54,6 +67,30 @@ function expectShortEphemeralTextPayload(payload: TestPayload) {
 
 describe("anthropic payload policy", () => {
   it.each([
+    {
+      name: "uses 70 percent of the context window by default",
+      contextWindow: 200_000,
+      extraParams: { anthropicServerCompaction: true },
+      expectedThreshold: 140_000,
+    },
+    {
+      name: "uses an explicit threshold",
+      contextWindow: 200_000,
+      extraParams: {
+        anthropicServerCompaction: true,
+        anthropicCompactThreshold: 120_000,
+      },
+      expectedThreshold: 120_000,
+    },
+    {
+      name: "clamps an explicit threshold to the API minimum",
+      contextWindow: 200_000,
+      extraParams: {
+        anthropicServerCompaction: true,
+        anthropicCompactThreshold: 42_000,
+      },
+      expectedThreshold: 50_000,
+    },
     {
       name: "uses the API minimum for a small context window",
       contextWindow: 32_000,
@@ -104,6 +141,153 @@ describe("anthropic payload policy", () => {
     expect(configuredPayload.context_management).toBe(existing);
   });
 
+  it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
+    const policy = cachePolicy({ cacheRetention: "long", serviceTier: "standard_only" });
+    const payload: TestPayload = {
+      system: [
+        { type: "text", text: "Follow policy." },
+        { type: "text", text: "Use tools carefully." },
+      ],
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Working." }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Hello" },
+            { type: "tool_result", tool_use_id: "tool_1", content: "done" },
+          ],
+        },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+    expect(payload.service_tier).toBe("standard_only");
+    expect(payload.system).toEqual([
+      textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
+      textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
+    ]);
+    expect(payload.messages[0]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Working." }],
+    });
+    expect(payload.messages[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } },
+        {
+          type: "tool_result",
+          tool_use_id: "tool_1",
+          content: "done",
+          cache_control: { type: "ephemeral", ttl: "1h" },
+        },
+      ],
+    });
+  });
+
+  it("falls back to the latest tool result when no user text or image exists", () => {
+    const policy = cachePolicy();
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "first" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Continue." }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_2", content: "second" }],
+        },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "tool_1", content: "first" }],
+    });
+    expect(payload.messages[2]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_2",
+          content: "second",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+  });
+
+  it("uses the latest tool result when only one message cache marker remains", () => {
+    const policy = cachePolicy();
+    const payload: TestPayload = {
+      system: [
+        { type: "text", text: "Claude Code identity." },
+        { type: "text", text: "Follow policy." },
+      ],
+      tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Investigate the cache writes." }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I'll inspect the logs." }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Investigate the cache writes." }],
+    });
+    expect(payload.messages[2]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_1",
+          content: "log chunk",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+  });
+
+  it("denies proxied Anthropic service tier but honors explicit long TTL for custom hosts", () => {
+    const policy = cachePolicy({
+      baseUrl: "https://proxy.example.com/anthropic",
+      cacheRetention: "long",
+      serviceTier: "auto",
+    });
+    const payload = simpleTextPayload();
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" })]);
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    });
+  });
+
   it("keeps explicit short retention unchanged for custom hosts", () => {
     const policy = cachePolicy({ baseUrl: "https://proxy.example.com/anthropic" });
     const payload = simpleTextPayload();
@@ -137,5 +321,14 @@ describe("anthropic payload policy", () => {
       role: "user",
       content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
     });
+  });
+
+  it("strips the boundary even when cache retention is disabled", () => {
+    const policy = cachePolicy({ cacheRetention: "none" });
+    const payload = boundarySystemPayload();
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+    expect(payload.system).toEqual([textBlock("Stable prefix\nDynamic lab suffix")]);
   });
 });

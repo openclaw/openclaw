@@ -34,6 +34,35 @@ describe("telegram error policy", () => {
     });
   });
 
+  it("keeps cooldowns per error message within the same scope", () => {
+    const scopeKey = buildTelegramErrorScopeKey({
+      accountId,
+      chatId: 42,
+    });
+
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "A",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "B",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "A",
+      }),
+    ).toBe(true);
+  });
+
   it("prunes expired cooldowns within a single scope", () => {
     const scopeKey = buildTelegramErrorScopeKey({
       accountId,
@@ -124,6 +153,44 @@ describe("telegram error policy", () => {
     expect(
       shouldSuppressTelegramError({
         scopeKey,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not leak suppression across accounts or threads", () => {
+    const workMain = buildTelegramErrorScopeKey({
+      accountId,
+      chatId: 42,
+    });
+    const personalMain = buildTelegramErrorScopeKey({
+      accountId: "personal",
+      chatId: 42,
+    });
+    const workTopic = buildTelegramErrorScopeKey({
+      accountId,
+      chatId: 42,
+      threadSpec: { id: 9, scope: "forum" },
+    });
+
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey: workMain,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey: personalMain,
+        cooldownMs: 1000,
+        errorMessage: "429",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressTelegramError({
+        scopeKey: workTopic,
         cooldownMs: 1000,
         errorMessage: "429",
       }),

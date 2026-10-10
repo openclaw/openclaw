@@ -168,7 +168,7 @@ describe("owned backend silence allowances", () => {
     expect(closed.activeBackendLivenessDeadlineAtMs).toBeUndefined();
   });
 
-  it.each([30_000])(
+  it.each([30_000, 1_200_000])(
     "changes the %ims allowance without manufacturing output or progress",
     (noOutputTimeoutMs) => {
       vi.useFakeTimers();

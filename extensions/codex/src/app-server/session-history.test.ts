@@ -89,8 +89,25 @@ function mirroredTarget(sessionFile: string) {
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
   it.each([
+    new Error("private transcript detail"),
+    new Error("Codex settled-turn projection exceeds the item limit: private detail"),
+    Object.assign(new Error("private missing consumer data"), { code: "ENOENT" }),
+  ])("sanitizes unknown consumer failures without classifying their text (%s)", async (error) => {
+    const result = await readCodexNativeHistory({ kind: "empty" }, "session-id", () => {
+      throw error;
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "history_read_failed",
+    });
+  });
+
+  it.each([
     { incognito: false, reason: "item_limit", count: 201, text: "prior" },
     { incognito: true, reason: "item_limit", count: 201, text: "prior" },
+    { incognito: false, reason: "field_limit", count: 1, text: "x".repeat(65537) },
+    { incognito: true, reason: "field_limit", count: 1, text: "x".repeat(65537) },
   ])(
     "retains $reason in capture diagnostics (incognito=$incognito)",
     async ({ incognito, reason, count, text }) => {
@@ -134,7 +151,11 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     },
   );
 
-  it.each([{ oversized: true, incognito: true }])(
+  it.each([
+    { oversized: false, incognito: false },
+    { oversized: true, incognito: false },
+    { oversized: true, incognito: true },
+  ])(
     "projects native evidence within its budget ($oversized, incognito=$incognito)",
     async ({ oversized, incognito }) => {
       const { marker, sessionTarget } = await writeSqliteSession({ incognito });
@@ -334,6 +355,20 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     },
   );
 
+  it("reads incognito model context from the process-held SQLite store", async () => {
+    const { marker, sessionTarget } = await writeSqliteSession({ incognito: true });
+    const result = await readCodexMirroredSessionHistoryMessages({
+      ...sessionTarget,
+      sessionTarget,
+      sessionFile: marker,
+    });
+    expect(result).toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+    await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
+  });
+
   it("preserves native prompt evidence across model-context reads", async () => {
     const { marker, sessionTarget } = await writeSqliteSession();
     const upstreamUserText = "synthetic-native-prompt:" + "x".repeat(1024 * 1024);
@@ -371,6 +406,15 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     )!;
     expect(hash(readUpstreamUserText(after))).toBe(hash(upstreamUserText));
     expect(readMirrorIdentity(after)).toBe("synthetic-native-turn");
+  });
+  it("treats a missing mirrored session file as empty history", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
   });
 
   it("sanitizes consumer rejection after a missing file is read as empty history", async () => {
@@ -420,6 +464,19 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ).resolves.toEqual([]);
     expect(await fs.readdir(dir)).toEqual([]);
+  });
+
+  it("returns [] for transcripts that do not open with a Codex session marker", async () => {
+    // A non-Codex-shaped transcript (e.g. a non-Codex model run reusing this
+    // hook) is an empty mirror, not a read failure, so callers must not warn.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(sessionFile, JSON.stringify({ type: "message", id: "orphan" }) + "\n");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
   });
 
   it("returns undefined for a session header without a string id", async () => {
@@ -475,6 +532,25 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
+  it("replays SQLite history from the canonical typed session target", async () => {
+    const { sessionKey, sessionTarget } = await writeSqliteSession({
+      storedSessionFile: "agent:main:codex-sqlite",
+    });
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: sessionKey,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it.each([
     ["agent id", { agentId: "other" }],
     ["session id", { sessionId: "another-session" }],
@@ -507,6 +583,21 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ).resolves.toEqual([]);
   });
 
+  it("resolves SQLite marker history when the caller has no session key", async () => {
+    const { marker } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it("falls back from an unregistered requested key to the marker's verified session key", async () => {
     const { marker } = await writeSqliteSession();
     const staleSessionKey = "agent:main:stale-codex-session";
@@ -517,6 +608,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         sessionFile: marker,
         sessionId: "codex-sqlite-session",
         sessionKey: staleSessionKey,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it("resolves synthesized SQLite markers for stale file-backed session metadata", async () => {
+    const { marker } = await writeSqliteSession({
+      storedSessionFile: "/tmp/legacy-session.jsonl",
+    });
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
       }),
     ).resolves.toMatchObject([
       { role: "user", content: "sqlite prompt" },
@@ -648,9 +756,77 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toEqual([]);
   });
+
+  it("keeps visible history when continuation rows use a disjoint append cursor", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "visible", parentId: null, role: "user", content: "visible prompt" }),
+      messageEntry({
+        id: "inactive",
+        parentId: "visible",
+        role: "assistant",
+        content: "inactive answer",
+      }),
+      {
+        type: "metadata",
+        id: "append-metadata",
+        parentId: "inactive",
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive",
+        targetId: "visible",
+        appendParentId: "append-metadata",
+      },
+      messageEntry({
+        id: "continued",
+        parentId: "append-metadata",
+        role: "assistant",
+        content: "continued answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
+      { role: "user", content: "visible prompt" },
+      { role: "assistant", content: [{ type: "text", text: "continued answer" }] },
+    ]);
+  });
+
+  it("keeps visible history when a continuation references the leaf marker", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "visible", parentId: null, role: "user", content: "visible prompt" }),
+      messageEntry({
+        id: "inactive",
+        parentId: "visible",
+        role: "assistant",
+        content: "inactive answer",
+      }),
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive",
+        targetId: "visible",
+      },
+      messageEntry({
+        id: "continued",
+        parentId: "active-leaf",
+        role: "assistant",
+        content: "continued answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
+      { role: "user", content: "visible prompt" },
+      { role: "assistant", content: [{ type: "text", text: "continued answer" }] },
+    ]);
+  });
 });
 
-it.each([true])(
+it.each([false, true])(
   "bounds prepared Codex history without truncating native evidence (incognito=%s)",
   async (incognito) => {
     const fixture = await writeSqliteSession({ incognito });

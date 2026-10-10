@@ -31,6 +31,42 @@ function toolResult(
 }
 
 describe("projectSettledCodexMessages", () => {
+  it("projects a canonical completed tool exchange without exposing reasoning", () => {
+    expect(
+      projectSettledCodexMessages([
+        message({ role: "user", content: "Send the update." }),
+        message({
+          role: "assistant",
+          content: [{ type: "text", text: "I’ll send it now." }],
+        }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Send the update." }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "I’ll send it now." }],
+      },
+      {
+        type: "function_call",
+        call_id: "call-1",
+        name: "message",
+        arguments: '{"action":"send"}',
+      },
+      {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "Message sent.",
+      },
+    ]);
+  });
+
   it("accepts Codex's enriched mirrored tool-result block", () => {
     expect(
       projectSettledCodexMessages([
@@ -50,6 +86,27 @@ describe("projectSettledCodexMessages", () => {
         call_id: "call-1",
         output: "Telegram delivery complete.",
       },
+    ]);
+  });
+
+  it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
+    const name = "codex_apps.slack.slack_send";
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name, arguments: { channel: "C1" } }],
+        }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: name,
+          content: [{ type: "text", text: "Sent." }],
+        }),
+      ]),
+    ).toEqual([
+      { type: "function_call", call_id: "call-1", name, arguments: '{"channel":"C1"}' },
+      { type: "function_call_output", call_id: "call-1", output: "Sent." },
     ]);
   });
 
@@ -154,6 +211,25 @@ describe("projectSettledCodexMessages", () => {
     expect(laterReads).toBe(0);
   });
 
+  it("preserves upstream user text above the ordinary message limit", () => {
+    const upstreamUserText = "x".repeat(64 * 1024 + 1);
+
+    expect(
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "[Telegram metadata] decorated prompt" }),
+          upstreamUserText,
+        ),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: upstreamUserText }],
+    });
+  });
+
   it("rejects upstream user text above the projection limit", () => {
     expect(() =>
       projectSettledCodexMessages([
@@ -165,6 +241,21 @@ describe("projectSettledCodexMessages", () => {
         toolResult(),
       ]),
     ).toThrow("field_limit");
+  });
+
+  it("charges upstream user text against the aggregate byte limit", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "decorated" }),
+          "x".repeat(400 * 1024),
+        ),
+        message({ role: "user", content: "x".repeat(60 * 1024) }),
+        message({ role: "user", content: "x".repeat(60 * 1024) }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrow("byte_limit");
   });
 
   it("does not let provenance hide non-text user content", () => {
@@ -185,6 +276,7 @@ describe("projectSettledCodexMessages", () => {
   });
 
   it.each([
+    { name: "orphan result", messages: [toolResult()] },
     { name: "missing result", messages: [toolCall()] },
     { name: "duplicate call id", messages: [toolCall(), toolCall(), toolResult()] },
     {
@@ -208,6 +300,17 @@ describe("projectSettledCodexMessages", () => {
       name: "unknown role",
       value: { role: "future-role", content: "unknown" },
       reason: "unsupported_content",
+    },
+    {
+      name: "custom image evidence",
+      value: {
+        role: "custom",
+        customType: "plugin.note",
+        display: false,
+        content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+        __openclaw: { upstreamUserText: "Cannot replace image evidence." },
+      },
+      reason: "unsupported_user_image",
     },
     {
       name: "unknown custom block",

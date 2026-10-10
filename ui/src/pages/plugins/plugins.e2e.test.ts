@@ -131,6 +131,147 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
+  it("renders unified discovery with focused search, category sections, and settings navigation", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      const catalog = page.getByRole("region", { name: "Explore plugins" });
+      const search = catalog.getByRole("searchbox", { name: "Search plugins" });
+      await search.waitFor();
+      await expect
+        .poll(() => search.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      expect(
+        await page.getByRole("heading", { name: "Installed plugins", exact: true }).count(),
+      ).toBe(0);
+      expect(await page.getByRole("button", { name: "Plugin settings", exact: true }).count()).toBe(
+        1,
+      );
+      expect(
+        (await catalog.locator(".plugin-catalog-chip").allTextContents())
+          .map((label) => label.trim())
+          .slice(0, 3),
+      ).toEqual(["All", "Featured", "Trending"]);
+      expect(await catalog.locator(".plugin-catalog-section__header h2").allTextContents()).toEqual(
+        expect.arrayContaining(["Featured", "Trending", "Channels", "Memory"]),
+      );
+      expect(await gateway.getRequests("plugins.catalog.browse")).toHaveLength(1);
+      expect((await gateway.getRequests("plugins.catalog.browse"))[0]?.params).toEqual({
+        intent: "all",
+        pageSize: 100,
+      });
+      const grid = catalog.locator(".plugin-catalog-grid").first();
+      await expect
+        .poll(() =>
+          grid.evaluate(
+            (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+          ),
+        )
+        .toBe(4);
+      const installedCard = catalog.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').first();
+      await installedCard.waitFor();
+      expect(await installedCard.getByLabel("Disabled", { exact: true }).count()).toBe(1);
+      expect(await installedCard.getByRole("button", { name: /Install/iu }).count()).toBe(0);
+      const availableCard = catalog
+        .locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`)
+        .first();
+      expect(await availableCard.getByRole("button", { name: /Install/iu }).count()).toBe(1);
+      expect(await availableCard.getByText(/downloads/u).count()).toBe(0);
+      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
+
+      await search.fill("matrix");
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        match: { intent: "all", query: "matrix", pageSize: 100 },
+      });
+      expect(await catalog.locator(".plugin-catalog-section").count()).toBe(0);
+      expect(
+        await catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card").count(),
+      ).toBe(1);
+
+      await page.getByRole("button", { name: "Plugin settings", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens a routed ClawHub-style plugin detail page with normalized metadata", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: pluginMethodResponses(),
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+      await page.getByRole("heading", { level: 1, name: "Matrix", exact: true }).waitFor();
+      expect(
+        (await gateway.getRequests("plugins.catalog.get")).map((request) => request.params),
+      ).toContainEqual({ id: matrixDiscoveryPlugin.id });
+      expect(
+        await page.getByText("Connect OpenClaw to Matrix rooms and direct messages.").count(),
+      ).toBe(1);
+      const detailPanel = page.locator(".plugin-catalog-detail__panel");
+      const detailReadme = page.locator(".plugin-catalog-detail__readme");
+      const detailSidebar = page.locator(".plugin-catalog-detail__sidebar");
+      await detailPanel.getByText("Matrix messaging", { exact: true }).waitFor();
+      await detailReadme
+        .getByText("Connect OpenClaw to Matrix rooms and direct messages.")
+        .waitFor();
+      expect(await page.locator(".plugin-catalog-detail [role=tablist]").count()).toBe(0);
+      const [panelBox, readmeBox, sidebarBox] = await Promise.all([
+        detailPanel.boundingBox(),
+        detailReadme.boundingBox(),
+        detailSidebar.boundingBox(),
+      ]);
+      expect(panelBox).not.toBeNull();
+      expect(readmeBox).not.toBeNull();
+      expect(sidebarBox).not.toBeNull();
+      expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
+      expect(readmeBox!.x + readmeBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
+      expect(await page.getByText("52.2k", { exact: true }).count()).toBe(1);
+      expect(await detailSidebar.getByText("Clean", { exact: true }).count()).toBe(1);
+      expect(await page.getByText("Type", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
+      expect(
+        await detailSidebar
+          .getByRole("link", { name: "openclaw/openclaw", exact: true })
+          .getAttribute("href"),
+      ).toBe("https://github.com/openclaw/openclaw");
+      expect(
+        await page.getByRole("link", { name: "@openclaw", exact: true }).getAttribute("href"),
+      ).toBe("https://clawhub.ai/openclaw");
+      expect(await page.getByRole("link", { name: "Security audit" }).getAttribute("href")).toBe(
+        "https://clawhub.ai/openclaw/plugins/matrix/security-audit",
+      );
+      expect(await page.getByRole("link", { name: "View on ClawHub" }).count()).toBe(0);
+      expect(await page.getByRole("tab", { name: "Plugins", exact: true }).count()).toBe(0);
+      expect(
+        await page.getByRole("button", { name: "Install", exact: true }).evaluate((button) => {
+          const probe = document.createElement("span");
+          probe.style.background = "var(--primary)";
+          document.body.append(probe);
+          const expected = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return getComputedStyle(button).backgroundColor === expected;
+        }),
+      ).toBe(true);
+
+      expect(await detailSidebar.getByText("2.1.0", { exact: true }).count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("installs directly and uses Settings for required configuration", async () => {
     const context = await newContext();
     const page = await context.newPage();

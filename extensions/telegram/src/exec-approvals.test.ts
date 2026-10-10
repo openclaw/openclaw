@@ -81,6 +81,13 @@ function makeChannelApprovalRequest(params: {
 }
 
 describe("telegram exec approvals", () => {
+  it("matches approvers by normalized sender id", () => {
+    const cfg = buildConfig({ approvers: [123, "456"] });
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "123" })).toBe(true);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
+  });
+
   it("infers approvers from command owners", () => {
     const cfg = {
       ...buildConfig(),
@@ -232,6 +239,19 @@ describe("telegram exec approvals", () => {
       target: { channel: "telegram", to: "12345" },
       mode: "session" as const,
       expected: false,
+    },
+    {
+      name: "allows an unscoped target from a named callback account",
+      target: { channel: "telegram", to: "12345" },
+      accountId: "any-account",
+      mode: "targets" as const,
+      expected: true,
+    },
+    {
+      name: "keeps target eligibility when the callback account is unspecified",
+      target: { channel: "telegram", to: "12345", accountId: "work" },
+      mode: "targets" as const,
+      expected: true,
     },
   ])("$name", ({ target, accountId, senderId = "12345", mode, expected }) => {
     const cfg: OpenClawConfig = {

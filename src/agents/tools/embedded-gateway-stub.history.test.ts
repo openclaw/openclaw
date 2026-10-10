@@ -119,7 +119,7 @@ describe("embedded session history anchors", () => {
     }
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "recalls an old search hit outside the newest tail (physical selector: %s)",
     async (includeSessionId) => {
       const result = await toolsFor().search.execute("find", { query: "quasar" });

@@ -51,6 +51,18 @@ describe("configured Codex connection verification", () => {
     ).toBe(false);
   });
 
+  it("ignores local launch settings that a remote service does not consume", () => {
+    const binding = captureBinding();
+    const capture = captureCodexConfiguredConnection({
+      ...start,
+      command: "/another/local/codex",
+      args: ["app-server", "--another-local-option"],
+      env: { PATH: "/another/local/path", CODEX_HOME: "/local/home" },
+      codexHome: "/another/local/home",
+    });
+    expect(validateCodexConfiguredConnectionCapture(binding, capture)).toBe(true);
+  });
+
   it("binds the home-resolved canonical Unix socket", () => {
     const canonical = {
       ...start,
@@ -80,14 +92,15 @@ describe("configured Codex connection verification", () => {
     ).toBe(true);
   });
 
-  it.each([{ serverVersion: "9.0.0" }, { codexHome: "/remote/other-home" }])(
-    "binds initialized identity changes %j",
-    (change) => {
-      expect(captureBinding(start, { ...runtimeIdentity, ...change })).not.toEqual(
-        captureBinding(),
-      );
-    },
-  );
+  it.each([
+    { serverVersion: "9.0.0" },
+    { userAgent: "different codex" },
+    { codexHome: "/remote/other-home" },
+    { platformFamily: "windows" },
+    { platformOs: "darwin" },
+  ])("binds initialized identity changes %j", (change) => {
+    expect(captureBinding(start, { ...runtimeIdentity, ...change })).not.toEqual(captureBinding());
+  });
 
   it("rejects connection changes between capture and initialize", () => {
     expect(() =>

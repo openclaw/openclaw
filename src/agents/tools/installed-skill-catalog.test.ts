@@ -121,7 +121,43 @@ describe("installed skill catalog", () => {
     ).toBe("retained-guide");
   });
 
-  it.each([[["deploy"], "DEPLOY", "deploy"]] as const)(
+  it("ranks an exact identity first and searches the entire prepared catalog", async () => {
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const skills = [
+      skill("alpha", "Release checks"),
+      skill("releases", "Prepare a software release"),
+      skill("zulu", "Audit database migrations"),
+    ];
+    expect((await searchInstalledSkills(skills, "releases", 1)).skills[0]?.name).toBe("releases");
+    expect((await searchInstalledSkills(skills, "database migration")).skills).toEqual([
+      { name: "zulu", description: "Audit database migrations", location: "/skills/zulu/SKILL.md" },
+    ]);
+    expect(await searchInstalledSkills(skills, "unrelated")).toEqual({
+      skills: [],
+      hasMore: false,
+      coverage: { bodyIndexed: 0, metadataOnly: 3, truncatedBodies: 0 },
+    });
+    expect(build).toHaveBeenCalledTimes(1);
+    const refreshed = skills.map(({ name, description }) => skill(name, description));
+    for (const item of refreshed) {
+      item.location = `/current/${item.name}`;
+    }
+    expect((await searchInstalledSkills(refreshed, "database migration")).skills[0]?.location).toBe(
+      "/current/zulu",
+    );
+    expect(build).toHaveBeenCalledTimes(1);
+    refreshed[2]!.description = "Inspect nebulae";
+    expect((await searchInstalledSkills(refreshed, "nebulae")).skills[0]?.name).toBe("zulu");
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [["deploy", "Deploy"], "Deploy", "Deploy"],
+    [["Deploy", "deploy"], "deploy", "deploy"],
+    [["Deploy", "deploy"], "Deploy", "Deploy"],
+    [["deploy", "Deploy"], "deploy", "deploy"],
+    [["deploy"], "DEPLOY", "deploy"],
+  ] as const)(
     "preserves exact identity with catalog %j and query %s",
     async (names, query, expected) => {
       const skills = names.map((name) =>

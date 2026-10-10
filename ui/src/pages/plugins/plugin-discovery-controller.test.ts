@@ -221,6 +221,16 @@ it("preserves home navigation when a category completes during the search deboun
   expect.soft(controller.trending).toEqual([trending]);
 });
 
+it("does not expose continuation for search results", async () => {
+  vi.useFakeTimers();
+  const { controller } = setup([{ items: [entry(1)], nextCursor: "unsupported-search-page" }]);
+
+  controller.updateQuery("memory");
+  await vi.runAllTimersAsync();
+
+  expect(controller.result).toEqual({ items: [entry(1)] });
+});
+
 it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {
   vi.useFakeTimers();
   const { controller, request } = setup([], async () => ({ items: [entry(1)] }));
@@ -307,7 +317,7 @@ it("restores the loaded overview immediately when clearing search and retires la
   expect(request).toHaveBeenCalledTimes(3);
 });
 
-it.each(["category"] as const)(
+it.each(["category", "featured"] as const)(
   "restores All when clearing a search before debounce from %s",
   async (filter) => {
     vi.useFakeTimers();
@@ -401,6 +411,38 @@ it("retries a degraded overview when returning from search", async () => {
   expect(controller.loading).toBe(false);
 });
 
+it("loads one bounded page initially and continues only after explicit expansion", async () => {
+  const promotedMatch = entry(100);
+  promotedMatch.catalog.official = true;
+  promotedMatch.catalog.downloads = 10_000;
+  const matches = [...Array.from({ length: 100 }, (_, index) => entry(index)), promotedMatch];
+  const { controller, request } = setup([
+    { items: matches.slice(0, 100), nextCursor: "catalog-page-2" },
+    { items: matches.slice(100) },
+  ]);
+  controller.category = "tools";
+
+  await controller.refresh();
+  expect(controller.result?.items).toHaveLength(100);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenCalledWith(
+    "plugins.catalog.browse",
+    { intent: "all", category: "tools", pageSize: 100 },
+    expect.anything(),
+  );
+
+  await controller.loadMore();
+
+  expect(controller.result?.items).toHaveLength(101);
+  expect(controller.result?.items[0]?.id).toBe(promotedMatch.id);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenLastCalledWith(
+    "plugins.catalog.browse",
+    { intent: "all", category: "tools", cursor: "catalog-page-2", pageSize: 100 },
+    expect.anything(),
+  );
+});
+
 it("replaces a first-page local placeholder with later published Media metadata", async () => {
   const placeholder = entry(1);
   delete placeholder.catalog.family;
@@ -422,6 +464,24 @@ it("replaces a first-page local placeholder with later published Media metadata"
   expect(controller.result?.items).toEqual([published]);
 });
 
+it("preserves independent Trending rank from the deduplicated overview", async () => {
+  const official = entry(1);
+  official.catalog.official = true;
+  official.catalog.downloads = 10_000;
+  official.catalog.trending = true;
+  official.catalog.trendingRank = 1;
+  const community = entry(2);
+  community.catalog.downloads = 100;
+  community.catalog.trending = true;
+  community.catalog.trendingRank = 0;
+  const { controller } = setup([{ items: [official, community] }]);
+
+  await controller.refresh();
+
+  expect(controller.result?.items.map((item) => item.id)).toEqual([official.id, community.id]);
+  expect(controller.trending.map((item) => item.id)).toEqual([community.id, official.id]);
+});
+
 it("keeps unranked overview members after ranked entries", async () => {
   const ranked = entry(1);
   ranked.catalog.featured = true;
@@ -433,6 +493,30 @@ it("keeps unranked overview members after ranked entries", async () => {
   await controller.refresh();
 
   expect(controller.featured.map((item) => item.id)).toEqual([ranked.id, unranked.id]);
+});
+
+it("preserves category navigation when a filtered view reconnects", async () => {
+  const categories = [
+    {
+      slug: "channels",
+      label: "Channels",
+      description: "Channels",
+      icon: "message-circle",
+      order: 0,
+    },
+  ];
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : { items: [entry(1)], categories },
+  );
+
+  await controller.refresh();
+  controller.category = "channels";
+  controller.invalidate();
+  expect(controller.categories).toEqual([]);
+  await controller.ensureCategories();
+  await controller.refresh();
+
+  expect(controller.categories).toEqual(categories);
 });
 
 it("sorts category pins before downloads on the first page and after pagination", async () => {

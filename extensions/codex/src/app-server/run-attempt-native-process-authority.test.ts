@@ -576,6 +576,20 @@ describe("native background process source authority", () => {
     }
   });
 
+  it("sole sandbox lease normal completion settles its task-owned process", async () => {
+    const f = await fixture();
+    try {
+      const staff = await f.begin("maintainer");
+      expect(staff.terminal.alive).toBe(true);
+      expect(readAttemptTerminal(await staff.complete()).aborted).toBe(false);
+      await staff.terminal.settled;
+      expect(staff.terminal.alive).toBe(false);
+      expect(f.terminated).toEqual([]);
+    } finally {
+      await f.dispose();
+    }
+  });
+
   it("parent cancellation settles its claimed native child's process and preserves independent maintainer work", async () => {
     const f = await fixture();
     try {
@@ -642,7 +656,7 @@ describe("native background process source authority", () => {
       await f.dispose();
     }
   });
-  it.each(["active", "settled", "peer replacement"] as const)(
+  it.each(["active", "settled", "peer", "peer replacement"] as const)(
     "rechecks %s background custody at subscription retention",
     async (custody) => {
       const f = await fixture();

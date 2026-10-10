@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
 } from "openclaw/plugin-sdk/core";
@@ -133,6 +134,28 @@ describe("buildPromptSection", () => {
     expect(systemAgentReads).toBe(0);
   });
 
+  it("describes the two-step flow when both memory tools are available", () => {
+    const result = buildMemoryPromptSection({
+      availableTools: new Set(["memory_search", "memory_get"]),
+    });
+    expect(result[0]).toBe("## Memory Recall");
+    expect(result[1]).toContain("run memory_search");
+    expect(result[1]).toContain("for memory-file hits, use memory_get");
+    expect(result).toContain(
+      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+    );
+    expect(result.at(-1)).toBe("");
+  });
+
+  it("limits the guidance to memory_search when only search is available", () => {
+    const result = buildMemoryPromptSection({
+      availableTools: new Set(["memory_search"]),
+    });
+    expect(result[0]).toBe("## Memory Recall");
+    expect(result[1]).toContain("run memory_search");
+    expect(result[1]).not.toContain("then use memory_get");
+  });
+
   it("limits the guidance to memory_get when only get is available", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_get"]),
@@ -143,6 +166,7 @@ describe("buildPromptSection", () => {
   });
 
   it.each([
+    [[], [], ["sessions_search", "sessions_history"]],
     [["sessions_search"], ["sessions_search"], ["sessions_history"]],
     [["sessions_history"], ["sessions_history"], ["sessions_search"]],
     [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
@@ -262,6 +286,44 @@ describe("memory-core plugin runtime registration", () => {
     expect(current).not.toHaveBeenCalled();
   });
 
+  it("registers the dreaming runtime slash command", () => {
+    let command: OpenClawPluginCommandDefinition | undefined;
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+        registerCommand(definition) {
+          command = definition;
+        },
+      }),
+    );
+
+    expect(command?.name).toBe("dreaming");
+    expect(command?.acceptsArgs).toBe(true);
+    expect(command?.exposeSenderIsOwner).toBe(true);
+    expect(command?.description).toContain("Enable or disable");
+  });
+
+  it("registers the standing-intent tool and deterministic prompt hook", () => {
+    const toolNames: string[] = [];
+    const hooks: string[] = [];
+    const subagentRun = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never,
+        registerTool(_factory, options?: Parameters<OpenClawPluginApi["registerTool"]>[1]) {
+          toolNames.push(...(options?.names ?? []));
+        },
+        on(hookName) {
+          hooks.push(hookName);
+        },
+      }),
+    );
+
+    expect(toolNames).toContain("intent");
+    expect(hooks).toContain("before_prompt_build");
+    expect(subagentRun).not.toHaveBeenCalled();
+  });
+
   it("scopes both reply hooks to scheduled turns across three registrations", () => {
     for (let cycle = 1; cycle <= 3; cycle += 1) {
       const replyHookTriggers: unknown[] = [];
@@ -342,7 +404,18 @@ describe("memory-core plugin runtime registration", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["memory-core"])(
+  it("keeps memory manager initialization out of registration", () => {
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+      }),
+    );
+
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["memory-core", "honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {
       const config: OpenClawConfig = {
@@ -384,6 +457,8 @@ describe("memory-core plugin runtime registration", () => {
 
   it.each([
     { cleanupOwner: "stop", cleanupFails: false },
+    { cleanupOwner: "stop", cleanupFails: true },
+    { cleanupOwner: "dispose", cleanupFails: false },
     { cleanupOwner: "dispose", cleanupFails: true },
   ])(
     "drains managers after tracked activation rejects ($cleanupOwner, cleanup failure: $cleanupFails)",
@@ -503,8 +578,6 @@ describe("memory-core plugin runtime registration", () => {
 
     expect(llmGetter).not.toHaveBeenCalled();
     expect(stateGetter).not.toHaveBeenCalled();
-    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
     const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
     if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
@@ -583,6 +656,15 @@ describe("buildMemoryFlushPlan", () => {
     expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 
+  it("defaults to safe prompts and gating values", () => {
+    const plan = buildMemoryFlushPlan();
+    expect(plan?.softThresholdTokens).toBe(4000);
+    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
+    expect(plan?.prompt).toContain("memory/");
+    expect(plan?.prompt).toContain("MEMORY.md");
+    expect(plan?.systemPrompt).toContain("MEMORY.md");
+  });
+
   it("respects disable flag", () => {
     expect(
       buildMemoryFlushPlan({
@@ -630,6 +712,24 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.softThresholdTokens).toBe(4000);
     expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
+  });
+
+  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                forceFlushTranscriptBytes: "3mb",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
   });
 
   it("keeps overwrite guards in the default prompt", () => {

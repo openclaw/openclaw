@@ -42,6 +42,40 @@ describe("google provider policy public artifact", () => {
     });
   });
 
+  it("preserves explicit OpenAI-compatible Google endpoints during normalization", () => {
+    expect(
+      normalizeConfig({
+        provider: "google",
+        providerConfig: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          api: "openai-completions",
+          models: [],
+        },
+      }),
+    ).toEqual({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      api: "openai-completions",
+      models: [],
+    });
+  });
+
+  it("normalizes retired Google model ids even for explicit OpenAI-compatible endpoints", () => {
+    expect(
+      normalizeConfig({
+        provider: "google",
+        providerConfig: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          api: "openai-completions",
+          models: [createModel("google/gemini-3-pro-preview")],
+        },
+      }),
+    ).toEqual({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      api: "openai-completions",
+      models: [createModel("google/gemini-3.1-pro-preview")],
+    });
+  });
+
   it("normalizes retired Gemini CLI config model ids before emission", () => {
     expect(
       normalizeConfig({
@@ -54,6 +88,39 @@ describe("google provider policy public artifact", () => {
     ).toEqual({
       baseUrl: "openclaw://google-gemini-cli",
       models: [createModel("google/gemini-3.1-pro-preview", "Gemini CLI 3 Pro")],
+    });
+  });
+
+  it("preserves Gemini 3 thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemini-3-flash-preview",
+        reasoning: false,
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "adaptive" },
+        { id: "high" },
+      ],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("preserves provider-prefixed Gemini 3 thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "google/gemini-3-flash-preview",
+        reasoning: false,
+      }),
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "low" }, { id: "medium" }, { id: "adaptive" }]),
+      preserveWhenCatalogReasoningFalse: true,
     });
   });
 

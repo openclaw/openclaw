@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -11,7 +14,8 @@ import type {
   ProviderPlugin,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
@@ -115,6 +119,7 @@ const profileId = "microsoft-foundry:entra";
 const agentDir = "/tmp/test-agent";
 const loginError = "Please run 'az login' to setup account.";
 const foundryTokenCacheMaxEntries = 128;
+let runRealExec: typeof import("openclaw/plugin-sdk/process-runtime").runExec;
 let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
@@ -279,6 +284,12 @@ async function selectModel(provider: FoundryProvider, config: OpenClawConfig, mo
 }
 
 describe("microsoft-foundry plugin", () => {
+  beforeAll(async () => {
+    ({ runExec: runRealExec } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/process-runtime")
+    >("openclaw/plugin-sdk/process-runtime"));
+  });
+
   beforeEach(() => {
     runtimeAuthTestSequence += 1;
     runtimeAuthTestTenantId = `tenant-${runtimeAuthTestSequence}`;
@@ -543,6 +554,92 @@ describe("microsoft-foundry plugin", () => {
     } finally {
       release.resolve();
       await Promise.allSettled(pending);
+    }
+  });
+
+  it("refreshes an evicted account through an Azure CLI subprocess", async ({ signal }) => {
+    const nodeExecPath = resolveTestNodeExecPath();
+    const proofDir = await fs.mkdtemp(path.join(os.tmpdir(), "foundry-cache-proof-"));
+    try {
+      const binDir = path.join(proofDir, "bin");
+      await fs.mkdir(binDir);
+      const fakeAz = path.join(proofDir, "fake-az.mjs");
+      await fs.writeFile(
+        fakeAz,
+        String.raw`#!/usr/bin/env node
+  const args = process.argv.slice(2);
+  process.stdout.write(JSON.stringify({
+    accessToken: "synthetic-cli-" + args[args.indexOf("--tenant") + 1],
+    expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
+  }));
+  `,
+      );
+      if (process.platform === "win32") {
+        await fs.writeFile(
+          path.join(binDir, "az.cmd"),
+          `@echo off\r\n"${nodeExecPath}" "${fakeAz}" %*\r\n`,
+        );
+      } else {
+        await fs.chmod(fakeAz, 0o700);
+        await fs.symlink(fakeAz, path.join(binDir, "az"));
+      }
+
+      const prepare = prepareAuth();
+      const tenant = (index: number) => `boundary-${runtimeAuthTestTenantId}-${index}`;
+      const prepareForTenant = async (index: number) => {
+        ensureAuthProfileStoreMock.mockReturnValueOnce(entraStore({ tenantId: tenant(index) }));
+        return authResult(await prepare(authContext()));
+      };
+      execFileMock.mockResolvedValue(tokenResponse("synthetic-seed-token"));
+      // Fill through the provider without launching a process for each cached account.
+      for (let index = 0; index <= foundryTokenCacheMaxEntries; index++) {
+        await prepareForTenant(index);
+      }
+      execFileMock.mockImplementation(
+        (command: string, args: string[], options: { logOutput: boolean; timeoutMs: number }) =>
+          runRealExec(command, args, {
+            ...options,
+            signal,
+            cwd: proofDir,
+            baseEnv: {
+              PATH: [
+                binDir,
+                path.dirname(nodeExecPath),
+                ...(process.platform === "win32" ? [] : ["/usr/bin", "/bin"]),
+              ].join(path.delimiter),
+              HOME: proofDir,
+              USERPROFILE: proofDir,
+              SystemRoot: process.env.SystemRoot,
+              ComSpec: process.env.ComSpec,
+              OPENCLAW_STATE_DIR: path.join(proofDir, "state"),
+              AZURE_CONFIG_DIR: path.join(proofDir, "azure"),
+            },
+          }),
+      );
+
+      const refreshed = await prepareForTenant(0);
+      expect(refreshed).toMatchObject({
+        apiKey: `synthetic-cli-${tenant(0)}`,
+        request: { auth: { mode: "authorization-bearer", token: `synthetic-cli-${tenant(0)}` } },
+      });
+      expect(execFileMock).toHaveBeenLastCalledWith(
+        "az",
+        [
+          "account",
+          "get-access-token",
+          "--resource",
+          COGNITIVE_SERVICES_RESOURCE,
+          "--output",
+          "json",
+          "--tenant",
+          tenant(0),
+        ],
+        { logOutput: false, timeoutMs: 30_000 },
+      );
+      expect(await prepareForTenant(0)).toEqual(refreshed);
+      expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
+    } finally {
+      await fs.rm(proofDir, { recursive: true, force: true });
     }
   });
 
@@ -963,28 +1060,46 @@ describe("microsoft-foundry plugin", () => {
     ).toBe(baseStreamFn);
   });
 
-  it("uses Foundry-native token limits for gpt-5.4-mini", () => {
+  it.each([
+    ["gpt-5.6-sol", 1_050_000, 128_000],
+    ["gpt-5.4-pro", 1_050_000, 128_000],
+    ["gpt-5.4-mini", 400_000, 128_000],
+    ["gpt-4o-mini", 128_000, 16_384],
+  ] as const)(
+    "uses Foundry-native token limits for %s",
+    (modelNameHint, contextWindow, maxTokens) => {
+      const result = buildAuthResult({
+        modelId: `prod-${modelNameHint}`,
+        modelNameHint,
+        api: modelNameHint.startsWith("gpt-5") ? "openai-responses" : "openai-completions",
+        authMethod: "api-key",
+      });
+
+      expect(providerPatch(result).models[0]).toMatchObject({
+        name: modelNameHint,
+        contextWindow,
+        maxTokens,
+      });
+    },
+  );
+
+  it.each([
+    ["claude-opus-5", 128_000],
+    ["claude-sonnet-4.6", 128_000],
+    ["claude-sonnet-4.5", 64_000],
+    ["claude-opus-4.1", 32_000],
+  ] as const)("preserves Foundry Claude token limits for %s", (modelNameHint, maxTokens) => {
     const result = buildAuthResult({
-      modelId: "prod-gpt-5.4-mini",
-      modelNameHint: "gpt-5.4-mini",
-      api: "openai-responses",
-      authMethod: "api-key",
+      modelId: `prod-${modelNameHint.replaceAll(".", "-")}`,
+      modelNameHint,
+      api: "anthropic-messages",
     });
 
     expect(providerPatch(result).models[0]).toMatchObject({
-      name: "gpt-5.4-mini",
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-      compat: { supportedReasoningEfforts: ["none", "low", "medium", "high"] },
-    });
-    expect(providerPatch(result).models[0]?.thinkingLevelMap).toEqual({
-      off: "none",
-      minimal: null,
-      low: "low",
-      medium: "medium",
-      high: "high",
-      xhigh: null,
-      max: null,
+      name: modelNameHint,
+      api: "anthropic-messages",
+      contextWindow: maxTokens === 128_000 ? 1_000_000 : 200_000,
+      maxTokens,
     });
   });
 
@@ -1082,6 +1197,36 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
+  it("records model-name reasoning effort limits for Foundry deployment aliases", () => {
+    const result = buildAuthResult({
+      modelId: "deployment-codex-mini",
+      modelNameHint: "gpt-5.1-codex-mini",
+      api: "openai-completions",
+      authMethod: "api-key",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.models[0]?.reasoning).toBe(true);
+    expect(provider?.models[0]?.compat?.supportsReasoningEffort).toBe(true);
+    expect(provider?.models[0]?.compat?.supportedReasoningEfforts).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+    // Persisted thinking maps must use schema level keys (openclaw#91011).
+    expect(provider?.models[0]?.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: null,
+      max: null,
+    });
+  });
+
   it("omits minimal from Foundry GPT-5 Codex reasoning effort metadata", () => {
     const result = buildAuthResult({
       modelId: "gpt-5-codex",
@@ -1146,6 +1291,27 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
+  it("deletes legacy provider-level secret refs", () => {
+    const secretRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "AZURE_OPENAI_API_KEY",
+    };
+    const result = buildAuthResult({
+      apiKey: secretRef,
+      modelId: "gpt-4o",
+      authMethod: "api-key",
+    });
+
+    const provider = providerPatch(result);
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.authHeader).toBeUndefined();
+    expect(provider.headers).toBeUndefined();
+    expect(Object.hasOwn(provider, "apiKey")).toBe(true);
+    expect(Object.hasOwn(provider, "authHeader")).toBe(true);
+    expect(Object.hasOwn(provider, "headers")).toBe(true);
+  });
+
   it("moves the selected Foundry auth profile to the front of auth.order", () => {
     const result = buildAuthResult({
       modelId: "gpt-5.4",
@@ -1170,9 +1336,6 @@ describe("microsoft-foundry plugin", () => {
     });
 
     const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-    expect(provider).toHaveProperty("apiKey", undefined);
-    expect(provider).toHaveProperty("authHeader", undefined);
-    expect(provider).toHaveProperty("headers", undefined);
     expect(provider?.models.map((model) => model.id)).toEqual([
       "deployment-gpt5",
       "deployment-gpt4o",

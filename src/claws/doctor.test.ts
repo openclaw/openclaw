@@ -1,11 +1,12 @@
-import { access, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan } from "./add.js";
@@ -141,6 +142,50 @@ describe("collectClawStateHealthFindings", () => {
     await expect(access(databasePath)).rejects.toThrow();
   });
 
+  it("reports an unreadable state database as a structured finding", async () => {
+    const current = await fixture();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    await mkdir(dirname(databasePath), { recursive: true });
+    await writeFile(databasePath, "not sqlite", "utf8");
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: {},
+      sourceMcpServers: {},
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining("Could not inspect Claw lifecycle state"),
+      }),
+    ]);
+  });
+
+  it("reports a newer state schema instead of interpreting it", async () => {
+    const current = await fixture();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    await mkdir(dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    const newerSchemaVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    database.exec(`PRAGMA user_version = ${newerSchemaVersion}`);
+    database.close();
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: {},
+      sourceMcpServers: {},
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining(`uses newer schema version ${newerSchemaVersion}`),
+      }),
+    ]);
+    const reopened = new DatabaseSync(databasePath, { readOnly: true });
+    expect(reopened.isOpen).toBe(true);
+    reopened.close();
+  });
+
   it("does not change existing database bytes, metadata, schema, or journal mode", async () => {
     const current = await installFixture({ withMcp: true, withCron: true });
     // Keep a real shared-state worker open until the snapshot cleanup boundary.
@@ -193,18 +238,38 @@ describe("collectClawStateHealthFindings", () => {
 
   it("reports no findings for a complete unchanged install", async () => {
     const current = await installFixture({ withFile: true, withMcp: true, withCron: true });
-    const sourceMcpServers = snapshotMcpServers(current.getConfig());
-    current.getConfig().mcp!.servers!.docs!.env = { DOCS_TOKEN: "resolved-secret" };
     await expect(
       collectClawStateHealthFindings({
         env: current.env,
         cfg: current.getConfig(),
-        sourceMcpServers,
+        sourceMcpServers: snapshotMcpServers(current.getConfig()),
         cronGateway: {
           list: async () => [cronJob()],
         },
       }),
     ).resolves.toEqual([]);
+  });
+
+  it("does not load MCP config when no Claw owns an MCP server", async () => {
+    const current = await installFixture({ withFile: true });
+    await writeFile(join(current.plan.agent.workspace, "SOUL.md"), "local edit\n", "utf8");
+    const listMcpServers = vi.fn(async () => {
+      throw new Error("MCP config unavailable");
+    });
+
+    await expect(
+      collectClawStateHealthFindings({
+        env: current.env,
+        cfg: current.getConfig(),
+        listMcpServers,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("workspace file changed"),
+        path: "claws.worker.workspace.SOUL.md",
+      }),
+    ]);
+    expect(listMcpServers).not.toHaveBeenCalled();
   });
 
   it("reports MCP config failure when a Claw owns an MCP server", async () => {
@@ -228,6 +293,20 @@ describe("collectClawStateHealthFindings", () => {
       }),
     ]);
     expect(listMcpServers).toHaveBeenCalledOnce();
+  });
+
+  it("uses source MCP placeholders instead of resolved secret values", async () => {
+    const current = await installFixture({ withMcp: true });
+    const sourceMcpServers = structuredClone(current.getConfig().mcp?.servers ?? {});
+    current.getConfig().mcp!.servers!.docs!.env = { DOCS_TOKEN: "resolved-secret" };
+
+    await expect(
+      collectClawStateHealthFindings({
+        env: current.env,
+        cfg: current.getConfig(),
+        sourceMcpServers,
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("reports incomplete package lifecycle state", async () => {
@@ -342,6 +421,22 @@ describe("collectClawStateHealthFindings", () => {
           path: "claws.worker.cronJobs.daily-report",
         }),
       ]),
+    );
+  });
+
+  it("reports complete cron ownership as unknown without live Gateway inventory", async () => {
+    const current = await installFixture({ withCron: true });
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: current.getConfig(),
+      sourceMcpServers: snapshotMcpServers(current.getConfig()),
+    });
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("live Gateway state is unknown"),
+        path: "claws.worker.cronJobs.daily-report",
+      }),
     );
   });
 

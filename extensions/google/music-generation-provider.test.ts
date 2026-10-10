@@ -21,6 +21,7 @@ vi.mock("./google-genai-runtime.js", () => ({
 }));
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
 
 type GoogleGenAIConfig = {
@@ -118,6 +119,10 @@ describe("google music generation provider", () => {
     vi.resetModules();
   });
 
+  it("declares explicit mode capabilities", () => {
+    expectExplicitMusicGenerationCapabilities(buildGoogleMusicGenerationProvider());
+  });
+
   it("advertises Gemini music generation with a config-only Google API key", () => {
     expect(
       buildGoogleMusicGenerationProvider().isConfigured?.({
@@ -171,26 +176,26 @@ describe("google music generation provider", () => {
     expect(lastGoogleGenAIConfig().apiKey).toBe("google-key");
   });
 
-  it.each([["mixed alphabet", "aGVsbG8+_"]])(
-    "rejects %s in inline audio",
-    async (_scenario, data) => {
-      mockGoogleAuth();
-      generateContentMock.mockResolvedValue({
-        candidates: [
-          {
-            content: { parts: [{ inlineData: { data, mimeType: "audio/mpeg" } }] },
-            finishReason: "STOP",
-          },
-        ],
-      });
+  it.each([
+    ["non-canonical pad bits", "ZE=="],
+    ["mixed alphabet", "aGVsbG8+_"],
+  ])("rejects %s in inline audio", async (_scenario, data) => {
+    mockGoogleAuth();
+    generateContentMock.mockResolvedValue({
+      candidates: [
+        {
+          content: { parts: [{ inlineData: { data, mimeType: "audio/mpeg" } }] },
+          finishReason: "STOP",
+        },
+      ],
+    });
 
-      await expect(generateMusic()).rejects.toThrow(
-        "Generated music asset contains malformed base64 audio data",
-      );
+    await expect(generateMusic()).rejects.toThrow(
+      "Generated music asset contains malformed base64 audio data",
+    );
 
-      expect(generateContentMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+  });
 
   it("accepts inline audio encoded with URL-safe base64", async () => {
     mockGoogleAuth();
@@ -281,6 +286,15 @@ describe("google music generation provider", () => {
     expect(generateContentMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry request errors", async () => {
+    mockGoogleAuth();
+    generateContentMock.mockRejectedValue(new Error("HTTP 400 invalid request"));
+
+    await expect(generateMusic()).rejects.toThrow("HTTP 400 invalid request");
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+  });
+
   const baseUrlCases: Array<{
     name: string;
     baseUrl?: string;
@@ -299,6 +313,11 @@ describe("google music generation provider", () => {
       name: "does NOT strip /v1beta when it appears mid-path (end-anchor proof)",
       baseUrl: "https://proxy.example.com/v1beta/route",
       expectedBaseUrl: "https://proxy.example.com/v1beta/route",
+      prompt: "test",
+      audio: "x",
+    },
+    {
+      name: "does not set baseUrl when none is configured",
       prompt: "test",
       audio: "x",
     },

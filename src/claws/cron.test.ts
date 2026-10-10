@@ -138,6 +138,25 @@ describe("installClawCronJobs", () => {
     expect(readClawCronRefs("worker-two", { env: current.env })).toEqual(refs);
   });
 
+  it("does not require the gateway when every cron reference is already complete", async () => {
+    const current = await fixture();
+    await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
+    });
+    const waitUntilAgentAvailable = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, waitUntilAgentAvailable },
+      }),
+    ).resolves.toMatchObject([{ schedulerJobId: "scheduler-123", status: "complete" }]);
+    expect(waitUntilAgentAvailable).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it("fails closed when a complete scheduler job disappeared", async () => {
     const current = await fixture();
     await installClawCronJobs(current.plan, {
@@ -196,28 +215,53 @@ describe("installClawCronJobs", () => {
     }
   });
 
-  it.each([{ name: "unknown definition field", patch: { operatorSetting: { mode: "changed" } } }])(
-    "rejects a same-key scheduler job with drifted $name",
-    async ({ patch }) => {
-      const current = await fixture();
-      await installClawCronJobs(current.plan, {
-        env: current.env,
-        gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
-      });
-      const [ref] = readClawCronRefs("worker-two", { env: current.env });
-      const drifted = listedCronJob("worker-two", ref!, "scheduler-123");
-      Object.assign(drifted, patch);
-      const add = vi.fn();
-
-      await expect(
-        installClawCronJobs(current.plan, {
-          env: current.env,
-          gateway: { add, list: vi.fn().mockResolvedValue({ jobs: [drifted] }) },
-        }),
-      ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
-      expect(add).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "message",
+      patch: { payload: { kind: "agentTurn", message: "Different declaration" } },
     },
-  );
+    { name: "unknown definition field", patch: { operatorSetting: { mode: "changed" } } },
+  ])("rejects a same-key scheduler job with drifted $name", async ({ patch }) => {
+    const current = await fixture();
+    await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
+    });
+    const [ref] = readClawCronRefs("worker-two", { env: current.env });
+    const drifted = listedCronJob("worker-two", ref!, "scheduler-123");
+    Object.assign(drifted, patch);
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, list: vi.fn().mockResolvedValue({ jobs: [drifted] }) },
+      }),
+    ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it("preserves the pending reference when agent readiness fails", async () => {
+    const current = await fixture();
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: {
+          add,
+          waitUntilAgentAvailable: vi.fn().mockRejectedValue(new Error("reload timed out")),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "cron_install_failed",
+      cronJobs: [{ manifestId: "daily-report", status: "pending", error: "reload timed out" }],
+    });
+    expect(add).not.toHaveBeenCalled();
+    expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
+      { manifestId: "daily-report", status: "pending", error: "reload timed out" },
+    ]);
+  });
 
   it("reconciles a response-lost retry by declaration key", async () => {
     const current = await fixture();

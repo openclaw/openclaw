@@ -421,6 +421,31 @@ describe("exportClawAgent", () => {
     expect(replanned.agent.config).toMatchObject(agentProfile);
   });
 
+  it.each([
+    {},
+    {
+      model: { primary: "acme/primary", fallbacks: [] },
+      subagents: { allowAgents: [], delegationMode: "suggest" as const },
+    },
+  ])(
+    "preserves explicit empty selections without exporting inherited defaults: %j",
+    async (agentProfile) => {
+      const fixture = await installedFixture({ agentProfile });
+      fixture.config.agents!.defaults = {
+        model: { primary: "acme/inherited", fallbacks: ["acme/inherited-fallback"] },
+        subagents: { allowAgents: ["inherited-worker"], delegationMode: "prefer" },
+      };
+      const out = join(fixture.root, "selections");
+      await exportClawAgent("worker", out, fixture.exportOptions);
+      const exported = await readClawManifestFile(out);
+      if (!exported.ok) {
+        throw new Error(JSON.stringify(exported.diagnostics));
+      }
+      expect(exported.openClawProfile?.agent.model).toEqual(agentProfile.model);
+      expect(exported.openClawProfile?.agent.subagents).toEqual(agentProfile.subagents);
+    },
+  );
+
   it("exports extension plugins into profile v1 without duplicating manifest packages", async () => {
     const fixture = await installedFixture();
     const integrity = `sha256:${"b".repeat(64)}`;
@@ -476,6 +501,46 @@ describe("exportClawAgent", () => {
     });
   });
 
+  it("attaches an explicit reviewed package bootstrap and re-reads the export", async () => {
+    const fixture = await installedFixture();
+    const bootstrapPath = join(fixture.root, "reviewed-bootstrap.md");
+    const out = join(fixture.root, "exported-with-bootstrap");
+    await writeFile(bootstrapPath, "# First run\n\nAsk for the operator's timezone.\n", "utf8");
+
+    const result = await exportClawAgent("worker", out, {
+      ...fixture.exportOptions,
+      bootstrapPath,
+    });
+
+    expect(result.filesWritten).toContain("BOOTSTRAP.md");
+    await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toBe(
+      "# First run\n\nAsk for the operator's timezone.\n",
+    );
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.packageBootstrap).toMatchObject({
+      sourcePath: "BOOTSTRAP.md",
+      byteLength: 46,
+    });
+
+    const originalPackage = JSON.parse(await readFile(join(out, "package.json"), "utf8")) as {
+      version: string;
+    };
+    await writeFile(bootstrapPath, "# First run\n\nAsk for the operator's locale.\n", "utf8");
+    const changedOut = join(fixture.root, "exported-with-changed-bootstrap");
+    await exportClawAgent("worker", changedOut, {
+      ...fixture.exportOptions,
+      bootstrapPath,
+    });
+    const changedPackage = JSON.parse(await readFile(join(changedOut, "package.json"), "utf8")) as {
+      version: string;
+    };
+    expect(changedPackage.version).not.toBe(originalPackage.version);
+  });
+
   it("rejects empty bootstrap authoring without leaving an export target", async () => {
     const fixture = await installedFixture();
     const bootstrapPath = join(fixture.root, "empty-bootstrap.md");
@@ -515,6 +580,28 @@ describe("exportClawAgent", () => {
         packageDeps: fixture.packageDeps,
       }),
     ).rejects.toMatchObject({ code: "workspace_files_drifted" });
+  });
+
+  it("exports a pending package bootstrap as package-root BOOTSTRAP.md", async () => {
+    const fixture = await installedFixture({ packageBootstrap: true });
+    const out = join(fixture.root, "exported-bootstrap");
+
+    const result = await exportClawAgent("worker", out, {
+      ...fixture.exportOptions,
+      packageDeps: fixture.packageDeps,
+    });
+
+    expect(result.filesWritten).toContain("BOOTSTRAP.md");
+    await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toContain("repository map");
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.packageBootstrap).toMatchObject({
+      sourcePath: "BOOTSTRAP.md",
+      byteLength: "# First run\n\nReview the repository map first.\n".length,
+    });
   });
 
   it("rejects a pending package bootstrap that changes after status inspection", async () => {
@@ -630,6 +717,55 @@ describe("exportClawAgent", () => {
     await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
       "reviewed replacement",
     );
+  });
+
+  it("keeps pending package bootstrap outside the managed workspace aggregate", async () => {
+    const workspaceContent = Buffer.alloc(9 * 1024, "w");
+    const bootstrapContent = Buffer.alloc(6 * 1024, "b");
+    expect(workspaceContent.byteLength * 3).toBeLessThan(
+      sourceLimitsTestControl.managedWorkspaceBytes,
+    );
+    expect(workspaceContent.byteLength * 3 + bootstrapContent.byteLength).toBeGreaterThan(
+      sourceLimitsTestControl.managedWorkspaceBytes,
+    );
+    const fixture = await installedFixture({
+      extraWorkspaceFiles: ["one.md", "two.md", "three.md"],
+      extraWorkspaceFileContent: workspaceContent,
+      packageBootstrap: true,
+      packageBootstrapContent: bootstrapContent,
+    });
+    const out = join(fixture.root, "exported-independent-bootstrap-quota");
+
+    const result = await exportClawAgent("worker", out, {
+      ...fixture.exportOptions,
+      packageDeps: fixture.packageDeps,
+    });
+
+    expect(result.filesWritten).toContain("BOOTSTRAP.md");
+    await expect(readFile(join(out, "BOOTSTRAP.md"))).resolves.toEqual(bootstrapContent);
+    for (const path of ["one.md", "two.md", "three.md"]) {
+      await expect(readFile(join(out, "workspace", path))).resolves.toEqual(workspaceContent);
+    }
+  });
+
+  it("exports a whitespace-only SOUL.md as an explicit workspace file", async () => {
+    const fixture = await installedFixture({ soulContent: " \n" });
+    const out = join(fixture.root, "exported-empty-soul");
+
+    await exportClawAgent("worker", out, {
+      ...fixture.exportOptions,
+    });
+
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.clawMarkdownBody).toBeUndefined();
+    expect(exported.manifest.workspace.bootstrapFiles["SOUL.md"]).toEqual({
+      source: "workspace/SOUL.md",
+    });
+    await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(" \n");
   });
 
   it("exports non-UTF-8 SOUL.md bytes as an explicit workspace file", async () => {
@@ -749,6 +885,32 @@ describe("exportClawAgent", () => {
         config: fixture.config,
       }),
     ).rejects.toMatchObject({ code: "workspace_changed" });
+  });
+
+  it("expands a home-relative output directory", async () => {
+    const fixture = await installedFixture();
+    vi.stubEnv("HOME", fixture.root);
+
+    const result = await exportClawAgent("worker", "~/exported-home", {
+      ...fixture.exportOptions,
+    });
+
+    expect(result.outputDirectory).toBe(join(fixture.root, "exported-home"));
+    await expect(readFile(join(result.outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
+      "schemaVersion: 1",
+    );
+  });
+
+  it("fails closed when a managed file is unavailable", async () => {
+    const fixture = await installedFixture();
+    await writeFile(join(fixture.plan.agent.workspace, "SOUL.md"), "still available\n", "utf8");
+    await rm(join(fixture.plan.agent.workspace, "reference", "policy.md"));
+
+    await expect(
+      exportClawAgent("worker", join(fixture.root, "exported-missing"), {
+        ...fixture.exportOptions,
+      }),
+    ).rejects.toMatchObject({ code: "workspace_files_drifted" });
   });
 
   it("never writes into an existing output directory", async () => {

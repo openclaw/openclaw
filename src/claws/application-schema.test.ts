@@ -62,6 +62,19 @@ function extensionPreflight(
 }
 
 describe("Claw application schema v1", () => {
+  it("accepts strict native extension assertions without a schema bump", () => {
+    expect(
+      parseClawOpenClawProfile({
+        schemaVersion: 1,
+        agent: { tools: { profile: "coding", allow: ["read"] } },
+        extensions: [extension],
+      }),
+    ).toMatchObject({
+      ok: true,
+      profile: { schemaVersion: 1, extensions: [{ id: "market-data", format: "claude" }] },
+    });
+  });
+
   it("rejects duplicate extensions and unknown formats", () => {
     expect(
       parseClawOpenClawProfile({ schemaVersion: 1, agent: {}, extensions: [extension, extension] })
@@ -319,5 +332,43 @@ describe("Claw application planning v1", () => {
         path: "$.profiles.openclaw.extensions[0].format",
       }),
     );
+  });
+});
+
+describe("parseClawOpenClawProfile model and delegation", () => {
+  it.each([
+    {
+      model: { primary: "acme/model", fallbacks: ["acme/team/fallback"] },
+      subagents: { allowAgents: ["researcher", "writer_2"], delegationMode: "prefer" },
+    },
+    {
+      model: { primary: "acme/model", fallbacks: [] },
+      subagents: { allowAgents: [], delegationMode: "suggest" },
+    },
+    { model: { primary: "acme/model" }, subagents: {} },
+  ])("preserves declared selections: %j", (agent) => {
+    expect(parseClawOpenClawProfile({ schemaVersion: 1, agent })).toMatchObject({
+      ok: true,
+      profile: { agent },
+    });
+  });
+
+  it.each([
+    { model: {} },
+    { model: "acme/model" },
+    { model: { primary: "model" } },
+    { model: { primary: "/model" } },
+    { model: { primary: "acme/" } },
+    { model: { primary: "acme/has space" } },
+    { model: { primary: "acme/model", fallbacks: [""] } },
+    { model: { primary: "acme/model", fallbacks: ["invalid"] } },
+    { model: { primary: "acme/model", extra: true } },
+    { subagents: { delegationMode: "required" } },
+    { subagents: { allowAgents: ["Invalid"] } },
+    { subagents: { allowAgents: ["*"] } },
+    { subagents: { allowAgents: [""] } },
+    { subagents: { extra: true } },
+  ])("rejects invalid profile selections: %j", (agent) => {
+    expect(parseClawOpenClawProfile({ schemaVersion: 1, agent }).ok).toBe(false);
   });
 });
