@@ -690,6 +690,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: derivedRoute,
+              mirrorSessionKey: outboundSessionKey,
+              workerGuard: { assertCurrent: commitAgentRuntimeAuthority },
               creation: resolveSandboxedSessionCreation(client, cfg),
               sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });

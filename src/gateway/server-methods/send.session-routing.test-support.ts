@@ -1,10 +1,18 @@
-import { expect, it, type Mock } from "vitest";
+import { beforeAll, expect, it, vi, type Mock } from "vitest";
 import type { getChannelPlugin } from "../../channels/plugins/index.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { mirrorDeliveredPayloads } from "../../infra/outbound/deliver-transcript.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import type {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { firstRespondCall } from "./send.test-helpers.js";
 import type {
   createMessageMethodPluginFixtures,
@@ -33,6 +41,89 @@ export function registerSendSessionRoutingTests({
   mockDeliverySuccess,
   registerMessageThreadAddressingPlugin,
 }: SessionRoutingTestHarness): void {
+  let persistRoute: typeof ensureOutboundSessionEntry;
+  beforeAll(async () => {
+    ({ ensureOutboundSessionEntry: persistRoute } = await vi.importActual<
+      typeof import("../../infra/outbound/outbound-session.js")
+    >("../../infra/outbound/outbound-session.js"));
+  });
+
+  it.each([false, true])(
+    "persists a transcript mirror without rebinding its route (existing=%s)",
+    async (existing) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const mirror = "agent:main:main";
+        const destination = "agent:main:slack:channel:c1";
+        mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+          sessionKey: destination,
+          baseSessionKey: destination,
+          peer: { kind: "channel", id: "c1" },
+          chatType: "channel",
+          from: "slack:channel:C1",
+          to: "channel:C1",
+        });
+        mocks.ensureOutboundSessionEntry.mockImplementationOnce(persistRoute);
+        mocks.deliverOutboundPayloads.mockImplementationOnce(async (delivery) => {
+          const result = { channel: "slack" as const, messageId: "first-contact" };
+          await delivery.onDeliveryResult?.(result);
+          await mirrorDeliveredPayloads({
+            delivery,
+            payloads: [{ text: "First contact", mediaUrls: [] }],
+          });
+          return [result];
+        });
+        const savedDelivery = normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "saved-room", accountId: "saved-bot" },
+        });
+        if (existing) {
+          await replaceSessionEntry(
+            { sessionKey: mirror },
+            { sessionId: "existing-mirror", updatedAt: 1, delivery: savedDelivery },
+          );
+        } else {
+          expect(loadSessionEntry({ sessionKey: mirror })).toBeUndefined();
+        }
+        const { respond } = await runSend({
+          to: "channel:C1",
+          message: "First contact",
+          channel: "slack",
+          sessionKey: mirror,
+          idempotencyKey: "first-contact-mirror",
+        });
+        expect(firstRespondCall(respond)[0]).toBe(true);
+        const entry = loadSessionEntry({ sessionKey: mirror });
+        expect(entry?.sessionId).toBeDefined();
+        if (existing) {
+          expect(entry?.sessionId).toBe("existing-mirror");
+          expect(entry?.delivery).toEqual(savedDelivery);
+        } else {
+          expect(entry?.delivery?.kind).not.toBe("external");
+        }
+        expect(loadSessionEntry({ sessionKey: destination })?.delivery).toMatchObject({
+          kind: "external",
+          context: { channel: "slack", to: "channel:C1" },
+        });
+        expect(
+          await loadTranscriptEvents({
+            agentId: "main",
+            sessionKey: mirror,
+            sessionId: entry!.sessionId,
+          }),
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({
+                role: "assistant",
+                content: [{ type: "text", text: "First contact" }],
+              }),
+            }),
+          ]),
+        );
+      });
+    },
+  );
+
   const deliveryCall = () => mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
   const ensureSessionEntryCall = () => mocks.ensureOutboundSessionEntry.mock.calls[0]?.[0];
 
