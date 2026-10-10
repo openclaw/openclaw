@@ -206,6 +206,27 @@ describe("openclaw-modal-dialog", () => {
     }
   });
 
+  it("focuses the dialog container first", async () => {
+    const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
+    const { dialog } = await renderModal();
+
+    expect(focus).toHaveBeenCalledWith();
+    expect(document.activeElement).not.toBe(container.querySelector("#first-action"));
+    expect(dialog.open).toBe(true);
+  });
+
+  it("focuses slotted autofocus content", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <textarea id="autofocus-target" autofocus></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    await getRenderedModalDialog(container);
+
+    expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
+  });
+
   it("focuses slotted input once the opening update commits, without waiting for a frame", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     render(
@@ -221,10 +242,11 @@ describe("openclaw-modal-dialog", () => {
     });
   });
 
-  it.each([
-    { interaction: "none", reopened: true },
-    { interaction: "pointer", reopened: true },
-  ])(
+  it.each(
+    ["none", "pointer", "keyboard"].flatMap((interaction) =>
+      [false, true].map((reopened) => ({ interaction, reopened })),
+    ),
+  )(
     "honors autofocus without overriding $interaction input (reopened=$reopened)",
     async ({ interaction, reopened }) => {
       // oxlint-disable-next-line typescript/unbound-method -- The saved method is explicitly rebound with call(this) below.
@@ -321,6 +343,15 @@ describe("openclaw-modal-dialog", () => {
 
   it("assigns overlay motion by interaction type", () => {
     expectModalMotionPolicy();
+  });
+  it("emits modal-cancel on Escape", async () => {
+    const { modal, dialog } = await renderModal();
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("emits modal-cancel when the backdrop is clicked", async () => {
