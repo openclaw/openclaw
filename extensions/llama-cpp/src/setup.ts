@@ -69,15 +69,10 @@ function describeEmbeddingDownload(isDefault: boolean): string {
     : "your configured local embedding model";
 }
 
-function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
-  const model = config.agents?.defaults?.model;
-  return typeof model === "string" ? model : model?.primary;
-}
-
-function configuredCandidates(
+async function configuredCandidates(
   config: ProviderAppGuidedSetupContext["config"],
   scope: "detection" | "setup",
-): LlamaCppChatCandidate[] {
+): Promise<LlamaCppChatCandidate[]> {
   const existing = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
   const provider = buildLlamaCppProviderConfig({
@@ -85,10 +80,13 @@ function configuredCandidates(
     // Detection reports persisted inventory; interactive setup may still offer the default.
     ...(managedExisting && scope === "detection" ? { modelInventory: managedExisting.models } : {}),
   });
-  const primary = readPrimaryModel(config);
-  const primaryId = primary?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
-    ? primary.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
-    : undefined;
+  const { resolveDefaultModelForAgent } = await import("openclaw/plugin-sdk/agent-runtime");
+  const primary = resolveDefaultModelForAgent({
+    cfg: config,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
+  const primaryId = primary.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
   return provider.models
     .map((model) => ({ model, provider }))
     .toSorted((a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId));
@@ -189,7 +187,7 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   ) {
     return null;
   }
-  for (const candidate of configuredCandidates(ctx.config, "detection")) {
+  for (const candidate of await configuredCandidates(ctx.config, "detection")) {
     if (await resolveCachedCandidate(candidate, ctx.signal)) {
       return {
         modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
@@ -385,7 +383,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     asset = selectLlamaServerAsset(hardware.platform, hardware.arch, { kind: "cpu" });
     runtimeNote = `${error instanceof Error ? error.message : String(error)} This recommendation uses CPU execution.`;
   }
-  const candidates = configuredCandidates(ctx.config, "setup");
+  const candidates = await configuredCandidates(ctx.config, "setup");
   const plan = await resolveSetupPlan(
     ctx,
     candidates,

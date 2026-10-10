@@ -42,6 +42,7 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
+  buildLlamaCppModel,
 } from "./defaults.js";
 vi.mock("./hardware.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./hardware.js")>()),
@@ -895,6 +896,43 @@ describe("llama.cpp managed setup", () => {
           path: customModelPath,
         }),
       }),
+    );
+  });
+
+  it.each([
+    "llama-cpp/selected",
+    "Chosen",
+    "llama-cpp/Chosen",
+    "llama-cpp/selected@llama-cpp:default",
+  ])("keeps the selected model when the primary is %s", async (primary) => {
+    const ctx = authContext(true);
+    const otherModelPath = path.join(tempRoot, "other.gguf");
+    await Promise.all([fs.writeFile(modelPath, "GGUF"), fs.writeFile(otherModelPath, "GGUF")]);
+    ctx.config.models = {
+      providers: {
+        [LLAMA_CPP_PROVIDER_ID]: {
+          baseUrl: "http://127.0.0.1:19432/v1",
+          params: { modelCacheDir: tempRoot },
+          localService: { command: path.join(tempRoot, "llama-server") },
+          models: [
+            buildLlamaCppModel({ id: "other", name: "Other GGUF", source: otherModelPath }),
+            buildLlamaCppModel({ id: "selected", name: "Selected GGUF", source: modelPath }),
+          ],
+        },
+      },
+    };
+    ctx.config.agents = {
+      defaults: {
+        model: { primary },
+        models: { "llama-cpp/selected": { alias: "Chosen" } },
+      },
+    };
+
+    const result = await runLlamaCppSetup(ctx);
+
+    expect(result.defaultModel).toBe("llama-cpp/selected");
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models[0]?.id).toBe(
+      "selected",
     );
   });
 
