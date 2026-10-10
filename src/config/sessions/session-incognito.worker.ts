@@ -32,6 +32,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
@@ -68,6 +69,7 @@ import {
 import { createIncognitoManagerWorker } from "./session-incognito-manager.worker.js";
 import { isIncognitoOutboxCommand } from "./session-incognito-outbox-contract.js";
 import { createIncognitoOutboxWorker } from "./session-incognito-outbox.worker.js";
+import { projectIncognitoSessionRuntimeFacts } from "./session-incognito-runtime-facts.js";
 import {
   incognitoSideDataKeys,
   isIncognitoSideDataWrite,
@@ -119,75 +121,14 @@ export function createIncognitoSessionWorker(
                 .update(JSON.stringify(chatMetadataSessionFields.map((field) => entry[field])))
                 .digest("hex")
             : undefined,
-          delivery: entry
-            ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-            : undefined,
-          media: entry
-            ? {
-                sessionId: entry.sessionId,
-                updatedAt: entry.updatedAt,
-                lifecycleRevision: entry.lifecycleRevision,
-                permissionMode: entry.permissionMode,
-                execNode: entry.execNode,
-                repositoryWorkspaceId: entry.repositoryWorkspaceId,
-                worktreeId: entry.worktree?.id,
-                sessionRoot: entry.sessionRoot,
-                spawnedCwd: entry.spawnedCwd,
-                spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
-                pendingWorktree: entry.pendingWorktree,
-                pendingProjectGitUrl: entry.pendingProjectGitUrl,
-              }
-            : undefined,
-          steering: entry
-            ? {
-                lifecycleRevision: entry.lifecycleRevision,
-                restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion,
-                restartRecoveryTerminalDeliveryEvidence:
-                  entry.restartRecoveryTerminalDeliveryEvidence?.map((receipt) => ({
-                    runId: receipt.runId,
-                    harnessCompletion: receipt.harnessCompletion,
-                    deliveryContext: receipt.deliveryContext,
-                    payloads: receipt.payloads?.map(({ visible }) => ({ visible })),
-                    payloadsTruncated: receipt.payloadsTruncated,
-                    deliveryStatus: receipt.deliveryStatus && {
-                      status: receipt.deliveryStatus.status,
-                      resultCount: receipt.deliveryStatus.resultCount,
-                    },
-                    messagingToolSentTargets: receipt.messagingToolSentTargets?.map(
-                      ({
-                        provider,
-                        accountId,
-                        to,
-                        threadId,
-                        threadImplicit,
-                        threadSuppressed,
-                        visible,
-                        sourceReplyFinal,
-                      }) => ({
-                        provider,
-                        accountId,
-                        to,
-                        threadId,
-                        threadImplicit,
-                        threadSuppressed,
-                        visible,
-                        sourceReplyFinal,
-                      }),
-                    ),
-                    messagingToolSentTargetsTruncated: receipt.messagingToolSentTargetsTruncated,
-                    messagingToolAggregateEvidenceUnaccounted:
-                      receipt.messagingToolAggregateEvidenceUnaccounted,
-                  })),
-                sessionId: entry.sessionId,
-                updatedAt: entry.updatedAt,
-                status: entry.status,
-                restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-                restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-                restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-                restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-                restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-              }
-            : undefined,
+          ...projectIncognitoSessionRuntimeFacts(entry),
+          cliHistory:
+            entry?.cliHistoryBoundary?.state === "known"
+              ? {
+                  boundary: entry.cliHistoryBoundary,
+                  watermark: readSessionTranscriptWatermarkInDatabase(database, entry.sessionId),
+                }
+              : undefined,
           sharing: entry
             ? {
                 entry: projectSessionSharingEntry(entry),

@@ -37,6 +37,8 @@ export type ToolStreamEntry = {
   resultReceived?: boolean;
   startedAt: number;
   receivedAt: number;
+  /** Live-only placement; durable invocation positions supersede this boundary. */
+  afterUserSendId?: string;
   message: Record<string, unknown>;
 };
 
