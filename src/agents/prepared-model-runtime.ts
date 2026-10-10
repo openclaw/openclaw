@@ -281,7 +281,7 @@ export async function publishPreparedModelRuntimeSnapshot(
 /** Activates lifecycle publication for direct embedded runtimes without a gateway startup. */
 export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode"> = {},
+  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode" | "force"> = {},
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   const assertLifetime = captureModelRuntimeLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
@@ -309,7 +309,7 @@ export async function activateStandalonePreparedModelRuntime(
 async function activateStandalonePreparedModelRuntimeNow(
   input: PreparedModelRuntimeInput,
   assertLifetime: () => void,
-  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode">,
+  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode" | "force">,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
     assertLifetime();

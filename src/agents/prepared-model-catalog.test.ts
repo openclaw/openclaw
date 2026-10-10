@@ -387,21 +387,30 @@ describe("prepared model catalog access", () => {
     expect(mocks.refreshStaleCatalog).not.toHaveBeenCalled();
   });
 
-  it("activates a persistent full owner for an explicitly writable catalog read", async () => {
-    mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
-    mocks.activateSnapshot.mockResolvedValue(fullSnapshot);
+  it.each([false, true])(
+    "activates standalone inventory with offline persistence %s",
+    async (persistOfflineRefresh) => {
+      mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
+      mocks.activateSnapshot.mockResolvedValue(fullSnapshot);
 
-    await expect(loadPreparedModelCatalogSnapshot({ readOnly: false })).resolves.toBe(
-      fullSnapshot.modelCatalog,
-    );
+      await expect(
+        loadPreparedModelCatalogSnapshot({
+          readOnly: false,
+          ...(persistOfflineRefresh
+            ? { refreshFullCatalog: true, persistOfflineRefresh: true }
+            : {}),
+        }),
+      ).resolves.toBe(fullSnapshot.modelCatalog);
 
-    expect(mocks.activateSnapshot).toHaveBeenCalledWith(
-      expect.not.objectContaining({ readOnly: true }),
-      { catalogMode: "static" },
-    );
-    expect(mocks.loadSnapshot).not.toHaveBeenCalled();
-    expect(mocks.releaseSnapshot).not.toHaveBeenCalled();
-  });
+      expect(mocks.activateSnapshot).toHaveBeenCalledWith(
+        expect.not.objectContaining({ readOnly: true }),
+        persistOfflineRefresh ? { catalogMode: "live", force: true } : { catalogMode: "static" },
+      );
+      expect(mocks.loadSnapshot).not.toHaveBeenCalled();
+      expect(mocks.releaseSnapshot).not.toHaveBeenCalled();
+      expect(mocks.refreshStaleCatalog).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a standalone catalog owner built from another config", async () => {
     mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
