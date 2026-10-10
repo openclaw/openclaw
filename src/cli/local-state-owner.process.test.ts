@@ -802,6 +802,8 @@ describe("same-root local mutation routing", () => {
   );
 
   it.each([
+    ["mcp logout", ["mcp", "logout", "synthetic-server"]],
+    ["models auth logout", ["models", "auth", "logout", "synthetic:manual", "--yes"]],
     ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
     ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
     ["exec-policy set", ["exec-policy", "set", "--ask", "always"]],
