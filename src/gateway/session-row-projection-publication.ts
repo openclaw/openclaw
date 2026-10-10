@@ -1,3 +1,4 @@
+import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -118,22 +119,29 @@ export function createSessionRowPublication(owner: {
     if (prepared && !prepared.entry && !prepared.sharing) {
       return;
     }
-    const previousFacts = row.retainedDatabaseFacts;
+    const previousFacts = row.retainedDatabaseFacts ?? row.pendingDatabaseFacts;
     const committed = prepared?.projection;
     const entry = prepared?.entry;
     const sameSession =
       entry &&
       previousFacts?.entry.sessionId === entry.sessionId &&
       previousFacts.entry.lifecycleRevision === entry.lifecycleRevision;
-    // Agent receipts certify only their own store. Shared facets keep their independent
-    // publication lifetime; a changed binding requires preparation by that owner.
+    const projection =
+      committed ??
+      (change.scope === "session-entry" &&
+      sameSession &&
+      (!readSessionActivitySummary(entry) || previousFacts.activitySummaryWatermark)
+        ? previousFacts
+        : undefined);
+    // Entry-only writes preserve Board/transcript facts. Shared facets retain their
+    // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
-      entry && committed && !change.factsInvalidated
+      entry && projection && !change.factsInvalidated
         ? {
             sessionKey: row.key,
             entry,
-            hasBoard: committed.hasBoard,
-            activitySummaryWatermark: committed.activitySummaryWatermark,
+            hasBoard: projection.hasBoard,
+            activitySummaryWatermark: projection.activitySummaryWatermark,
             acpMeta:
               sameSession && previousFacts.entry.sessionStartedAt === entry.sessionStartedAt
                 ? previousFacts.acpMeta
@@ -167,7 +175,7 @@ export function createSessionRowPublication(owner: {
       }
       return;
     }
-    records.invalidateDatabaseFacts(row);
+    records.invalidateDatabaseFacts(row, databaseFacts);
     if (
       !prepared &&
       !change.factsInvalidated &&

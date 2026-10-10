@@ -484,6 +484,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     matching,
     mark,
     read: (id) => rows.get(id),
+    store: (path) => stores.get(path),
     invalidate: backfill.remove,
     refresh(id, retained) {
       const row = rows.get(id);
@@ -513,6 +514,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     ensureMaterialized,
   });
   const stop = [
+    sessionChanges.subscribeFacts(transcriptUpdates.publish),
     sessionChanges.subscribeFacts(membership.invalidate),
     sessionChanges.subscribeProjection(mark),
     // Participant writers publish facts before their display-only lifecycle notice.
