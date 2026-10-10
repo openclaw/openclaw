@@ -219,7 +219,11 @@ describe("admitted lazy session writer", () => {
             const otherSessionId = `${target.sessionId}-other`;
             runWithoutOwnedSessionTranscriptWrites(() =>
               replaceSessionEntrySync(
-                { ...target, sessionKey: `${target.sessionKey}-other`, sessionId: otherSessionId },
+                {
+                  agentId: target.agentId,
+                  storePath: target.storePath,
+                  sessionKey: `${target.sessionKey}-other`,
+                },
                 { sessionId: otherSessionId, updatedAt: 2, ...(incognito && { incognito: true }) },
               ),
             );
