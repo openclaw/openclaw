@@ -106,16 +106,6 @@ function resolveTelegramCommandKeyForControlLane(params: {
   )?.key;
 }
 
-export function isTelegramReadOnlyControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  // Read-only commands must not supersede pending work when they enter the control lane.
-  // Diagnostics and export commands materialize state and remain on the ordinary lane.
-  const key = resolveTelegramCommandKeyForControlLane(params);
-  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
-}
-
 function isTelegramAbortLaneText(params: { rawText?: string; botUsername?: string }): boolean {
   // Live polling and webhook admission already have bot identity. In defensive pre-identity
   // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.

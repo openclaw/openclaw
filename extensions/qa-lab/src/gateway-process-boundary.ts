@@ -100,15 +100,8 @@ function normalizeEnvKeys(keys: readonly string[]) {
   return normalized.toSorted();
 }
 
-function parsePositiveInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 1) {
-    throw new Error(`invalid ${label}`);
-  }
-  return value;
-}
-
-function parseNonNegativeInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+function parseInteger(value: unknown, label: string, minimum: number) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`invalid ${label}`);
   }
   return value;
@@ -140,14 +133,14 @@ function parseQaGatewayProcessHandoff(value: unknown) {
   return {
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "process-boundary generation"),
-    pid: parsePositiveInteger(value.pid, "process-boundary pid"),
-    uid: parseNonNegativeInteger(value.uid, "process-boundary uid"),
-    gid: parseNonNegativeInteger(value.gid, "process-boundary gid"),
+    pid: parseInteger(value.pid, "process-boundary pid", 2),
+    uid: parseInteger(value.uid, "process-boundary uid", 0),
+    gid: parseInteger(value.gid, "process-boundary gid", 0),
     procStartTicks: parseNonEmptyString(
       value.procStartTicks,
       "process-boundary process start ticks",
     ),
-    pgrp: parsePositiveInteger(value.pgrp, "process-boundary process group"),
+    pgrp: parseInteger(value.pgrp, "process-boundary process group", 2),
     commandFile: {
       path: parseNonEmptyString(commandFile.path, "process-boundary command path"),
       sha256: parseSha256(commandFile.sha256, "process-boundary command digest"),
@@ -185,11 +178,11 @@ function parseQaGatewayProcessRuntimeProof(value: unknown) {
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "runtime generation"),
     status: "pass",
-    pid: parsePositiveInteger(value.pid, "runtime pid"),
-    uid: parseNonNegativeInteger(value.uid, "runtime uid"),
-    gid: parseNonNegativeInteger(value.gid, "runtime gid"),
+    pid: parseInteger(value.pid, "runtime pid", 2),
+    uid: parseInteger(value.uid, "runtime uid", 0),
+    gid: parseInteger(value.gid, "runtime gid", 0),
     procStartTicks: parseNonEmptyString(value.procStartTicks, "runtime process start ticks"),
-    pgrp: parsePositiveInteger(value.pgrp, "runtime process group"),
+    pgrp: parseInteger(value.pgrp, "runtime process group", 2),
     state,
     cwd: parseNonEmptyString(value.cwd, "runtime cwd"),
     executablePath: parseNonEmptyString(value.executablePath, "runtime executable path"),

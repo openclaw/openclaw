@@ -31,7 +31,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -414,7 +414,7 @@ export function createGatewayHookDispatcher(params: {
     try {
       dispatchCfg = getRuntimeConfig();
     } catch (err) {
-      void runWithGatewayIndependentRootWorkContinuation(
+      void runWithGatewayDetachedWorkContinuation(
         async () => reportHookFailure(err),
         "hooks:failure-report",
       );
@@ -489,7 +489,7 @@ export function createGatewayHookDispatcher(params: {
 
     // Queue identity is fixed when accepted; the isolated runner still receives
     // the original session expression and fresh config, preserving hook routing.
-    void runWithGatewayIndependentRootWorkContinuation(
+    void runWithGatewayDetachedWorkContinuation(
       () =>
         enqueueHookAgentDispatch(queueKey, async () => {
           // The admission deadline starts before this same-session queue. Expired

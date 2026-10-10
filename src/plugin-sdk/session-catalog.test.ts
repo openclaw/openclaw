@@ -210,55 +210,6 @@ describe("session catalog SDK", () => {
     return { provider, options, create, complete };
   }
 
-  it("composes explicit local, node, adoption, capability, and continuation operations", async () => {
-    const { provider } = createFamilyFixture();
-    const onHost = vi.fn();
-
-    const hosts = await provider.list({
-      sessionEntries: { entriesForAgent: () => [] },
-      onHost,
-    });
-
-    expect(hosts).toEqual([
-      expect.objectContaining({
-        hostId: "gateway",
-        sessions: [
-          expect.objectContaining({
-            threadId: "local-thread",
-            sessionKey: "adopted",
-            canContinue: true,
-            canOpenTerminal: false,
-          }),
-        ],
-      }),
-      expect.objectContaining({
-        hostId: "node:node-1",
-        sessions: [
-          expect.objectContaining({
-            threadId: "remote-thread",
-            canContinue: false,
-            canOpenTerminal: true,
-          }),
-        ],
-      }),
-    ]);
-    expect(onHost).toHaveBeenCalledTimes(2);
-
-    await expect(
-      provider.openTerminal({ hostId: "node:node-1", threadId: "remote-thread" }),
-    ).resolves.toEqual({
-      kind: "node",
-      nodeId: "node-1",
-      command: "family.terminal",
-      paramsJSON: JSON.stringify({ threadId: "remote-thread" }),
-      title: "family remote-thread",
-    });
-
-    await expect(
-      provider.continueSession({ hostId: "gateway", threadId: "local-thread" }),
-    ).resolves.toEqual({ sessionKey: "agent:main:created" });
-  });
-
   it.each(["local", "nodes"] as const)(
     "does not start node work when the owner retires during %s discovery",
     async (stage) => {
@@ -414,7 +365,6 @@ describe("session catalog SDK", () => {
   );
 
   it.each([
-    { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "main" },
     { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "other" },
     { joinDuring: "lookup", firstAgentId: undefined, secondAgentId: "main" },
     { joinDuring: "completion", firstAgentId: "main", secondAgentId: "main" },

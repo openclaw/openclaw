@@ -96,23 +96,23 @@ function resolveMemberChannelPermissionBits(params: {
     "permission_overwrites" in params.channel ? (params.channel.permission_overwrites ?? []) : [];
   for (const overwrite of overwrites) {
     if (overwrite.id === params.guildId) {
-      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
-      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
+      permissions = removePermissionBits(permissions, overwrite.deny);
+      permissions = addPermissionBits(permissions, overwrite.allow);
     }
   }
   let roleDeny = 0n;
   let roleAllow = 0n;
   for (const overwrite of overwrites) {
     if (params.member.roles?.includes(overwrite.id)) {
-      roleDeny = addPermissionBits(roleDeny, overwrite.deny ?? "0");
-      roleAllow = addPermissionBits(roleAllow, overwrite.allow ?? "0");
+      roleDeny = addPermissionBits(roleDeny, overwrite.deny);
+      roleAllow = addPermissionBits(roleAllow, overwrite.allow);
     }
   }
   permissions = (permissions & ~roleDeny) | roleAllow;
   for (const overwrite of overwrites) {
     if (overwrite.id === params.userId) {
-      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
-      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
+      permissions = removePermissionBits(permissions, overwrite.deny);
+      permissions = addPermissionBits(permissions, overwrite.allow);
     }
   }
 
@@ -319,13 +319,11 @@ async function hasGuildPermissionsDiscord(
   opts: DiscordReactOpts,
 ): Promise<boolean> {
   const permissions = await fetchMemberGuildPermissionsDiscord(guildId, userId, opts);
-  if (permissions === null) {
-    return false;
-  }
-  if (hasAdministrator(permissions)) {
-    return true;
-  }
-  return requiredPermissions[match]((permission) => hasPermissionBit(permissions, permission));
+  return (
+    permissions !== null &&
+    (hasAdministrator(permissions) ||
+      requiredPermissions[match]((permission) => hasPermissionBit(permissions, permission)))
+  );
 }
 
 /**

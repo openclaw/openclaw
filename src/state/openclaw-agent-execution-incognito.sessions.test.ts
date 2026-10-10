@@ -36,9 +36,12 @@ import { readAgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.read
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import { registerIncognitoSessionMutationTests } from "./openclaw-agent-execution-incognito.mutations.test-support.js";
+import { useIncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const references = new Set<IncognitoAgentDatabaseExecution>();
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
@@ -187,11 +190,9 @@ it("grants only its transaction preimage and publishes detached facts before its
       expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
         "Incognito authority callbacks cannot call their actor",
       );
-      expect(() =>
-        actor.run(authority, (scope) =>
-          scope.execute({ type: "database.incognito.memory", input: undefined }),
-        ),
-      ).toThrow("Incognito authority callbacks cannot call their actor");
+      expect(() => actor.sessions.withSharedState(async () => undefined)).toThrow(
+        "Incognito authority callbacks cannot call their actor",
+      );
       expect(facts.sharing?.entry?.sessionId).toBe(stage === "commit" ? "publication" : undefined);
     },
   };
@@ -326,13 +327,7 @@ it("serializes reads, creation, publication, and queued revocation in the actor 
   const borrower = await capture();
   assert(borrower);
   const sessionKey = key("fifo");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = actor.run(authority, async (scope) => {
-    entered.resolve();
-    await release.promise;
-    await scope.execute({ type: "database.incognito.memory", input: undefined });
-  });
+  const { entered, release, held } = probe.hold(actor, authority);
   await entered.promise;
   let allowed = true;
   const source: IncognitoSessionAuthority = {
@@ -951,3 +946,5 @@ it.each(["default", "explicit", "durable-only"] as const)(
     }
   },
 );
+
+registerIncognitoSessionMutationTests(() => ({ actor, env, authority, key, entry }));

@@ -1,6 +1,5 @@
 type CancelAfterCommit = () => void;
-type CompleteAfterCommit = () => void;
-export type AfterCommitEffect = (complete: CompleteAfterCommit) => CancelAfterCommit | void;
+export type AfterCommitEffect = (complete: () => void) => CancelAfterCommit | void;
 
 /**
  * Renderer-neutral boundary for state invalidation and DOM-dependent effects.

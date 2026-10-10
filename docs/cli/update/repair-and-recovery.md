@@ -363,6 +363,24 @@ least 45 minutes have passed since the lease's last recorded activity. A
 recoverable larger recorded timeout extends that grace period. Gateway startup
 and borrowed update processes do not reclaim these leases.
 
+Repair also checks legacy update child-lineage leases left after a manual
+installation hop, even when the installation-root lease is absent. Dead PIDs
+and PIDs reused with different start identities can be reclaimed. An unbound
+lineage reservation names the same executor and helper; an unrelated process
+group with that numeric ID does not keep it alive. Bound child process groups
+still require proven extinction. Repair preserves the original lease evidence
+while claiming the installation and records the reclaimed keys in update history.
+When several child leases remain, repair checks each child's original run and
+rollback evidence before claiming the installation; one child's history cannot
+authorize reclaiming another child's lease.
+Live or uninspectable owners remain protected. On Linux with restricted `/proc`
+visibility, retry from the original OS account with process-inspection permissions;
+permission errors never prove that an owner died.
+
+An ordinary installation-root update lease is not legacy custody just because it
+has no mutation-protocol marker. Repair leaves that lease to its current owner;
+normal update admission can reclaim it once its owners and descendants settle.
+
 The original run must be identifiable from its retained helper, update history,
 or generation-bound repair metadata, and readable in the selected state database.
 Repair needs that record to check rollback and recovery evidence. Use the same
@@ -566,7 +584,12 @@ availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
 successfully when required checks pass. Doctor maintenance admission refusals
 also finish with a warning when no data is at risk. Repair restores any service
-it stopped, leaves migrations pending, and names the next repair action. Errors
+it stopped and leaves migrations pending. When Doctor could not run, the saved
+run is `skipped` with reason `doctor-maintenance-pending`, and the report leads
+with the next action: stop the Gateway through its service owner, then rerun
+`openclaw update repair` with the same profile and state overrides. A standalone
+repair's generic failure is recorded as `repair-failed`; specific failure codes
+and failures belonging to an existing update keep their original reasons. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
 cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
 

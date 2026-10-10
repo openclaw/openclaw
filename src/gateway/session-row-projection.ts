@@ -347,12 +347,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
       }
-    } else if (change.scope === "automation") {
-      records.markAutomation(
-        matching({ key: change.sessionKey }).filter((row) => !isCold(row)),
-        change.agentId,
-        dirty,
-      );
+    } else if (!change.factsInvalidated && (change.scope === "automation" || presentationOnly)) {
+      const affected = matching({ key: change.sessionKey }).filter((row) => !isCold(row));
+      records.markAutomation(affected, change.agentId, dirty);
     } else if (!presentationOnly) {
       rowScope.visitSessionRowPublicationTargets(change, {
         matching,
@@ -585,7 +582,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       rows,
       dirty,
       matching,
-      acquire: (row) => acquireEntry(row, readSessionRowEntry(row)),
+      acquire: (row) =>
+        acquireEntry(row, row.retainedDatabaseFacts?.entry ?? readSessionRowEntry(row)),
       referenced,
     }),
   });

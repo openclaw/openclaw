@@ -33,7 +33,6 @@ import {
   prepareSessionUpstreamLink,
   readCurrentSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
-import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -154,10 +153,15 @@ async function listBranches(
       agentId: requestedAgent.agentId,
       projection: "list",
     });
-    if (
-      !current.entry?.sessionId ||
-      readSessionUpstreamLink(current.canonicalKey, current.target.agentId)
-    ) {
+    const upstreamLink = current.entry?.sessionId
+      ? await prepareSessionUpstreamLink(
+          captureSessionUpstreamLinkReadSource(),
+          current.canonicalKey,
+          current.target.agentId,
+        )
+      : undefined;
+    read?.assertCurrent();
+    if (!current.entry?.sessionId || upstreamLink) {
       // Fresh and upstream-owned sessions have no local branches. Only the
       // mutating siblings treat those states as errors.
       respond(true, { branches: [] }, undefined);

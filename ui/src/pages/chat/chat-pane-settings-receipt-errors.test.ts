@@ -6,7 +6,7 @@ import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts"
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { switchChatThinkingLevel } from "./chat-session.ts";
+import { switchChatSetting } from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -77,8 +77,8 @@ it.each(["current", "replacement", "same-client reconnect", "failed readback"] a
       const pane = mount(key);
       await refreshPane(pane);
       expect(selectedChatSessionRow(pane.state)).toBeUndefined();
-      first = switchChatThinkingLevel(pane.state, "high");
-      latest = switchChatThinkingLevel(pane.state, "low");
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
+      latest = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       expect(patch).toHaveBeenCalledOnce();
       if (outcome !== "failed readback") {
         rows.push(materialized);
@@ -164,8 +164,8 @@ it("continues an unbound settings tail after predecessor rejection without inven
     await sessions.refresh({ agentId: "main", force: true });
     const pane = mount(key);
     await refreshPane(pane);
-    first = switchChatThinkingLevel(pane.state, "high");
-    latest = switchChatThinkingLevel(pane.state, "low");
+    first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "high" });
+    latest = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
     firstReply.reject(new Error("Synthetic superseded first rejection"));
     await expect(first).resolves.toBe(false);
     await Promise.race([latestDispatched.promise, latest]);

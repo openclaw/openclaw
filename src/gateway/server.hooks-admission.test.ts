@@ -662,7 +662,7 @@ describe("gateway hook admission", () => {
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
 
       const admitted = await request();
-      expect(admitted.status).toBe(200);
+      expect(admitted.status, await admitted.clone().text()).toBe(200);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(3);
     });
   });

@@ -1,12 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  normalizeStringEntries,
   normalizeStringEntriesLower,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { bm25RankToScore, buildFtsQuery, buildMatchQueryFromTerms } from "./keyword-query.js";
+import {
+  bm25RankToScore,
+  buildMatchQueryFromTerms,
+  planKeywordSearch,
+  tokenizeFtsQuery,
+} from "./keyword-query.js";
 import {
   projectMemorySearchRow,
   resolveSnippetProjection,
@@ -14,7 +18,6 @@ import {
   type SearchRowResult,
 } from "./manager-search-shared.js";
 
-const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
 
@@ -78,7 +81,7 @@ function comparePathKeywordSearchResults(
 export type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 function normalizeSearchTokens(raw: string): string[] {
-  return normalizeStringEntriesLower(raw.normalize("NFC").match(FTS_QUERY_TOKEN_RE) ?? []);
+  return normalizeStringEntriesLower(tokenizeFtsQuery(raw.normalize("NFC")));
 }
 
 function literalSearchMatcher(value: string, whole = false): RegExp {
@@ -112,7 +115,8 @@ function scoreFallbackKeywordResult(params: {
   const textLengthBoost = Math.min(params.text.length / 160, 0.18);
 
   const lexicalBoost = uniqueQueryOverlap * 0.45 + density * 0.2 + pathBoost + textLengthBoost;
-  return Math.min(1, params.ftsScore + lexicalBoost);
+  // Scale boosts into the remaining headroom so relevance survives recency weighting.
+  return (params.ftsScore + lexicalBoost) / (1 + lexicalBoost);
 }
 
 function escapeLikePattern(term: string): string {
@@ -227,41 +231,6 @@ function buildExactPathCandidatePatterns(query: string): string[] {
   return [...patterns];
 }
 
-function planKeywordSearch(params: {
-  query: string;
-  ftsTokenizer?: "unicode61" | "trigram";
-  includeCombiningMarks?: boolean;
-}): { matchQuery: string | null; substringTerms: string[] } {
-  if (params.ftsTokenizer !== "trigram") {
-    return {
-      matchQuery: buildFtsQuery(params.query),
-      substringTerms: [],
-    };
-  }
-
-  const tokenPattern = params.includeCombiningMarks ? /[\p{L}\p{M}\p{N}_]+/gu : FTS_QUERY_TOKEN_RE;
-  const tokens = normalizeStringEntries(params.query.match(tokenPattern) ?? []);
-  if (tokens.length === 0) {
-    return { matchQuery: null, substringTerms: [] };
-  }
-
-  const matchTerms: string[] = [];
-  const substringTerms: string[] = [];
-  for (const token of tokens) {
-    // FTS5 MATCH cannot find terms shorter than three Unicode characters.
-    if (Array.from(token).length < 3) {
-      substringTerms.push(token);
-      continue;
-    }
-    matchTerms.push(token);
-  }
-
-  return {
-    matchQuery: buildMatchQueryFromTerms(matchTerms),
-    substringTerms,
-  };
-}
-
 function planPathKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
@@ -286,13 +255,13 @@ function planPathKeywordSearch(params: {
     const plan = planKeywordSearch({
       ...params,
       query,
-      includeCombiningMarks: true,
+      includeLeadingMarks: true,
     });
     addPlan(query, plan);
   }
   if (params.ftsTokenizer !== "trigram") {
     for (const query of new Set([params.query.normalize("NFC"), params.query.normalize("NFD")])) {
-      const tokens = normalizeStringEntries(query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? []);
+      const tokens = tokenizeFtsQuery(query, true);
       const substringTerms = tokens.filter((token) => !isAscii(token));
       if (substringTerms.length > 0) {
         const matchQuery = buildMatchQueryFromTerms(tokens.filter(isAscii));
@@ -322,6 +291,7 @@ export async function searchKeyword(params: {
   const plan = planKeywordSearch({
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
+    canonicalVariants: true,
   });
   if (!plan.matchQuery && plan.substringTerms.length === 0) {
     return [];
@@ -363,7 +333,7 @@ export async function searchKeyword(params: {
   const { rows, usedMatch } = loadKeywordRowsWithFallback(
     plan,
     loadRows,
-    () => normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []),
+    () => tokenizeFtsQuery(params.query),
     "memory search: FTS5 MATCH failed, falling back to substring search",
   );
 
@@ -577,7 +547,7 @@ export async function searchPathKeyword(params: {
     return loadKeywordRowsWithFallback(
       lexicalPlan,
       loadPartitions,
-      () => normalizeStringEntries(lexicalPlan.query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? []),
+      () => tokenizeFtsQuery(lexicalPlan.query, true),
       "memory search: path FTS5 MATCH failed, falling back to substring search",
     );
   };

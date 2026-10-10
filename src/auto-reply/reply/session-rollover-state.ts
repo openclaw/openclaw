@@ -32,6 +32,7 @@ export function resolveReplySessionRolloverState(
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
     category: entry.category,
+    sidebarRoot: entry.sidebarRoot,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,

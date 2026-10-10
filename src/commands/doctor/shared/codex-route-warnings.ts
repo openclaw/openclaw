@@ -453,14 +453,10 @@ export function maybeRepairCodexRoutes(params: {
   const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
   const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
-  const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
-    cfg: params.cfg,
-    env,
-  });
-  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
-    cfg: params.cfg,
-    env,
-  });
+  const compactionContext = { cfg: params.cfg, env };
+  const unsupportedCompactionOverrides =
+    collectUnsupportedCodexCompactionOverrides(compactionContext);
+  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs(compactionContext);
   const hasRemovableServiceTier = collectCodexModelParamHits(params.cfg, env).some(
     (hit) => hit.removable,
   );

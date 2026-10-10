@@ -307,13 +307,53 @@ JSON distinguishes preparation
 
 `openclaw update --dry-run` reports the immutable target without adoption,
 preparation, or publication. `openclaw update status` includes the current and
-prepared generation identities, activation enablement, and the retained activation
-phase. Immutable preparation does not switch stored
-channels and rejects package targets such as `--tag`. `--sha` is available only
+prepared generation identities and activation enablement. Its immutable receipt
+fields are also available under `update.immutable` in `--json`:
+
+- `prepared` identifies a sealed candidate, not an accepted activation.
+- `activation` identifies retained recovery: operation ID, phase, previous and
+  candidate SHA, optional `failure`, and the exact `recoveryCommand` using the
+  recorded external Node and retained helper. Known failure reason codes are
+  shown; other stored error text is replaced with `details-withheld`.
+- `lastActivation` is historical verification: operation ID, `outcome`,
+  `selectedSha`, and `verifiedAtMs`. Text status labels `succeeded` as **accepted**
+  and `rolled-back` as **restored**; restored availability is not candidate success.
+  Its optional `gateway` contains the verified `version`, `buildId`, `pid`, and
+  `bootId`. Older receipts without these fields remain readable.
+
+These facts come from the installation record, so a fresh CLI observer can read
+them after the updater exits. They do not probe the current process or grant
+activation authority. A retained `activation` remains pending recovery even when
+`lastActivation` records restored availability or an older accepted update.
+
+Immutable preparation does not switch stored channels and rejects package targets such as `--tag`. `--sha` is available only
 for adopted immutable installations. Gateway `update.run` still requires the
 root installation owner to run the CLI outside the Gateway service cgroup; it
 does not elevate chat requests. `update repair` directs immutable recovery to
 `update recover`.
+
+Immutable status and dry-run also explain migration coverage. JSON exposes
+`immutableCoverage` in status and `coverage` in dry-run. The report inventories
+default, configured external, and registered agent stores, including absent paths
+and the registry's original path aliases. It reports declared plugin migration
+resources and warnings for undeclared resources. External paths are identified;
+their presence does not establish candidate migration support.
+
+For an already-prepared target, inspection compares the current package, candidate
+package, and preparation receipt schema contracts and shows each store's schema
+version against that target. A crossing such as agent schema 24 → 25 names the
+reason immutable activation refuses it before drain. An unprepared SHA has
+**unknown** target coverage: inspection does not fetch, build, or boot it. Matching
+schema versions are not physical-schema, backup, migration, or activation readiness
+proof; plugin migration coverage remains unknown.
+
+Live inventory uses the adopted service's effective environment and configuration.
+If those cannot be read, the report retains the available preparation facts and
+explains the inventory gap. Run inspection as the installation owner for complete
+service visibility. Database inspection preserves live SQLite artifacts using
+private scratch copies, which are disposed afterward; large stores can make this
+read-only inspection expensive. It does not migrate data, write configuration,
+enable activation, or stop the serving Gateway.
 
 The serving Gateway must support committed suspension handoff. A new CLI cannot
 add that capability to an older running process. For the first native activation,
@@ -626,6 +666,13 @@ There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 for channel, availability, and the latest durable update report. Gateway console verbosity (`--verbose`) and
 file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
+
+With `--no-restart`, state verification blocked by another process is deferred,
+and the installed update is recorded with Gateway readiness unverified. That
+recorded contention also defers Gateway recovery verification. Restart the Gateway through its service
+owner, then run `openclaw update status` and `openclaw doctor`; keep recovery backups
+until verification completes. Other failures keep their recovery diagnostics;
+a genuine database incompatibility still fails.
 
 Interactive updates show phase transitions, the current step, and elapsed time.
 The phases match the Control UI: requested, staging, validating, activating,

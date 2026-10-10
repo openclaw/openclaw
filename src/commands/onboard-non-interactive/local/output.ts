@@ -228,7 +228,7 @@ export function logNonInteractiveOnboardingFailure(params: {
     service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
     output.diagnostics?.lastGatewayError
-      ? `Last gateway error: ${output.diagnostics.lastGatewayError}`
+      ? `Recent Gateway log error (may be from an earlier run): ${output.diagnostics.lastGatewayError}`
       : undefined,
     output.diagnostics?.inspectError
       ? `Diagnostics warning: ${output.diagnostics.inspectError}`

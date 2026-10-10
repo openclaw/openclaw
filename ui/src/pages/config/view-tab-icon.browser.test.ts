@@ -48,6 +48,66 @@ describe("browser tab icon settings", () => {
     expect(pixel.getAnimations({ subtree: true })).toHaveLength(0);
   });
 
+  it("hides collected artwork without changing the saved preference and restores it when enabled", () => {
+    const props: TabIconViewProps = {
+      tabIcon: "lobster:crimson",
+      lobsterdexEnabled: false,
+      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => palette.id === "crimson"),
+      setTabIconMode: vi.fn(),
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(renderTabIconSection(props), container);
+    expect(container.querySelector('wa-radio[value="lobster"]')).toBeNull();
+    expect(container.querySelector(".settings-tab-icon__lobsters")).toBeNull();
+    expect(container.textContent).not.toContain("Lobsterdex");
+    expect(container.querySelector("wa-radio-group")?.value).toBe("default");
+    expect(props.tabIcon).toBe("lobster:crimson");
+    expect(props.setTabIconMode).not.toHaveBeenCalled();
+
+    props.lobsterdexEnabled = true;
+    render(renderTabIconSection(props), container);
+    expect(container.querySelector('wa-radio[value="lobster"]')).not.toBeNull();
+    expect(container.querySelector("wa-radio-group")?.value).toBe("lobster");
+    expect(container.querySelector('.settings-tab-icon__pick[aria-pressed="true"]')).not.toBeNull();
+  });
+
+  it("shows avatar shapes only for agent artwork and supports keyboard selection", async () => {
+    const props: TabIconViewProps = {
+      tabIcon: "agent",
+      setTabIconMode: (choice) => {
+        props.tabIcon = choice;
+        render(renderTabIconSection(props), container);
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(renderTabIconSection(props), container);
+    const choices = container.querySelectorAll<HTMLButtonElement>(
+      ".settings-tab-icon__shapes button",
+    );
+    expect(choices).toHaveLength(3);
+    expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
+    const circle = container.querySelector<HTMLButtonElement>('button[aria-label="Circle"]')!;
+    circle.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(props.tabIcon).toBe("agent:circle");
+    expect(circle.getAttribute("aria-pressed")).toBe("true");
+    expect(choices[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector("wa-radio-group")?.value).toBe("agent");
+    const rounded = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Rounded corners"]',
+    )!;
+    await userEvent.click(rounded);
+    expect(props.tabIcon).toBe("agent:rounded");
+    props.setTabIconMode("default");
+    expect(container.querySelector(".settings-tab-icon__shapes")).toBeNull();
+    props.setTabIconMode("lobster:crimson");
+    expect(container.querySelector(".settings-tab-icon__shapes")).toBeNull();
+  });
+
   it("keeps unavailable saved choices and makes an empty collection quietly unavailable", async () => {
     const props: TabIconViewProps = { tabIcon: "lobster:gold", setTabIconMode: vi.fn() };
     const container = document.createElement("div");

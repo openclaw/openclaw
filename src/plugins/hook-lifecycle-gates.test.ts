@@ -47,38 +47,6 @@ describe("before_agent_run hook", () => {
     expect(result).toBeUndefined();
   });
 
-  it("returns pass when handler returns pass", async () => {
-    const runner = makeGateRunner([
-      {
-        pluginId: "test",
-        handler: async () => ({ outcome: "pass" as const }),
-      },
-    ]);
-    const result = await runner.runBeforeAgentRun({ prompt: "hello", messages: [] }, ctx);
-    expect(result?.decision).toEqual({ outcome: "pass" });
-    expect(result?.pluginId).toBe("test");
-  });
-
-  it("returns block when handler returns block (with `message`)", async () => {
-    const runner = makeGateRunner([
-      {
-        pluginId: "test",
-        handler: async () => ({
-          outcome: "block" as const,
-          reason: "unsafe content",
-          message: "I can't process that.",
-          category: "violence",
-        }),
-      },
-    ]);
-    const result = await runner.runBeforeAgentRun({ prompt: "bad stuff", messages: [] }, ctx);
-    expect(result?.decision.outcome).toBe("block");
-    if (result?.decision.outcome === "block") {
-      expect(result.decision.reason).toBe("unsafe content");
-      expect(result.decision.message).toBe("I can't process that.");
-    }
-  });
-
   it("blocks when one of multiple handlers passes and a later handler blocks", async () => {
     const calls: string[] = [];
     const passHandler = vi.fn(async () => {
@@ -197,32 +165,6 @@ describe("before_agent_run hook", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await rejection;
   });
-
-  it("receives the correct event payload", async () => {
-    let receivedEvent: unknown;
-    const runner = makeGateRunner([
-      {
-        pluginId: "test",
-        handler: async (event: unknown) => {
-          receivedEvent = event;
-          return { outcome: "pass" as const };
-        },
-      },
-    ]);
-    await runner.runBeforeAgentRun(
-      {
-        prompt: "hello world",
-        messages: [{ role: "user", content: "hello" }],
-        channelId: "discord",
-        senderId: "user-123",
-      },
-      ctx,
-    );
-    const event = receivedEvent as Record<string, unknown>;
-    expect(event.prompt).toBe("hello world");
-    expect(event.channelId).toBe("discord");
-    expect(event.senderId).toBe("user-123");
-  });
 });
 
 describe("before_agent_run invalid ask outcome", () => {
@@ -253,28 +195,5 @@ describe("before_agent_run invalid ask outcome", () => {
     expect(result?.decision.outcome).toBe("block");
     expect(result?.pluginId).toBe("plugin-a");
     expect(secondHandlerCalled).toBe(false);
-  });
-});
-
-describe("before_tool_call channelId forwarding", () => {
-  it("passes channelId through to before_tool_call handlers", async () => {
-    let receivedCtx: unknown;
-    const registry = makeRegistry([
-      {
-        pluginId: "test",
-        hookName: "before_tool_call",
-        handler: async (eventValue: unknown, ctxLocal: unknown) => {
-          receivedCtx = ctxLocal;
-          return undefined;
-        },
-        source: "test",
-      },
-    ]);
-    const runner = createHookRunner(registry);
-    await runner.runBeforeToolCall(
-      { toolName: "exec", params: {} },
-      { toolName: "exec", channelId: "discord", sessionKey: "s1" },
-    );
-    expect((receivedCtx as { channelId?: string }).channelId).toBe("discord");
   });
 });

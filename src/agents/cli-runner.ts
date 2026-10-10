@@ -483,6 +483,7 @@ async function runPreparedCliAgentOwned(
     }
     await bootstrapHarnessContextEngine({
       admittedRunContext: params.admittedRunContext,
+      preparedRunAdmission: params.preparedRunAdmission,
       hadSessionFile: context.hadSessionFile,
       contextEngine: context.contextEngine,
       sessionId: params.sessionId,

@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -40,7 +44,7 @@ type Owner = {
   committed: () => void;
 };
 type Source = {
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   assertRollbackCurrent: () => void;
   upstreamLinkCurrent?: SessionUpstreamLinkCurrentCheck;
 };
@@ -68,7 +72,9 @@ export async function withSessionInitializationSource<T>(
       assert();
     };
     const current = Object.freeze({
-      assertCurrent: () => assertActive(source.assertCurrent),
+      assertCurrent: composeSessionSourceAssertion([source.assertCurrent], (assertSources) =>
+        assertActive(assertSources),
+      ),
       assertRollbackCurrent: () => assertActive(source.assertRollbackCurrent),
       upstreamLinkCurrent: source.upstreamLinkCurrent,
     });
@@ -109,10 +115,10 @@ export function captureSessionInitializationOwner(harnessId: string | undefined)
   };
   return {
     upstreamLinkCurrent: source?.upstreamLinkCurrent,
-    assertCurrent() {
-      source?.assertCurrent();
+    assertCurrent: composeSessionSourceAssertion([source?.assertCurrent], (assertSources) => {
+      assertSources();
       assertRegistryCurrent();
-    },
+    }),
     assertRollbackCurrent() {
       source?.assertRollbackCurrent();
       assertRegistryCurrent();

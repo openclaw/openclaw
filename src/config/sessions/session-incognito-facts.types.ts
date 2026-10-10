@@ -2,6 +2,7 @@ import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-cont
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Content-free postimage; full entries remain owned by the requesting read. */
@@ -28,12 +29,29 @@ export type IncognitoSessionFacts = {
     | "pendingWorktree"
     | "pendingProjectGitUrl"
   > & { worktreeId?: string };
+  policy?: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "sandbox"
+    | "sandboxMode"
+    | "createdActor"
+    | "agentRuntimeOverride"
+    | "nativeRuntimeConsent"
+    | "permissionMode"
+    | "execHost"
+    | "execNode"
+  >;
+  cliHistory?: {
+    boundary: SessionEntry["cliHistoryBoundary"];
+    watermark: SessionTranscriptWatermark;
+  };
   completionSources?: Array<{ sourceId: string; valid: boolean }>;
   steering?: Pick<
     SessionEntry,
     | "sessionId"
     | "updatedAt"
     | "lifecycleRevision"
+    | "activeWriterRunId"
     | "restartRecoveryHarnessCompletion"
     | "restartRecoveryTerminalDeliveryEvidence"
     | "status"
@@ -42,7 +60,19 @@ export type IncognitoSessionFacts = {
     | "restartRecoveryDeliveryReceiptState"
     | "restartRecoveryDeliveryToolCallId"
     | "restartRecoveryTerminalRunIds"
-  >;
+    | "lifecycleRunId"
+    | "startedAt"
+    | "abortedLastRun"
+    | "spawnDepth"
+    | "subagentRole"
+    | "restartRecoverySourceReplyDeliveryMode"
+    | "restartRecoveryDeliveryContext"
+    | "sendPolicy"
+    | "chatType"
+  > & {
+    hasRecoveryClaim: boolean;
+    pendingFinalDeliveryContext?: NonNullable<SessionEntry["pendingFinalDelivery"]>["context"];
+  };
   expiresAt?: number;
 };
 

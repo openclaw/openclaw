@@ -128,7 +128,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
-  const watchUpdateProgress = callbacks.watchUpdateProgress;
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
@@ -232,7 +231,6 @@ export function renderApplicationShell(host: ShellViewHost) {
     params: {},
     sessionScope: true,
   });
-  const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
@@ -261,11 +259,11 @@ export function renderApplicationShell(host: ShellViewHost) {
       themeMode: context.theme.mode,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: config.devGitBranch,
-      watchUpdateProgress,
+      watchUpdateProgress: callbacks.watchUpdateProgress,
       onOpenPalette: host.openPalette,
       onRetryConnect: callbacks.retryGateway,
       onToggleSidebar: callbacks.toggleSidebar,
-      onOpenNewSession: openNewSession,
+      onOpenNewSession: callbacks.requestOpenNewSession,
       onUpdateSidebarEntries: callbacks.updateSidebarEntries,
       onPairMobile: callbacks.openDevicePairSetup,
       onNavigate: host.navigate,
@@ -443,7 +441,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   label: t("chat.runControls.newSession"),
                   showShortcut: true,
                   disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                  onOpen: openNewSession,
+                  onOpen: callbacks.requestOpenNewSession,
                 })}
                 <openclaw-tooltip
                   .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}

@@ -14,7 +14,6 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   type ApplicationChatSubmissions,
   type RetainedChatSubmission,
@@ -37,11 +36,6 @@ const chatSessionProjections = new WeakMap<
   {
     projection?: SessionProjectionState;
     runId?: string;
-    modelObservation?: {
-      runId: string;
-      model: string | undefined;
-      provider: string | undefined;
-    };
   }
 >();
 // Display ownership outlives active-state cleanup. It is not the foreground
@@ -106,13 +100,16 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
     sessionKey,
     agentId: scope.agentId ?? resolveUiSelectedSessionAgentId(owner),
   });
-  const retire = (runId: string, awaitTranscriptReceipt = false) => {
+  const deliveredInScope = (runId: string) => {
     const entry = submissions.readDelivered(key + runId, client ?? owner);
-    if (
-      entry?.kind === "delivered" &&
-      !(awaitTranscriptReceipt && persistedSteerTargetRunId(entry.message)) &&
+    return entry?.kind === "delivered" &&
       (!entry.sessionId || !scope.sessionId || entry.sessionId === scope.sessionId)
-    ) {
+      ? entry
+      : undefined;
+  };
+  const retire = (runId: string, awaitTranscriptReceipt = false) => {
+    const entry = deliveredInScope(runId);
+    if (entry && !(awaitTranscriptReceipt && persistedSteerTargetRunId(entry.message))) {
       entry.pending = false;
     }
   };
@@ -126,16 +123,14 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
     },
     ownsPendingSteer: (identity: SessionMessageIdentity | null) => {
       const runId = identity?.idempotencyKey?.replace(/:user$/u, "");
-      const entry = runId ? submissions.readDelivered(key + runId, client ?? owner) : undefined;
+      const entry = runId ? deliveredInScope(runId) : undefined;
       return Boolean(
         identity?.role === "user" &&
         !identity.isImported &&
         identity.id === null &&
         identity.sequence === null &&
-        entry?.kind === "delivered" &&
-        entry.pending &&
-        persistedSteerTargetRunId(entry.message) &&
-        (!entry.sessionId || !scope.sessionId || entry.sessionId === scope.sessionId),
+        entry?.pending &&
+        persistedSteerTargetRunId(entry.message),
       );
     },
     receive: (message: unknown, identity: SessionMessageIdentity | null, persisted = false) => {
@@ -154,14 +149,8 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
       if (receipt) {
         retire(runId);
       }
-      const delivered = submissions.readDelivered(key + runId, client ?? owner);
-      if (
-        !receipt &&
-        !identity.isImported &&
-        delivered?.kind === "delivered" &&
-        !delivered.pending &&
-        (!delivered.sessionId || !scope.sessionId || delivered.sessionId === scope.sessionId)
-      ) {
+      const delivered = deliveredInScope(runId);
+      if (!receipt && !identity.isImported && delivered && !delivered.pending) {
         return undefined;
       }
       if (!handoff || identity.isImported || runId !== handoff.pendingRunId) {
@@ -229,8 +218,9 @@ export function readChatSessionProjectionScope(
 function chatProjectionScopeChanged(
   previous: SessionProjectionScope,
   scope: SessionProjectionScope,
+  keys: readonly (keyof SessionProjectionScope)[] = CHAT_PROJECTION_SCOPE_KEYS,
 ) {
-  return CHAT_PROJECTION_SCOPE_KEYS.some(
+  return keys.some(
     (key) =>
       Object.hasOwn(scope, key) && previous[key] !== undefined && previous[key] !== scope[key],
   );
@@ -286,36 +276,7 @@ export function setChatRunOwner(owner: object, runId: string | undefined): void 
   chatSessionProjections.set(owner, {
     ...current,
     runId,
-    modelObservation:
-      current?.modelObservation && current.modelObservation.runId === runId
-        ? current.modelObservation
-        : undefined,
   });
-}
-
-export function observeChatRunModel(
-  owner: object,
-  runId: string | undefined,
-  row?: GatewaySessionRow,
-): void {
-  chatSessionProjections.set(owner, {
-    ...chatSessionProjections.get(owner),
-    modelObservation:
-      runId && row
-        ? { runId, model: row.activeModel, provider: row.activeModelProvider }
-        : undefined,
-  });
-}
-
-export function getChatModelObservedRunId(
-  owner: object,
-  row: GatewaySessionRow | undefined,
-): string | undefined {
-  const observation = chatSessionProjections.get(owner)?.modelObservation;
-  return observation?.model === row?.activeModel &&
-    observation?.provider === row?.activeModelProvider
-    ? observation?.runId
-    : undefined;
 }
 
 /** The only mutation boundary for the reducer and its rendered message array. */
@@ -329,13 +290,11 @@ export function publishChatSessionProjection(
   const scopeChanged = previousScope && chatProjectionScopeChanged(previousScope, projection.scope);
   if (scopeChanged) {
     const status = owner.compactionStatus;
-    const sessionKeys = ["sessionKey", "sessionId", "agentId"] as const;
-    const sessionChanged = sessionKeys.some(
-      (key) =>
-        Object.hasOwn(projection.scope, key) &&
-        previousScope[key] !== undefined &&
-        previousScope[key] !== projection.scope[key],
-    );
+    const sessionChanged = chatProjectionScopeChanged(previousScope, projection.scope, [
+      "sessionKey",
+      "sessionId",
+      "agentId",
+    ]);
     if (sessionChanged) {
       owner.providerPolicyNotice = null;
     }
@@ -353,10 +312,6 @@ export function publishChatSessionProjection(
     runId && Object.hasOwn(projection.runs, runId) && !scopeChanged ? runId : undefined;
   chatSessionProjections.set(owner, {
     projection,
-    modelObservation:
-      scopeChanged || (current?.modelObservation?.runId === runId && !retainedRunId)
-        ? undefined
-        : current?.modelObservation,
     runId: retainedRunId,
   });
   // Run-only transitions share the transcript array. Preserve their ownership
@@ -466,6 +421,9 @@ export function selectChatInputDisplay(
   const accepted = new Set(inputs.map((input) => input.runId));
   const retainedSteer = (runId: string | undefined) =>
     Boolean(runId && (steerSendKeys.has(runId) || steerSendKeys.has(`${runId}:user`)));
+  const unseenInputs = inputs.filter(
+    (input) => !userIds.has(input.id) && !retainedSteer(input.runId),
+  );
   return {
     queue: queue.filter(
       (item) =>
@@ -474,16 +432,10 @@ export function selectChatInputDisplay(
           !sendKeys.has(item.sendRunId) &&
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
-    pendingInputs: inputs.filter(
-      (input) =>
-        !userIds.has(input.id) &&
-        !input.queued &&
-        !retainedSteer(input.runId) &&
-        asNullableRecord(input.message)?.display !== false,
+    pendingInputs: unseenInputs.filter(
+      (input) => !input.queued && asNullableRecord(input.message)?.display !== false,
     ),
-    queuedInputs: inputs.filter(
-      (input) => !userIds.has(input.id) && input.queued && !retainedSteer(input.runId),
-    ),
+    queuedInputs: unseenInputs.filter((input) => input.queued),
   };
 }
 
