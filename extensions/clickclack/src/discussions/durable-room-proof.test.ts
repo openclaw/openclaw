@@ -191,8 +191,8 @@ describe("ClickClack durable room real-behavior proof", () => {
         },
       },
     } as unknown as PluginRuntime);
-    runtime.state.openKeyedStore = <T>(
-      options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
     ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);
     setClickClackRuntime(runtime);
     const service = new ClickClackDiscussionService(runtime, {

@@ -3,6 +3,7 @@
  */
 export {
   createPluginStateKeyedStore as createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2 as createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
   getPluginStateCapacity as getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,

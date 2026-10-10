@@ -4,6 +4,7 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
@@ -37,6 +38,7 @@ import {
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateCompareResult,
   PluginStateEntry,
   PluginStateKeyedStore,
@@ -86,6 +88,8 @@ export type {
   OpenAsyncKeyedStoreOptions,
   OpenRetainedKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
+  PluginStateComparisonCondition,
   PluginStateCompareIntent,
   PluginStateCompareResult,
   PluginStateEntry,
@@ -110,10 +114,16 @@ function createKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenAsyncKeyedStoreOptions,
   assertActive?: () => void,
+  warningPluginId?: string,
 ): Required<PluginStateKeyedStore<T>> {
   const prepared = prepareKeyedStoreOptions(pluginId, options);
   const assertRetainedActive = options.retention === "retained" ? assertActive : undefined;
-  const store = createSyncKeyedStore<T>(prepared, assertRetainedActive);
+  const store = createSyncKeyedStore<T>(
+    prepared,
+    assertRetainedActive,
+    "PluginStateKeyedStore",
+    warningPluginId,
+  );
   return {
     ...createAsyncKeyedStore<T>(prepared, assertRetainedActive, assertActive),
     withCurrent: ({ assertCurrent, sessionEntryCurrent }) => {
@@ -160,17 +170,29 @@ function createAsyncKeyedStore<T>(
       // SAFETY: The namespace's JSON value type is caller-owned, as with lookup.
       return observation as PluginStateObservation<T>;
     },
-    compareAndApply: async (key, comparison, intent) => {
+    compareAndApply: async (key, comparison, intent, options) => {
       if (intent?.operation !== "update" && intent?.operation !== "delete") {
         throw invalidInput("Plugin state comparison requires an update or delete intent.");
       }
       const operation = intent.operation === "update" ? "register" : "delete";
       const normalizedKey = validateKey(key, operation);
       validatePluginStateComparison(comparison, operation);
+      if (options && options.conditions.length > 100) {
+        throw invalidInput("Plugin state comparisons accept at most 100 conditions.", operation);
+      }
+      const conditions = options?.conditions.map((condition) => {
+        validatePluginStateComparison(condition.comparison, operation);
+        return {
+          namespace: validateNamespace(condition.namespace, operation),
+          key: validateKey(condition.key, operation),
+          comparison: condition.comparison,
+        };
+      });
       const common = {
         ...scope,
         key: normalizedKey,
         comparison,
+        conditions,
         maxEntries: prepared.maxEntries,
         overflowPolicy: prepared.overflowPolicy,
       };
@@ -345,31 +367,55 @@ function createAsyncKeyedStore<T>(
 function createSyncKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
+  warn = true,
+  warningPluginId?: string,
 ): Required<PluginStateSyncKeyedStore<T>> {
   requireBoundedOptions(options);
-  return createSyncKeyedStore<T>(prepareKeyedStoreOptions(pluginId, options));
+  return createSyncKeyedStore<T>(
+    prepareKeyedStoreOptions(pluginId, options),
+    undefined,
+    warn ? "PluginStateSyncKeyedStore" : undefined,
+    warningPluginId,
+  );
 }
 
 function createSyncKeyedStore<T>(
   { pluginId, namespace, maxEntries, overflowPolicy, defaultTtlMs, env }: PreparedKeyedStoreOptions,
   assertActive?: () => void,
+  legacyContract?: "PluginStateKeyedStore" | "PluginStateSyncKeyedStore",
+  warningPluginId?: string,
 ): Required<PluginStateSyncKeyedStore<T>> {
   const scope = { pluginId, namespace, env };
   const writeScope = { ...scope, maxEntries, overflowPolicy };
+  const warnLegacyUse = (method: string, replacement = `openKeyedStoreV2().${method}()`) => {
+    if (legacyContract) {
+      warnPluginSdkDeprecation({
+        pluginId: warningPluginId,
+        family: "plugin-state-keyed-store",
+        method: `${legacyContract}.${method}`,
+        replacement: `await ${replacement}`,
+        compatibility:
+          "Synchronous operations still commit before returning; legacy callbacks retain transaction-local ordering.",
+      });
+    }
+  };
   return {
     register(key, value, opts) {
+      warnLegacyUse("register");
       pluginStateRegister({
         ...writeScope,
         ...prepareRegisterParams(key, value, defaultTtlMs, opts),
       });
     },
     registerIfAbsent(key, value, opts) {
+      warnLegacyUse("registerIfAbsent");
       return pluginStateRegisterIfAbsent({
         ...writeScope,
         ...prepareRegisterParams(key, value, defaultTtlMs, opts),
       });
     },
     update(key, updateValue, opts) {
+      warnLegacyUse("update", "openKeyedStoreV2().observe() and compareAndApply()");
       assertActive?.();
       if (isRetainedPluginStateNamespace(namespace) && opts?.ttlMs !== undefined) {
         throw invalidInput("Retained plugin state does not accept a TTL.");
@@ -388,6 +434,7 @@ function createSyncKeyedStore<T>(
       });
     },
     deleteIf(key, predicate) {
+      warnLegacyUse("deleteIf", "openKeyedStoreV2().observe() and compareAndApply()");
       assertActive?.();
       return pluginStateDeleteIf({
         ...scope,
@@ -400,27 +447,34 @@ function createSyncKeyedStore<T>(
       });
     },
     lookup(key) {
+      warnLegacyUse("lookup");
       return pluginStateLookup({ ...scope, key: validateKey(key, "lookup") }) as T | undefined;
     },
     lookupMany(keys) {
+      warnLegacyUse("lookupMany");
       // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
       return pluginStateLookupMany({ ...scope, keys: prepareLookupKeys(keys) }) as Array<
         Result<T | undefined, PluginStateStoreError>
       >;
     },
     consume(key) {
+      warnLegacyUse("consume");
       return pluginStateConsume({ ...scope, key: validateKey(key, "consume") }) as T | undefined;
     },
     delete(key) {
+      warnLegacyUse("delete");
       return pluginStateDelete({ ...scope, key: validateKey(key, "delete") });
     },
     entries() {
+      warnLegacyUse("entries");
       return pluginStateEntries(scope) as PluginStateEntry<T>[];
     },
     count() {
+      warnLegacyUse("count");
       return pluginStateCount(scope);
     },
     clear() {
+      warnLegacyUse("clear");
       pluginStateClear(scope);
     },
   };
@@ -483,10 +537,59 @@ export function createPluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(pluginId, options, assertActive);
 }
 
+/** Opens a data-only worker store bound to the retained caller's lifetime and authority. */
+export function createPluginStateKeyedStoreV2<T>(
+  pluginId: string,
+  options: OpenAsyncKeyedStoreOptions,
+  authority: PluginStateActionAuthority,
+): PluginStateKeyedStore<T, 2> {
+  if (pluginId.startsWith("core:")) {
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
+  }
+  if (typeof authority.assertCurrent !== "function") {
+    throw invalidInput("Plugin state action authority requires assertCurrent.");
+  }
+  authority.assertCurrent();
+  return createAsyncKeyedStore<T>(
+    prepareKeyedStoreOptions(pluginId, options),
+    authority.assertCurrent,
+    authority.assertCurrent,
+    authority.sessionEntryCurrent,
+  );
+}
+
+/** Registry-owned stores retain diagnostic identity after the opening invocation ends. */
+export function createPluginStateRuntimeStores(pluginId: string, assertRuntimeCurrent: () => void) {
+  if (pluginId.startsWith("core:")) {
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
+  }
+  return {
+    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+      if (options.retention === "retained") {
+        assertRuntimeCurrent();
+      }
+      return createKeyedStoreForPluginId<T>(pluginId, options, assertRuntimeCurrent, pluginId);
+    },
+    openKeyedStoreV2: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
+      createPluginStateKeyedStoreV2<T>(pluginId, options, {
+        assertCurrent: () => {
+          assertRuntimeCurrent();
+          authority?.assertCurrent();
+        },
+        sessionEntryCurrent: authority?.sessionEntryCurrent,
+      }),
+    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createSyncKeyedStoreForPluginId<T>(pluginId, options, true, pluginId),
+  };
+}
+
 /**
  * Named adapter for the plugin-state-sync-keyed-store compatibility contract.
- * @deprecated Plugin runtimes should use api.runtime.state.openKeyedStore and
- * await its operations. This sync adapter remains through the next Plugin SDK major.
+ * @deprecated Use createPluginStateKeyedStoreV2 or api.runtime.state.openKeyedStoreV2
+ * and await its operations. This adapter will be removed in the next Plugin SDK major.
  */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
@@ -681,7 +784,7 @@ export async function replaceCorePluginStateEntry(
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
 ): Required<PluginStateSyncKeyedStore<T>> {
-  return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
+  return createSyncKeyedStoreForPluginId<T>(options.ownerId, options, false);
 }
 
 /** Resets plugin-state module/database state for isolated tests. */

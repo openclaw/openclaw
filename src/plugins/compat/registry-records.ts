@@ -200,7 +200,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-11",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+      "Use api.runtime.state.openKeyedStoreV2 or createPluginStateKeyedStoreV2, await data-only operations, and replace update/deleteIf closures with observe/compareAndApply. Synchronous methods retain commit-before-return until they are removed in the next Plugin SDK major and explicit breaking-release approval.",
     docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
     surfaces: [
       "api.runtime.state.openSyncKeyedStore",
@@ -221,7 +221,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:
-      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+      "Bundled plugins use worker-owned keyed-state operations and conditional prepared writes. Released synchronous stores and opaque callbacks retain their timing with a bounded migration warning; schemas, retention, and update behavior are unchanged.",
   },
   {
     code: "memory-read-result-statusless-success",

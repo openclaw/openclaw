@@ -18,8 +18,10 @@ import {
 import { DetachedDiscussionBindingRetention } from "./binding-retention.js";
 import {
   attachBindingToCurrentActiveSession,
+  bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
+  readDiscussionSessionEntry,
   type ClickClackDiscussionBinding,
   type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
@@ -41,6 +43,7 @@ import { DiscussionReconcileScheduler } from "./reconcile-scheduler.js";
 import {
   clearClickClackDiscussionChannelRevoked,
   isClickClackDiscussionChannelRevoked,
+  isClickClackDiscussionChannelRevokedAsync,
   markClickClackDiscussionChannelRevoked,
 } from "./revoked-channel-store.js";
 import {
@@ -169,7 +172,7 @@ export class ClickClackDiscussionService {
         if (existing) {
           const resolved = await this.#resolveBindingForUse(existing);
           if (resolved.state === "retargeted") {
-            this.#revokeAndDeleteBinding(sessionKey, existing);
+            await this.#revokeAndDeleteBinding(sessionKey, existing);
             return { state: "available" };
           }
           if (resolved.state === "stale") {
@@ -215,7 +218,7 @@ export class ClickClackDiscussionService {
     if (existing) {
       const resolved = await this.#resolveBindingForUse(existing);
       if (resolved.state === "retargeted") {
-        this.#revokeAndDeleteBinding(sessionKey, existing);
+        await this.#revokeAndDeleteBinding(sessionKey, existing);
       } else if (resolved.state === "stale") {
         await this.#releaseStaleBinding(sessionKey, existing);
       } else if (resolved.state === "active") {
@@ -320,11 +323,13 @@ export class ClickClackDiscussionService {
         if (resolved.state !== "active") {
           return { text: "No discussion is bound to this session." };
         }
-        const attached = this.#refreshSessionAttachment(sessionKey, binding);
+        const attached = await this.#refreshSessionAttachment(sessionKey, binding);
         if (!attached) {
           return { text: "No discussion is bound to this session." };
         }
         if (
+          !bindingMatchesActiveSessionIncarnation(this.#runtime, sessionKey, attached) ||
+          resolveDiscussionBindingAccount(this.#currentConfig(), attached).state !== "active" ||
           isClickClackDiscussionChannelRevoked({
             runtime: this.#runtime,
             serverBaseUrl: binding.serverBaseUrl,
@@ -367,25 +372,21 @@ export class ClickClackDiscussionService {
   ): Promise<void> {
     await this.#finalizePendingBinding(sessionKey, binding);
     if (
-      isClickClackDiscussionChannelRevoked({
+      await isClickClackDiscussionChannelRevokedAsync({
         runtime: this.#runtime,
         serverBaseUrl: binding.serverBaseUrl,
         channelId: binding.channelId,
       })
     ) {
-      this.#store.delete(sessionKey);
+      await this.#store.delete(sessionKey);
       return;
     }
-    // This read also guards the immediately following detached-retention mutation.
-    const entry = this.#runtime.agent.session.getSessionEntry({
-      sessionKey,
-      readConsistency: "latest",
-    });
+    const entry = await readDiscussionSessionEntry(this.#runtime, sessionKey);
     if (!entry) {
-      this.#detachedBindings.mark(sessionKey, binding);
+      await this.#detachedBindings.mark(sessionKey, binding);
       return;
     }
-    const activeBinding = this.#detachedBindings.clear(sessionKey, binding);
+    const activeBinding = await this.#detachedBindings.clear(sessionKey, binding);
     if (!activeBinding) {
       return;
     }
@@ -393,7 +394,7 @@ export class ClickClackDiscussionService {
       ? resolveDiscussionBindingAccount(this.#currentConfig(), activeBinding)
       : await this.#resolveBindingForUse(activeBinding);
     if (resolved.state === "retargeted") {
-      this.#revokeAndDeleteBinding(sessionKey, activeBinding);
+      await this.#revokeAndDeleteBinding(sessionKey, activeBinding);
       return;
     }
     if (resolved.state === "stale") {
@@ -424,7 +425,7 @@ export class ClickClackDiscussionService {
       activeBinding.displayTitle === undefined
     ) {
       const bindings = await this.#store.entries();
-      const freshBinding = this.#store.get(sessionKey);
+      const freshBinding = await this.#store.getAsync(sessionKey);
       if (
         !freshBinding ||
         freshBinding.serverBaseUrl !== activeBinding.serverBaseUrl ||
@@ -434,13 +435,13 @@ export class ClickClackDiscussionService {
         return;
       }
       if (
-        isClickClackDiscussionChannelRevoked({
+        await isClickClackDiscussionChannelRevokedAsync({
           runtime: this.#runtime,
           serverBaseUrl: freshBinding.serverBaseUrl,
           channelId: freshBinding.channelId,
         })
       ) {
-        this.#store.delete(sessionKey);
+        await this.#store.delete(sessionKey);
         return;
       }
       bindingForAttachment = freshBinding;
@@ -456,7 +457,7 @@ export class ClickClackDiscussionService {
       return;
     }
     const account = current.account;
-    const attached = this.#refreshSessionAttachment(sessionKey, bindingForAttachment);
+    const attached = await this.#refreshSessionAttachment(sessionKey, bindingForAttachment);
     if (!attached) {
       return;
     }
@@ -499,6 +500,24 @@ export class ClickClackDiscussionService {
       return;
     }
     const client = this.#clientFactory(account);
+    const assertCurrentAuthority = () => {
+      const bound = this.#store.get(sessionKey);
+      if (
+        !bound ||
+        bound.externalRef !== currentBinding.externalRef ||
+        bound.serverBaseUrl !== currentBinding.serverBaseUrl ||
+        bound.channelId !== currentBinding.channelId ||
+        !bindingMatchesActiveSessionIncarnation(this.#runtime, sessionKey, currentBinding) ||
+        resolveDiscussionBindingAccount(this.#currentConfig(), currentBinding).state !== "active" ||
+        isClickClackDiscussionChannelRevoked({
+          runtime: this.#runtime,
+          serverBaseUrl: currentBinding.serverBaseUrl,
+          channelId: currentBinding.channelId,
+        })
+      ) {
+        throw new Error("ClickClack discussion authority changed before channel update");
+      }
+    };
     let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
     if (labelChanged) {
       updated = await this.#withChannelMutationLock(() =>
@@ -510,13 +529,15 @@ export class ClickClackDiscussionService {
           sessionKey,
           agentId: currentBinding.agentId,
           patch,
+          assertCurrentAuthority,
         }),
       );
     } else {
+      assertCurrentAuthority();
       updated = await client.updateChannel(currentBinding.channelId, patch);
       assertChannelPatch(updated, patch);
     }
-    const latestBinding = this.#store.get(sessionKey);
+    const latestBinding = await this.#store.getAsync(sessionKey);
     if (
       !latestBinding ||
       latestBinding.serverBaseUrl !== currentBinding.serverBaseUrl ||
@@ -535,15 +556,15 @@ export class ClickClackDiscussionService {
     if (updated.display_title === undefined) {
       delete nextBinding.displayTitle;
     }
-    this.#store.set(sessionKey, nextBinding);
+    await this.#store.set(sessionKey, nextBinding, { assertCurrent: assertCurrentAuthority });
   }
 
-  #refreshSessionAttachment(
+  async #refreshSessionAttachment(
     sessionKey: string,
     binding: ClickClackDiscussionBinding,
-  ): ClickClackDiscussionBinding | undefined {
+  ): Promise<ClickClackDiscussionBinding | undefined> {
     try {
-      return attachBindingToCurrentActiveSession({
+      return await attachBindingToCurrentActiveSession({
         runtime: this.#runtime,
         store: this.#store,
         sessionKey,
@@ -579,14 +600,17 @@ export class ClickClackDiscussionService {
     // Release local routing authority only. The ClickClack room remains durable,
     // and its lifecycle remains owned by ClickClack.
     await clearDiscussionBindingGeneration({ runtime: this.#runtime, sessionKey });
-    this.#revokeAndDeleteBinding(sessionKey, binding);
+    await this.#revokeAndDeleteBinding(sessionKey, binding);
   }
 
-  #revokeAndDeleteBinding(sessionKey: string, binding: ClickClackDiscussionBinding): void {
+  async #revokeAndDeleteBinding(
+    sessionKey: string,
+    binding: ClickClackDiscussionBinding,
+  ): Promise<void> {
     // Persist the reverse ownership evidence first. If that write fails, retain
     // the binding so inbound routing still fails closed.
-    markClickClackDiscussionChannelRevoked(this.#runtime, binding);
-    this.#store.delete(sessionKey);
+    await markClickClackDiscussionChannelRevoked(this.#runtime, binding);
+    await this.#store.delete(sessionKey);
   }
 
   async #finalizePendingBinding(
@@ -601,7 +625,7 @@ export class ClickClackDiscussionService {
       // A matching binding is the durable commit record. Clear the fail-closed
       // tombstone first, then the recovery reservation; every crash point can
       // replay this sequence without orphaning the remote channel.
-      clearClickClackDiscussionChannelRevoked({
+      await clearClickClackDiscussionChannelRevoked({
         runtime: this.#runtime,
         serverBaseUrl: binding.serverBaseUrl,
         channelId: binding.channelId,

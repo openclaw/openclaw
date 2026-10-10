@@ -919,7 +919,7 @@ describe("Invalid engine fallback", () => {
     ]);
 
     setActivePluginRegistry(builder);
-    activateContextEngineRegistrations(builder);
+    await activateContextEngineRegistrations(builder);
     expect(await listContextEngineQuarantines()).toEqual([]);
   });
 

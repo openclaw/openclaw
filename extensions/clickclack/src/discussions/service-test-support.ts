@@ -53,22 +53,60 @@ export function createDiscussionMemoryStore<T>(): PluginStateSyncKeyedStore<T> {
 
 export function asyncDiscussionTestStore<T>(
   openStore: PluginRuntime["state"]["openSyncKeyedStore"],
-  options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-): PluginStateKeyedStore<T> {
+  options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+): PluginStateKeyedStore<T, 2> {
   if (options.retention === "retained") {
     throw new Error("ClickClack discussion fixture expects a bounded store");
   }
   const store = openStore<T>(options);
+  const observe = (key: string) => ({
+    value: store.lookup(key),
+    comparison: JSON.stringify(store.entries().find((entry) => entry.key === key) ?? null),
+  });
   return {
-    register: async (...args) => store.register(...args),
+    observe: async (key) => observe(key),
+    compareAndApply: async (key, comparison, intent) => {
+      const current = observe(key);
+      if (current.comparison !== comparison) {
+        return { status: "conflict", current };
+      }
+      if (intent.action === "keep") {
+        return { status: "unchanged" };
+      }
+      if (intent.action === "set") {
+        store.register(key, intent.value);
+      } else {
+        store.delete(key);
+      }
+      return { status: "applied" };
+    },
+    register: async (key, value, opts) => {
+      opts?.assertCurrent?.();
+      store.register(key, value, opts);
+    },
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     lookup: async (...args) => store.lookup(...args),
+    lookupMany: async (keys) => keys.map((key) => ({ ok: true, value: store.lookup(key) })),
     consume: async (...args) => store.consume(...args),
     delete: async (key, opts) => {
       opts?.assertCurrent?.();
       return store.delete(key);
     },
     entries: async () => store.entries(),
+    entriesInKeyRange: async ({ keyStartInclusive, keyEndExclusive, limit, order }) =>
+      store
+        .entries()
+        .filter((entry) => entry.key >= keyStartInclusive && entry.key < keyEndExclusive)
+        .toSorted((left, right) =>
+          order === "desc" ? right.key.localeCompare(left.key) : left.key.localeCompare(right.key),
+        )
+        .slice(0, limit),
+    count: async () => store.entries().length,
+    deleteIfEqual: async (key, expected) =>
+      store.lookup(key) === expected ? store.delete(key) : false,
+    moveEntriesFrom: async () => {
+      throw new Error("Discussion stores do not move retained entries");
+    },
     clear: async () => store.clear(),
   };
 }
@@ -143,8 +181,9 @@ export function createHarness(
     config: { current: vi.fn(() => config) },
     state: {
       openSyncKeyedStore,
-      openKeyedStore: <T>(storeOptions: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0]) =>
-        asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions),
+      openKeyedStoreV2: <T>(
+        storeOptions: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+      ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, storeOptions),
     },
     agent: {
       session: {

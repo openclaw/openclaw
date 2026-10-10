@@ -553,7 +553,7 @@ describe("ClickClack discussion service contracts", () => {
         credentialFingerprint: discussionCredentialFingerprint("test-token"),
       },
     });
-    markClickClackDiscussionChannelRevoked(harness.runtime, binding);
+    await markClickClackDiscussionChannelRevoked(harness.runtime, binding);
 
     await harness.service.reconcile(sessionKey);
 
@@ -605,7 +605,7 @@ describe("ClickClack discussion service contracts", () => {
     const binding = harness.store.lookup(sessionKey) as Parameters<
       typeof markClickClackDiscussionChannelRevoked
     >[1];
-    markClickClackDiscussionChannelRevoked(harness.runtime, binding);
+    await markClickClackDiscussionChannelRevoked(harness.runtime, binding);
 
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
     expect(harness.store.lookup(sessionKey)).toBeUndefined();

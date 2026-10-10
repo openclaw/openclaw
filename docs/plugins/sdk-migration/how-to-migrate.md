@@ -9,6 +9,59 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await plugin state and conversation bindings
+
+Use `api.runtime.state.openKeyedStoreV2<T>(options)` for a data-only store bound
+to the plugin runtime's lifetime. For an individual revocable action, pass its
+`assertCurrent` authority as the second argument. Deferred code with an explicit
+owner can use `createPluginStateKeyedStoreV2(pluginId, options, authority)` from
+`openclaw/plugin-sdk/plugin-state-store-runtime`. Keep that import lazy.
+
+The opener returns synchronously; await every operation before publishing its
+result or releasing its owner. Reads and writes execute in the existing workers.
+Mutation completion includes native commit and installation of committed facts.
+Atomic `consume` and `registerIfAbsent` remain single worker operations.
+
+Replace transaction-local JavaScript callbacks with observation and conditional
+application:
+
+```typescript
+// Legacy: the callback executes inside a native transaction on the host.
+await legacyStore.update("counter", (value) => (value ?? 0) + 1);
+
+// Worker-owned: prepare outside the transaction and handle an explicit conflict.
+const observed = await store.observe("counter");
+const result = await store.compareAndApply("counter", observed.comparison, {
+  operation: "update",
+  action: "set",
+  value: (observed.value ?? 0) + 1,
+});
+if (result.status === "conflict") {
+  // Recompute from current observations or report the conflict to the caller.
+}
+```
+
+Comparisons bind stored content and metadata, not permission or a unique binding
+incarnation. The optional fourth argument accepts same-plugin conditions on
+other namespace/key observations. The worker checks every condition and the
+destination inside one transaction. On conflict, prepare every dependent input
+again; the returned `current` describes only the destination. Never retry a
+transport error, an unknown write, or an arbitrary callback. The new API does
+not serialize closures or preserve transaction-local reads made by old callbacks.
+For transcript callbacks, use the separate
+[transcript preparation contract](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation),
+which checks duplicates before preparation and supports explicit suppression.
+
+The original synchronous keyed stores and opaque `update`/`deleteIf` callbacks
+remain compatibility APIs. They
+preserve synchronous commit-before-return and callback ordering, and are
+**removed in the next Plugin SDK major** after the approved compatibility window.
+Actual legacy use emits one diagnostic per plugin and capability family per
+Gateway process; importing a module does not warn. Diagnostics contain the method,
+replacement, and compatibility promise, without paths or stored values.
+
+This migration changes no schema, stored format, retention, or update behavior.
+
 ## Workspace mutation guards
 
 Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.

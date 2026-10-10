@@ -209,6 +209,21 @@ completion contract.
 
 ### Conversation and plugin-state receipt coverage
 
+Bundled keyed-state mutations use the data-only V2 store and the existing
+shared-state worker. Preparation can await on the host; `compareAndApply` checks
+the destination and any same-plugin namespace conditions in one synchronous
+worker transaction. An explicit conflict requires fresh preparation. Neither an
+unknown outcome nor a failed worker request selects a native fallback.
+
+Released synchronous stores and opaque callbacks remain named
+compatibility paths until removed in the next Plugin SDK major. They preserve
+commit-before-return and use one shared migration-warning budget per plugin and
+capability family. Exact final-authority reads remain at ClickClack/peer delivery,
+native binding leases, channel route ownership, resource policy, MCP effects,
+placement activation, and model-selection commit boundaries. Their retirement
+requires complete owner publication and removal of raw synchronous writers.
+There is no new freshness probe, schema, stored-byte, retention, or update change.
+
 Plugin-state keyed mutations publish stored JSON postimages and exact deleted
 keys through the same postcommit phases. Expiry sweeps, capacity eviction,
 conditional deletion, atomic consume/register-if-absent, namespace clear,
