@@ -9,6 +9,7 @@ import {
 } from "../../app/settings.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -184,7 +185,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
         <div class="settings-row settings-row--stacked">
           <div class="settings-typography-preview">
             <div class="settings-typography-preview__caption">
-              ${t("configView.appearance.fonts.previewCaption")}
+              ${t("configView.appearance.fonts.brandedPreviewCaption", { brand: currentThemeBranding().brandName })}
             </div>
             <p class="settings-typography-preview__prose">
               ${t("configView.appearance.fonts.previewProse")}

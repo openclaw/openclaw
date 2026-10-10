@@ -24,6 +24,7 @@ import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -86,6 +87,8 @@ import {
 import { SessionDetailsController } from "./session-details-controller.ts";
 import { renderSessionManagementMenu } from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
+
+registerSessionOrganizationEnglish();
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
@@ -297,6 +300,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     return {
       epoch: this.pageEpoch,
+      signal: this.pluginActionLifetime.signal,
       context,
       gateway,
       sessions: context.sessions,
@@ -695,7 +699,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 label: row.label || row.displayName || row.key,
                 agentId: requests[0]!.agentId,
               },
-              scope: { ...scope, signal: this.pluginActionLifetime.signal },
+              scope,
               isCurrent: () => this.isRequestScopeCurrent(scope),
               request,
             })
@@ -750,7 +754,6 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async deleteAllArchived() {
     const scope = this.captureRequestScope();
-    const signal = this.pluginActionLifetime.signal;
     if (!scope || this.loading || this.sessionMutationPending) {
       return;
     }
@@ -794,7 +797,7 @@ class SessionsPage extends OpenClawLightDomElement {
         t("sessionsView.deleteAllArchivedConfirm", {
           count: String(archivedRows.length),
         }),
-        { signal },
+        { signal: scope.signal },
       )) ||
       !this.isRequestScopeCurrent(scope)
     ) {
@@ -993,9 +996,8 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const initialValue = resolveSessionRenameValue(row);
-    const requestSignal = this.pluginActionLifetime.signal;
     const value = await this.inputDialog.open(() => ({
-      signal: requestSignal,
+      signal: scope.signal,
       title: t("sessionsView.renameSessionPrompt"),
       defaultValue: initialValue,
     }));
@@ -1057,7 +1059,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 label: row?.label || row?.displayName || key,
                 agentId,
               },
-              scope: { ...scope, signal: this.pluginActionLifetime.signal },
+              scope,
               isCurrent: () => this.isRequestScopeCurrent(scope),
               request,
             })

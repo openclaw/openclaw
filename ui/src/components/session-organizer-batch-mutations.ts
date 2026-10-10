@@ -37,6 +37,7 @@ export type SessionActionRow = Pick<
   hasActiveRun?: boolean;
   hasActiveSubagentRun?: boolean;
   isChild?: boolean;
+  pinnable?: boolean;
   sidebarRoot?: boolean;
   archiveGuard?: Pick<
     SessionsPatchManyParams["targets"][number],

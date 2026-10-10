@@ -2,9 +2,11 @@ import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/s
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
-import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { isSubagentSessionKey, resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
   formatPreservedWorktreesNotice,
@@ -34,6 +36,8 @@ import {
   withSessionWorkspaceRecovery,
 } from "./session-workspace-recovery.runtime.ts";
 
+registerSessionOrganizationEnglish();
+
 registerNewSessionSetupEnglish();
 
 export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
@@ -46,9 +50,9 @@ export {
   updateSessionGroupDefaults,
 } from "./session-organizer-catalog.ts";
 
-export { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
-
 export { patchSession } from "./session-organizer-patch.runtime.ts";
+
+export { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
 export {
   archiveSessionWithUndo,
   archiveSessionTreeWithUndo,
@@ -194,6 +198,45 @@ async function acknowledgeUnreadHiddenRuns(
   );
 }
 
+// A child may temporarily render as a root while its parent is archived.
+// Pinnability retains the durable lineage; hidden workers are never promoted.
+function needsGroupPromotion(session: SessionActionRow): boolean {
+  return (
+    !isSubagentSessionKey(session.key) &&
+    !session.sidebarRoot &&
+    (session.isChild === true || session.pinnable === false)
+  );
+}
+
+async function moveSessionRowsToCategory(
+  host: SessionActionHost,
+  rows: readonly SidebarRecentSession[],
+  category: string | null,
+  scope: SidebarSessionMutationScope,
+): Promise<SessionActionRow[] | null> {
+  const successful: SessionActionRow[] = [];
+  // Keep caller order and batch together only rows needing the same placement.
+  for (let start = 0; start < rows.length;) {
+    const promote = needsGroupPromotion(rows[start]!);
+    let end = start + 1;
+    while (end < rows.length && needsGroupPromotion(rows[end]!) === promote) {
+      end += 1;
+    }
+    const result = await patchSessionRows(
+      host,
+      rows.slice(start, end),
+      { category, ...(promote ? { sidebarRoot: true } : {}) },
+      scope,
+    );
+    if (!result) {
+      return null;
+    }
+    successful.push(...result);
+    start = end;
+  }
+  return successful;
+}
+
 export async function runBatchSessionAction(
   host: SessionOrganizerControllerHost,
   action: SessionMenuAction,
@@ -209,10 +252,12 @@ export async function runBatchSessionAction(
       }
       break;
     case "move-to-group":
-      await patchSessionRows(
+      await moveSessionRowsToCategory(
         host,
-        rows.filter((row) => (row.category ?? null) !== action.category),
-        { category: action.category },
+        rows.filter(
+          (row) => (row.category ?? null) !== action.category || needsGroupPromotion(row),
+        ),
+        action.category,
         scope,
       );
       break;
@@ -240,18 +285,29 @@ export async function renameSession(
   session: SidebarRecentSession,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
-  const value = await showInputDialog({
+  await showInputDialog({
     signal: scope.signal,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
+    submit: async (value) => {
+      const patch = resolveSessionRenamePatch(value, session.renameValue, session.userLabel);
+      if (!patch) {
+        return null;
+      }
+      let failure: string | null = null;
+      await patchSession(host, session, patch, scope, {
+        sessionScope: true,
+        handleError: (error) => {
+          if (!/^label already in use:/iu.test(formatUiError(error))) {
+            return false;
+          }
+          failure = t("sessionsView.sessionNameInUse");
+          return true;
+        },
+      });
+      return failure;
+    },
   });
-  if (value === null) {
-    return;
-  }
-  const patch = resolveSessionRenamePatch(value, session.renameValue, session.userLabel);
-  if (patch) {
-    await patchSession(host, session, patch, scope, { sessionScope: true });
-  }
 }
 
 export async function assignSessionOwner(
@@ -302,11 +358,11 @@ export async function createSessionGroup(
       return patchSession(
         host,
         sessions[0]!,
-        { category: name, ...(sessions[0]!.isChild ? { sidebarRoot: true } : {}) },
+        { category: name, ...(needsGroupPromotion(sessions[0]!) ? { sidebarRoot: true } : {}) },
         scope,
       );
     }
-    const successful = await patchSessionRows(host, sessions, { category: name }, scope);
+    const successful = await moveSessionRowsToCategory(host, sessions, name, scope);
     if (!successful) {
       return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
     }
@@ -345,14 +401,14 @@ export async function assignSessionCategory(
   if (
     (currentSession.category ?? null) === category &&
     patch.pinned === undefined &&
-    !currentSession.isChild
+    !needsGroupPromotion(currentSession)
   ) {
     return;
   }
   await patchSession(
     host,
     currentSession,
-    { category, ...patch, ...(currentSession.isChild ? { sidebarRoot: true } : {}) },
+    { category, ...patch, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
     scope,
   );
 }

@@ -64,7 +64,7 @@ function visibleRows(
   return build(createInput(overrides)).flatMap((item) =>
     item.kind === "group"
       ? item.messages.map(({ message }) => extractTextCached(message))
-      : item.kind === "notice"
+      : item.kind === "notice" || item.kind === "stream"
         ? [item.text]
         : [],
   );
@@ -74,7 +74,7 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
-  it("moves durable steers below their run's output without reordering other history", () => {
+  it("keeps accepted steers at their transcript positions between same-run answers", () => {
     const messages = [
       { role: "user", content: "Original", __openclaw: { idempotencyKey: "run:user", seq: 1 } },
       { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
@@ -88,10 +88,10 @@ describe("transcript input order", () => {
     expect(visibleRows({ messages })).toEqual([
       "Original",
       "Before",
-      "After",
-      "Final",
       "Steer one",
+      "After",
       "Steer two",
+      "Final",
       "Next",
       "Other run",
     ]);
@@ -105,6 +105,77 @@ describe("transcript input order", () => {
       "Next",
       "Other run",
     ]);
+  });
+
+  it.each([true, false])(
+    "keeps the live tail after accepted steers and before a later turn (original=%s)",
+    (includeOriginal) => {
+      const original = {
+        role: "user",
+        content: "Original",
+        __openclaw: { idempotencyKey: "run:user", seq: 1 },
+      };
+      const messages = [
+        ...(includeOriginal ? [original] : []),
+        { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
+        {
+          role: "user",
+          content: "Steer one",
+          __openclaw: { idempotencyKey: "steer-one:user", steerTargetRunId: "run", seq: 3 },
+        },
+        { role: "assistant", content: "After", __openclaw: { runId: "run", seq: 4 } },
+        {
+          role: "user",
+          content: "Steer two",
+          __openclaw: { idempotencyKey: "steer-two:user", steerTargetRunId: "run", seq: 5 },
+        },
+        { role: "user", content: "Next turn", __openclaw: { idempotencyKey: "next:user", seq: 6 } },
+      ];
+      expect(
+        visibleRows({ messages, runId: "run", stream: "Live continuation", streamStartedAt: 1 }),
+      ).toEqual([
+        ...(includeOriginal ? ["Original"] : []),
+        "Before",
+        "Steer one",
+        "After",
+        "Steer two",
+        "Live continuation",
+        "Next turn",
+      ]);
+    },
+  );
+
+  it("keeps retained activity before a steer when its observed prompt is paged out", () => {
+    expect(
+      visibleRows({
+        runId: "run",
+        messages: [
+          {
+            role: "user",
+            content: "Steer",
+            __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "run", seq: 3 },
+          },
+        ],
+        streamSegments: [
+          {
+            text: "Earlier commentary",
+            itemId: "comment",
+            runId: "run",
+            ts: 9000,
+            afterUserSendId: "original",
+          },
+        ],
+        toolMessages: [
+          {
+            role: "assistant",
+            content: "Earlier tool",
+            runId: "run",
+            timestamp: 9001,
+            openclawToolStreamAfterSendId: "original",
+          },
+        ],
+      }),
+    ).toEqual(["Earlier commentary", "Earlier tool", "Steer"]);
   });
 
   it.each(["steer", "interrupt"] as const)(

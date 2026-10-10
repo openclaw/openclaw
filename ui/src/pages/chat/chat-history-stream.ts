@@ -293,7 +293,7 @@ export function applyHistoryRun(params: {
     for (const event of run.events) {
       if (event?.runId === run.runId) {
         // SAFETY: history replays the same agent events against the pane that owns live tool state.
-        handleAgentEvent(state as never, event as never);
+        handleAgentEvent(state as never, event as never, "history");
       }
     }
   }

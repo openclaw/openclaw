@@ -57,6 +57,10 @@ behaviors:
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
 Pending loads retain their initial expiry so stalled work can be replaced.
+An explicit refresh through the prepared catalog owner bypasses completed
+response-cache entries only for the keys acquired by that request. Repeated
+reads within the same acquisition share the refreshed value; concurrent callers
+share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
 Bundled providers set `discoveryMode: "strict"` in their catalog options.
 This code option keeps successful empty results empty and reports failed

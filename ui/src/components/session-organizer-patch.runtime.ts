@@ -4,11 +4,8 @@ import type {
   SidebarSessionMutationScope,
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
-import {
-  requireSessionMutationAccess,
-  type SessionActionHost,
-  type SessionActionRow,
-} from "./session-organizer-batch-mutations.ts";
+import { requireSessionMutationAccess } from "./session-organizer-batch-mutations.ts";
+import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { withSessionWorkspaceRecovery } from "./session-workspace-recovery.runtime.ts";
 
 export async function patchSession(
@@ -16,7 +13,12 @@ export async function patchSession(
   session: SessionActionRow,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
-  refresh: { deferListRefresh?: boolean; sessionScope?: boolean } = {},
+  refresh: {
+    deferListRefresh?: boolean;
+    sessionScope?: boolean;
+    /** Return true when the caller presents this attempt's rejection locally. */
+    handleError?: (error: unknown) => boolean;
+  } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -92,7 +94,9 @@ export async function patchSession(
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
     }
-    host.sessionData.publishSessionMutationError(scope, error);
+    if (!refresh.handleError?.(error)) {
+      host.sessionData.publishSessionMutationError(scope, error);
+    }
     return "failed";
   }
 }

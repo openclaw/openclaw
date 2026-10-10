@@ -12,6 +12,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
+import { createModalDialogTestFixture, submitInputDialog } from "../test-helpers/modal-dialog.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "./app-sidebar.ts";
@@ -103,3 +104,97 @@ it("drags a nested conversation into the top level and keeps its history identit
   });
   expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
 });
+
+it.each(["existing group", "new group", "batch group"])(
+  "keeps an archived parent's child independent after moving to a %s",
+  async (action) => {
+    let parent: GatewaySessionRow = {
+      key: "agent:main:parent",
+      sessionId: "parent-id",
+      kind: "direct",
+      label: "Archived parent",
+      updatedAt: 1,
+      archived: true,
+      childSessions: ["agent:main:child"],
+    };
+    let child: GatewaySessionRow = {
+      key: "agent:main:child",
+      sessionId: "child-id",
+      kind: "direct",
+      label: "Surviving child",
+      updatedAt: 2,
+      parentSessionKey: parent.key,
+      spawnedBy: parent.key,
+    };
+    const patches: Record<string, unknown>[] = [];
+    const request = createGatewayRequestMock(async (method, params) => {
+      const query = isRecord(params) ? params : {};
+      if (method === "sessions.list") {
+        return { ...sessionsResult([parent, child], child.updatedAt ?? 1), groups: ["Projects"] };
+      }
+      if (method === "sessions.describe") {
+        return { session: query.key === parent.key ? parent : child };
+      }
+      if (method === "sessions.patch" || method === "sessions.patchMany") {
+        const patch =
+          method === "sessions.patch" ? query : isRecord(query.patch) ? query.patch : {};
+        patches.push(patch);
+        child = {
+          ...child,
+          ...(typeof patch.sidebarRoot === "boolean" ? { sidebarRoot: patch.sidebarRoot } : {}),
+          category: typeof patch.category === "string" ? patch.category : undefined,
+          updatedAt: (child.updatedAt ?? 1) + 1,
+        };
+        return method === "sessions.patch"
+          ? { ok: true, key: child.key, path: "", entry: { ...child } }
+          : { outcomes: [{ ok: true, key: child.key, agentId: "main" }] };
+      }
+      return {};
+    });
+    const gateway = createGatewayHarness(createTestGatewayClient(request));
+    gateway.publish({ sessionKey: child.key });
+    const sessions = createTestSessionCapability(gateway.gateway);
+    await sessions.refresh({ agentId: "main", force: true });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions);
+    sidebar.connected = true;
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = child.key;
+    await sidebar.updateComplete;
+    const modal = createModalDialogTestFixture();
+    try {
+      const row = sidebar.findSidebarSessionByKey(child.key)!;
+      expect(row).toMatchObject({ isChild: false, pinnable: false });
+      if (action === "existing group") {
+        await sidebar.sessionOrganizer.assignSessionCategory(row, "Projects");
+      } else if (action === "new group") {
+        const operation = modal.track(sidebar.sessionOrganizer.createSessionGroup([row]));
+        await submitInputDialog("Projects");
+        await operation;
+      } else {
+        await sidebar.sessionOrganizer.runBatchSessionAction(
+          { kind: "move-to-group", category: "Projects" },
+          [row],
+          false,
+        );
+      }
+      expect(patches).toEqual([
+        expect.objectContaining({ category: "Projects", sidebarRoot: true }),
+      ]);
+      parent = { ...parent, archived: false, updatedAt: 10 };
+      child = { ...child, category: undefined, updatedAt: 11 };
+      await sessions.refresh({ agentId: "main", force: true });
+      await sidebar.updateComplete;
+      expect(sidebar.findSidebarSessionByKey(child.key)).toMatchObject({
+        isChild: false,
+        sidebarRoot: true,
+      });
+      expect(child).toMatchObject({
+        sessionId: "child-id",
+        parentSessionKey: parent.key,
+        spawnedBy: parent.key,
+      });
+    } finally {
+      await modal.cleanup();
+    }
+  },
+);

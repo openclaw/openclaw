@@ -44,7 +44,7 @@ export class SessionsPageArchive {
       return;
     }
     const operations = await this.loadOperations(scope);
-    if (!operations) {
+    if (!operations || !this.host.isCurrent(scope)) {
       return;
     }
     await operations.archiveSessionTreeWithUndo(
@@ -106,14 +106,14 @@ export class SessionsPageArchive {
       return;
     }
     const operations = await this.loadOperations(scope);
-    if (!operations) {
+    if (!operations || !this.host.isCurrent(scope)) {
       return;
     }
     if (
-      !(await operations.confirmRunningSessionArchive({
-        ...row,
-        label: row.label ?? row.displayName ?? row.key,
-      })) ||
+      !(await operations.confirmRunningSessionArchive(
+        { ...row, label: row.label ?? row.displayName ?? row.key },
+        scope.signal,
+      )) ||
       !this.host.isCurrent(scope)
     ) {
       return;

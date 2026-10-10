@@ -114,6 +114,78 @@ describe("conversation position rail", () => {
     },
   );
 
+  it("reveals only overflowing transcripts and retires focus when they fit again", () => {
+    const flushFrame = stubAnimationFrames();
+    stubRailVisibility();
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const positions = {
+      markers: [
+        {
+          id: "short",
+          anchorId: "short",
+          role: "user" as const,
+          message: message("short", "user", "A short question", 1),
+        },
+      ],
+      markerIdsByMessageId: new Map([["short", "short"]]),
+    };
+    const update = () =>
+      render(
+        transcript.renderSession(
+          "agent:main:rail-overflow",
+          (session) => html`
+            <div class="chat-thread" tabindex="0">
+              <div class="chat-bubble" data-entry-id="short">A short question</div>
+              ${renderChatPositionRail({ positions, transcript: session, requestUpdate: update })}
+            </div>
+          `,
+        ),
+        container,
+      );
+    try {
+      update();
+      const root = container.querySelector<HTMLElement>(".chat-thread")!;
+      const rail = root.querySelector<HTMLElement>(".chat-position-rail")!;
+      const marks = rail.querySelector<HTMLElement>(".chat-position-rail__marks")!;
+      Object.defineProperties(root, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, value: 600 },
+      });
+      Object.defineProperty(marks, "clientHeight", { configurable: true, value: 12 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 12);
+      }
+      flushFrame();
+      expect(rail.hasAttribute("data-overflow")).toBe(false);
+      const resize = (clientHeight: number, scrollHeight: number) => {
+        publishTranscriptScroll(root, {
+          type: "resize",
+          viewport: { clientHeight, scrollHeight, scrollTop: 0 },
+        });
+        flushFrame();
+      };
+      resize(600, 900);
+      expect(rail.hasAttribute("data-overflow")).toBe(true);
+      const marker = rail.querySelector<HTMLButtonElement>("button")!;
+      marker.focus();
+      expect(document.activeElement).toBe(marker);
+      resize(900, 900);
+      expect(rail.hasAttribute("data-overflow")).toBe(false);
+      expect(document.activeElement).toBe(root);
+      expect(rail.querySelector(".chat-position-rail__preview")).toBeNull();
+      resize(600, 601);
+      expect(rail.hasAttribute("data-overflow")).toBe(false);
+      resize(600, 602);
+      expect(rail.hasAttribute("data-overflow")).toBe(true);
+      resize(0, 602);
+      expect(rail.hasAttribute("data-overflow")).toBe(false);
+    } finally {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    }
+  });
+
   const railUpdateScenarios = [
     "boot-resize",
     "resize",
