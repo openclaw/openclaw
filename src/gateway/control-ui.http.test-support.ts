@@ -1,8 +1,9 @@
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import { vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 export function setupTrustedProxyAuth(): ResolvedGatewayAuth {
   vi.spyOn(os, "networkInterfaces").mockReturnValue(
@@ -30,4 +31,40 @@ export function createTrustedProxyHeaders(
     "x-forwarded-proto": "https",
     ...extraHeaders,
   };
+}
+
+export type RequestParams = {
+  url: string;
+  method?: "GET" | "HEAD" | "POST";
+  headers?: IncomingMessage["headers"];
+  distinctHeaders?: IncomingMessage["headersDistinct"];
+  remoteAddress?: string;
+};
+function makeRequest(params: RequestParams): IncomingMessage {
+  const headers = params.headers ?? {};
+  // SAFETY: HTTP handler fixtures supply the request fields used by the tested routes.
+  return {
+    url: params.url,
+    method: params.method ?? "GET",
+    headers,
+    headersDistinct:
+      params.distinctHeaders ??
+      Object.fromEntries(
+        Object.entries(headers).map(([name, value]) => [
+          name,
+          Array.isArray(value) ? value : [String(value)],
+        ]),
+      ),
+    socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+  } as IncomingMessage;
+}
+
+export async function runRequest<Options>(
+  handler: (req: IncomingMessage, res: ServerResponse, options: Options) => Promise<boolean>,
+  params: RequestParams,
+  options: Options,
+) {
+  const response = makeMockHttpResponse();
+  const handled = await handler(makeRequest(params), response.res, options);
+  return { ...response, handled };
 }

@@ -21,17 +21,17 @@ it("retains unsaved starts when a terminal policy change would reload the docume
     );
     const { createApplicationConfigCapability } = await import("./config.ts");
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
-    const attempt = async () => {
+    const attempt = async (terminalEnabled: boolean) => {
       const result = await config.refresh();
-      expect(result).toMatchObject({ terminalEnabled: true });
+      expect(result).toMatchObject({ terminalEnabled });
       // The existing document keeps its policy until a fresh document can load.
       expect(config.current.terminalEnabled).toBe(false);
       return result;
     };
-    await attempt();
+    await attempt(false);
     expect(reload).not.toHaveBeenCalled();
     release();
-    await attempt();
+    await attempt(true);
     expect(reload).toHaveBeenCalledOnce();
   } finally {
     release();

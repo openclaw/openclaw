@@ -48,7 +48,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
+import { renderedTranscript } from "./chat-state-transcript.test-support.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
@@ -108,29 +108,6 @@ describe("canonical session message recovery", () => {
       ...overrides,
     } as unknown as ChatPageHost;
     return { request, state };
-  }
-
-  function renderedTranscript(state: ChatPageHost) {
-    return buildChatItems({
-      paneId: "test",
-      sessionKey: state.sessionKey,
-      runId: state.chatRunId,
-      messages: state.chatMessages,
-      toolMessages: state.chatToolMessages,
-      streamSegments: state.chatStreamSegments,
-      stream: state.chatStream,
-      streamStartedAt: state.chatStreamStartedAt,
-      queue: state.chatQueue,
-      showToolCalls: true,
-    }).flatMap((item) => {
-      if (item.kind === "group") {
-        return item.messages.map(({ message }) => ({
-          role: item.role,
-          text: extractText(message),
-        }));
-      }
-      return item.kind === "stream" ? [{ role: "assistant", text: item.text }] : [];
-    });
   }
 
   it.each([
@@ -3446,6 +3423,7 @@ describe("loadPageAssistantIdentity", () => {
       config: {
         current: {
           allowExternalEmbedUrls: false,
+          remoteImageOrigins: [],
           assistantIdentity: { name: "Assistant" },
           chatMessageMaxWidth: null,
           embedSandboxMode: "scripts",

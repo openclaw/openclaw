@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
@@ -34,6 +34,8 @@ import {
 } from "./control-ui-contract.js";
 import {
   createTrustedProxyHeaders,
+  runRequest,
+  type RequestParams,
   setupTrustedProxyAuth,
 } from "./control-ui.http.test-support.js";
 import {
@@ -116,46 +118,11 @@ describe("handleControlUiHttpRequest", () => {
     expect(params.end).toHaveBeenCalledWith("Not Found");
   }
 
-  type RequestParams = {
-    url: string;
-    method?: "GET" | "HEAD" | "POST";
-    headers?: IncomingMessage["headers"];
-    distinctHeaders?: IncomingMessage["headersDistinct"];
-    remoteAddress?: string;
-  };
   type AuthParams = {
     auth?: ResolvedGatewayAuth;
     trustedProxies?: string[];
     basePath?: string;
   };
-
-  function makeRequest(params: RequestParams): IncomingMessage {
-    const headers = params.headers ?? {};
-    return {
-      url: params.url,
-      method: params.method ?? "GET",
-      headers,
-      headersDistinct:
-        params.distinctHeaders ??
-        Object.fromEntries(
-          Object.entries(headers).map(([name, value]) => [
-            name,
-            Array.isArray(value) ? value : [String(value)],
-          ]),
-        ),
-      socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
-    } as IncomingMessage;
-  }
-
-  async function runRequest<Options>(
-    handler: (req: IncomingMessage, res: ServerResponse, options: Options) => Promise<boolean>,
-    params: RequestParams,
-    options: Options,
-  ) {
-    const response = makeMockHttpResponse();
-    const handled = await handler(makeRequest(params), response.res, options);
-    return { ...response, handled };
-  }
 
   type ControlRequestParams = RequestParams &
     Omit<NonNullable<Parameters<typeof handleControlUiHttpRequest>[2]>, "root"> & {
@@ -381,6 +348,29 @@ describe("handleControlUiHttpRequest", () => {
     );
     expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
   });
+
+  it.each([undefined, [], ["HTTPS://Images.Example.test.:443"]])(
+    "serves Markdown image origins without changing page CSP: %j",
+    async (remoteImageOrigins) => {
+      const tmp = await createControlUiRoot();
+      const config = { gateway: { controlUi: { remoteImageOrigins } } };
+      const page = await runControlUiRequest(tmp, "/", {
+        headers: { host: "ui.example.test" },
+        config,
+      });
+      const expected = remoteImageOrigins?.length ? ["https://images.example.test."] : [];
+      const csp = String(
+        page.setHeader.mock.calls.findLast((call) => call[0] === "Content-Security-Policy")?.[1],
+      );
+      expect(csp.split("; ").find((directive) => directive.startsWith("img-src "))).toBe(
+        "img-src 'self' data: blob: https:",
+      );
+      const bootstrap = await runControlUiRequest(tmp, CONTROL_UI_BOOTSTRAP_CONFIG_PATH, {
+        config,
+      });
+      expect(parseBootstrapPayload(bootstrap.end).remoteImageOrigins).toEqual(expected);
+    },
+  );
 
   it("uses effective terminal availability instead of raw restart-pending config", async () => {
     const tmp = await createControlUiRoot();

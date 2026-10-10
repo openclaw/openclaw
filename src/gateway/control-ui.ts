@@ -60,6 +60,8 @@ import {
 import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
+  isExpectedSafePathError,
+  isSafeRelativePath,
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
@@ -619,26 +621,6 @@ export async function handleControlUiAvatarRequest(
     }
     return true;
   }
-}
-
-function isExpectedSafePathError(error: unknown): boolean {
-  const code =
-    typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
-  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
-}
-
-function isSafeRelativePath(relPath: string) {
-  if (!relPath) {
-    return false;
-  }
-  const normalized = path.posix.normalize(relPath);
-  return !(
-    path.posix.isAbsolute(normalized) ||
-    path.win32.isAbsolute(normalized) ||
-    normalized.startsWith("../") ||
-    normalized === ".." ||
-    normalized.includes("\0")
-  );
 }
 
 // The default SPA entry infers /__openclaw__ as its base path before bootstrap.

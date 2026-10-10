@@ -111,6 +111,7 @@ function externalPluginConfig(
     environment: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
+    remoteImageOrigins: [],
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,

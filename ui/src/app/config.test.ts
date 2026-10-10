@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   type ControlUiBootstrapConfig,
 } from "../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationConfigCapability } from "./config.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
 function bootstrapResponse(
   serverVersion: string,
   automaticallyFetchFavicons = false,
   pluginAssetsRequireAuth?: boolean,
   communityInvite = true,
+  remoteImageOrigins?: string[],
+  terminalEnabled = false,
 ): Response {
   const payload: ControlUiBootstrapConfig = {
     basePath: "",
@@ -18,10 +22,11 @@ function bootstrapResponse(
     assistantAvatar: "A",
     assistantAgentId: "main",
     serverVersion,
-    terminalEnabled: false,
+    terminalEnabled,
     cliAgentsEnabled: true,
     automaticallyFetchFavicons,
     communityInvite,
+    ...(remoteImageOrigins ? { remoteImageOrigins } : {}),
     ...(pluginAssetsRequireAuth === undefined ? {} : { pluginAssetsRequireAuth }),
     pluginFrameGrants: [],
   };
@@ -35,6 +40,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
+  document.documentElement.removeAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE);
 });
 
 describe("createApplicationConfigCapability", () => {
@@ -146,6 +152,92 @@ describe("createApplicationConfigCapability", () => {
     await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/control-ui-config.json");
     expect(config.current.automaticallyFetchFavicons).toBe(true);
+  });
+
+  it("accepts the Gateway's canonical remote image origins", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        bootstrapResponse("test", false, undefined, true, ["https://images.example.test"]),
+      ),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+
+    expect(config.current.remoteImageOrigins).toEqual([]);
+    await expect(config.refresh()).resolves.toMatchObject({
+      remoteImageOrigins: ["https://images.example.test"],
+    });
+  });
+
+  it.each([
+    [[], ["https://images.example.test"]],
+    [["https://images.example.test"], []],
+  ])("publishes image policy changes without reloading %j -> %j", async (initial, next) => {
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { origin: "https://ui.example.test", reload } });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, true, initial))
+        .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, true, next)),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    await config.refresh();
+    expect(config.current.remoteImageOrigins).toEqual(initial);
+    const listener = vi.fn();
+    config.subscribe(listener);
+    await config.refresh();
+    expect(reload).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(config.current.remoteImageOrigins).toEqual(next);
+  });
+
+  it("revokes remote image origins when a guarded terminal-policy reload is blocked", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "true");
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { origin: "https://ui.example.test", reload } });
+    const unregisterReloadGuard = registerControlUiReloadGuard(() => false, vi.fn());
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          bootstrapResponse(
+            "initial",
+            false,
+            undefined,
+            true,
+            ["https://images.example.test"],
+            true,
+          ),
+        )
+        .mockResolvedValueOnce(bootstrapResponse("updated", false, undefined, true, [], false)),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    try {
+      await config.refresh();
+      expect(config.current.terminalEnabled).toBe(true);
+      expect(config.current.remoteImageOrigins).toEqual(["https://images.example.test"]);
+      const listener = vi.fn();
+      config.subscribe(listener);
+
+      await config.refresh();
+
+      expect(reload).not.toHaveBeenCalled();
+      expect(config.current.terminalEnabled).toBe(true);
+      expect(config.current.remoteImageOrigins).toEqual([]);
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          terminalEnabled: true,
+          remoteImageOrigins: [],
+        }),
+      );
+    } finally {
+      unregisterReloadGuard();
+      document.documentElement.removeAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE);
+    }
   });
 
   it.each([null, { pluginFrameGrants: {} }])(

@@ -40,6 +40,31 @@ previews too.
 
 The browser-side CSP restriction itself is always on and not configurable.
 
+## Remote images in message Markdown
+
+Ordinary user, assistant, and read-only message Markdown keeps remote images as
+click-to-open links by default. Operators can enable inline loading from trusted
+origins with `gateway.controlUi.remoteImageOrigins`, for example
+`["https://images.example.com"]`. Omitted or empty lists keep that default.
+
+Entries must be exact bare HTTPS origins without credentials, paths (including a
+trailing slash), queries, fragments, or wildcards. Hostnames and effective ports
+are normalized; trailing hostname dots remain significant. Images must match the
+configured origin, including its port. HTTP remote images remain links.
+Bootstrap refresh applies additions and removals to message rendering without a
+page reload.
+
+This is renderer admission for ordinary message Markdown. It does not narrow the
+page-wide CSP or change structured transcript images, Activity previews, plugin
+README/document previews, or Gateway SSRF checks. It adds no image proxy or
+Gateway fetch. Browser redirects are governed by the page CSP, not this list;
+an admitted URL can redirect to another HTTPS origin.
+
+Images load directly from the operator browser, exposing its network address and
+potentially sending host cookies. Trust configured hosts and their redirects.
+Existing configurations need no migration; remove this key before downgrading to
+a version that does not recognize it.
+
 ## Public transcript boundary
 
 Public threads use the same `/chat/...` URL as the authenticated Control UI.

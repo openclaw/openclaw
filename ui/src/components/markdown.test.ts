@@ -72,6 +72,56 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("images", () => {
+    it("renders allowed exact-origin images for user and assistant messages", () => {
+      const options = { remoteImages: true, remoteImageOrigins: ["https://images.example.test"] };
+      const allowed = toSanitizedMarkdownHtml(
+        "![Allowed](https://images.example.test/chart.png)",
+        options,
+      );
+      const assistantAllowed = toSanitizedMarkdownHtml(
+        "![Allowed](https://images.example.test/chart.png)",
+        { ...options, assistantTranscriptRoleHeaders: true },
+      );
+      const blocked = toSanitizedMarkdownHtml("![Blocked](http://images.example.test/chart.png)", {
+        remoteImages: true,
+        remoteImageOrigins: ["https://images.example.test"],
+      });
+
+      expect(allowed).toContain('src="https://images.example.test/chart.png"');
+      expect(assistantAllowed).toContain('src="https://images.example.test/chart.png"');
+      expect(blocked).toContain("External image not loaded: Blocked");
+      expect(blocked).not.toContain('src="http://images.example.test/chart.png"');
+    });
+
+    it.each([
+      "http://images.example.test",
+      "https://other.example.test",
+      "https://images.example.test:8443",
+    ])("does not admit a different scheme, host, or port: %s", (origin) => {
+      const result = toSanitizedMarkdownHtml(`![Chart](${origin}/chart.png)`, {
+        remoteImages: true,
+        remoteImageOrigins: ["https://images.example.test"],
+      });
+      expect(result).not.toContain("<img");
+      expect(result).toContain("markdown-external-image");
+    });
+
+    it("separates absent, empty, allowed, and revoked policies in the Markdown cache", () => {
+      const markdown = "![Chart](https://images.example.test/chart.png)";
+      expect(toSanitizedMarkdownHtml(markdown)).toContain("External image not loaded");
+      expect(toSanitizedMarkdownHtml(markdown, { remoteImages: true })).toContain(
+        "markdown-inline-image",
+      );
+      for (const remoteImageOrigins of [[], ["https://images.example.test"], []]) {
+        const result = toSanitizedMarkdownHtml(markdown, {
+          remoteImages: true,
+          remoteImageOrigins,
+        });
+        expect(result.includes("markdown-inline-image")).toBe(remoteImageOrigins.length > 0);
+        expect(result.includes("markdown-external-image")).toBe(remoteImageOrigins.length === 0);
+      }
+    });
+
     it("marks assistant-authored transcript roles in visible image labels", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(

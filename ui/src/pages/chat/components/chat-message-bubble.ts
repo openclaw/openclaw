@@ -210,6 +210,7 @@ export function renderGroupedMessage(
     onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    remoteImageOrigins?: MarkdownRenderOptions["remoteImageOrigins"];
     fetchLinkFavicon?: LinkFaviconFetcher;
     pluginToolIcons?: PluginToolIcons;
     githubRepo?: MarkdownRenderOptions["githubRepo"];
@@ -324,7 +325,7 @@ export function renderGroupedMessage(
     codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
     githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
-    humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
+    ...(markdown === displayMarkdown && humanMentions ? { humanMentions } : {}),
     ...(role === "assistant" && opts.githubRepositories
       ? { githubRepositories: opts.githubRepositories }
       : {}),
@@ -332,6 +333,12 @@ export function renderGroupedMessage(
     sessionLinks: true,
     tableInteractions: "enabled",
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
+    ...(opts.remoteImageOrigins !== undefined
+      ? {
+          remoteImages: opts.remoteImageOrigins.length > 0,
+          remoteImageOrigins: opts.remoteImageOrigins,
+        }
+      : {}),
   };
 
   // Classify completed bare JSON before Markdown can interpret its literal values.

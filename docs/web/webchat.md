@@ -121,6 +121,10 @@ Full configuration: [Configuration](/gateway/configuration)
 
 WebChat has no persisted config section. Gateway uses the built-in `chat.history` display limit. API clients can send per-request `maxChars` to override it for a single call. Clients that can expand tool output with `chat.message.get` may also send `toolResultMaxChars` to request shorter tool-result text previews without reducing user or assistant text. Complete JSON objects and arrays that fit the existing display limit retain that limit because clients use them for source cards and embedded views. This optional limit applies to `chat.history` and `chat.startup`, including history pages and delta catch-up; omit it to retain the default behavior. Repeat it on each page request. Legacy `channels.webchat` and `gateway.webchat` config is retired. Run `openclaw doctor --fix` to remove it.
 
+Ordinary message Markdown in the Control UI keeps remote images as click-to-open links by default. Set `gateway.controlUi.remoteImageOrigins` to trusted, exact bare HTTPS origins, such as `https://images.example.com`, to load matching images inline in user, assistant, and read-only messages. HTTP origins, wildcards, credentials, paths (including a trailing slash), query strings, and fragments are rejected. Hostnames and effective ports are normalized.
+
+Bootstrap refresh applies changes without a page reload. This setting does not narrow the page-wide CSP or change structured images, Activity previews, or document/plugin previews. Images load directly from the browser and may redirect to other HTTPS origins; the Gateway does not proxy them or relax SSRF checks. See [Control UI security](/web/control-ui/security-model#remote-images-in-message-markdown).
+
 Related global options:
 
 - `gateway.port`, `gateway.bind`: WebSocket host/port.

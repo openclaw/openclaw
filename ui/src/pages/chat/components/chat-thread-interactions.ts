@@ -178,6 +178,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    remoteImageOrigins?: MarkdownRenderOptions["remoteImageOrigins"];
     fetchLinkFavicon?: LinkFaviconFetcher;
     pluginToolIcons?: PluginToolIcons;
     githubRepo?: MarkdownRenderOptions["githubRepo"];

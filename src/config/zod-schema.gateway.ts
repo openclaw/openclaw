@@ -2,6 +2,7 @@ import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/a
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
+import { normalizeControlUiRemoteImageOrigin } from "../gateway/control-ui-remote-images.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -251,6 +252,23 @@ export const GatewayConfigSchema = z
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
         automaticallyFetchFavicons: z.boolean().optional(),
+        /** Exact HTTPS origins permitted for inline images in ordinary message Markdown. */
+        remoteImageOrigins: z
+          .array(
+            z
+              .string()
+              .trim()
+              .refine(
+                (value) => normalizeControlUiRemoteImageOrigin(value) !== undefined,
+                "Each gateway.controlUi.remoteImageOrigins entry must be a bare HTTPS origin without credentials, path, query, or fragment",
+              ),
+          )
+          .transform((origins) =>
+            Array.from(
+              new Set(origins.map((origin) => normalizeControlUiRemoteImageOrigin(origin)!)),
+            ).toSorted(),
+          )
+          .optional(),
         /** Allowed browser origins for Control UI/WebChat websocket connections. */
         allowedOrigins: z.array(z.string()).optional(),
         /**

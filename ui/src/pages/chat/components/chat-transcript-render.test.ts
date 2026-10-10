@@ -4,6 +4,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { createApplicationConfigCapability } from "../../../app/config.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
@@ -35,6 +36,73 @@ async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each(["shared", "read-only"] as const)(
+    "refreshes allowed and revoked images in retained %s rows",
+    async (visibility) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async () =>
+          Response.json({ remoteImageOrigins: ["https://httpbin.org"] }),
+        ),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+      const props = threadProps("remote-images", "agent:main:remote-images", [
+        { role: "user", content: "![User image](https://httpbin.org/image/png)", timestamp: 1_000 },
+        {
+          role: "assistant",
+          content: "![Assistant image](https://httpbin.org/image/jpeg)",
+          timestamp: 2_000,
+        },
+        {
+          role: "assistant",
+          content: "![Blocked](https://example.test/image.png)",
+          timestamp: 3_000,
+        },
+      ]);
+      props.selectedSession = {
+        key: props.sessionKey,
+        kind: "direct",
+        visibility,
+        sharingRole: "viewer",
+      };
+      const container = document.body.appendChild(document.createElement("div"));
+      const transcript = createTestTranscript();
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+
+      try {
+        props.remoteImageOrigins = config.current.remoteImageOrigins;
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        expect(container.querySelectorAll("img.markdown-inline-image")).toHaveLength(0);
+        expect(container.querySelectorAll(".markdown-external-image")).toHaveLength(3);
+
+        await config.refresh();
+        props.remoteImageOrigins = config.current.remoteImageOrigins;
+        rerender();
+
+        expect(
+          [...container.querySelectorAll<HTMLImageElement>("img.markdown-inline-image")].map(
+            (image) => image.getAttribute("src"),
+          ),
+        ).toEqual(["https://httpbin.org/image/png", "https://httpbin.org/image/jpeg"]);
+        expect(container.querySelectorAll(".markdown-external-image")).toHaveLength(1);
+        vi.mocked(fetch).mockResolvedValue(Response.json({ remoteImageOrigins: [] }));
+        await config.refresh();
+        props.remoteImageOrigins = config.current.remoteImageOrigins;
+        rerender();
+        expect(container.querySelectorAll("img.markdown-inline-image")).toHaveLength(0);
+        expect(container.querySelectorAll(".markdown-external-image")).toHaveLength(3);
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
 
   it.each([
     ["blob:configured-agent", "gutter", "props"],

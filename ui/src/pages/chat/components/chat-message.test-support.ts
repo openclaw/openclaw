@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
@@ -211,4 +212,17 @@ export function createAssistantCanvasBlock(params: {
       },
     }),
   };
+}
+
+export function expectElement<T extends Element>(
+  container: Element,
+  selector: string,
+  constructor: new () => T,
+): T {
+  const element = container.querySelector<T>(selector);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected ${selector} to match ${constructor.name}`);
+  }
+  return element;
 }
