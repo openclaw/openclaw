@@ -3432,6 +3432,7 @@ describe("image lightbox lifecycle", () => {
 
 describe("loadPageAssistantIdentity", () => {
   it("memoizes identity by agent while fetching a cross-agent switch", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const request = vi.fn(
       async (_method: string, params?: { agentId?: string }): Promise<unknown> => ({
         name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
@@ -3485,8 +3486,12 @@ describe("loadPageAssistantIdentity", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.assistantName).toBe("Other Agent");
 
-    identities.invalidate(["main"]);
+    now.mockReturnValue(61_001);
     state.sessionKey = "agent:main:third";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    identities.invalidate(["main"]);
     await state.loadAssistantIdentity();
     expect(request).toHaveBeenCalledTimes(3);
 

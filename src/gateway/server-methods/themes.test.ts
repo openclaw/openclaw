@@ -218,6 +218,11 @@ describe("theme RPC", () => {
     const broadcastToConnIds = vi.fn();
     const branding = {
       mascot: "none",
+      brandName: "Mission Control",
+      brandIcon: "mark",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
       workingPhrases: ["Building", "Compiling"],
       critters: ["penguin", "fedora"],
       avatarHat: "fedora",

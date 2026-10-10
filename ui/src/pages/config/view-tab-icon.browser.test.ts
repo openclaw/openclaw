@@ -48,6 +48,31 @@ describe("browser tab icon settings", () => {
     expect(pixel.getAnimations({ subtree: true })).toHaveLength(0);
   });
 
+  it("hides collected artwork without changing the saved preference and restores it when enabled", () => {
+    const props: TabIconViewProps = {
+      tabIcon: "lobster:crimson",
+      lobsterdexEnabled: false,
+      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => palette.id === "crimson"),
+      setTabIconMode: vi.fn(),
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    render(renderTabIconSection(props), container);
+    expect(container.querySelector('wa-radio[value="lobster"]')).toBeNull();
+    expect(container.querySelector(".settings-tab-icon__lobsters")).toBeNull();
+    expect(container.textContent).not.toContain("Lobsterdex");
+    expect(container.querySelector("wa-radio-group")?.value).toBe("default");
+    expect(props.tabIcon).toBe("lobster:crimson");
+    expect(props.setTabIconMode).not.toHaveBeenCalled();
+
+    props.lobsterdexEnabled = true;
+    render(renderTabIconSection(props), container);
+    expect(container.querySelector('wa-radio[value="lobster"]')).not.toBeNull();
+    expect(container.querySelector("wa-radio-group")?.value).toBe("lobster");
+    expect(container.querySelector('.settings-tab-icon__pick[aria-pressed="true"]')).not.toBeNull();
+  });
+
   it("shows avatar shapes only for agent artwork and supports keyboard selection", async () => {
     const props: TabIconViewProps = {
       tabIcon: "agent",

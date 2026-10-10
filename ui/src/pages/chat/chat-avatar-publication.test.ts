@@ -21,9 +21,10 @@ describe("forwarded avatar publication", () => {
     resetTranscriptTestDom();
   });
 
-  it.each(["append", "reorder", "identity refresh"])(
+  it.each(["append", "reorder", "identity invalidation"])(
     "keeps settled rows idle after %s and publishes revised avatars",
     async (change) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(60_000);
       setAvatarGatewayOrigin("https://gateway.example.test", ["test-token"]);
       vi.spyOn(globalThis, "fetch").mockImplementation(
         async () =>
@@ -85,7 +86,8 @@ describe("forwarded avatar publication", () => {
           change === "append"
             ? [...messages, { role: "user", content: "Continue", timestamp: 3 }]
             : [...messages].toReversed();
-        if (change === "identity refresh") {
+        now.mockReturnValue(120_001);
+        if (change === "identity invalidation") {
           identities.invalidate(["research", "planner"]);
         }
         // Commit the transcript first, just as the pane does before its avatar refresh.
@@ -99,9 +101,10 @@ describe("forwarded avatar publication", () => {
         expect(host.requestUpdate).not.toHaveBeenCalled();
         expect(container.querySelector('[data-entry-id="report-research"]')).toBe(researchRow);
         expect(image?.getAttribute("src")).toBe("blob:avatar-0");
-        expect(host.request).toHaveBeenCalledTimes(change === "identity refresh" ? 4 : 2);
+        expect(host.request).toHaveBeenCalledTimes(change === "identity invalidation" ? 4 : 2);
 
         avatarRevision += 1;
+        now.mockReturnValue(180_002);
         identities.invalidate(["research", "planner"]);
         host.chatMessages = [...host.chatMessages];
         rerender();
