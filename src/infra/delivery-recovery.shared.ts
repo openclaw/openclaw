@@ -186,9 +186,13 @@ export function findPlatformMessageRejectedError(
  * Untyped pre-connect proof stays undefined so caller-specific text policy keeps precedence.
  */
 export function resolveDeliveryNotSentRetryability(err: unknown): boolean | undefined {
+  return deliveryNotSentRetryability(err, true);
+}
+
+function deliveryNotSentRetryability(err: unknown, requireMarker: boolean): boolean | undefined {
   const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
   if (
-    !candidates.some(isPlatformMessageNotDispatchedError) ||
+    (requireMarker && !candidates.some(isPlatformMessageNotDispatchedError)) ||
     !hasDeliveryNotSentProof(candidates) ||
     hasDeliverySendEvidence(candidates)
   ) {
@@ -209,12 +213,7 @@ function hasDeliverySendEvidence(candidates: readonly unknown[]): boolean {
 
 /** True only when the complete error graph proves a retryable recipient no-send. */
 export function isRetryableDeliveryNotSentError(err: unknown): boolean {
-  const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
-  return (
-    hasDeliveryNotSentProof(candidates) &&
-    !hasDeliverySendEvidence(candidates) &&
-    !candidates.some(isPlatformMessageRejectedError)
-  );
+  return deliveryNotSentRetryability(err, false) ?? false;
 }
 
 /** True when the durable queue retained the exact failed attempt for recovery. */

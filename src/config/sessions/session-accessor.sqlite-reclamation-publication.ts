@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   collectLifecycleIdentityChanges,
   prepareCommittedSessionEntryRemovals,
@@ -26,8 +27,10 @@ export function collectReclamationDeletionEntries(
               (upsert) => upsert.sessionKey === sessionKey,
             ),
         )
-      : result?.kind === "maintenance-finalize"
-        ? result.value.committedEntries
+      : plan.kind === "maintenance-finalize" && result?.kind === "maintenance-finalize"
+        ? result.value.committedEntryIndices.map((index) =>
+            expectDefined(plan.entries[index], "Missing committed maintenance entry"),
+          )
         : plan.entries;
   const removed =
     result?.kind === "lifecycle-projection-commit"
@@ -54,7 +57,9 @@ export function prepareReclamationPublication(
     return prepareCommittedSessionEntryRemovals(
       plan.agentId,
       databaseIdentity,
-      result.value.committedEntries,
+      result.value.committedEntryIndices.map((index) =>
+        expectDefined(plan.entries[index], "Missing committed maintenance entry"),
+      ),
     );
   }
   if (plan.kind === "lifecycle-artifacts") {
@@ -87,7 +92,13 @@ export function collectReclamationChangedSessionKeys(
     case "maintenance-plan":
       return result.value.archivedEntries.map(({ sessionKey }) => sessionKey);
     case "maintenance-finalize":
-      return result.value.committedEntries.map(({ sessionKey }) => sessionKey);
+      if (plan.kind !== "maintenance-finalize") {
+        throw new Error("SQLite maintenance result has no matching plan");
+      }
+      return result.value.committedEntryIndices.map(
+        (index) =>
+          expectDefined(plan.entries[index], "Missing committed maintenance entry").sessionKey,
+      );
     case "maintenance-preservation-required":
     case "maintenance-plan-stale":
     case "maintenance-statistics":

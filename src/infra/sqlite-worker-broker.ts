@@ -204,20 +204,16 @@ export class SqliteWorkerBroker {
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     let actor = this.actors.get(key);
-    if (actor?.retirementRequested) {
-      if (actor.retirement) {
-        await waitForSqliteOpen(actor.retirement, options.signal);
-        return this.openAdmitted(options, client);
-      }
-      throw new SqliteWorkerError("SQLite actor retirement must finish before reopening", "closed");
-    }
-    if (actor?.cleanupState === "pending") {
-      if (actor.closing) {
-        await waitForSqliteOpen(actor.closing, options.signal);
+    if (actor?.retirementRequested || actor?.cleanupState === "pending") {
+      const pending = actor.retirementRequested ? actor.retirement : actor.closing;
+      if (pending) {
+        await waitForSqliteOpen(pending, options.signal);
         return this.openAdmitted(options, client);
       }
       throw new SqliteWorkerError(
-        "SQLite worker cleanup is pending; retry close before reopening",
+        actor.retirementRequested
+          ? "SQLite actor retirement must finish before reopening"
+          : "SQLite worker cleanup is pending; retry close before reopening",
         "closed",
       );
     }
