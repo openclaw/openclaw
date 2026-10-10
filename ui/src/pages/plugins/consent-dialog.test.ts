@@ -227,7 +227,7 @@ describe("renderPluginConsentDialog", () => {
           pluginId: "community-calendar",
           rowKey: "plugin:community-calendar",
         },
-        pluginId: null,
+        pluginId: "community-calendar",
         fallback: {
           name: "Community Calendar",
           version: "1.2.0",

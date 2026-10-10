@@ -22,9 +22,6 @@ export const browserPanelStyles = css`
     width: 100%;
     height: 100%;
   }
-  .bp-actions {
-    flex: none;
-  }
   .bp-profile {
     max-width: 100px;
     overflow: hidden;

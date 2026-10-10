@@ -3122,7 +3122,7 @@ workboard-inline-text {
   overflow-wrap: anywhere;
 }
 
-.workboard-detail__text-trigger:not(:disabled):hover {
+.workboard-detail__text-trigger:not(:disabled, [aria-disabled="true"]):hover {
   background: var(--bg-hover);
 }
 
@@ -3134,10 +3134,13 @@ workboard-inline-text {
 .workboard-detail__text-trigger--notes {
   font-size: 0.85rem;
   line-height: 1.55;
+  cursor: text;
 }
 
+/* The base role="button" rule turns selection off; the value opts back in. */
 .workboard-detail__text-trigger--notes .workboard-detail__text-value {
   white-space: pre-wrap;
+  user-select: text;
 }
 
 .workboard-detail__text-trigger--labels {
@@ -3166,6 +3169,13 @@ workboard-inline-text {
   font-size: 16px;
   font-weight: 400;
   line-height: 1.5;
+}
+
+.workboard-detail__text-editor--notes textarea.settings-input {
+  min-height: 12lh;
+  max-height: 70vh;
+  resize: vertical;
+  field-sizing: content;
 }
 
 .workboard-detail__text-actions {

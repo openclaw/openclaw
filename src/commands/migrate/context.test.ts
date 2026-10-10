@@ -1,7 +1,17 @@
 // Migration context tests cover report directory naming and timestamp fallback behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildMigrationReportDir, resolveMigrationTargetAgentId } from "./context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createNonExitingRuntime } from "../../runtime.js";
+import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
+
+function migrationTarget(config: OpenClawConfig, targetAgentId?: string) {
+  return buildMigrationContext({
+    configOverride: config,
+    targetAgentId,
+    runtime: createNonExitingRuntime(),
+  }).targetAgentId;
+}
 
 describe("migration context helpers", () => {
   it("builds report directories with filename-safe timestamps", () => {
@@ -24,20 +34,18 @@ describe("migration context helpers", () => {
       },
     };
 
-    expect(resolveMigrationTargetAgentId(config, "Research")).toBe("research");
-    expect(() => resolveMigrationTargetAgentId(config, "research/../main")).toThrow(
+    expect(migrationTarget(config, "Research")).toBe("research");
+    expect(() => migrationTarget(config, "research/../main")).toThrow(
       'Invalid agent id "research/../main"',
     );
-    expect(() => resolveMigrationTargetAgentId(config, "missing")).toThrow(
-      'Unknown agent id "missing"',
-    );
+    expect(() => migrationTarget(config, "missing")).toThrow('Unknown agent id "missing"');
   });
 
   it("keeps the configured default when no migration target is supplied", () => {
-    expect(resolveMigrationTargetAgentId({}, undefined)).toBeUndefined();
+    expect(migrationTarget({})).toBeUndefined();
   });
 
   it("rejects an explicitly blank migration target", () => {
-    expect(() => resolveMigrationTargetAgentId({}, "")).toThrow("--agent must not be blank");
+    expect(() => migrationTarget({}, "")).toThrow("--agent must not be blank");
   });
 });

@@ -1,11 +1,11 @@
 import { MessageActionDeniedError } from "./message-action-denial.js";
 
+function requiredTargetError(message: string): Error {
+  return new MessageActionDeniedError(message, "message_target_missing", "message-target:required");
+}
+
 export function missingTargetError(provider: string, hint?: string): Error {
-  return new MessageActionDeniedError(
-    `Delivering to ${provider} requires target${formatTargetHint(hint)}`,
-    "message_target_missing",
-    "message-target:required",
-  );
+  return requiredTargetError(`Delivering to ${provider} requires target${formatTargetHint(hint)}`);
 }
 
 export function missingChannelDestinationError(
@@ -22,11 +22,7 @@ export function missingChannelDestinationError(
 }
 
 export function missingMessageActionTargetError(action: string): Error {
-  return new MessageActionDeniedError(
-    `Action ${action} requires a target.`,
-    "message_target_missing",
-    "message-target:required",
-  );
+  return requiredTargetError(`Action ${action} requires a target.`);
 }
 
 export function invalidMessageActionTargetError(message: string): Error {

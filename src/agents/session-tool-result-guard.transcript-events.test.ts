@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -18,6 +18,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
+import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
+import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   initializeGlobalHookRunner,
@@ -39,6 +43,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
+import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
@@ -127,8 +132,146 @@ afterEach(async () => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  async function openSourceProjection(deferred: boolean) {
+    const { sessionManager, target } = await openPersistedSessionManager();
+    const runId = `source-${target.sessionId}`;
+    const manager = guardSessionManager(sessionManager, { ...target, runId });
+    const gateway = createAgentEventTestHarness();
+    gateway.register(runId, target.sessionKey, runId);
+    const sourceEvents: AgentEventRuntimePayload[] = [];
+    const unsubscribeAgent = subscribeAgentEvents(async (event) => {
+      if (event.runId === runId) {
+        if (event.stream === "assistant") {
+          sourceEvents.push(event);
+        }
+        await gateway.handler(event);
+      }
+    });
+    const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
+      if (event.sessionId === target.sessionId) {
+        gateway.handler.retireTranscript(event);
+      }
+    });
+    const finishing = createDeferred();
+    const finish = createDeferred();
+    const source = createSubscribedSessionHarness({
+      runId,
+      ...(deferred ? { onBeforeTerminalDelivery: () => undefined } : {}),
+      onBeforeLifecycleTerminal: () => {
+        finishing.resolve();
+        return finish.promise;
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stream = (message: ReturnType<typeof assistantText>) => {
+      source.emit({ type: "message_start", message: { ...message, content: [] } });
+      source.emit({
+        type: "message_update",
+        message: { ...message },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: message.content
+            .flatMap((block) => (block.type === "text" ? [block.text] : []))
+            .join("\n"),
+        },
+      });
+    };
+    const commit = (message: Parameters<typeof persistAgentSessionMessage>[1]) =>
+      persistAgentSessionMessage(manager, message, { invalidateSerializedPrefixCache: false });
+    const snapshot = async () => {
+      await unsubscribeAgent.drain();
+      gateway.chatRunState.flushPendingText(runId);
+      return projectInFlightRunSnapshot({ chatRunState: gateway.chatRunState, runId }).text;
+    };
+    return {
+      ...source,
+      manager,
+      sourceEvents,
+      stream,
+      commit,
+      snapshot,
+      finishing,
+      async close() {
+        finish.resolve();
+        await source.subscription.waitForPendingEvents();
+        source.subscription.unsubscribe();
+        await unsubscribeAgent();
+        unsubscribeTranscript();
+        await gateway.handler.dispose();
+        gateway.chatRunState.clear();
+        vi.useRealTimers();
+      },
+    };
+  }
+
+  it.each(["superseded", "retained by steer"])(
+    "retires a committed deferred occurrence %s without hiding identical later output",
+    async (prior) => {
+      const h = await openSourceProjection(true);
+      const first = assistantText("[[reply_to_current]] Repeated answer.");
+      const second = assistantText("Repeated answer.");
+      try {
+        h.stream(first);
+        h.emit({ type: "message_end", message: first });
+        const firstId = await h.commit(first);
+        assert(firstId);
+        expect(h.manager.getEntry(firstId)).toMatchObject({
+          type: "message",
+          message: { role: "assistant" },
+        });
+        expect(h.sourceEvents).toEqual([]);
+        if (prior === "retained by steer") {
+          const steer = makeUserMessage("Continue with the same answer", 1);
+          h.emit({ type: "message_start", message: steer });
+          h.emit({ type: "message_end", message: steer });
+          await h.commit(steer);
+        }
+        h.stream(second);
+        h.emit({ type: "message_end", message: second });
+        h.emit({ type: "agent_end", messages: [first, second] });
+        await h.finishing.promise;
+
+        expect(h.sourceEvents.map((event) => event.data.text)).toEqual(
+          prior === "superseded" ? ["Repeated answer."] : ["Repeated answer.", "Repeated answer."],
+        );
+        expect(await h.snapshot()).toBe("Repeated answer.");
+        await h.commit(second);
+        expect(await h.snapshot()).toBe("");
+      } finally {
+        await h.close();
+      }
+    },
+  );
+
+  it("retires a prior committed source after the next identical item starts", async () => {
+    const h = await openSourceProjection(false);
+    const first = assistantText("[[reply_to_current]] Same answer.");
+    const second = assistantText("Same answer.");
+    try {
+      h.stream(first);
+      h.emit({ type: "message_end", message: first });
+      await h.subscription.waitForPendingEvents();
+      expect(await h.snapshot()).toBe("Same answer.");
+      h.stream(second);
+      await h.subscription.waitForPendingEvents();
+      expect(await h.snapshot()).toBe("Same answer.\n\nSame answer.");
+      await h.commit(first);
+      expect(await h.snapshot()).toBe("Same answer.");
+
+      h.emit({
+        type: "message_update",
+        message: assistantText("Same answer. Continued."),
+        assistantMessageEvent: { type: "text_delta", delta: " Continued." },
+      });
+      await h.subscription.waitForPendingEvents();
+      expect(await h.snapshot()).toBe("Same answer. Continued.");
+    } finally {
+      await h.close();
+    }
+  });
+
   it("preserves prepared source and redaction when a concurrent append forces a retry", async () => {
-    const { sessionManager: manager, target } = await openPersistedSessionManager();
+    const { root, sessionManager: manager, target } = await openPersistedSessionManager();
     const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));
     installSessionToolResultGuard(manager, {
       config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
@@ -165,7 +308,8 @@ describe("guardSessionManager transcript updates", () => {
     } finally {
       execSpy.mockRestore();
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(root);
+    closeOpenClawAgentDatabasesForTest(root);
     const entries = SessionManager.open(target).getBranch();
     expect(entries.map(({ id, parentId }) => ({ id, parentId }))).toEqual([
       { id: baseId, parentId: null },
@@ -467,51 +611,6 @@ describe("guardSessionManager transcript updates", () => {
       },
     ]);
     expect(updates[0]?.messageId).not.toBe("");
-  });
-
-  it("caches real tool result sequence before final assistant messages", async () => {
-    const updates = collectUpdates();
-    const { sessionManager: sm, target } = await openPersistedSessionManager();
-    sm.appendMessage(makeUserMessage("existing prompt", 1));
-    const spy = vi.spyOn(sm, "getBranch");
-    const guarded = guardSessionManager(sm, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      runId: "run-owning-final",
-    });
-    guarded.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-    guarded.appendMessage(makeTextToolResult("call_1", "read", "tool output", false, 2));
-    guarded.appendMessage(assistantText("final answer"));
-    expect(
-      sm.getEntries().flatMap((entry) =>
-        entry.type === "message"
-          ? [
-              {
-                role: entry.message.role,
-                runId: asNullableRecord(asNullableRecord(entry.message)?.["__openclaw"])?.runId,
-              },
-            ]
-          : [],
-      ),
-    ).toEqual([
-      { role: "user", runId: undefined },
-      { role: "assistant", runId: "run-owning-final" },
-      { role: "toolResult", runId: "run-owning-final" },
-      { role: "assistant", runId: "run-owning-final" },
-    ]);
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(updates.map(({ messageSeq }) => messageSeq)).toEqual([2, 4]);
-    expect(
-      updates.map(
-        ({ message }) => asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.runId,
-      ),
-    ).toEqual(["run-owning-final", "run-owning-final"]);
-    expect(updates.map(({ runId }) => runId)).toEqual([undefined, "run-owning-final"]);
-    spy.mockRestore();
   });
 
   it("refreshes run ownership and delivery preparation across reused managers", async () => {

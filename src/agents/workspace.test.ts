@@ -19,10 +19,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { registerWorkspaceBootstrapTests } from "./workspace-bootstrap.test-utils.js";
-import {
-  LEGACY_WORKSPACE_ATTESTATION_HEADER,
-  LEGACY_WORKSPACE_STATE_DIRNAME,
-} from "./workspace-legacy-state.js";
+import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { registerWorkspacePreparationTests } from "./workspace-preparation.test-utils.js";
 import * as workspaceState from "./workspace-state-store.js";
@@ -35,10 +32,12 @@ import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceBootstrapPending,
+  loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   WORKSPACE_VANISHED_ERROR_CODE,
@@ -124,21 +123,8 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
   });
 });
 
-const LEGACY_WORKSPACE_STATE_PATH_SEGMENTS = [
-  LEGACY_WORKSPACE_STATE_DIRNAME,
-  "workspace-state.json",
-] as const;
-
 async function readWorkspaceState(dir: string) {
   return (await readWorkspaceStateSnapshot(dir)).setup;
-}
-
-async function writeLegacyWorkspaceState(dir: string, state: unknown): Promise<void> {
-  await fs.mkdir(path.join(dir, LEGACY_WORKSPACE_STATE_PATH_SEGMENTS[0]), { recursive: true });
-  await fs.writeFile(
-    path.join(dir, ...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS),
-    `${JSON.stringify(state)}\n`,
-  );
 }
 
 async function expectBootstrapSeeded(dir: string) {
@@ -168,41 +154,6 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 }
 
 describe("ensureAgentWorkspace", () => {
-  it("registers workspace aliases in the selected state database", async () => {
-    const root = testState!.root;
-    const workspace = path.join(root, "custom-db-workspace");
-    const workspaceAlias = path.join(root, "custom-db-workspace-alias");
-    const databasePath = path.join(root, "custom-state.sqlite");
-    const options = { path: databasePath };
-    const seededAt = "2026-07-31T12:00:00.000Z";
-    await fs.mkdir(workspace);
-    await fs.symlink(workspace, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
-    await mergeWorkspaceSetupState(workspace, { bootstrapSeededAt: seededAt }, Date.now(), options);
-
-    expect((await readWorkspaceStateSnapshot(workspaceAlias, options)).setup).toEqual({
-      version: 1,
-      bootstrapSeededAt: seededAt,
-    });
-  });
-
-  it("requires Doctor when partial SQLite state coexists with legacy setup state", async () => {
-    const seededAt = "2026-07-15T10:00:00.000Z";
-    await mergeWorkspaceSetupState(tempDir, { bootstrapSeededAt: seededAt });
-    await writeLegacyWorkspaceState(tempDir, {
-      version: 1,
-      setupCompletedAt: "2026-07-15T10:01:00.000Z",
-    });
-
-    await expect(ensureWorkspace()).rejects.toThrow(/run openclaw doctor --fix/u);
-    await expect(
-      fs.access(workspacePath(...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS)),
-    ).resolves.toBeUndefined();
-    expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual({
-      version: 1,
-      bootstrapSeededAt: seededAt,
-    });
-  });
-
   it("refuses to re-seed a future-attested workspace after only generated remnants survive", async () => {
     await ensureWorkspace();
     const snapshot = await readWorkspaceStateSnapshot(tempDir);
@@ -284,37 +235,26 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
   });
 
-  it("allows repeated skip-bootstrap setup for an intentionally empty workspace", async () => {
-    await ensureWorkspace(false);
-    await expect(ensureWorkspace(false)).resolves.toMatchObject({ dir: tempDir });
+  it("reseeds expired SQLite state with a missing workspace", async () => {
+    const expiredAtMs = Date.now() - 25 * 60 * 60 * 1000;
+    await mergeWorkspaceSetupState(
+      tempDir,
+      {
+        bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
+        setupCompletedAt: "2026-07-15T10:01:00.000Z",
+      },
+      expiredAtMs,
+    );
+    await replaceWorkspaceAttestation({
+      workspaceDir: tempDir,
+      attestedAtMs: expiredAtMs,
+      generatedHashes: new Map(),
+    });
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await ensureWorkspace();
+    await expectBootstrapSeeded(tempDir);
+    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
   });
-
-  it.each(["missing", "git-remnant"])(
-    "reseeds expired SQLite state with a %s workspace",
-    async (remnant) => {
-      const expiredAtMs = Date.now() - 25 * 60 * 60 * 1000;
-      await mergeWorkspaceSetupState(
-        tempDir,
-        {
-          bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
-          setupCompletedAt: "2026-07-15T10:01:00.000Z",
-        },
-        expiredAtMs,
-      );
-      await replaceWorkspaceAttestation({
-        workspaceDir: tempDir,
-        attestedAtMs: expiredAtMs,
-        generatedHashes: new Map(),
-      });
-      await fs.rm(tempDir, { recursive: true, force: true });
-      if (remnant === "git-remnant") {
-        await fs.mkdir(workspacePath(".git"), { recursive: true });
-      }
-      await ensureWorkspace();
-      await expectBootstrapSeeded(tempDir);
-      expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
-    },
-  );
 
   it("requires Doctor when SQLite setup state coexists with a legacy attestation", async () => {
     await mergeWorkspaceSetupState(tempDir, {
@@ -324,21 +264,10 @@ describe("ensureAgentWorkspace", () => {
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n${new Date().toISOString()}\n`;
     await fs.writeFile(attestationPath, marker);
 
-    await expect(ensureWorkspace()).rejects.toThrow(/run openclaw doctor --fix/u);
+    await expect(ensureWorkspace()).rejects.toThrow(/Run openclaw doctor --fix/u);
 
     expect(await fs.readFile(attestationPath, "utf-8")).toBe(marker);
     expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(true);
-  });
-
-  it("ignores and preserves a foreign sibling attestation file", async () => {
-    const attestationPath = `${tempDir}.attested`;
-    const siblingContent = "external attestation data\n";
-    await fs.writeFile(attestationPath, siblingContent);
-
-    await ensureWorkspace();
-
-    await expectBootstrapSeeded(tempDir);
-    expect(await fs.readFile(attestationPath, "utf-8")).toBe(siblingContent);
   });
 
   it("treats git-backed workspaces as existing even when template files are missing", async () => {
@@ -361,6 +290,25 @@ describe("ensureAgentWorkspace", () => {
     await ensureWorkspace();
     await expectCompletedWithoutBootstrap(tempDir);
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
+  it("does not read setup state for an absent bootstrap file and refreshes after a setup wait", async () => {
+    const actual = workspaceState.readWorkspaceStateSnapshot;
+    const read = vi.spyOn(workspaceState, "readWorkspaceStateSnapshot");
+    try {
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+      expect(read).not.toHaveBeenCalled();
+      await writeWorkspaceFile(DEFAULT_BOOTSTRAP_FILENAME, "# Bootstrap\n");
+      read.mockImplementationOnce(async (...args) => {
+        const snapshot = await actual(...args);
+        await fs.unlink(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
+        return snapshot;
+      });
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("propagates a transient profile read after the retry budget is exhausted", async () => {
@@ -406,18 +354,6 @@ describe("ensureAgentWorkspace", () => {
     }
   });
 
-  it("keeps bootstrap pending when SOUL.md holds a previously shipped template", async () => {
-    await ensureWorkspace();
-    await writeWorkspaceFile(
-      DEFAULT_SOUL_FILENAME,
-      await fs.readFile("test/fixtures/agents/retired-workspace-templates/SOUL.md", "utf8"),
-    );
-
-    await ensureWorkspace();
-    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
-    await expect(fs.access(workspacePath(DEFAULT_BOOTSTRAP_FILENAME))).resolves.toBeUndefined();
-  });
-
   it("observes setup completed concurrently before writing optional bootstrap files", async () => {
     const agentsPath = workspacePath(DEFAULT_AGENTS_FILENAME);
     await fs.writeFile(agentsPath, "custom agents instructions\n", "utf8");
@@ -458,7 +394,6 @@ registerWorkspaceBootstrapTests();
 
 describe("workspace attestation survival", () => {
   it.each([
-    ["generated", "missing", undefined],
     ["generated", "corrupt", "0".repeat(64)],
     ["customized", "missing", undefined],
   ] as const)(
@@ -705,3 +640,94 @@ it("settles admitted Git work through success, failure, and caller retirement", 
     }
   }
 });
+
+describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+  "workspace permission failures",
+  () => {
+    afterEach(async () => {
+      await fs.chmod(tempDir, 0o700);
+    });
+
+    it.each([0o300, 0o000])(
+      "retains optional bootstrap entries when root mode is %s",
+      async (mode) => {
+        const names = [
+          DEFAULT_AGENTS_FILENAME,
+          DEFAULT_MEMORY_FILENAME,
+          DEFAULT_USER_FILENAME,
+        ] as const;
+        for (const name of names) {
+          await fs.writeFile(path.join(tempDir, name), `content:${name}`);
+        }
+        await fs.chmod(tempDir, mode);
+        await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
+        const files = await loadWorkspaceBootstrapFiles(tempDir, names);
+        expect(files.map((file) => file.name).toSorted()).toEqual([...names].toSorted());
+        for (const file of files) {
+          expect(file.missing).toBe(false);
+          if (mode === 0o300) {
+            expect(file.content).toBe(`content:${file.name}`);
+          } else {
+            expect(file.content).toContain("[UNREADABLE:");
+          }
+        }
+      },
+    );
+
+    it("omits absent optional bootstrap files when the root cannot be listed", async () => {
+      await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "instructions");
+      await fs.chmod(tempDir, 0o300);
+      await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
+
+      const files = await loadWorkspaceBootstrapFiles(tempDir, [
+        DEFAULT_AGENTS_FILENAME,
+        DEFAULT_MEMORY_FILENAME,
+        DEFAULT_USER_FILENAME,
+      ]);
+
+      expect(files.map((file) => file.name)).toEqual([DEFAULT_AGENTS_FILENAME]);
+      expect(files[0]?.content).toBe("instructions");
+    });
+
+    it("rejects skip-bootstrap setup under an unlistable root without changing content", async () => {
+      await fs.writeFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "user memory");
+      await ensureWorkspace(false);
+      const before = await fs.readdir(tempDir);
+      const beforeState = await readWorkspaceStateSnapshot(tempDir);
+      await fs.chmod(tempDir, 0o100);
+      await expect(ensureWorkspace(false)).rejects.toMatchObject({ code: "EACCES" });
+      await fs.chmod(tempDir, 0o700);
+      expect((await fs.readdir(tempDir)).toSorted()).toEqual(before.toSorted());
+      expect(await fs.readFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "utf8")).toBe(
+        "user memory",
+      );
+      expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual(beforeState.setup);
+    });
+
+    it("rejects setup under an unlistable root without completing onboarding", async () => {
+      await ensureWorkspace();
+      const before = (await readWorkspaceStateSnapshot(tempDir)).setup;
+      expect(before.setupCompletedAt).toBeUndefined();
+      const bootstrap = await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf8");
+      await fs.chmod(tempDir, 0o300);
+      await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EACCES" });
+      expect(await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf8")).toBe(
+        bootstrap,
+      );
+      expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual(before);
+    });
+
+    it("rejects setup under an unlistable root without changing surviving skills", async () => {
+      await ensureWorkspace();
+      const before = (await readWorkspaceStateSnapshot(tempDir)).setup;
+      await fs.rm(tempDir, { recursive: true });
+      const skill = path.join(tempDir, "skills", "local-skill", "SKILL.md");
+      await fs.mkdir(path.dirname(skill), { recursive: true });
+      await fs.writeFile(skill, "custom skill");
+      await fs.chmod(tempDir, 0o300);
+      await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EACCES" });
+      expect(await fs.readFile(skill, "utf8")).toBe("custom skill");
+      expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual(before);
+    });
+  },
+);

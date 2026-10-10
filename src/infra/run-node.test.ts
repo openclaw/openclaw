@@ -10,6 +10,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { captureRunNodeInputState } from "../../scripts/lib/run-node-input-state.mts";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
@@ -516,17 +517,17 @@ describe("run-node script", () => {
       env: { OPENCLAW_RUNNER_LOG: "0" },
       fs: fsSync,
       process: lockProcess,
-      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      stderr: { write: () => true },
     });
     const { promise: waitingForLock, resolve: markWaiting } = createDeferred();
     const stderr = {
-      write: (chunk: string | Buffer) => {
+      write: (chunk: string | Uint8Array) => {
         if (String(chunk).includes("Waiting for TypeScript/runtime artifact lock")) {
           markWaiting();
         }
         return true;
       },
-    } as unknown as NodeJS.WriteStream;
+    };
     const runRuntimePostBuild = vi.fn();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
       gitStatus: ` M ${ROOT_SRC}\0`,
@@ -557,6 +558,44 @@ describe("run-node script", () => {
     ]);
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
+
+  it.for([false, true])(
+    "reuses prepared dirty runtime inputs for Gateway status unless they changed (changed: %s)",
+    async (changed, { tmp }) => {
+      const input = "scripts/runtime-postbuild.mts";
+      await setupStampedProject(tmp, {
+        files: { [input]: "export {};\n" },
+        trackConfig: true,
+      });
+      const { deps } = await trackProjectWithGit(tmp);
+      const env = { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: tmp };
+      await fs.appendFile(resolvePath(tmp, input), "\n");
+      writeRuntimePostBuildStamp({
+        cwd: tmp,
+        env,
+        inputState: captureRunNodeInputState({ ...deps, env }, "runtime"),
+      });
+      if (changed) {
+        await fs.appendFile(resolvePath(tmp, input), "\n");
+      }
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn } = createSpawnRecorder();
+
+      expect(
+        await runNodeCommand(tmp, {
+          args: ["gateway", "status", "--deep"],
+          env,
+          spawn,
+          spawnSync: realSpawnSync,
+          runRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "openclaw.mjs", "gateway", "status", "--deep"],
+      ]);
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(changed ? 1 : 0);
+    },
+  );
 
   it.for([false, true])(
     "keeps legacy client stamps subject to required output checks (missing: %s)",
@@ -674,7 +713,7 @@ describe("run-node script", () => {
       env: { OPENCLAW_RUNNER_LOG: "0" },
       fs: fsSync,
       process: fakeProcess,
-      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      stderr: { write: () => true },
     });
 
     it("releases the lock directory on process exit", async ({ tmp }) => {

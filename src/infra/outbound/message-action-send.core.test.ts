@@ -671,6 +671,7 @@ describe("runMessageAction core send routing", () => {
     const mediaInput = firstMockArg(sendMedia, "send media");
     expect(mediaInput.text).toBe("");
     expect(mediaInput.mediaUrl).toBe("file:///tmp/openclaw-voice.ogg");
+    expect(mediaInput.audioAsVoice).toBe(true);
   });
 
   it("forwards inbound audio context to message-tool TTS", async () => {

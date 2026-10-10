@@ -204,14 +204,7 @@ export function renderAndroidResourceValue(source: string, translated: string): 
   }
   const sourceTokens = sourceInterpolations.map((interpolation) => interpolation.value);
   const translatedTokens = translatedInterpolations.map((interpolation) => interpolation.value);
-  const tokenCounts = (tokens: readonly string[]) => {
-    const counts = new Map<string, number>();
-    for (const token of tokens) {
-      counts.set(token, (counts.get(token) ?? 0) + 1);
-    }
-    return [...counts].toSorted(([left], [right]) => compareText(left, right));
-  };
-  if (JSON.stringify(tokenCounts(sourceTokens)) !== JSON.stringify(tokenCounts(translatedTokens))) {
+  if (JSON.stringify(sourceTokens.toSorted()) !== JSON.stringify(translatedTokens.toSorted())) {
     throw new Error(
       `Android translation changed interpolation placeholders: ${JSON.stringify(source)} -> ${JSON.stringify(translated)}`,
     );
@@ -494,10 +487,6 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   ["apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt", new Set(["Off"])],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt",
-    new Set(["all", "applied", "held", "pending", "rejected"]),
-  ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
     new Set(["$versionName-dev"]),

@@ -18,7 +18,7 @@ import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
-} from "../model-account-connect.js";
+} from "../model-account-connect-errors.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -50,7 +50,9 @@ function connectHandler<P extends { profileId?: string }>(
       if (!service) {
         throw new Error("Model-account service is not running.");
       }
-      options.respond(true, await run(service, action, options.params));
+      const result = await run(service, action, options.params);
+      action.assertCurrent();
+      options.respond(true, result);
     },
     (error) =>
       error instanceof ModelAccountConnectAuthorityError
@@ -69,31 +71,31 @@ export const usersAuthConnectHandlers: GatewayRequestHandlers = {
   "users.listAuthLinks": connectHandler(
     "users.listAuthLinks",
     validateUsersListAuthLinksParams,
-    (service, action) => service.listLinks(action),
+    (service, action) => service.listLinksAsync(action),
     "operator.read",
   ),
   "users.linkAuthProfile": connectHandler(
     "users.linkAuthProfile",
     validateUsersLinkAuthProfileParams,
-    (service, action, params) => service.link(action, params.authProfileId),
+    (service, action, params) => service.linkAsync(action, params.authProfileId),
     // Choosing an existing shared credential remains an explicit admin decision.
     "operator.admin",
   ),
   "users.unlinkAuthProfile": connectHandler(
     "users.unlinkAuthProfile",
     validateUsersUnlinkAuthProfileParams,
-    (service, action, params) => service.unlink(action, params.provider),
+    (service, action, params) => service.unlinkAsync(action, params.provider),
   ),
   "users.listModelAccounts": connectHandler(
     "users.listModelAccounts",
     validateUsersListModelAccountsParams,
-    (service, action, params) => service.list(action, params.cursor),
+    (service, action, params) => service.listAsync(action, params.cursor),
     "operator.read",
   ),
   "users.selectModelAccount": connectHandler(
     "users.selectModelAccount",
     validateUsersSelectModelAccountParams,
-    (service, action, params) => service.select(action, params.authProfileId),
+    (service, action, params) => service.selectAsync(action, params.authProfileId),
   ),
   "users.authConnect.start": connectHandler(
     "users.authConnect.start",
@@ -109,12 +111,12 @@ export const usersAuthConnectHandlers: GatewayRequestHandlers = {
   "users.authConnect.status": connectHandler(
     "users.authConnect.status",
     validateUsersAuthConnectStatusParams,
-    (service, action, params) => service.status(action, params.connectId),
+    (service, action, params) => service.statusAsync(action, params.connectId),
   ),
   "users.authConnect.cancel": connectHandler(
     "users.authConnect.cancel",
     validateUsersAuthConnectCancelParams,
-    (service, action, params) => service.cancel(action, params.connectId),
+    (service, action, params) => service.cancelAsync(action, params.connectId),
   ),
   "users.authConnect.catalog": connectHandler(
     "users.authConnect.catalog",

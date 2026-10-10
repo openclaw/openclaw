@@ -5,7 +5,10 @@ import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
-import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
+import {
+  packageActivationRuntimeIdentity,
+  resolveImmutableRecoveryCommand,
+} from "./package-update-activation-paths.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableInstallDescriptor,
@@ -23,46 +26,84 @@ import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const SHA = /^[a-f0-9]{40}$/u;
+// Only owner-authored reason codes belong in broadly visible status, never stored error text.
+const PUBLIC_ACTIVATION_FAILURES = new Set([
+  "activation-interrupted",
+  "candidate-start-failed",
+  "candidate-still-starting",
+  "candidate-verification-failed",
+  "candidate-verification-pending",
+  "post-start-canary-unverified",
+  "post-start-generation-unverified",
+  "predecessor-verification-failed",
+  "recovery-verification-pending",
+  "rollback-verification-pending",
+  "verification-pending",
+]);
 const SOURCE = "https://github.com/openclaw/openclaw.git";
+
+function inspectEntry(file: string, allowNotDirectory = false) {
+  return fs.lstat(file).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT") || (allowNotDirectory && hasErrnoCode(error, "ENOTDIR"))) {
+      return null;
+    }
+    throw error;
+  });
+}
 
 export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateImmutableInstall {
   const { descriptor, prepared } = record;
-  return {
+  const result: UpdateImmutableInstall = {
     root: descriptor.root,
     currentSha: descriptor.current.sha,
     currentPath: descriptor.current.path,
     ...(descriptor.activationEnabled ? { activationEnabled: true } : {}),
-    ...(record.activation?.operation
-      ? {
-          activation: {
-            operationId: record.activation.operation.operationId,
-            phase: record.activation.operation.phase,
-            previousSha: record.activation.operation.previous.sha,
-            candidateSha: record.activation.operation.candidate.sha,
-          },
-        }
-      : {}),
-    ...(record.activation?.lastResult
-      ? {
-          lastActivation: {
-            operationId: record.activation.lastResult.operationId,
-            outcome: record.activation.lastResult.outcome,
-            selectedSha: record.activation.lastResult.selectedSha,
-            verifiedAtMs: record.activation.lastResult.verifiedAtMs,
-          },
-        }
-      : {}),
-    ...(prepared
-      ? {
-          prepared: {
-            sha: prepared.sha,
-            path: prepared.path,
-            buildDigest: prepared.buildDigest,
-            preparedAtMs: prepared.preparedAtMs,
-          },
-        }
-      : {}),
   };
+  const operation = record.activation?.operation;
+  if (operation) {
+    result.activation = {
+      operationId: operation.operationId,
+      phase: operation.phase,
+      previousSha: operation.previous.sha,
+      candidateSha: operation.candidate.sha,
+      ...(operation.failure !== undefined
+        ? {
+            failure: PUBLIC_ACTIVATION_FAILURES.has(operation.failure)
+              ? operation.failure
+              : "details-withheld",
+          }
+        : {}),
+      recoveryCommand: resolveImmutableRecoveryCommand(operation.recovery, descriptor),
+    };
+  }
+  const lastResult = record.activation?.lastResult;
+  if (lastResult) {
+    result.lastActivation = {
+      operationId: lastResult.operationId,
+      outcome: lastResult.outcome,
+      selectedSha: lastResult.selectedSha,
+      verifiedAtMs: lastResult.verifiedAtMs,
+      ...(lastResult.gateway
+        ? {
+            gateway: {
+              pid: lastResult.gateway.pid,
+              bootId: lastResult.gateway.bootId,
+              version: lastResult.gateway.version,
+              buildId: lastResult.gateway.buildId,
+            },
+          }
+        : {}),
+    };
+  }
+  if (prepared) {
+    result.prepared = {
+      sha: prepared.sha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: prepared.preparedAtMs,
+    };
+  }
+  return result;
 }
 
 async function installationRoot(input: string): Promise<string | null> {
@@ -74,31 +115,16 @@ async function installationRoot(input: string): Promise<string | null> {
     return path.dirname(path.dirname(root));
   }
   if (path.basename(root) === "current") {
-    const stat = await fs.lstat(root).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    });
+    const stat = await inspectEntry(root);
     if (stat?.isSymbolicLink()) {
       return path.dirname(root);
     }
   }
-  const current = await fs.lstat(path.join(root, "current")).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await inspectEntry(path.join(root, "current"), true);
   if (!current) {
     return null;
   }
-  const releases = await fs.lstat(path.join(root, "releases")).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const releases = await inspectEntry(path.join(root, "releases"));
   return releases ? root : null;
 }
 
@@ -127,17 +153,12 @@ export async function inspectImmutableInstall(
       layout.current.sha === selected.sha &&
       layout.current.identity === selected.identity
     ) {
-      assertImmutableDescriptorCurrent({
+      const descriptor = {
         ...record.descriptor,
         current: { ...layout.current, buildDigest: selected.buildDigest },
-      });
-      return projectImmutableInstall({
-        ...record,
-        descriptor: {
-          ...record.descriptor,
-          current: { ...layout.current, buildDigest: selected.buildDigest },
-        },
-      });
+      };
+      assertImmutableDescriptorCurrent(descriptor);
+      return projectImmutableInstall({ ...record, descriptor });
     }
   }
   assertImmutableDescriptorCurrent(record.descriptor);
@@ -344,6 +365,10 @@ export async function prepareImmutableUpdate(params: {
     status: ImmutableUpdateResult["status"],
     reason?: string,
   ): ImmutableUpdateResult => ({ status, reason, installation, targetSha, steps, warnings });
+  const preparedResult = (record: ImmutableInstallRecord): ImmutableUpdateResult => ({
+    ...result("prepared", "activation unavailable"),
+    installation: projectImmutableInstall(record),
+  });
   try {
     if (params.sha !== undefined && !SHA.test(params.sha)) {
       throw new Error("--sha requires a full lowercase 40-hex commit SHA.");
@@ -417,13 +442,15 @@ export async function prepareImmutableUpdate(params: {
         assertOwner();
         assertImmutableDescriptorCurrent(descriptor);
       };
+      const verifyService = () =>
+        verifyImmutableService(
+          descriptor.service,
+          descriptor.root,
+          descriptor.current.path,
+          descriptor.runtime.path,
+        );
       assertCurrent();
-      await verifyImmutableService(
-        descriptor.service,
-        descriptor.root,
-        descriptor.current.path,
-        descriptor.runtime.path,
-      );
+      await verifyService();
       const current = await verifyImmutableGeneration(
         descriptor.current.path,
         descriptor.current.sha,
@@ -437,17 +464,7 @@ export async function prepareImmutableUpdate(params: {
         return result("already-current");
       }
       const destination = path.join(descriptor.root, "releases", selectedSha);
-      if (
-        await fs.lstat(destination).then(
-          () => true,
-          (error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return false;
-            }
-            throw error;
-          },
-        )
-      ) {
+      if (await inspectEntry(destination)) {
         if (record.prepared?.sha !== selectedSha) {
           throw new Error(
             "Generation already exists without a matching preparation receipt; preserved for inspection.",
@@ -463,10 +480,7 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         assertCurrent();
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(record),
-        };
+        return preparedResult(record);
       }
       assertCurrent();
       const stage = await fs.mkdtemp(path.join(descriptor.root, ".openclaw-immutable-"));
@@ -552,12 +566,7 @@ export async function prepareImmutableUpdate(params: {
             await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
             await sealImmutableGeneration(candidate);
             const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyImmutableService(
-              descriptor.service,
-              descriptor.root,
-              descriptor.current.path,
-              descriptor.runtime.path,
-            );
+            await verifyService();
             assertCurrent();
             // Native publishers hold this lock; preexisting generations are never rebuilt.
             if (fsSync.existsSync(destination)) {
@@ -589,10 +598,7 @@ export async function prepareImmutableUpdate(params: {
         const { recordImmutablePreparedGeneration } =
           await import("./package-update-activation-immutable.js");
         const recorded = recordImmutablePreparedGeneration(record, prepared, assertCurrent);
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(recorded),
-        };
+        return preparedResult(recorded);
       } catch (error) {
         cleanupUncertain = hasCommandProcessCleanupError(error);
         throw error;

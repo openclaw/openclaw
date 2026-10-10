@@ -14,8 +14,10 @@ export type SessionEntryCurrentFacts = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   inheritedToolPolicyVersion?: unknown;
+  inheritedToolPolicySource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
+  delegatedToolPolicy?: unknown;
   subagentRecovery?: {
     lastRunId?: unknown;
     sessionLifecycleRunId?: unknown;
@@ -61,7 +63,7 @@ export type CapturedSessionEntryCurrentRead =
       readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
     }
   | {
-      kind: "native" | "missing";
+      kind: "native" | "incognito" | "missing";
       source?: undefined;
       assertSourceCurrent(this: void): void;
       readCurrent(): SessionEntryCurrentFacts | undefined;

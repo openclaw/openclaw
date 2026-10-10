@@ -100,131 +100,158 @@ function facts(identities: readonly OpenClawStateLeaseIdentity[], expiresAt = Da
 }
 
 describe("state lease group admission", () => {
-  it("binds source guards when leases are registered, before group admission", () => {
-    const context = sourceContext();
-    const members = [fixture(context), fixture(context, "target")];
-    context.admission.assertCurrent = () => {};
-    const operation = vi.fn(async () => {});
-    expect(() =>
-      withOpenClawStateLeasesWorkerAdmission(
-        members.map(({ lease }) => lease),
-        context,
-        operation,
-      ),
-    ).toThrow("source binding was replaced");
-    expect(operation).not.toHaveBeenCalled();
-    expect(members.every(({ owner }) => owner.canRelease())).toBe(true);
-  });
-
-  it.each(["admission", "environment-values"] as const)(
-    "refuses %s replacement during the bridge's first await",
+  it.each(["registered-guard", "admission", "environment-values"] as const)(
+    "refuses source replacement at %s before callback entry",
     async (kind) => {
       const context = sourceContext();
       const members = [fixture(context), fixture(context, "target")];
       const operation = vi.fn(async () => {});
-      const pending = runWithOpenClawStateLeasesWorker(
-        members.map(({ lease }) => lease),
-        context,
-        operation,
-      );
-      if (kind === "admission") {
-        context.admission = { ...context.admission };
+      if (kind === "registered-guard") {
+        context.admission.assertCurrent = () => {};
+        expect(() =>
+          withOpenClawStateLeasesWorkerAdmission(
+            members.map(({ lease }) => lease),
+            context,
+            operation,
+          ),
+        ).toThrow("source binding was replaced");
       } else {
-        context.environment.OPENCLAW_STATE_DIR = "/unrelated-state";
+        const pending = runWithOpenClawStateLeasesWorker(
+          members.map(({ lease }) => lease),
+          context,
+          operation,
+        );
+        if (kind === "admission") {
+          context.admission = { ...context.admission };
+        } else {
+          context.environment.OPENCLAW_STATE_DIR = "/unrelated-state";
+        }
+        await expect(pending).rejects.toThrow("source binding was replaced");
+        expect(runWorkerOperation).not.toHaveBeenCalled();
       }
-      await expect(pending).rejects.toThrow("source binding was replaced");
-      expect(runWorkerOperation).not.toHaveBeenCalled();
       expect(operation).not.toHaveBeenCalled();
       expect(members.every(({ owner }) => owner.canRelease())).toBe(true);
     },
   );
 
-  it.each(["admission", "maintenance", "maintenance-owner"] as const)(
-    "retains the original source %s guard",
-    async (kind) => {
-      const context = sourceContext();
-      let sourceCurrent = true;
-      const withdrawn = new Error("original source retired");
-      const assertSourceCurrent = () => {
-        if (!sourceCurrent) {
-          throw withdrawn;
+  it.each([
+    "admission",
+    "maintenance",
+    "maintenance-owner",
+    "effect",
+    "transaction-replacement",
+    "commit",
+    "member-0",
+    "member-1",
+    "caller",
+    "expiry",
+    "async",
+  ] as const)("refuses grants after %s authority changes", async (kind) => {
+    const context = sourceContext();
+    let now = 1_000;
+    let sourceCurrent = true;
+    let currentCaller = true;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const sourceError = new Error("original source retired");
+    const callerError = new Error(kind === "caller" ? "caller retired" : "original caller retired");
+    const revoked = new Error("lease retired during host commit preparation");
+    const assertSourceCurrent = () => {
+      if (!sourceCurrent) {
+        throw sourceError;
+      }
+    };
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: assertSourceCurrent,
+    });
+    if (kind === "admission") {
+      context.admission.assertCurrent = assertSourceCurrent;
+    } else if (kind === "maintenance" || kind === "maintenance-owner") {
+      context.maintenanceScope = maintenance;
+    }
+    const members = [fixture(context), fixture(context, "target")];
+    const authority = {
+      assertCurrent() {
+        if (kind === "transaction-replacement") {
+          authority.beforeTransaction = () => {};
         }
-      };
-      const maintenance = createOpenClawDatabaseMaintenanceScope({
-        assertOwnerCurrent: assertSourceCurrent,
-      });
-      if (kind === "admission") {
-        context.admission.assertCurrent = assertSourceCurrent;
-      } else {
-        context.maintenanceScope = maintenance;
-      }
-      const members = [fixture(context), fixture(context, "target")];
-      try {
-        await withOpenClawStateLeasesWorkerAdmission(
-          members.map(({ lease }) => lease),
-          context,
-          async (scope) => {
-            const current = job(scope.createAdmission);
-            expect(current.request("transaction", facts(scope.identities))).toBe(1);
-            if (kind === "admission") {
-              context.admission.assertCurrent = () => {};
-            } else if (kind === "maintenance") {
-              maintenance.assertAdmission = () => {};
-            } else {
-              maintenance.assertOwnerCurrent = () => {};
-            }
-            sourceCurrent = false;
-            expect(current.request("commit", facts(scope.identities))).toBe(2);
-            expect(current.admission.failure).toMatchObject({
-              message: "State lease worker source binding was replaced",
-            });
-            current.settled.resolve({ kind: "completed" });
-          },
-        );
-      } finally {
-        sourceCurrent = true;
-        await maintenance.close();
-      }
-    },
-  );
-
-  it.each(["effect", "commit"] as const)(
-    "retains the original %s authority callback",
-    async (kind) => {
-      const context = sourceContext();
-      const members = [fixture(context), fixture(context, "target")];
-      let currentCaller = true;
-      const withdrawn = new Error("original caller retired");
-      const authority = {
-        assertCurrent() {
-          if (!currentCaller) {
-            throw withdrawn;
-          }
-        },
-        beforeCommit() {
+        if (!currentCaller) {
+          throw callerError;
+        }
+      },
+      beforeTransaction() {
+        if (kind === "transaction-replacement") {
+          throw callerError;
+        }
+      },
+      beforeCommit() {
+        if (kind === "member-0" || kind === "member-1") {
+          expectDefined(members[kind === "member-0" ? 0 : 1], "selected member").controller.abort(
+            revoked,
+          );
+        } else if (kind === "caller" || kind === "commit") {
           currentCaller = false;
-        },
-      };
+        } else if (kind === "expiry") {
+          now = 2_000;
+        }
+      },
+    };
+    if (kind === "async") {
+      // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous authority contract.
+      authority.beforeCommit = async () => {};
+    }
+    try {
       await withOpenClawStateLeasesWorkerAdmission(
         members.map(({ lease }) => lease),
         context,
         async (scope) => {
           const current = job(scope.createAdmission);
-          expect(current.request("transaction", facts(scope.identities))).toBe(1);
-          if (kind === "effect") {
+          const held = facts(scope.identities, 2_000);
+          if (kind === "transaction-replacement") {
+            expect(current.request("transaction", held)).toBe(2);
+            expect(current.admission.failure).toBe(callerError);
+            current.settled.resolve({ kind: "completed" });
+            return;
+          }
+          expect(current.request("transaction", held)).toBe(1);
+          if (kind === "admission") {
+            context.admission.assertCurrent = () => {};
+          } else if (kind === "maintenance") {
+            maintenance.assertAdmission = () => {};
+          } else if (kind === "maintenance-owner") {
+            maintenance.assertOwnerCurrent = () => {};
+          } else if (kind === "effect") {
             authority.assertCurrent = () => {};
             currentCaller = false;
-          } else {
+          } else if (kind === "commit") {
             authority.beforeCommit = () => {};
           }
-          expect(current.request("commit", facts(scope.identities))).toBe(2);
-          expect(current.admission.failure).toBe(withdrawn);
+          sourceCurrent = false;
+          expect(current.request("commit", held)).toBe(2);
+          if (kind === "effect" || kind === "commit") {
+            expect(current.admission.failure).toBe(callerError);
+          } else if (kind === "member-0" || kind === "member-1") {
+            expect(current.admission.failure).toBe(revoked);
+          } else {
+            expect(current.admission.failure).toMatchObject({
+              message:
+                kind === "caller"
+                  ? "caller retired"
+                  : kind === "expiry"
+                    ? "State lease worker ownership was refused"
+                    : kind === "async"
+                      ? "State lease worker authority must complete synchronously"
+                      : "State lease worker source binding was replaced",
+            });
+          }
           current.settled.resolve({ kind: "completed" });
         },
         authority,
       );
-    },
-  );
+    } finally {
+      sourceCurrent = true;
+      await maintenance.close();
+    }
+  });
 
   it("routes the plural storage entry point through one retained worker operation", async () => {
     const context = sourceContext();
@@ -267,24 +294,6 @@ describe("state lease group admission", () => {
     expect(members.every(({ owner }) => owner.canRelease())).toBe(true);
   });
 
-  it.each(["transaction", "commit"] as const)("refuses an out-of-order %s grant", async (stage) => {
-    const context = sourceContext();
-    const members = [fixture(context), fixture(context, "target")];
-    await withOpenClawStateLeasesWorkerAdmission(
-      members.map(({ lease }) => lease),
-      context,
-      async (scope) => {
-        const current = job(scope.createAdmission);
-        if (stage === "transaction") {
-          expect(current.request("transaction", facts(scope.identities))).toBe(1);
-        }
-        expect(current.request(stage, facts(scope.identities))).toBe(2);
-        expect(current.admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        current.settled.resolve({ kind: "completed" });
-      },
-    );
-  });
-
   it("retains both owners before callback entry and joins each job's native settlement", async () => {
     const context = sourceContext();
     const first = fixture(context);
@@ -320,99 +329,51 @@ describe("state lease group admission", () => {
     expect(second.owner.canRelease()).toBe(true);
   });
 
-  it.each([0, 1])("refuses a commit when beforeCommit revokes member %s", async (index) => {
+  it.each([
+    "missing",
+    "extra",
+    "reordered",
+    "wrong-owner",
+    "expired",
+    "transaction",
+    "commit",
+  ] as const)("refuses invalid %s grant requests", async (kind) => {
     const context = sourceContext();
     const members = [fixture(context), fixture(context, "target")];
-    const revoked = new Error("lease retired during host commit preparation");
     await withOpenClawStateLeasesWorkerAdmission(
       members.map(({ lease }) => lease),
       context,
       async (scope) => {
         const current = job(scope.createAdmission);
-        expect(current.request("transaction", facts(scope.identities))).toBe(1);
-        expect(current.request("commit", facts(scope.identities))).toBe(2);
-        expect(current.admission.failure).toBe(revoked);
-        current.settled.resolve({ kind: "completed" });
-      },
-      {
-        assertCurrent() {},
-        beforeCommit() {
-          expectDefined(members[index], "selected member").controller.abort(revoked);
-        },
-      },
-    );
-  });
-
-  it.each(["caller", "expiry"] as const)("rechecks %s after beforeCommit", async (kind) => {
-    const context = sourceContext();
-    const members = [fixture(context), fixture(context, "target")];
-    let now = 1_000;
-    let currentCaller = true;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    await withOpenClawStateLeasesWorkerAdmission(
-      members.map(({ lease }) => lease),
-      context,
-      async (scope) => {
-        const current = job(scope.createAdmission);
-        const held = facts(scope.identities, 2_000);
-        expect(current.request("transaction", held)).toBe(1);
-        expect(current.request("commit", held)).toBe(2);
-        expect(current.admission.failure).toMatchObject({
-          message:
-            kind === "caller" ? "caller retired" : "State lease worker ownership was refused",
-        });
-        current.settled.resolve({ kind: "completed" });
-      },
-      {
-        assertCurrent() {
-          if (!currentCaller) {
-            throw new Error("caller retired");
-          }
-        },
-        beforeCommit() {
-          if (kind === "caller") {
-            currentCaller = false;
-          } else {
-            now = 2_000;
-          }
-        },
+        const held = facts(scope.identities);
+        if (kind === "missing") {
+          held.pop();
+        }
+        if (kind === "extra") {
+          held.push(expectDefined(held[0], "first lease facts"));
+        }
+        if (kind === "reordered") {
+          held.reverse();
+        }
+        if (kind === "wrong-owner") {
+          expectDefined(held[1], "second lease facts").identity.owner = "unrelated";
+        }
+        if (kind === "expired") {
+          expectDefined(held[1], "second lease facts").expiresAt = Date.now();
+        }
+        if (kind === "transaction") {
+          expect(current.request("transaction", held)).toBe(1);
+        }
+        expect(current.request(kind === "commit" ? "commit" : "transaction", held)).toBe(2);
+        expect(current.admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+        current.settled.resolve(
+          kind === "transaction" || kind === "commit"
+            ? { kind: "completed" }
+            : { kind: "not-entered", error: current.admission.failure },
+        );
       },
     );
   });
-
-  it.each(["missing", "extra", "reordered", "wrong-owner", "expired"] as const)(
-    "refuses %s lease facts without granting the transaction",
-    async (kind) => {
-      const context = sourceContext();
-      const members = [fixture(context), fixture(context, "target")];
-      await withOpenClawStateLeasesWorkerAdmission(
-        members.map(({ lease }) => lease),
-        context,
-        async (scope) => {
-          const current = job(scope.createAdmission);
-          const held = facts(scope.identities);
-          if (kind === "missing") {
-            held.pop();
-          }
-          if (kind === "extra") {
-            held.push(expectDefined(held[0], "first lease facts"));
-          }
-          if (kind === "reordered") {
-            held.reverse();
-          }
-          if (kind === "wrong-owner") {
-            expectDefined(held[1], "second lease facts").identity.owner = "unrelated";
-          }
-          if (kind === "expired") {
-            expectDefined(held[1], "second lease facts").expiresAt = Date.now();
-          }
-          expect(current.request("transaction", held)).toBe(2);
-          expect(current.admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-          current.settled.resolve({ kind: "not-entered", error: current.admission.failure });
-        },
-      );
-    },
-  );
 
   it.each([
     "empty",
@@ -475,29 +436,6 @@ describe("state lease group admission", () => {
       operation,
     );
     expect(operation).toHaveBeenCalledOnce();
-  });
-
-  it("rejects promise-returning commit authority before granting", async () => {
-    const context = sourceContext();
-    const members = [fixture(context), fixture(context, "target")];
-    await withOpenClawStateLeasesWorkerAdmission(
-      members.map(({ lease }) => lease),
-      context,
-      async (scope) => {
-        const current = job(scope.createAdmission);
-        expect(current.request("transaction", facts(scope.identities))).toBe(1);
-        expect(current.request("commit", facts(scope.identities))).toBe(2);
-        expect(current.admission.failure).toMatchObject({
-          message: "State lease worker authority must complete synchronously",
-        });
-        current.settled.resolve({ kind: "completed" });
-      },
-      {
-        assertCurrent() {},
-        // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous authority contract.
-        beforeCommit: async () => {},
-      },
-    );
   });
 
   it("poisons both owners from one unknown native outcome even after a handled callback failure", async () => {

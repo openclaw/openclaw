@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -11,6 +12,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -26,13 +28,63 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
+  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  withGatewayPersonalToolUser,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
+    const refusal = new Error("requesting session authority was revoked");
+    let active = true;
+    const assertSourceCurrent = () => {
+      if (!active) {
+        throw refusal;
+      }
+    };
+    const synchronousSource = vi.fn(assertSourceCurrent);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "source-profile",
+      scopes: ["operator.write"],
+      assertCurrent: Object.assign(synchronousSource, {
+        prepareSessionSource: async () => ({ assertCurrent: assertSourceCurrent, checks: [] }),
+      }),
+    });
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:source",
+        operationalRunInstance: { instanceId: "source-instance", runId: "source-run" },
+        operatorAuthority,
+        receiptAuthority: () => true,
+        cronAuthorityCheck: () => false,
+      },
+      () =>
+        withGatewayPersonalToolUser(undefined, async () => {
+          const assertion = expectDefined(captureGatewayToolCallerAssertion(), "captured caller");
+          expect(() => assertion("sessions.abort")).not.toThrow();
+          expect(() => assertion("cron.update")).toThrow(
+            "Automation caller authority is no longer active.",
+          );
+          synchronousSource.mockClear();
+          const prepared = await prepareSessionSourceAuthority(assertion);
+          try {
+            prepared.assertCurrent();
+            expect(synchronousSource).not.toHaveBeenCalled();
+            active = false;
+            expect(() => prepared.assertCurrent()).toThrow(refusal);
+            expect(() => assertion("sessions.abort")).toThrow(refusal);
+            expect(synchronousSource).not.toHaveBeenCalled();
+          } finally {
+            await prepared.release?.();
+          }
+        }),
+    );
+  });
+
   it.each(["outer", "inner", "unrelated"] as const)(
     "narrows nested approval scopes: %s",
     async (narrower) => {
@@ -84,6 +136,8 @@ describe("gateway caller context wrapper", () => {
     await withGatewayToolCallerIdentity(
       {
         ...identity,
+        sessionEventToolsAllow: ["read", "process"],
+        sessionEventSettings: { permissionMode: "workspace" },
         assertToolAllowed: (name) => {
           if (name === "exec") {
             throw new Error("exec denied");
@@ -94,6 +148,8 @@ describe("gateway caller context wrapper", () => {
         withGatewayToolCallerIdentity(
           {
             ...identity,
+            sessionEventToolsAllow: ["read", "exec"],
+            sessionEventSettings: { permissionMode: "full" },
             assertToolAllowed: (name) => {
               if (name === "process") {
                 throw new Error("process denied");
@@ -103,6 +159,8 @@ describe("gateway caller context wrapper", () => {
           () =>
             withGatewayToolCallerIdentity(identity, () => {
               const caller = getGatewayToolCallerIdentity();
+              expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
+              expect(caller?.sessionEventSettings).toEqual({ permissionMode: "workspace" });
               expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
               expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
               expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
@@ -110,6 +168,51 @@ describe("gateway caller context wrapper", () => {
         ),
     );
   });
+
+  it.each(["full", "guarded"] as const)(
+    "retains a captured default posture through a nested %s permission wrapper",
+    async (permissionMode) => {
+      const identity = { agentId: "main", sessionKey: "agent:main:default-permission" };
+      const execute = vi.fn(() => getGatewayToolCallerIdentity()?.sessionEventSettings);
+      const wrapped = withGatewayToolCallerIdentity({ ...identity, sessionEventSettings: {} }, () =>
+        withGatewayToolCallerIdentity(
+          { ...identity, sessionEventSettings: { permissionMode } },
+          () => withGatewayToolCallerIdentity(identity, execute),
+        ),
+      );
+      if (permissionMode === "guarded") {
+        await expect(wrapped).rejects.toThrow("changed between default and explicit permissions");
+        expect(execute).not.toHaveBeenCalled();
+      } else {
+        await expect(wrapped).resolves.toEqual({ permissionMode: undefined });
+        expect(execute).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["outer", "inner"] as const)(
+    "preserves the %s caller's automatic-delivery restriction through delegation",
+    async (restricted) => {
+      const identity = { agentId: "main", sessionKey: "agent:main:private-followup" };
+      await withGatewayToolCallerIdentity(
+        {
+          ...identity,
+          ...(restricted === "outer" ? { sessionEventDelivery: false as const } : {}),
+        },
+        () =>
+          withGatewayToolCallerIdentity(
+            {
+              ...identity,
+              ...(restricted === "inner" ? { sessionEventDelivery: false as const } : {}),
+            },
+            () =>
+              withGatewayToolCallerIdentity(identity, () => {
+                expect(getGatewayToolCallerIdentity()?.sessionEventDelivery).toBe(false);
+              }),
+          ),
+      );
+    },
+  );
 
   it("preserves tool metadata used by policy and presentation layers", () => {
     const tool: AnyAgentTool = {

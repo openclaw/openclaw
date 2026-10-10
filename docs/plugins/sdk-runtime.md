@@ -28,6 +28,18 @@ register(api) {
 
 `api.runtime.version` is the current OpenClaw product version, sourced from the shared version resolver so plugins see the same value the CLI reports.
 
+`api.runtime.capabilities` is an optional, read-only list of host behavior
+guarantees. Older hosts may omit it. Check a documented capability ID before
+enabling behavior that depends on it; equal product versions and tool names do
+not establish support. These process-stable facts do not grant caller authority,
+and they remain unavailable during metadata-only registration.
+
+`sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
+can start only hidden helpers of the same agent, retaining their restricted tool
+surface and session root. Channels may use this capability to enable helper
+tools for restricted senders. Core remains responsible for authorization and
+containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.
@@ -70,6 +82,14 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
 
 ## Storing runtime references
+
+Synchronous storage compatibility calls retain their synchronous return contract.
+Managed commits install their available facts before public change notifications;
+a notification failure does not roll back the stored change. The private
+[receipt/completeness contract](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+adds no public capability or deprecation. Plugins must still use the owning
+runtime operation and its live authority checks: a prior receipt or cached row
+does not certify raw-handle writers, foreign changes, or a later effect.
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
@@ -143,6 +163,14 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+Host-created request scopes borrow their plugin registry. A direct registry-scope
+callback keeps its registry until its returned operation settles; detached async
+resources do not extend that lifetime. Access to a released registry fails instead
+of silently selecting the current generation. Admitted turns and explicitly
+retained consumers keep their selected generation until they settle.
+Registry-dependent runtime APIs re-enter their live plugin owner after adoption
+and preserve an explicitly prepared registry, including an empty selection.
+
 Submitting a SessionManager append transfers its ordinary JSON payload to the
 manager by reference. Treat the payload as immutable from submission, including
 while an asynchronous append is pending; nested objects and arrays are frozen.
@@ -160,8 +188,10 @@ resumption acquires a new lease through the original owner and scope. A retained
 iterator cannot acquire fresh authority after its owner closes.
 
 Native plugins execute in the Gateway process and are not sandboxed. Provenance
-diagnostics and capability-specific trust requirements still apply;
-`plugins.allow` permits loading without verifying source provenance. These
+diagnostics and capability-specific trust requirements, such as hook agent turns
+and Gateway scope elevation, still apply. Every loaded plugin can
+use its own [state and ingress queues](/plugins/sdk-runtime/state-and-system#api-runtime-state),
+regardless of provenance. `plugins.allow` permits loading without verifying source provenance. These
 load-time facts belong to the instance until the plugin owner replaces it through
 restart or an explicit reload or installation operation.
 
@@ -173,7 +203,11 @@ callbacks while cleanup finishes.
 
 Replacement validates metadata and configuration first, then stops services and
 channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
-before invoking the new registration. Pre-publication failure triggers automatic
+before invoking the new registration. Session-extension and runtime-lifecycle
+`cleanup` callbacks receive `reason: "restart"` before the replacement registers,
+so they can unsubscribe observers and release in-memory buffers. Persistent
+session-state and scheduler reconciliation remain part of registry retirement.
+Pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown
@@ -192,10 +226,36 @@ instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
 
+### Instance-bound background context
+
+Managed instances also expose the additive
+`api.lifecycle.runInBackgroundContext<T>(run: () => T): T` capability. It runs
+immediately and returns the callback's value or promise. It detaches the calling
+turn, request, and unrelated async-local context while preserving the instance's
+host resource bindings. Each call selects that exact instance's current adopted
+registry, so a retained plugin sees replacement providers after a reload.
+
+Use it when installing timers, watchers, and listeners, and again when delivering
+each background callback. Keep the runner with the resource that owns it; an old
+manager must not look up a replacement plugin instance. Return asynchronous work
+from the callback so the instance can drain it. Its completion remains independent
+of disposal cleanup, so resource cleanup can safely await it. New calls reject after admission
+closes; already admitted host cleanup retains its teardown authority. The runner
+does not schedule work or cancel native resources: release those in the existing
+cleanup owner. Like the other instance lifecycle fields, it can be absent on an
+API host without a managed instance.
+
 Inspection release reports settled disposal failures without marking the managed
 resources as still retained. Prepared-model shutdown records those failures and
 can finish after cleanup settles. Unfinished disposal and failed host cleanup
 prerequisites still prevent shutdown from reporting a completed resource release.
+
+Stopping or restarting the Gateway preserves persistent plugin session state and
+runs host cleanup hooks with reason `restart`. Disabling or removing a plugin owns
+deleting that state. After admitted cleanup settles, plugin callback failures are
+reported with the plugin and hook name as shutdown warnings; they do not turn a
+normal stop into a failed process exit. Failed session-state cleanup and unfinished
+write-capable work still prevent a clean shutdown.
 
 Cleanup is best effort. Plugins must explicitly release their own timers,
 listeners, sockets, watchers, and child processes in `onDispose` or their
@@ -248,6 +308,42 @@ unambiguous admitting Gateway owner, turns keep their discovery registrations.
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
 [Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
+
+First-party bounded persistence sequences retain their original agent executor
+before asynchronous preparation and release it after publication cleanup. The
+private `sqlite-runtime` facade exposes that existing owner and its recorded
+native identity; each worker command keeps its own FIFO turn and live authority
+checks. Native maintenance and private shadow stores keep their existing owners.
+
+First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
+same subpath to admit cold agent storage in its existing executor before
+receiving a native handle. The operation callback still runs on the caller;
+dispatch its database work through the existing store worker. Its authority
+callback runs inside worker grants and must not read the same database or do
+blocking work. Put same-database predicates in the worker transaction. The
+released `withOpenClawAgentDatabaseAsync` retains native admission for arbitrary
+synchronous SDK guards, including its post-integrity, pre-repair checkpoint.
+
+Transcript assertion composition preserves prepared source checks independently
+of opaque SDK callbacks. Cold restoration can recheck those prepared components
+and their stored predicates while retaining the full synchronous assertion for
+native commit. Custom SDK assertion wrappers are not executed in restoration
+worker grants; existing writer adapter selection remains unchanged.
+
+`await api.runtime.agent.session.createSessionEntryListReader({ agentId, storePath, env? })`
+creates a read-only metadata inventory reader for a durable session store.
+Await the returned function to read `{ entries, assertCurrent }`. It reuses
+entries only after a worker verifies the same database connection and revision;
+foreign commits and reopened databases invalidate them. Entries exclude saved
+prompt snapshots and derived participants. Treat them as immutable. The returned
+assertion checks physical source identity, not sharing permissions or row freshness;
+revalidate access before publishing data after an await. Keep the reader within
+its consumer's lifecycle and discard it when configuration changes.
+
+`cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
+joins the selected database owner's pending startup preparation before capturing
+its physical identity. Prepared agents do not wait. Failed preparation still
+surfaces through normal database admission checks; Gateway shutdown cancels the wait.
 
 ### Memory runtime replacement
 

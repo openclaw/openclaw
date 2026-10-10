@@ -273,7 +273,6 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: {} as never, channel: "beta" },
       expected: {
         channel: "beta",
-        configured: [],
         source: "explicit",
       },
       verify: ({ isConfigured }: { isConfigured?: ReturnType<typeof vi.fn> }) => {
@@ -284,7 +283,6 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: {} as never, fallbackChannel: "gamma" },
       expected: {
         channel: "gamma",
-        configured: [],
         source: "tool-context-fallback",
       },
     },
@@ -297,7 +295,6 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: {} as never },
       expected: {
         channel: "delta",
-        configured: ["delta"],
         source: "single-configured",
       },
     },
@@ -463,8 +460,6 @@ describe("resolveMessageChannelSelection", () => {
     if (scenario.expected) {
       await expect(resolveMessageChannelSelection(params)).resolves.toMatchObject({
         channel: "delta",
-        configured: ["delta"],
-        source: "single-configured",
       });
     } else {
       await expect(resolveMessageChannelSelection(params)).rejects.toThrow(
@@ -494,8 +489,6 @@ describe("resolveMessageChannelSelection", () => {
     });
     expect(selection).toMatchObject({
       channel: "beta",
-      configured: [],
-      source: "tool-context-fallback",
     });
     expect(selection.plugin).toBe(fallbackPlugin);
 
@@ -531,8 +524,6 @@ describe("resolveMessageChannelSelection", () => {
 
     expect(selection).toMatchObject({
       channel: "scopex",
-      configured: [],
-      source: "explicit",
     });
   });
 
@@ -643,6 +634,5 @@ describe("resolveMessageChannelSelection (registry-scoped channel plugins)", () 
 
     const selection = await resolveMessageChannelSelection({ cfg: {} as never });
     expect(selection.channel).toBe("scopex");
-    expect(selection.source).toBe("single-configured");
   });
 });

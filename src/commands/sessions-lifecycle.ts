@@ -1,4 +1,3 @@
-/** Gateway-backed archive and delete commands for stored sessions. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   PreservedSessionWorktree,
@@ -197,7 +196,7 @@ function outputLifecycleResults(
   }
 }
 
-async function runSessionsLifecycleCommand(
+export async function sessionsLifecycleCommand(
   operation: SessionsLifecycleOperation,
   opts: SessionsLifecycleCliOptions,
   runtime: RuntimeEnv,
@@ -293,35 +292,30 @@ async function runSessionsLifecycleCommand(
         };
         continue;
       }
+      const rawResponse = await callGatewayFromCliWithTransport(
+        operation === "archive" ? "sessions.patch" : "sessions.delete",
+        rpcOptions,
+        {
+          key: keys[index],
+          ...(agent ? { agentId: agent } : {}),
+          ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
+          ...(operation === "archive"
+            ? { archived: true }
+            : {
+                deleteTranscript: true,
+                ...(session.archived === true ? { archivedOnly: true } : {}),
+              }),
+        },
+        { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
+      );
       if (operation === "archive") {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.patch",
-          rpcOptions,
-          {
-            key: session.key,
-            ...(agent ? { agentId: agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            archived: true,
-          },
-          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
-        )) as SessionsPatchResult;
+        const response = rawResponse as SessionsPatchResult;
         if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
         results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };
       } else {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.delete",
-          rpcOptions,
-          {
-            key: session.key,
-            ...(agent ? { agentId: agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            deleteTranscript: true,
-            ...(session.archived === true ? { archivedOnly: true } : {}),
-          },
-          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
-        )) as SessionsDeleteResult;
+        const response = rawResponse as SessionsDeleteResult;
         if (!response.deleted) {
           results[index] = notFoundResult(session.key, agent);
           continue;
@@ -355,20 +349,4 @@ async function runSessionsLifecycleCommand(
     Boolean(opts.json),
     deletedSessions,
   );
-}
-
-/** Archive one or more stored sessions through the same Gateway patch used by Control UI. */
-export async function sessionsArchiveCommand(
-  opts: SessionsLifecycleCliOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await runSessionsLifecycleCommand("archive", opts, runtime);
-}
-
-/** Delete one or more stored sessions through the same Gateway lifecycle owner used by Control UI. */
-export async function sessionsDeleteCommand(
-  opts: SessionsLifecycleCliOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await runSessionsLifecycleCommand("delete", opts, runtime);
 }

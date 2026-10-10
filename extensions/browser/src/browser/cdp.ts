@@ -13,10 +13,8 @@ import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   fetchJson,
-  isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
-  normalizeCdpHttpBaseForJsonEndpoints,
-  normalizeCdpWsUrl,
+  resolveCdpWebSocketDiscovery,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
@@ -100,19 +98,7 @@ export async function createTargetViaCdp(opts: {
   const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
-  let wsUrl: string;
-  if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
-    // Handshake-ready direct WebSocket URL — skip /json/version discovery.
-    wsUrl = opts.cdpUrl;
-  } else {
-    // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
-    // /json/version discovery first. For bare ws/wss URLs, fall back to
-    // using the URL itself as a direct WS endpoint when discovery is
-    // unavailable — some providers (e.g. Browserless/Browserbase) expose
-    // a direct WebSocket root without a /json/version route.
-    const discoveryUrl = isWebSocketUrl(opts.cdpUrl)
-      ? normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl)
-      : opts.cdpUrl;
+  const endpoint = await resolveCdpWebSocketDiscovery(opts.cdpUrl, async (discoveryUrl) => {
     let version: { webSocketDebuggerUrl?: string } | null = null;
     try {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
@@ -122,24 +108,16 @@ export async function createTargetViaCdp(opts: {
         cdpControlPolicy,
       );
     } catch (err) {
-      // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
       if (!isWebSocketUrl(opts.cdpUrl)) {
         throw err;
       }
-      // For bare ws/wss URLs, fall through: /json/version is unavailable
-      // so we attempt to use opts.cdpUrl as a direct WS endpoint below.
     }
-    const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
-    if (wsUrlRaw) {
-      wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
-    } else if (isWebSocketUrl(opts.cdpUrl)) {
-      // /json/version unavailable or returned no WebSocket URL. Treat the
-      // original URL as a direct WebSocket endpoint.
-      wsUrl = opts.cdpUrl;
-    } else {
-      throw new Error("CDP /json/version missing webSocketDebuggerUrl");
-    }
+    return version?.webSocketDebuggerUrl?.trim();
+  });
+  if (!endpoint) {
+    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
   }
+  const wsUrl = endpoint.url;
 
   const candidateWsUrls =
     isWebSocketUrl(opts.cdpUrl) && wsUrl !== opts.cdpUrl ? [wsUrl, opts.cdpUrl] : [wsUrl];

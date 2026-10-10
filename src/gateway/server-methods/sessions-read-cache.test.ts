@@ -45,11 +45,12 @@ import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
-  listSessions,
+  listSessions as readList,
   requestContext,
   sessionReadHandlers,
   seedSessions,
@@ -58,6 +59,12 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const listSessions = (params: Parameters<typeof readList>[0]) =>
+  readList({ ...params, acceptsSerializedJson: true });
+
+function rowFacts(rows: readonly GatewaySessionRow[]) {
+  return rows.map(({ snapshotAt: _snapshotAt, ...row }) => row);
+}
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
@@ -369,8 +376,8 @@ describe("resident sessions.list", () => {
 
       const first = await listSessions({ client, context, request });
       clock.mockReturnValue(60_401);
-      expect((await listSessions({ client, context, request })).sessions).toEqual(
-        first.sessions.map((row) => Object.assign({}, row, { snapshotAt: 60_401 })),
+      expect(rowFacts((await listSessions({ client, context, request })).sessions)).toEqual(
+        rowFacts(first.sessions),
       );
 
       // Terminal persistence must update resident rows after the run has ended.
@@ -388,6 +395,7 @@ describe("resident sessions.list", () => {
         status: "done",
         endedAt: 60_450,
         runtimeMs: 450,
+        snapshotAt: 60_401,
       });
     });
   });
@@ -488,10 +496,9 @@ describe("resident sessions.list", () => {
         ).toBe("active reply"),
       );
       const healed = await listSessions({ client, context, request });
-      expect(healed.sessions.find((session) => session.key === sessionKey)).toMatchObject({
-        derivedTitle: undefined,
-        lastMessagePreview: "active reply",
-      });
+      const healedRow = healed.sessions.find((session) => session.key === sessionKey);
+      expect(healedRow?.derivedTitle).toBeUndefined();
+      expect(healedRow?.lastMessagePreview).toBe("active reply");
 
       expect((await listSessions({ client, context, request })).sessions).toEqual(healed.sessions);
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(storedEntry);
@@ -553,8 +560,8 @@ describe("resident sessions.list", () => {
       ).toMatchObject({ expiresAt: 1_200 });
 
       clock.mockReturnValue(1_099);
-      expect((await listSessions({ client, context, request })).sessions).toEqual(
-        first.sessions.map((row) => Object.assign({}, row, { snapshotAt: 1_099 })),
+      expect(rowFacts((await listSessions({ client, context, request })).sessions)).toEqual(
+        rowFacts(first.sessions),
       );
 
       clock.mockReturnValue(1_100);
@@ -568,12 +575,15 @@ describe("resident sessions.list", () => {
         expired[0]?.sessions.find((session) => session.key === "agent:main:active")?.agentStatus,
       ).toBeUndefined();
       expect(
+        expired[0]?.sessions.find((session) => session.key === "agent:main:active")?.snapshotAt,
+      ).toBe(1_100);
+      expect(
         expired[0]?.sessions.find((session) => session.key === "agent:main:draft")?.agentStatus,
       ).toMatchObject({ expiresAt: 1_200 });
 
       clock.mockReturnValue(1_199);
-      expect((await listSessions({ client, context, request })).sessions).toEqual(
-        expired[0]?.sessions.map((row) => Object.assign({}, row, { snapshotAt: 1_199 })),
+      expect(rowFacts((await listSessions({ client, context, request })).sessions)).toEqual(
+        rowFacts(expired[0]!.sessions),
       );
 
       clock.mockReturnValue(1_200);
@@ -581,6 +591,9 @@ describe("resident sessions.list", () => {
       expect(
         allExpired.sessions.find((session) => session.key === "agent:main:draft")?.agentStatus,
       ).toBeUndefined();
+      expect(
+        allExpired.sessions.find((session) => session.key === "agent:main:draft")?.snapshotAt,
+      ).toBe(1_200);
     });
   });
 
@@ -589,7 +602,7 @@ describe("resident sessions.list", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:zzz-child";
-      await upsertSessionEntryCore(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-hidden-child",
@@ -764,6 +777,7 @@ describe("resident sessions.list", () => {
       await sessionReadHandlers["sessions.list"]?.({
         req: { type: "req", id: "session-list-test", method: "sessions.list" },
         params: { activeMinutes: 0 },
+        acceptsSerializedJson: true,
         client: identifiedClient("owner@example.com"),
         context: requestContext(config),
         respond,

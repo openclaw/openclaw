@@ -7,6 +7,7 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
@@ -157,27 +158,11 @@ export function createCrabboxWorkerProvider(
         });
       binaries.set(candidate, resolution);
     }
-    let onAbort: (() => void) | undefined;
-    try {
-      const binary = signal
-        ? await Promise.race([
-            resolution,
-            new Promise<never>((_resolve, reject) => {
-              onAbort = () => reject(toErrorObject(signal.reason, "Crabbox acquisition aborted"));
-              signal.addEventListener("abort", onAbort, { once: true });
-              if (signal.aborted) {
-                onAbort();
-              }
-            }),
-          ])
-        : await resolution;
-      signal?.throwIfAborted();
-      return binary;
-    } finally {
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
-    }
+    const binary = await racePromiseWithAbortSignal(resolution, signal, ({ reason }) =>
+      toErrorObject(reason, "Crabbox acquisition aborted"),
+    );
+    signal?.throwIfAborted();
+    return binary;
   };
   const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary,
@@ -272,7 +257,7 @@ export function createCrabboxWorkerProvider(
     signal?.throwIfAborted();
     const binary = await resolveBinary(parsed.binary, preparationSignal);
     preparationSignal?.throwIfAborted();
-    const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
+    const deadline = performance.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
     const nodeBootstrapTimeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(
       options?.nodeBootstrapTimeoutMs,
     );

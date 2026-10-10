@@ -1,3 +1,5 @@
+import { resolve as resolvePath } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -14,7 +16,11 @@ import {
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
+import { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -24,10 +30,7 @@ import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
 } from "../session-transcript-read-target.js";
-import {
-  readSessionTranscriptVisibleMessageDeltaCore,
-  type SessionTranscriptReadScope,
-} from "../session-transcript-readers.js";
+import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
@@ -142,14 +145,6 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
 }
 
-function isToolCallBlockType(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.toLowerCase().replace(/[_-]/g, "");
-  return normalized === "toolcall" || normalized === "tooluse";
-}
-
 function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
   const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
@@ -157,7 +152,11 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
   }
   for (const blockValue of record.content) {
     const block = asOptionalObjectRecord(blockValue);
-    if (!block || !isToolCallBlockType(block.type)) {
+    if (!block || typeof block.type !== "string") {
+      continue;
+    }
+    const type = block.type.toLowerCase().replace(/[_-]/g, "");
+    if (type !== "toolcall" && type !== "tooluse") {
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
@@ -183,45 +182,45 @@ async function foldSqliteTouchedFiles(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<Map<string, TouchedFile>> {
-  const cached = touchedFilesCache.get(cacheKey);
-  let cursor = cached?.cursor;
-  let files = cached?.files ?? new Map<string, TouchedFile>();
-  let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
+  return withSessionTranscriptDeltaReader(scope, async (reader) => {
+    const cached = touchedFilesCache.get(cacheKey);
+    let cursor = cached?.cursor;
+    let files = cached?.files ?? new Map<string, TouchedFile>();
+    let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
-  while (true) {
-    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
-      ...(cursor ? { cursor } : {}),
-      maxBytes,
-      maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
-    });
-    if (delta.kind === "missing") {
-      touchedFilesCache.delete(cacheKey);
-      return new Map();
-    }
-    if (delta.kind === "reset") {
-      cursor = delta.cursor;
-      files = new Map();
-      touchedFilesCache.set(cacheKey, { cursor, files });
-      continue;
-    }
-    for (const event of delta.events) {
-      const message = sqliteMessageEventWithSeq(event);
-      if (message !== undefined) {
-        collectTouchedFilesFromMessage(message, files);
+    while (true) {
+      const delta = await reader.visible({
+        ...(cursor ? { cursor } : {}),
+        maxBytes,
+        maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
+      });
+      if (delta.kind === "missing") {
+        touchedFilesCache.delete(cacheKey);
+        return new Map();
       }
+      if (delta.kind === "reset") {
+        cursor = delta.cursor;
+        files = new Map();
+        touchedFilesCache.set(cacheKey, { cursor, files });
+        continue;
+      }
+      for (const event of delta.events) {
+        const message = sqliteMessageEventWithSeq(event);
+        if (message !== undefined) {
+          collectTouchedFilesFromMessage(message, files);
+        }
+      }
+      cursor = delta.cursor;
+      touchedFilesCache.set(cacheKey, { cursor, files });
+      if (!delta.hasMore) {
+        return files;
+      }
+      if (delta.requiredBytes !== undefined) {
+        maxBytes = delta.requiredBytes;
+      }
+      await nextTurn();
     }
-    cursor = delta.cursor;
-    touchedFilesCache.set(cacheKey, { cursor, files });
-    if (!delta.hasMore) {
-      return files;
-    }
-    if (delta.requiredBytes !== undefined) {
-      maxBytes = delta.requiredBytes;
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
+  });
 }
 
 async function loadSqliteTouchedFiles(
@@ -276,15 +275,12 @@ export function resolveLocalSessionWorkspaceRoot(params: {
     : loaded.root;
 }
 
-async function loadSessionFiles(params: {
-  sessionKey: string;
-  agentId?: string;
-  context: GatewayRequestContext;
-  source?: ReturnType<typeof loadSessionFileRoot>;
-}): Promise<
+async function loadSessionFiles(
+  loaded: ReturnType<typeof loadSessionFileRoot>,
+  context: GatewayRequestContext,
+): Promise<
   LoadedSessionFiles & { repository?: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>> }
 > {
-  const loaded = params.source ?? loadSessionFileRoot(params);
   const { storePath, entry, canonicalKey, agentId } = loaded;
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
@@ -309,7 +305,7 @@ async function loadSessionFiles(params: {
       async () => {},
     );
   }
-  const repository = await resolveRepositoryWorkspaceAccess(loaded, params.context);
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
   const scope = {
     agentId,
     sessionEntry: entry,
@@ -403,8 +399,16 @@ async function handleSessionFilesRead(
   const source = loadSessionFileRoot({ ...params, agentId });
   const hostRead = createSessionFileReadAuthority(options, { ...source, agentId });
   try {
-    const loaded = await loadSessionFiles({ ...params, agentId, context, source });
+    const loaded = await loadSessionFiles(source, context);
     read?.assertCurrent();
+    if (
+      request.kind !== "list" &&
+      loaded.repository?.kind === "stored" &&
+      resolveRepositoryArtifactPath(request.params.path) === undefined
+    ) {
+      respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
+      return;
+    }
     let result:
       | Awaited<ReturnType<typeof listSessionWorkspaceFiles>>
       | Awaited<ReturnType<typeof getSessionWorkspaceFile>>
@@ -430,13 +434,6 @@ async function handleSessionFilesRead(
       read?.assertCurrent();
     } else if (request.kind === "assets") {
       const repository = loaded.repository;
-      if (
-        repository?.kind === "stored" &&
-        resolveRepositoryArtifactPath(request.params.path) === undefined
-      ) {
-        respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
-        return;
-      }
       result = await getSessionWorkspaceAssets({
         ...loaded,
         path: request.params.path,
@@ -457,13 +454,6 @@ async function handleSessionFilesRead(
       });
       read?.assertCurrent();
     } else {
-      if (
-        loaded.repository?.kind === "stored" &&
-        resolveRepositoryArtifactPath(request.params.path) === undefined
-      ) {
-        respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
-        return;
-      }
       const query = { files: loaded.files, path: request.params.path };
       const fileResult =
         loaded.repository?.kind === "stored"
@@ -545,8 +535,9 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
+    const cfg = context.getRuntimeConfig();
     const agentId = requireSessionFilesAgentId({
-      cfg: context.getRuntimeConfig(),
+      cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       respond,
@@ -600,6 +591,17 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }),
       );
       return;
+    }
+    const workspaceDir = repository ? undefined : resolveAgentWorkspaceDir(cfg, agentId);
+    if (
+      workspaceDir &&
+      update.file.workspacePath &&
+      resolvePath(update.root, update.file.workspacePath) ===
+        resolvePath(workspaceDir, DEFAULT_IDENTITY_FILENAME)
+    ) {
+      // A pre-write worker reply must settle before the event admits a new identity read.
+      await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
+      context.broadcast("agent.identity.changed", { agentId });
     }
     respond(true, {
       sessionKey: params.sessionKey,

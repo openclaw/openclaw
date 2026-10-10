@@ -72,15 +72,6 @@ async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void
   }
 }
 
-function retainEmbeddingProviderForRetirement(
-  scopeKey: string,
-  provider: MemoryEmbeddingProvider,
-): void {
-  const pending = EMBEDDING_PROVIDER_RETIREMENTS.get(scopeKey) ?? new Set();
-  pending.add(provider);
-  EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
-}
-
 export async function closeEmbeddingProvider(
   scopeKey: string,
   provider: MemoryEmbeddingProvider,
@@ -88,7 +79,9 @@ export async function closeEmbeddingProvider(
   try {
     await provider.close?.();
   } catch (closeErr) {
-    retainEmbeddingProviderForRetirement(scopeKey, provider);
+    const pending = EMBEDDING_PROVIDER_RETIREMENTS.get(scopeKey) ?? new Set();
+    pending.add(provider);
+    EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
     logWarn(`openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`);
   }
 }

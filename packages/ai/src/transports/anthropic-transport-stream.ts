@@ -43,9 +43,9 @@ import {
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
-  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   readResponseTextSnippet,
   resolveModelHeaderSentinels,
+  streamFragmentError,
 } from "./transport-utils.js";
 
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -152,10 +152,7 @@ function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
-    }
-    throw error;
+    throw streamFragmentError(error);
   }
 }
 
@@ -221,45 +218,6 @@ async function* parseAnthropicSseBody(
   }
 }
 
-function createAnthropicMessageRequest(params: {
-  apiKey?: string | null;
-  authToken?: string;
-  baseURL?: string;
-  defaultHeaders?: Record<string, string>;
-  fetch: typeof fetch;
-}) {
-  const url = resolveAnthropicMessagesUrl(params.baseURL);
-  return async (
-    body: Record<string, unknown>,
-    options?: { signal?: AbortSignal; headers?: Record<string, string> },
-  ) => {
-    const headers = new Headers(
-      mergeTransportHeaders(
-        {
-          "content-type": "application/json",
-          "anthropic-version": "2023-06-01",
-          ...(params.apiKey ? { "x-api-key": params.apiKey } : {}),
-          ...(params.authToken ? { authorization: `Bearer ${params.authToken}` } : {}),
-        },
-        params.defaultHeaders,
-      ),
-    );
-    for (const [name, value] of Object.entries(options?.headers ?? {})) {
-      headers.set(name, value);
-    }
-    const response = await params.fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: options?.signal,
-    });
-    return {
-      response,
-      stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
-    };
-  };
-}
-
 async function readAnthropicMessagesErrorBody(response: Response): Promise<unknown> {
   try {
     const text =
@@ -309,82 +267,96 @@ function createAnthropicTransportClient(params: {
       ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
       : buildGuardedModelFetch(model);
   const copilot = model.provider === "github-copilot";
-  if (copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
-    const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
-    return {
-      request: createAnthropicMessageRequest({
-        apiKey: null,
-        authToken: apiKey,
-        baseURL: model.baseUrl,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-          },
-          copilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
-          copilot ? getAiTransportHost().buildCopilotDynamicHeaders(context.messages) : undefined,
-          optionHeaders,
-        ),
-        fetch,
-      }),
-      isOAuthToken: false,
-    };
+  const bearerAuth = copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model));
+  const isOAuthToken = !bearerAuth && isAnthropicOAuthApiKey(apiKey);
+  let defaultHeaders: Record<string, string> | undefined;
+  let claudeCodeVersion: string | undefined;
+  let directApiKeyBetaHeader: string | undefined;
+  if (bearerAuth) {
+    defaultHeaders = mergeTransportHeaders(
+      {
+        accept: "application/json",
+        "anthropic-dangerous-direct-browser-access": "true",
+        ...(needsInterleavedBeta ? { "anthropic-beta": "interleaved-thinking-2025-05-14" } : {}),
+      },
+      copilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
+      copilot ? getAiTransportHost().buildCopilotDynamicHeaders(context.messages) : undefined,
+      optionHeaders,
+    );
+  } else {
+    const betaFeatures = ["fine-grained-tool-streaming-2025-05-14"];
+    if (needsInterleavedBeta) {
+      betaFeatures.push("interleaved-thinking-2025-05-14");
+    }
+    const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: isOAuthToken });
+    if (isOAuthToken) {
+      const identity = buildAnthropicClaudeCodeIdentity(betaHeader, model.headers, optionHeaders);
+      defaultHeaders = identity.headers;
+      claudeCodeVersion = identity.version;
+    } else {
+      defaultHeaders = mergeTransportHeaders(
+        {
+          accept: "application/json",
+          "anthropic-dangerous-direct-browser-access": "true",
+          ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+          ...(options?.sessionId &&
+          options.cacheRetention !== "none" &&
+          model.compat?.sendSessionAffinityHeaders === true
+            ? { "x-session-affinity": options.sessionId }
+            : {}),
+        },
+        model.headers,
+        optionHeaders,
+        // Attribution policy headers override config and caller headers, as on OpenAI transports.
+        getAiTransportHost().resolveProviderRequestHeaders({
+          provider: model.provider,
+          api: model.api,
+          baseUrl: model.baseUrl,
+          model,
+        }),
+      );
+      // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
+      directApiKeyBetaHeader = isDirectAnthropicModel(model)
+        ? (new Headers(defaultHeaders).get("anthropic-beta") ?? "")
+        : undefined;
+    }
   }
-  const betaFeatures = ["fine-grained-tool-streaming-2025-05-14"];
-  if (needsInterleavedBeta) {
-    betaFeatures.push("interleaved-thinking-2025-05-14");
-  }
-  if (isAnthropicOAuthApiKey(apiKey)) {
-    const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
-    const identity = buildAnthropicClaudeCodeIdentity(betaHeader, model.headers, optionHeaders);
-    return {
-      request: createAnthropicMessageRequest({
-        apiKey: null,
-        authToken: apiKey,
-        baseURL: model.baseUrl,
-        defaultHeaders: identity.headers,
-        fetch,
-      }),
-      isOAuthToken: true,
-      claudeCodeVersion: identity.version,
-    };
-  }
-  const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
-  const defaultHeaders = mergeTransportHeaders(
-    {
-      accept: "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-      ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-      ...(options?.sessionId &&
-      options.cacheRetention !== "none" &&
-      model.compat?.sendSessionAffinityHeaders === true
-        ? { "x-session-affinity": options.sessionId }
-        : {}),
-    },
-    model.headers,
-    optionHeaders,
-    // Attribution policy headers are protected over config and caller headers, as on the
-    // OpenAI transports (for example OpenRouter or Vercel AI Gateway Messages endpoints).
-    getAiTransportHost().resolveProviderRequestHeaders({
-      provider: model.provider,
-      api: model.api,
-      baseUrl: model.baseUrl,
-      model,
-    }),
-  );
+  const url = resolveAnthropicMessagesUrl(model.baseUrl);
   return {
-    request: createAnthropicMessageRequest({
-      apiKey,
-      baseURL: model.baseUrl,
-      defaultHeaders,
-      fetch,
-    }),
-    isOAuthToken: false,
-    // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
-    directApiKeyBetaHeader: isDirectAnthropicModel(model)
-      ? (new Headers(defaultHeaders).get("anthropic-beta") ?? "")
-      : undefined,
+    isOAuthToken,
+    claudeCodeVersion,
+    directApiKeyBetaHeader,
+    async request(
+      this: void,
+      body: Record<string, unknown>,
+      requestOptions?: { signal?: AbortSignal; headers?: Record<string, string> },
+    ) {
+      const headers = new Headers(
+        mergeTransportHeaders(
+          {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            ...(bearerAuth || isOAuthToken
+              ? { authorization: `Bearer ${apiKey}` }
+              : { "x-api-key": apiKey }),
+          },
+          defaultHeaders,
+        ),
+      );
+      for (const [name, value] of Object.entries(requestOptions?.headers ?? {})) {
+        headers.set(name, value);
+      }
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: requestOptions?.signal,
+      });
+      return {
+        response,
+        stream: response.body ? parseAnthropicSseBody(response.body, requestOptions?.signal) : [],
+      };
+    },
   };
 }
 

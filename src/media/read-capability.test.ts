@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
-import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+import {
+  resolveAgentScopedHostOutboundMediaAccess,
+  resolveAgentScopedOutboundMediaAccess,
+} from "./read-capability.js";
 import { loadWebMediaRaw } from "./web-media.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -35,6 +38,16 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     __setFsSafeTestHooksForTest(undefined);
     vi.unstubAllEnvs();
     channelPluginMocks.getLoadedChannelPlugin.mockReset();
+  });
+
+  it("keeps the native media opener exclusive to host access", () => {
+    const params = {
+      cfg: { tools: { allow: ["read"] } } satisfies OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-home/workspace-main",
+    };
+    const result = resolveAgentScopedOutboundMediaAccess(params);
+    expect(result).not.toHaveProperty("openFile");
+    expect(resolveAgentScopedHostOutboundMediaAccess(params).openFile).toBeTypeOf("function");
   });
 
   it.each([false, true])("reads from the selected workspace (explicit=%s)", async (explicit) => {

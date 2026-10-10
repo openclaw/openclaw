@@ -215,7 +215,6 @@ export function resolveUsableCustomProviderApiKey(params: {
   }
   if (
     customProviderConfig &&
-    isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
     isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)
@@ -341,15 +340,14 @@ function normalizeProviderEntryBaseUrlForBinding(baseUrl: string | undefined): s
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    parsed.hash = "";
-    parsed.search = "";
-    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
+  const parsed = URL.parse(trimmed);
+  if (!parsed) {
     return trimmed.toLowerCase().replace(/\/+$/, "");
   }
+  parsed.hash = "";
+  parsed.search = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function providerEntriesShareBaseUrl(params: {

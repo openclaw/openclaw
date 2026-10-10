@@ -78,9 +78,9 @@ export async function archiveLocalCodexSession(params: {
 }): Promise<{ archived: true }> {
   return await catalogSessionActions.enqueue(
     sessionCatalogAdoptedSourceKey(params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID, params.threadId),
-    async () => {
-      return await params.bindingStore.withThreadArchiveFence(async () => {
-        const run = async (control: CodexSessionCatalogControl) => {
+    () =>
+      params.bindingStore.withThreadArchiveFence(() =>
+        params.control.withPinnedConnection(async (control) => {
           assertNoPendingSupervisionBranch(params);
           await control.requireEligibleThread(params.threadId);
           // Eligibility reads metadata before checking membership; activity can change meanwhile.
@@ -108,9 +108,7 @@ export async function archiveLocalCodexSession(params: {
           });
           await control.archiveThread(params.threadId);
           return { archived: true as const };
-        };
-        return await params.control.withPinnedConnection(run);
-      });
-    },
+        }),
+      ),
   );
 }

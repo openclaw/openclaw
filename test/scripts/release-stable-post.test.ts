@@ -350,46 +350,46 @@ describe("release:stable post-publication CLI", () => {
     },
   );
 
-  it("completes closeout from release assets without dispatching or waiting for a closeout run", () => {
-    const release = fixture();
-    release.seed(postState("closeout"));
-    const result = release.run([...closeoutMain(), closeoutAssets()]);
-    expect(result.status, result.output).toBe(0);
-    expect(release.readState().closeout).toMatchObject({
-      publishRunConclusion: "success",
-      verifiedAt: expect.any(String),
-    });
-    expect(release.readState().phases.closeout.status).toBe("completed");
-    expect(release.readState().closeout.runId).toBeUndefined();
-    expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
-    expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
-  });
-
-  it("dispatches closeout using only its immutable tag", () => {
-    const release = fixture();
-    const state = postState("closeout");
-    release.seed(state);
-    const result = release.run([
-      ...closeoutMain(),
-      closeoutAssets([]),
-      ...workflowDispatch(
-        "openclaw-stable-main-closeout.yml",
-        REPOSITORY,
-        502,
-        "Stable main closeout",
-      ),
-      actionRun(REPOSITORY, 502),
-      closeoutAssets(),
-    ]);
-    expect(result.status, result.output).toBe(0);
-    const dispatch = result.calls.find((call) => call.args[0] === "workflow");
-    expect(dispatch?.args.slice(7)).toEqual(["-f", `tag=v${RELEASE}`]);
-    expect(release.readState().phases.closeout.status).toBe("completed");
-    expect(release.readState().closeout).toMatchObject({
-      runId: "502",
-      verifiedAt: expect.any(String),
-    });
-  });
+  it.each([false, true])(
+    "completes closeout with immutable release assets (dispatch=%s)",
+    (dispatch) => {
+      const release = fixture();
+      release.seed(postState("closeout"));
+      const result = release.run([
+        ...closeoutMain(),
+        ...(dispatch
+          ? [
+              closeoutAssets([]),
+              ...workflowDispatch(
+                "openclaw-stable-main-closeout.yml",
+                REPOSITORY,
+                502,
+                "Stable main closeout",
+              ),
+              actionRun(REPOSITORY, 502),
+            ]
+          : []),
+        closeoutAssets(),
+      ]);
+      expect(result.status, result.output).toBe(0);
+      expect(release.readState().phases.closeout.status).toBe("completed");
+      expect(release.readState().closeout).toMatchObject({
+        publishRunConclusion: "success",
+        verifiedAt: expect.any(String),
+      });
+      if (dispatch) {
+        expect(result.calls.find((call) => call.args[0] === "workflow")?.args.slice(7)).toEqual([
+          "-f",
+          `tag=v${RELEASE}`,
+        ]);
+        expect(release.readState().closeout.runId).toBe("502");
+      } else {
+        expect(release.readState().closeout.runId).toBeUndefined();
+        expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
+        expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
+      }
+    },
+  );
 
   it.each([
     { label: "only the evidence", names: [`openclaw-${RELEASE}-stable-main-closeout.json`] },

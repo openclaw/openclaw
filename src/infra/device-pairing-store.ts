@@ -47,12 +47,17 @@ import type {
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import {
+  getSqliteReadOperationRevision,
+  type SqliteReadOperationRevision,
+} from "./sqlite-schema-facts.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 export type { DevicePairingStoreState } from "./device-pairing.types.js";
@@ -367,7 +372,6 @@ export function readPairedDevicePairingRecordsFromDatabase(
   );
 }
 
-/** Load the full pending + paired device snapshot from the shared state DB. */
 export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStoreState {
   const database = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
   return structuredClone(
@@ -400,10 +404,9 @@ export function loadPairedDevicePairingStoreRecordFromDatabase(
 /** Read and patch one device under the worker's transaction and commit admission. */
 export function updatePairedDeviceInTransaction<T>(
   deviceId: string,
-  baseDir: string | undefined,
   update: (device: PairedDevice | null) => PairedDeviceUpdate<T>,
 ): T {
-  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
+  return runDevicePairingStoreMutation(undefined, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
     const device = loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId);
     const result = update(device);
@@ -473,7 +476,6 @@ export function persistDevicePairingStoreState(
   });
 }
 
-/** Load all bootstrap token records keyed by token key. */
 export function loadDeviceBootstrapTokenRecords(
   baseDir?: string,
 ): Record<string, DeviceBootstrapTokenRecord> {
@@ -542,7 +544,6 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     record: DeviceBootstrapTokenRecord,
   ) => boolean;
   recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void;
-  baseDir?: string;
 }): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const token = params.token.trim();
   const deviceId = params.deviceId.trim();
@@ -629,7 +630,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
       );
     }
     return { record, ...(completion ? { completion } : {}) };
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
+  }, resolveDevicePairingStateDbOptions());
 }
 
 /** Mark one consumed setup handoff as delivered without reviving an expired or replaced row. */
@@ -637,7 +638,6 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
   setupId: string;
   deviceId: string;
   nowMs: number;
-  baseDir?: string;
 }): DevicePairSetupCompletionRecord | null {
   const setupId = params.setupId.trim();
   const deviceId = params.deviceId.trim();
@@ -668,30 +668,59 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
         .where("device_id", "=", deviceId),
     );
     return fromSetupCompletionRow(row);
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
+  }, resolveDevicePairingStateDbOptions());
 }
 
-/** Prune retained setup outcomes when the Gateway maintenance owner ticks. */
-export function pruneExpiredDevicePairSetupCompletionRecords(
+const setupCompletionExpiry = createSqliteQueryCache<{
+  observed?: { revision: SqliteReadOperationRevision; retainUntilMs: number | undefined };
+}>(() => ({}));
+
+/** Admission observes new commits; an unchanged completion can still expire with time. */
+export function hasExpiredDevicePairSetupCompletionsInDatabase(
+  db: DatabaseSync,
   nowMs: number,
-  baseDir?: string,
+): boolean {
+  if (!tableExists(db, "device_pair_setup_completions")) {
+    return false;
+  }
+  const state = setupCompletionExpiry(db);
+  const revision = getSqliteReadOperationRevision(db);
+  let retainUntilMs: number | undefined;
+  if (revision && state.observed?.revision === revision) {
+    retainUntilMs = state.observed.retainUntilMs;
+  } else {
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+        .selectFrom("device_pair_setup_completions")
+        .select("retain_until_ms")
+        .orderBy("retain_until_ms", "asc")
+        .limit(1),
+    );
+    retainUntilMs = row?.retain_until_ms;
+    state.observed =
+      revision && getSqliteReadOperationRevision(db) === revision
+        ? { revision, retainUntilMs }
+        : undefined;
+  }
+  return retainUntilMs !== undefined && retainUntilMs <= nowMs;
+}
+
+/** The maintenance command owns the write transaction and its live admission. */
+export function pruneExpiredDevicePairSetupCompletionsInDatabase(
+  db: DatabaseSync,
+  nowMs: number,
 ): number {
-  const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
-  const database = openOpenClawStateDatabase(databaseOptions);
-  if (!tableExists(database.db, "device_pair_setup_completions")) {
+  if (!tableExists(db, "device_pair_setup_completions")) {
     return 0;
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-      const result = executeSqliteQuerySync(
-        db,
-        kysely.deleteFrom("device_pair_setup_completions").where("retain_until_ms", "<=", nowMs),
-      );
-      return Number(result.numAffectedRows ?? 0);
-    },
-    { ...databaseOptions, database },
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+      .deleteFrom("device_pair_setup_completions")
+      .where("retain_until_ms", "<=", nowMs),
   );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 /** Prune elapsed setup completions, then read one live record. */

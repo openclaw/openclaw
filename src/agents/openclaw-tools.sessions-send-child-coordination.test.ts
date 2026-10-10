@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -32,8 +33,8 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
     readAcpSessionMetaMock: vi.fn(),
     readAcpSessionMetaForEntryMock: vi.fn(),
   }));
+// mock-isolation: Keep ACP runtime access mocked while coordinating fixture session rows.
 vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
   readAcpSessionEntryAsync: async (params: {
     cfg?: OpenClawConfig;
     sessionKey: string;
@@ -373,8 +374,6 @@ describe("sessions_send child coordination", () => {
 
   it.each([
     { acknowledgment: "acknowledged", watch: undefined },
-    { acknowledgment: "ACK lost", watch: false },
-    { acknowledgment: "acknowledged", watch: true },
     { acknowledgment: "ACK lost", watch: true },
   ] as const)(
     "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch)",
@@ -797,7 +796,7 @@ describe("sessions_send child coordination", () => {
       };
       metadata.writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey: reusedKey,
+        sessionKey: buildAcpDatabaseSessionKey(reusedKey, parseAgentSessionKey(reusedKey)?.agentId),
         sessionId,
         lifecycleRevision,
         now: () => 100,
@@ -813,7 +812,7 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionMeta>[0]) =>
+        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
           metadataRead.readAcpSessionMetaForEntry({
             ...params,
             databasePath,

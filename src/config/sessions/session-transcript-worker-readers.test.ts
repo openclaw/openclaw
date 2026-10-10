@@ -3,6 +3,33 @@ import { expect, it } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 
+it("preserves the direct read request, signal, and projected result", async () => {
+  const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    async (prepare, inputBytes, receive, receivedSignal) => {
+      expect(prepare()).toEqual({ kind: "transcript-message-presence", ...input });
+      expect(inputBytes).toBe(JSON.stringify(input).length * 2);
+      expect(receivedSignal).toBe(signal);
+      return receive({ kind: "transcript-message-presence", present: true });
+    },
+  );
+  await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
+});
+
+it.each([
+  { value: false },
+  { value: { kind: "session-members" as const, entry: undefined, members: [] } },
+  { value: { kind: "prewarm" as const } },
+])("rejects another worker result before projecting it: %j", async ({ value }) => {
+  const readers = createSessionHistoryWorkerReaders(async (_prepare, _inputBytes, receive) =>
+    receive(value),
+  );
+  await expect(
+    readers.readMessagePresence({ scope: { sessionId: "synthetic-session" } }),
+  ).rejects.toThrow("Session history worker returned another result instead of message presence");
+});
+
 it.each(["archives", "corpus", "targets"] as const)(
   "serializes Windows storage environments for %s inventory",
   async (inventory) => {
@@ -62,3 +89,19 @@ it.each(["archives", "corpus", "targets"] as const)(
     }
   },
 );
+
+it("passes the cold metadata caller's signal to its reader task", async () => {
+  const input = { sessionId: "synthetic-cold-session", env: {} };
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    async (prepare, _inputBytes, receive, receivedSignal) => {
+      expect(prepare()).toEqual({ kind: "cold-metadata", ...input });
+      expect(receivedSignal).toBe(signal);
+      return receive({ kind: "cold-metadata", archive: undefined });
+    },
+  );
+  await expect(readers.readColdMetadata(input, signal)).resolves.toEqual({
+    kind: "cold-metadata",
+    archive: undefined,
+  });
+});

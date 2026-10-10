@@ -57,7 +57,7 @@ export function registerFreshDoctorDiagnosticTests({
       ...updateOptions,
       root,
       nodeRunner: process.execPath,
-      freshDoctorRequired: false,
+      pluginUpdate: { ...updateOptions.pluginUpdate, changed: false },
     });
     expect(result.reason).toBe("post-plugin-config-validation-execution-failed");
     expect(result.failureFacts).toHaveLength(3);
@@ -142,7 +142,7 @@ export function registerFreshDoctorDiagnosticTests({
       );
       const { pluginUpdate: result } = await completePostCorePluginUpdate({
         ...updateOptions,
-        freshDoctorRequired: false,
+        pluginUpdate: { ...updateOptions.pluginUpdate, changed: false },
       });
       expect(result.failureFacts).toEqual([
         expect.objectContaining({ message: "Command exited with code 1" }),
@@ -177,7 +177,7 @@ export function registerFreshDoctorDiagnosticTests({
     );
     const { pluginUpdate: result } = await completePostCorePluginUpdate({
       ...updateOptions,
-      freshDoctorRequired: false,
+      pluginUpdate: { ...updateOptions.pluginUpdate, changed: false },
     });
     expect(result.failureFacts?.[1]?.message).toMatch(/^stderr: Validator could not settle/u);
     expect(result.failureFacts?.[1]?.message?.length).toBeLessThanOrEqual(200);

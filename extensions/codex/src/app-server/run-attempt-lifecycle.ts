@@ -5,7 +5,8 @@ import {
   awaitAgentEndSideEffects,
   embeddedAgentLog,
   formatErrorMessage,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
+  runAgentCleanupStep,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -37,8 +38,9 @@ export function withCodexAppServerFastModeServiceTier(
 ): CodexAppServerRuntimeOptions {
   const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
   // Ultrafast starts from Fast; the actual turn revalidates native account/model access.
-  const serviceTier =
-    fastMode === undefined ? configuredAppServer.serviceTier : fastMode ? "priority" : null;
+  const configuredServiceTier =
+    configuredAppServer.serviceTier === "ultrafast" ? "priority" : configuredAppServer.serviceTier;
+  const serviceTier = fastMode === undefined ? configuredServiceTier : fastMode ? "priority" : null;
   if (serviceTier === appServer.serviceTier) {
     return appServer;
   }
@@ -73,7 +75,7 @@ export function emitCodexAppServerEvent(
   });
 }
 
-type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
@@ -87,7 +89,7 @@ export async function runCodexAgentEndHook(
     await awaitAgentEndSideEffects(sideEffectParams);
     return;
   }
-  runAgentEndSideEffects(sideEffectParams);
+  await runAgentEndSideEffectsAsync(sideEffectParams);
 }
 
 export function reportCodexBackgroundCleanupFailure(
@@ -103,5 +105,19 @@ export function reportCodexBackgroundCleanupFailure(
   void emitCodexAppServerEvent(params, {
     stream: "codex_app_server.lifecycle",
     data: { phase: "background_cleanup_failed", error: message },
+  });
+}
+
+export function runCodexCleanupStep(
+  params: Pick<EmbeddedRunAttemptParams, "runId" | "sessionId">,
+  step: string,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  return runAgentCleanupStep({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    step,
+    log: embeddedAgentLog,
+    cleanup,
   });
 }

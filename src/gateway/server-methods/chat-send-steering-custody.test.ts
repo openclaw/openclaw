@@ -1,8 +1,8 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   installRuntimeContextMessageForPrompt,
   normalizeMessagesForLlmBoundary,
@@ -15,9 +15,9 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
 } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../agents/sessions/agent-session-types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -61,29 +61,8 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
-function holdAssistantResponse(text: string) {
-  const response = createAssistantMessageEventStream();
-  let released = false;
-  return {
-    response,
-    isReleased: () => released,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      response.push({
-        type: "done",
-        reason: "stop",
-        message: createAssistant(testModel, [{ type: "text", text }]),
-      });
-      response.end();
-    },
-  };
-}
-
 describe("steering input custody", () => {
-  it.each([
+  it.for([
     "shared-secret owner",
     "same grant",
     "changed grant",
@@ -97,7 +76,7 @@ describe("steering input custody", () => {
     "different role sandbox across profiles",
   ] as const)(
     "preserves authenticated chat.send steering authority across callers (%s)",
-    async (scenario) => {
+    async (scenario, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
@@ -474,6 +453,7 @@ describe("steering input custody", () => {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
           if (queued) {
+            await withinTest(fixture.dispatchedRecorder, signal);
             expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
@@ -549,13 +529,16 @@ describe("steering input custody", () => {
     "native custody",
     "native committed",
     "browser custody",
+    "browser custody workspace",
     "browser custody session ACL",
     "browser custody lifecycle",
   ] as const)(
     "owns the real backing-run outcome when authority changes at steering commit (%s)",
     async (inputState) => {
       const sharedProfileCustody =
-        inputState === "browser custody" || inputState === "browser custody session ACL";
+        inputState === "browser custody" ||
+        inputState === "browser custody workspace" ||
+        inputState === "browser custody session ACL";
       const creator = sharedProfileCustody
         ? ensureProfileForEmail("steering-session-creator@example.test")
         : undefined;
@@ -569,6 +552,11 @@ describe("steering input custody", () => {
       let releaseProviders = () => {};
       let backingRun: Promise<void> | undefined;
       try {
+        if (inputState === "browser custody workspace") {
+          await patchSessionEntryCore(fixture.scope, () => ({
+            pendingProjectGitUrl: "file:///synthetic/missing-project.git",
+          }));
+        }
         const browserCustody = sharedProfileCustody || inputState === "browser custody lifecycle";
         fixture.params.queueMode = "steer";
         const operation = fixture.activeRun;
@@ -956,6 +944,11 @@ describe("steering input custody", () => {
             ok: !refused,
             payload: { runId: fixture.params.idempotencyKey, status: refused ? "error" : "ok" },
           });
+          if (inputState === "browser custody workspace") {
+            expect(loadExactSessionEntryReadOnly(fixture.scope)?.entry).toMatchObject({
+              pendingProjectGitUrl: "file:///synthetic/missing-project.git",
+            });
+          }
           const staleRetry = await fixture.send(undefined, { expectedProfileId: profile.id });
           expect(staleRetry).toHaveBeenCalledExactlyOnceWith(
             false,

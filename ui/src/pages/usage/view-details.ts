@@ -25,21 +25,17 @@ function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
 }
 
-/** Normalize a log timestamp to milliseconds (handles seconds vs ms). */
-function normalizeLogTimestamp(ts: number): number {
-  return ts < 1e12 ? ts * 1000 : ts;
-}
-
 function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
   // Keep undated entries visible; interval totals count dated entries separately.
   if (!(log.timestamp > 0)) {
     return true;
   }
-  const ts = normalizeLogTimestamp(log.timestamp);
+  // Log timestamps can be seconds or milliseconds.
+  const timestamp = log.timestamp;
+  const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
-/** Aggregate usage stats from time series points within a timestamp range. */
 function computeFilteredUsage(
   baseUsage: NonNullable<UsageSessionEntry["usage"]>,
   points: TimeSeriesPoint[],
@@ -94,10 +90,7 @@ export function renderSessionDetailPanel(
 
   const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
   const filteredUsage =
-    timeSeriesCursorStart !== null &&
-    timeSeriesCursorEnd !== null &&
-    detail.timeSeries?.points &&
-    usage
+    hasRange && detail.timeSeries?.points && usage
       ? computeFilteredUsage(
           usage,
           detail.timeSeries.points,
@@ -355,6 +348,11 @@ function renderContextPanel(
   `;
 }
 
+function selectedLogFilterValues(event: Event): string[] {
+  const selected = (event.target as HTMLSelectElement).selectedOptions;
+  return Array.from(selected, (option) => option.value);
+}
+
 function renderSessionLogsCompact(
   detail: UsageProps["detail"],
   callbacks: UsageProps["callbacks"]["details"],
@@ -439,11 +437,7 @@ function renderSessionLogsCompact(
           size="4"
           aria-label=${t("usage.details.filterByRole")}
           @change=${(event: Event) =>
-            callbacks.onLogFilterRolesChange(
-              Array.from((event.target as HTMLSelectElement).selectedOptions).map(
-                (option) => option.value as SessionLogRole,
-              ),
-            )}
+            callbacks.onLogFilterRolesChange(selectedLogFilterValues(event) as SessionLogRole[])}
         >
           ${(
             [
@@ -463,12 +457,7 @@ function renderSessionLogsCompact(
           multiple
           size="4"
           aria-label=${t("usage.details.filterByTool")}
-          @change=${(event: Event) =>
-            callbacks.onLogFilterToolsChange(
-              Array.from((event.target as HTMLSelectElement).selectedOptions).map(
-                (option) => option.value,
-              ),
-            )}
+          @change=${(event: Event) => callbacks.onLogFilterToolsChange(selectedLogFilterValues(event))}
         >
           ${toolOptions.map(
             (tool) =>

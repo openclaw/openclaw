@@ -26,35 +26,17 @@ async function copyBuildCommit(event: Event, commit: string, idleLabel: string) 
   }, COPY_FEEDBACK_MS);
 }
 
-function formatBranchPrefix(branch: string | null): string {
-  if (!branch || branch === "main") {
-    return "";
+function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
+  if (info.release || !info.commit) {
+    return null;
   }
+  const branch = info.branch && info.branch !== "main" ? info.branch : "git";
   const displayBranch =
     branch.length > BRANCH_DISPLAY_LENGTH
       ? `${truncateUtf16Safe(branch, BRANCH_DISPLAY_LENGTH)}…`
       : branch;
-  return `${displayBranch}@`;
-}
-
-export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
-  if (!info.commit) {
-    return null;
-  }
-  const branch = formatBranchPrefix(info.branch);
   const commit = `${info.commit.slice(0, 7)}${info.dirty === true ? "*" : ""}`;
-  return `${branch}${commit}`;
-}
-
-function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
-  if (info.release) {
-    return null;
-  }
-  const compactBuild = formatBuildChipText(info);
-  if (!compactBuild) {
-    return null;
-  }
-  return info.branch && info.branch !== "main" ? compactBuild : `git@${compactBuild}`;
+  return `${displayBranch}@${commit}`;
 }
 
 export function formatSidebarBuildSubtitle(info: ControlUiBuildInfo): string | null {

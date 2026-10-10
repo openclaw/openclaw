@@ -62,11 +62,13 @@ const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
 );
-// Run 36506342273 (hosted 4-vCPU): lane exceeded 1515s; x ~1.5 => 2280s inner.
+// Hosted release checks on 2026-10-06/07 passed in 1678-2290s (runs 37541402736,
+// 37559852628, 37589651386) and were killed at the old 2280s inner cap in
+// recovery-update-restart (37596230364, 37610648201): 2290s x ~1.5 => 3420s inner.
 // Run 36506210440: restart update took 856s; Crabbox 4-CPU took 993s x ~1.5 => 1500s.
 const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s}"',
 );
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
@@ -195,15 +197,6 @@ const bundledPluginInstallUninstallLanes = Array.from(
       stateScenario: "empty",
     }),
 );
-
-export const fleetCacheLane = lane("fleet-cache", {
-  command: "pnpm test:docker:fleet-cache",
-  e2eImageKind: false,
-  needsPackage: true,
-  resources: ["docker", "service", "npm"],
-  timeoutMs: 30 * 60 * 1000,
-  weight: 4,
-});
 
 export const mainLanes: DockerE2eLane[] = [
   lane("container-image-upgrade", {
@@ -437,8 +430,8 @@ export const mainLanes: DockerE2eLane[] = [
   npmLane("update-restart-auth", {
     command: updateRestartAuthCommand,
     stateScenario: "upgrade-survivor",
-    // Run 36506342273: 1515s x ~1.5 => 2280s inner + 300s host-side margin.
-    timeoutMs: 43 * 60 * 1000,
+    // 3420s inner + 300s host-side margin.
+    timeoutMs: 3720 * 1000,
     upgradeSurvivorScenario: "base",
     weight: 3,
   }),
@@ -681,9 +674,9 @@ const releasePathPackageUpdateOpenAiLanes = [
   scheduledLane("live-codex-npm-plugin"),
   scheduledLane("codex-on-demand", { timeoutMs: 30 * 60 * 1000 }),
   scheduledLane("release-typed-onboarding"),
-  // Use the shorter package row without changing npm weights or upgrade coverage.
-  ...scheduledLaneList("root-managed-vps-upgrade", "update-restart-auth"),
+  scheduledLane("root-managed-vps-upgrade"),
 ];
+const releasePathPackageUpdateRestartAuthLanes = scheduledLaneList("update-restart-auth");
 
 // Balance the npm-limited rows without raising per-runner resource caps.
 const releasePathPackageOnboardingLanes = scheduledLaneList(
@@ -723,6 +716,7 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
     ),
   ],
   "package-update-openai": releasePathPackageUpdateOpenAiLanes,
+  "package-update-restart-auth": releasePathPackageUpdateRestartAuthLanes,
   "package-update-onboarding": releasePathPackageOnboardingLanes,
   "package-update-migrations": releasePathPackageMigrationLanes,
   "package-update-self-upgrade": releasePathPackageSelfUpgradeLanes,
@@ -741,13 +735,18 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
 
 const betaReleasePathChunks = new Set([
   "package-update-openai",
+  "package-update-restart-auth",
   "package-update-onboarding",
   "package-update-migrations",
   "package-update-self-upgrade",
 ]);
 
 const legacyReleasePathChunks: Record<string, DockerE2eLane[]> = {
-  "package-update": [...releasePathPackageUpdateOpenAiLanes, ...releasePathPackageUpdateCoreLanes],
+  "package-update": [
+    ...releasePathPackageUpdateOpenAiLanes,
+    ...releasePathPackageUpdateRestartAuthLanes,
+    ...releasePathPackageUpdateCoreLanes,
+  ],
   "package-update-core": releasePathPackageUpdateCoreLanes,
   "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime": releasePathPluginRuntimeLanes,

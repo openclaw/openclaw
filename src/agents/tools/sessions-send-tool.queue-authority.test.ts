@@ -15,6 +15,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -37,37 +38,42 @@ import { createSessionsSendTool } from "./sessions-send-tool.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("sessions_send direct queue source authority", () => {
-  it.each(["live", "revoked", "unscoped"] as const)(
+  it.each(["live", "revoked", "unscoped", "send-revoked", "send-live"] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const crossAgent = source.startsWith("send-");
+        const targetAgentId = crossAgent ? "worker" : "main";
         const cfg = {
-          agents: { ownership: "explicit", entries: { main: {} } },
+          agents: {
+            ownership: "explicit",
+            entries: { main: { tools: { agentToAgent: { send: ["worker"] } } }, worker: {} },
+          },
           tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
         } satisfies OpenClawConfig;
         setRuntimeConfigSnapshot(cfg);
         setActivePluginRegistry(createSessionConversationTestRegistry());
         const requesterSessionKey = "agent:main:dashboard:queue-source";
-        const sessionKey = "agent:main:cron:queue-target:run:active";
+        const sessionKey = `agent:${targetAgentId}:cron:queue-target:run:active`;
         const sessionId = "queue-target-session";
         for (const [key, id] of [
           [requesterSessionKey, "queue-source-session"],
           [sessionKey, sessionId],
         ] as const) {
           await replaceSessionEntry(
-            { agentId: "main", sessionKey: key },
+            { agentId: key === requesterSessionKey ? "main" : targetAgentId, sessionKey: key },
             { sessionId: id, updatedAt: 1 },
           );
         }
         const target = await resolveSessionTranscriptRuntimeTarget({
-          agentId: "main",
+          agentId: targetAgentId,
           sessionId,
           sessionKey,
         });
         const manager = await SessionManager.openAsync(target, state.workspaceDir);
         guardSessionManager(manager);
         const { session } = await createTestSession({ sessionManager: manager });
-        const queued = vi.spyOn(session.agent, "steer");
+        const queued = vi.spyOn(session.agent, "admitSteeringMessage");
         const preparation = createDeferredCore();
         const resumePreparation = createDeferredCore();
         const queueMessage = async (
@@ -85,10 +91,16 @@ describe("sessions_send direct queue source authority", () => {
             await resumePreparation.promise;
             return await resolveMessage();
           });
-          await session.steer(text, undefined, recorder, undefined, undefined, undefined, () => {
-            assertCurrent?.();
-            return true;
-          });
+          await steerActiveSessionWithOptionalDeliveryWait(
+            session,
+            text,
+            options,
+            sessionKey,
+            () => {
+              assertCurrent?.();
+              return true;
+            },
+          );
         };
         const handle: EmbeddedAgentQueueHandle = {
           runId: "queue-target-run",
@@ -109,7 +121,7 @@ describe("sessions_send direct queue source authority", () => {
                 },
               }),
         };
-        setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
+        setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, targetAgentId);
         const instance = createOperationalRunInstanceRef("queue-source-run");
         const authority = claimAgentRunDelegatedAuthority(instance);
         // Resolution is read-only; the real queue and SQLite transcript perform every effect.
@@ -119,7 +131,7 @@ describe("sessions_send direct queue source authority", () => {
             if (request.method !== "sessions.resolve") {
               throw new Error(`Unexpected Gateway dispatch: ${request.method}`);
             }
-            return { key: sessionKey, agentId: "main" };
+            return { key: sessionKey, agentId: targetAgentId };
           });
         const message = `guidance-from-${source}-source`;
         const send = () =>
@@ -131,7 +143,7 @@ describe("sessions_send direct queue source authority", () => {
             callGateway,
           }).execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
         const pending =
-          source === "unscoped"
+          source === "unscoped" || crossAgent
             ? send()
             : withGatewayToolCallerIdentity(
                 {
@@ -149,12 +161,25 @@ describe("sessions_send direct queue source authority", () => {
           if (source === "revoked") {
             releaseAgentRunDelegatedAuthority(authority);
           }
+          const revokeSend = () =>
+            setRuntimeConfigSnapshot({
+              ...cfg,
+              agents: {
+                ...cfg.agents,
+                entries: { ...cfg.agents.entries, main: { tools: { agentToAgent: { send: [] } } } },
+              },
+            });
+          if (source === "send-revoked") {
+            revokeSend();
+          }
           resumePreparation.resolve();
           const result = await pending;
-          if (source === "revoked") {
+          if (source === "revoked" || source === "send-revoked") {
             expect(result.details).toMatchObject({ status: "error" });
             expect(JSON.stringify(result)).toContain(
-              "Message injection authority is no longer current",
+              source === "send-revoked"
+                ? "tools.agentToAgent.send"
+                : "Message injection authority is no longer current",
             );
             expect(queued).not.toHaveBeenCalled();
           } else {
@@ -166,6 +191,9 @@ describe("sessions_send direct queue source authority", () => {
           }
           // Acceptance transfers ownership: closing the sender cannot withdraw accepted guidance.
           releaseAgentRunDelegatedAuthority(authority);
+          if (crossAgent) {
+            revokeSend();
+          }
           streamMocks.streamSimple.mockImplementation(
             (model: Parameters<typeof createAssistant>[0]) =>
               createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
@@ -177,7 +205,7 @@ describe("sessions_send direct queue source authority", () => {
             .messages.filter(
               (entry) => entry.role === "user" && JSON.stringify(entry).includes(message),
             );
-          expect(delivered).toHaveLength(source === "revoked" ? 0 : 1);
+          expect(delivered).toHaveLength(source === "revoked" || source === "send-revoked" ? 0 : 1);
           expect(
             callGateway.mock.calls.every(([request]) => request.method === "sessions.resolve"),
           ).toBe(true);

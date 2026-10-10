@@ -16,6 +16,7 @@ import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { spawnTerminalPty } from "../process/terminal-pty.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -30,6 +31,7 @@ import { getFreePort } from "../test-utils/ports.js";
 
 async function runDoctor(env: NodeJS.ProcessEnv) {
   await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const result = spawnSync(
     process.execPath,
     ["openclaw.mjs", "doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
@@ -46,6 +48,7 @@ async function runDoctor(env: NodeJS.ProcessEnv) {
 
 async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolean) {
   await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const ptyEnv: Record<string, string> = {};
   for (const [key, value] of Object.entries({
     ...env,
@@ -94,6 +97,8 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
       answeredThrough += prompt.index + prompt[0].length;
       const question = prompt[1]!.trim();
       if (
+        question ===
+          "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished." ||
         question === "Migrate auth profile JSON files into SQLite now?" ||
         question === "Apply recommended config repairs now?"
       ) {

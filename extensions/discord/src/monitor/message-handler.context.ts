@@ -22,7 +22,7 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -385,7 +385,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const { deliverTarget, replyTarget, replyReference, autoThreadContext } = replyPlan;
+  const { deliverTarget, replyTarget, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext
@@ -419,7 +419,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const effectivePreviousTimestamp =
     effectiveSessionKey === route.sessionKey
       ? previousTimestamp
-      : readSessionUpdatedAt({
+      : await readSessionUpdatedAtAsync({
           storePath,
           sessionKey: effectiveSessionKey,
         });
@@ -441,23 +441,6 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-
-  // Auto-thread creation has finished: the return link belongs to that thread,
-  // while nativeChannelId can still identify the channel where the mention arrived.
-  const conversationThreadId = threadChannel?.id ?? autoThreadContext?.createdThreadId;
-  const conversationChannelId = conversationThreadId ?? messageChannelId;
-  const conversationGuildId = isGuildMessage
-    ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id)
-    : "@me";
-  const conversationLink =
-    /^\d+$/.test(conversationChannelId) &&
-    conversationGuildId &&
-    (conversationGuildId === "@me" || /^\d+$/.test(conversationGuildId))
-      ? {
-          url: `https://discord.com/channels/${conversationGuildId}/${conversationChannelId}`,
-          label: conversationThreadId ? "Discord Thread" : "Discord Conversation",
-        }
-      : undefined;
 
   const batchMessageIds =
     ctx.sourceMessageIds && ctx.sourceMessageIds.length > 1 ? [...ctx.sourceMessageIds] : undefined;
@@ -492,7 +475,6 @@ export async function buildDiscordMessageProcessContext(params: {
       }),
       nativeChannelId: messageChannelId,
       avatar: ctx.conversationAvatar,
-      link: conversationLink,
       label: fromLabel,
       spaceId: isGuildMessage
         ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
@@ -639,41 +621,35 @@ export async function buildDiscordMessageProcessContext(params: {
   return {
     ctxPayload,
     persistedSessionKey,
-    turn: {
-      storePath,
-      record: {
-        updateLastRoute: {
-          sessionKey: persistedSessionKey,
-          channel: "discord",
-          to: lastRouteTo,
-          accountId: route.accountId,
-          mainDmOwnerPin:
-            isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: author.id,
-                  onSkip: ({
-                    ownerRecipient,
-                    senderRecipient,
-                  }: {
-                    ownerRecipient: string;
-                    senderRecipient: string;
-                  }) => {
-                    logVerbose(
-                      `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        },
-        onRecordError: (err: unknown) => {
-          logVerbose(`discord: failed updating session meta: ${String(err)}`);
-        },
+    record: {
+      updateLastRoute: {
+        sessionKey: persistedSessionKey,
+        channel: "discord",
+        to: lastRouteTo,
+        accountId: route.accountId,
+        mainDmOwnerPin:
+          isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: author.id,
+                onSkip: ({
+                  ownerRecipient,
+                  senderRecipient,
+                }: {
+                  ownerRecipient: string;
+                  senderRecipient: string;
+                }) => {
+                  logVerbose(
+                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
+      },
+      onRecordError: (err: unknown) => {
+        logVerbose(`discord: failed updating session meta: ${String(err)}`);
       },
     },
     replyPlan,
-    deliverTarget,
-    replyTarget,
-    replyReference,
   };
 }

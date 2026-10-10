@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { startCronReceiptAuthorityHost } from "../cron/store/receipt-authority-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import * as approvalShared from "./server-methods/approval-shared.js";
@@ -156,6 +157,8 @@ describe("public Gateway close approval lifetime", () => {
         expect(emergencyResolution).toBe(false);
         expect(completions.request?.status).toBe("rejected");
         expect(completions.wait?.status).toBe("rejected");
+        // The closed Gateway has released custody; inspect persisted rows in a new host lifetime.
+        startCronReceiptAuthorityHost();
         expect(await getOperatorApprovalDetailed({ id })).toEqual(beforeClose);
       } finally {
         clearTimeout(releaseTimer);
@@ -299,6 +302,7 @@ describe("public Gateway close approval lifetime", () => {
         if (terminal === "allow-once") {
           expect(observations.consumed).toBe(true);
         }
+        startCronReceiptAuthorityHost();
         expect(await getOperatorApprovalDetailed({ id: pendingId })).toMatchObject({
           outcome: "found",
           record: { status: "pending", decision: null, terminalReason: null },

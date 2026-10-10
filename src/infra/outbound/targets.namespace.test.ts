@@ -46,13 +46,14 @@ async function resolveNamespaceHeartbeat(
   plugin: ChannelPlugin,
   directPolicy?: "allow" | "block",
   target = "alpha",
+  to = target,
 ) {
   setActivePluginRegistry(createTargetsTestRegistry([plugin]));
   mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
   return await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg: { channels: { alpha: {} } } as OpenClawConfig,
     agentId: "main",
-    heartbeat: { target, to: target, directPolicy },
+    heartbeat: { target, to, directPolicy },
   });
 }
 
@@ -75,20 +76,240 @@ describe("outbound channel namespace targets", () => {
       expectedTo: "C123456",
     },
     {
+      name: "uses a concrete native namespace resolver without an ID heuristic",
+      plugin: createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          targetResolver: {
+            resolveTarget: async () => ({ to: "C123456", kind: "group", source: "normalized" }),
+          },
+        },
+      }),
+      expectedTo: "C123456",
+    },
+    {
       name: "preserves an explicit native destination after a directory miss",
       plugin: createNamespacePlugin({ entries: [] }),
       expectedTo: "@alpha",
     },
-  ])("$name", async ({ plugin, expectedTo }) => {
-    const resolved = await resolveNamespaceHeartbeat(plugin);
+    {
+      name: "uses a concrete native namespace resolver without a normalizer",
+      plugin: createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          targetResolver: {
+            looksLikeId: () => true,
+            resolveTarget: async () => ({ to: "C123456", kind: "group", source: "normalized" }),
+          },
+        },
+      }),
+      expectedTo: "C123456",
+    },
+    {
+      name: "preserves a native namespace ID without normalization or concrete resolvers",
+      plugin: createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          targetResolver: { looksLikeId: () => true },
+        },
+      }),
+      expectedTo: "alpha",
+    },
+    {
+      name: "preserves provider-classified group handles during initial normalization",
+      plugin: createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          normalizeTarget: (raw) => raw.trim(),
+          inferTargetChatType: () => "group",
+          targetResolver: { looksLikeId: () => true },
+        },
+      }),
+      to: "@ops",
+      directPolicy: "block" as const,
+      expectedTo: "@ops",
+    },
+    {
+      name: "preserves provider-classified groups when normalization adds a handle marker",
+      plugin: createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          normalizeTarget: (raw) => (raw.startsWith("@") ? raw : `@${raw}`),
+          inferTargetChatType: () => "group",
+          targetResolver: { looksLikeId: () => true },
+        },
+      }),
+      to: "ops",
+      directPolicy: "block" as const,
+      expectedTo: "ops",
+    },
+    {
+      name: "preserves provider-classified native outbound groups",
+      plugin: createNamespacePlugin({
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "@ops" }),
+        },
+        messaging: {
+          targetPrefixes: ["a"],
+          inferTargetChatType: () => "group",
+        },
+      }),
+      directPolicy: "block" as const,
+      expectedTo: "@ops",
+    },
+    {
+      name: "preserves a directory-confirmed group when its handle marker changes",
+      plugin: createNamespacePlugin({
+        entries: [{ kind: "group", id: "OPS", name: "alpha" }],
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "@OPS" }),
+        },
+        messaging: { targetPrefixes: ["a"] },
+      }),
+      directPolicy: "block" as const,
+      expectedTo: "@OPS",
+    },
+    {
+      name: "preserves a confirmed group across a provider-prefix rewrite",
+      plugin: createNamespacePlugin({
+        entries: [{ kind: "group", id: "@ops", name: "alpha" }],
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "alpha:@ops" }),
+        },
+        messaging: {
+          targetPrefixes: ["a"],
+          inferTargetChatType: () => "group",
+        },
+      }),
+      directPolicy: "block" as const,
+      expectedTo: "alpha:@ops",
+    },
+    {
+      name: "allows a confirmed peer rewritten to an explicitly typed group",
+      plugin: createNamespacePlugin({
+        entries: [{ kind: "user", id: "D123456", name: "alpha" }],
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "group:C123456" }),
+        },
+        messaging: {
+          targetPrefixes: ["a"],
+          inferTargetChatType: () => "group",
+        },
+      }),
+      directPolicy: "block" as const,
+      expectedTo: "group:C123456",
+    },
+  ])("$name", async ({ plugin, expectedTo, directPolicy, to }) => {
+    const resolved = await resolveNamespaceHeartbeat(plugin, directPolicy, "alpha", to);
 
     expect(resolved).toMatchObject({ channel: "alpha", to: expectedTo });
+  });
+
+  it("does not resolve a reserved namespace literal through native fallback", async () => {
+    const resolveTarget = vi.fn(async () => ({
+      to: "C123456",
+      kind: "group" as const,
+      source: "normalized" as const,
+    }));
+    const resolved = await resolveNamespaceHeartbeat(
+      createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          targetResolver: {
+            looksLikeId: () => true,
+            reservedLiterals: ["alpha"],
+            resolveTarget,
+          },
+        },
+      }),
+    );
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-target" });
+    expect(resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("blocks a native outbound namespace rewritten to an explicit direct recipient", async () => {
+    const resolved = await resolveNamespaceHeartbeat(
+      createNamespacePlugin({
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "user:42" }),
+        },
+        messaging: {
+          targetPrefixes: ["a"],
+          inferTargetChatType: () => "group",
+        },
+      }),
+      "block",
+    );
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+  });
+
+  it("blocks a confirmed group handle rewritten to a typed peer with the same native ID", async () => {
+    const resolved = await resolveNamespaceHeartbeat(
+      createNamespacePlugin({
+        entries: [{ kind: "group", id: "@ops", name: "alpha" }],
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "user:ops" }),
+        },
+        messaging: {
+          targetPrefixes: ["a"],
+          inferTargetChatType: () => "group",
+        },
+      }),
+      "block",
+    );
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+  });
+
+  it("keeps a confirmed peer direct through an opaque rewrite with weak group inference", async () => {
+    const resolved = await resolveNamespaceHeartbeat(
+      createNamespacePlugin({
+        entries: [{ kind: "user", id: "D123456", name: "alpha" }],
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: () => ({ ok: true, to: "opaque-conversation-id" }),
+        },
+        messaging: {
+          targetPrefixes: ["a"],
+          inferTargetChatType: () => "group",
+        },
+      }),
+      "block",
+    );
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
   });
 
   it("blocks a normalized native direct destination after a directory miss", async () => {
     const resolved = await resolveNamespaceHeartbeat(
       createNamespacePlugin({ entries: [] }),
       "block",
+    );
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+  });
+
+  it("blocks a canonical direct recipient after normalization removes its group wrapper", async () => {
+    const resolved = await resolveNamespaceHeartbeat(
+      createNamespacePlugin({
+        messaging: {
+          targetPrefixes: ["a"],
+          normalizeTarget: (raw) => raw.replace(/^(?:alpha:)?group:/, ""),
+          inferTargetChatType: ({ to }) => (to.includes("group:") ? "group" : "direct"),
+          targetResolver: { looksLikeId: () => true },
+        },
+      }),
+      "block",
+      "alpha",
+      "alpha:group:42",
     );
 
     expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
@@ -157,6 +378,15 @@ describe("outbound channel namespace targets", () => {
       name: "an unchanged direct directory target despite conflicting inference",
       entries: [{ kind: "user" as const, id: "D123456", name: "alpha" }],
       resolveTarget: ({ to }: { to?: string }) => ({ ok: true as const, to: to ?? "" }),
+      messaging: {
+        targetPrefixes: ["a"],
+        inferTargetChatType: (): "group" => "group",
+      },
+    },
+    {
+      name: "an equivalent provider-prefixed direct directory target despite conflicting inference",
+      entries: [{ kind: "user" as const, id: "D123456", name: "alpha" }],
+      resolveTarget: () => ({ ok: true as const, to: "alpha:D123456" }),
       messaging: {
         targetPrefixes: ["a"],
         inferTargetChatType: (): "group" => "group",

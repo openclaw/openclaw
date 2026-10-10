@@ -96,15 +96,11 @@ describe("outbound message planning", () => {
       chunkerMode: testCase.chunkerMode,
       chunkMode: testCase.chunkMode,
       overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(units).toEqual(
       testCase.expected.map((text, index) => ({
-        kind: "text",
         text,
         overrides: {
           replyToId: index === 0 ? "reply-1" : undefined,
@@ -128,15 +124,11 @@ describe("outbound message planning", () => {
       chunkMode,
       chunker: () => [],
       overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(units).toEqual([
       {
-        kind: "text",
         text: "visible reply",
         overrides: {
           replyToId: "reply-1",
@@ -157,19 +149,13 @@ describe("outbound message planning", () => {
     const firstUnits = planOutboundTextMessageUnits({
       text: "explicit",
       overrides: { replyToId: explicit.replyToId, replyToIdSource: explicit.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
     const implicit = policy.resolveCurrentReplyTo({});
     const secondUnits = planOutboundTextMessageUnits({
       text: "implicit",
       overrides: { replyToId: implicit.replyToId, replyToIdSource: implicit.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(firstUnits[0]?.overrides.replyToId).toBe("explicit-reply");
@@ -186,28 +172,20 @@ describe("outbound message planning", () => {
       caption: "caption",
       mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
       overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(
-      units.map((unit) =>
-        unit.kind === "media"
-          ? [
-              unit.kind,
-              unit.caption,
-              unit.mediaUrl,
-              unit.overrides.replyToId,
-              unit.overrides.deliveryPartIndex,
-              unit.overrides.deliveryPartCount,
-            ]
-          : [unit.kind],
-      ),
+      units.map((unit) => [
+        unit.caption,
+        unit.mediaUrl,
+        unit.overrides.replyToId,
+        unit.overrides.deliveryPartIndex,
+        unit.overrides.deliveryPartCount,
+      ]),
     ).toEqual([
-      ["media", "caption", "https://example.com/1.png", "reply-1", 0, 2],
-      ["media", undefined, "https://example.com/2.png", undefined, 1, 2],
+      ["caption", "https://example.com/1.png", "reply-1", 0, 2],
+      [undefined, "https://example.com/2.png", undefined, 1, 2],
     ]);
   });
 
@@ -222,7 +200,6 @@ describe("outbound message planning", () => {
 
     expect(units).toEqual([
       {
-        kind: "text",
         text: "<b>bold</b>",
         overrides: {
           formatting: { parseMode: "HTML" },

@@ -333,14 +333,13 @@ export function validatePluginSchemaValue(
   params: Parameters<typeof validateJsonSchemaValue>[0] & { origin: PluginOrigin },
 ): PluginSchemaValidationResult {
   const { origin, ...validationParams } = params;
-  if (origin === "bundled") {
-    const result = validateJsonSchemaValue(validationParams);
-    return result.ok ? result : { ...result, schemaError: false };
-  }
   try {
     const result = validateJsonSchemaValue(validationParams);
     return result.ok ? result : { ...result, schemaError: false };
   } catch (error) {
+    if (origin === "bundled") {
+      throw error;
+    }
     // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
     // pattern), and callers log it, so it is sanitized like every other error path.
     const text = sanitizeTerminalText(error instanceof Error ? error.message : String(error));

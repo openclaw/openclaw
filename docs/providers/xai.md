@@ -105,6 +105,12 @@ subscription quota are separate billing buckets.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/grok-4.7`. OAuth login preserves an existing
   primary model unless you explicitly change it.
+- With OAuth, thinking levels follow the reasoning efforts your account's
+  model listing reports. When a listed model cannot turn reasoning off, `off`
+  is not offered. If a model shows effort levels in the picker but
+  `--thinking` rejects them, the login predates this behavior: rerun
+  `openclaw models auth login --provider xai --method oauth` to refresh the
+  saved model rows.
 - Inspect saved xAI auth profiles:
 
   ```bash
@@ -764,7 +770,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
 ## Live testing
 
 The xAI media paths are covered by unit tests and opt-in live suites. Export
-`XAI_API_KEY` in the process environment before running live probes.
+`XAI_API_KEY` in the process environment before running live checks.
 
 ```bash
 pnpm test extensions/xai

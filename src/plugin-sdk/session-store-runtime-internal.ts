@@ -2,9 +2,12 @@ import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recove
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
 import {
   projectPublicSessionEntry,
-  projectPublicSessionEntryPatch,
   SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
 } from "../config/sessions/session-entry-projection.js";
+import {
+  readSessionEntryByIdReadOnlyInWorker,
+  readSessionEntryReadOnlyInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 
 export type SessionStoreReadParams = {
@@ -15,6 +18,37 @@ export type SessionStoreReadParams = {
   sessionKey: string;
   storePath?: string;
 };
+
+export type SessionStoreEntrySummary = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
+/** Loads the complete public entry through the selected asynchronous read owner. */
+export async function getSessionEntryAsync(
+  params: SessionStoreReadParams,
+): Promise<SessionEntry | undefined> {
+  const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
+  return entry ? projectPluginSessionEntry(entry) : undefined;
+}
+
+/** Looks up a visible current session ID in one selected store. */
+export async function getSessionEntryByIdAsync(
+  params: Omit<SessionStoreReadParams, "sessionKey"> & {
+    sessionId: string;
+    /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+    orderBy?: "updatedAt";
+  },
+): Promise<SessionStoreEntrySummary | undefined> {
+  const selected = await readSessionEntryByIdReadOnlyInWorker({
+    ...toSessionAccessScope({ ...params, sessionKey: "" }),
+    sessionId: params.sessionId,
+    orderBy: params.orderBy,
+  });
+  return selected
+    ? { sessionKey: selected.sessionKey, entry: projectPluginSessionEntry(selected.entry) }
+    : undefined;
+}
 
 export function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
   // Keep plugin-facing options separate from internal accessor-only controls.
@@ -40,11 +74,7 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
   };
 }
 
-export function projectPluginSessionEntryPatch(
-  patch: Partial<InternalSessionEntry>,
-): Partial<SessionEntry> {
-  return projectPublicSessionEntryPatch(patch);
-}
+export { projectPublicSessionEntryPatch as projectPluginSessionEntryPatch } from "../config/sessions/session-entry-projection.js";
 
 export function generationValidPrivateFieldsForSameSession(
   existingEntry: InternalSessionEntry | undefined,

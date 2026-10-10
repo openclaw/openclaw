@@ -10,6 +10,7 @@ import {
 } from "../../channels/plugins/message-action-dispatch.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MessageActionInput } from "../../infra/outbound/message-action-contracts.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -49,6 +50,33 @@ export function resolveAgentRuntimeMessageActionConfig(
   return resolveAgentRuntimeMessageActionAuthorization(client)?.scheduled
     ? readMessageActionInvocationConfig(token)
     : undefined;
+}
+
+/** Translate the RPC using its captured route, independently of turn authorization. */
+export function createGatewayMessageActionInput(params: {
+  context: MessageActionInput & { channel: string; accountId?: string };
+  request: MessageActionParams;
+  runtimeAgentId?: string;
+}): MessageActionInput {
+  const { context, request, runtimeAgentId } = params;
+  return {
+    ...context,
+    gatewayOwnedDelivery: true,
+    allowNativeChannelNamespace: request.allowNativeChannelNamespace,
+    ...(request.action === "send"
+      ? {
+          // The RPC owns source-reply receipts and their transcript mirror.
+          suppressTranscriptMirror: true,
+          actionOrigin: runtimeAgentId ? ("message-tool" as const) : undefined,
+        }
+      : {}),
+    params: {
+      ...request.params,
+      channel: context.channel,
+      ...(context.accountId ? { accountId: context.accountId } : {}),
+      idempotencyKey: request.idempotencyKey,
+    },
+  };
 }
 
 /** Retain the live caller and scheduled source through this action's requests. */
@@ -104,7 +132,15 @@ export function createMessageActionRuntimeAuthority(
     isFencedProviderReadAction(params.request.action)
       ? undefined
       : params.authorization?.deliveryAttempt?.beforeAttempt();
+  const prepareUse = params.authorization?.scheduled?.prepareUse;
   return {
+    prepareEffect: prepareUse
+      ? () =>
+          prepareUse(
+            Boolean(assertReadCurrent || assertScheduledWriteCurrent),
+            assertDirectAdapterHandoff,
+          )
+      : undefined,
     assertReadCurrent,
     assertScheduledWriteCurrent,
     beforeDeliveryAttempt,
@@ -126,7 +162,6 @@ export function resolveTrustedMessageActionToolContext(params: {
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
-    allowNativeChannelNamespace?: boolean;
   };
 }):
   | ({
@@ -194,14 +229,7 @@ export function resolveTrustedMessageActionToolContext(params: {
       ),
     };
   }
-  const redeemedAuthorization = resolveAgentRuntimeMessageActionAuthorization(params.client);
-  const messageActionAuthorization = redeemedAuthorization
-    ? {
-        ...redeemedAuthorization,
-        allowNativeChannelNamespace:
-          params.request.allowNativeChannelNamespace === false ? false : undefined,
-      }
-    : undefined;
+  const messageActionAuthorization = resolveAgentRuntimeMessageActionAuthorization(params.client);
   return {
     ok: true,
     toolContext: messageActionContext.toolContext,

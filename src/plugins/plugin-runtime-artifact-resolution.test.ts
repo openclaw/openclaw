@@ -123,42 +123,66 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it.each(["source", "package-local", "root-bundled"])(
-    "exposes the selected %s runtime entry to registration",
-    (layout) => {
+  it.each([
+    { layout: "source default", preferBuiltPluginArtifacts: undefined },
+    { layout: "source", preferBuiltPluginArtifacts: false },
+    { layout: "package-local", preferBuiltPluginArtifacts: true },
+    { layout: "root-bundled", preferBuiltPluginArtifacts: true },
+  ])(
+    "exposes and fingerprints the selected $layout runtime entry",
+    ({ layout, preferBuiltPluginArtifacts }) => {
       const fixture = createBundledPluginFixture();
-      const entry =
-        layout === "source"
-          ? fixture.source
-          : layout === "package-local"
-            ? path.join(fixture.rootDir, "dist", "index.js")
-            : fixture.builtSource;
+      const entry = !preferBuiltPluginArtifacts
+        ? fixture.source
+        : layout === "package-local"
+          ? path.join(fixture.rootDir, "dist", "index.js")
+          : fixture.builtSource;
+      const name = preferBuiltPluginArtifacts ? "fixture-built" : "fixture-source";
       fs.mkdirSync(path.dirname(entry), { recursive: true });
       fs.writeFileSync(
         entry,
         `export default {
-        id: "fixture",
-        register(api) {
-          api.registerService({ id: api.runtimeSource ?? "missing runtime source", start() {} });
-        }
-      };\n`,
+          id: "fixture", name: ${JSON.stringify(name)},
+          register(api) {
+            api.registerService({ id: api.runtimeSource ?? "missing runtime source", start() {} });
+          }
+        };`,
       );
-      const registry = withEnv(
+      withEnv(
         {
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         },
-        () =>
-          loadOpenClawPlugins({
+        () => {
+          const config = {
+            plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } },
+          };
+          const record = { pluginId: "fixture", origin: "bundled" as const, ...fixture };
+          const stagingRegistry = createEmptyPluginRegistry();
+          setPluginRuntimeLoadContext(
+            stagingRegistry,
+            resolvePluginRuntimeLoadContext({ config, preferBuiltPluginArtifacts }),
+          );
+          const before = withPluginRuntimeRegistryScope(stagingRegistry, () =>
+            fingerprintPluginRuntimeArtifact(record),
+          );
+          const registry = loadOpenClawPlugins({
             cache: false,
-            config: { plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } } },
+            config,
             onlyPluginIds: ["fixture"],
-            preferBuiltPluginArtifacts: layout !== "source",
-          }),
+            preferBuiltPluginArtifacts,
+          });
+          expect(registry.services.map(({ service }) => service.id)).toEqual([entry]);
+          expect(registry.plugins[0]?.source).toBe(fixture.source);
+          expect(registry.plugins).toContainEqual(
+            expect.objectContaining({ id: "fixture", name, status: "loaded" }),
+          );
+          expect(fingerprintPluginRuntimeArtifact(record)).toBe(before);
+          fs.appendFileSync(entry, "\n// Runtime artifact replaced.\n");
+          expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(before);
+        },
       );
-      expect(registry.services.map(({ service }) => service.id)).toEqual([entry]);
-      expect(registry.plugins[0]?.source).toBe(fixture.source);
     },
   );
 
@@ -209,43 +233,39 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it.each([".cjs", ".js"])(
-    "uses the emitted %s entry rather than a stale format neighbor",
-    (extension) => {
+  it.each([
+    { extension: ".cjs", neighbor: "built", missing: false },
+    { extension: ".js", neighbor: "built", missing: false },
+    { extension: ".cjs", neighbor: "built", missing: true },
+    { extension: ".js", neighbor: "source", missing: false },
+    { extension: ".js", neighbor: "package-local", missing: false },
+  ])(
+    "selects declared $extension output over a stale $neighbor neighbor (missing: $missing)",
+    ({ extension, neighbor, missing }) => {
       const fixture = createBundledPluginFixture(extension);
       const staleExtension = extension === ".js" ? ".cjs" : ".js";
-      fs.writeFileSync(
-        path.join(path.dirname(fixture.builtSource), `index${staleExtension}`),
-        'throw new Error("stale build format");\n',
-      );
-
-      expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
-        fixture.builtSource,
-      );
+      const stale =
+        neighbor === "built"
+          ? path.join(path.dirname(fixture.builtSource), `index${staleExtension}`)
+          : path.join(fixture.rootDir, neighbor === "source" ? "index.js" : "dist/index.js");
+      fs.mkdirSync(path.dirname(stale), { recursive: true });
+      fs.writeFileSync(stale, 'throw new Error("stale build output");\n');
+      if (missing) {
+        fs.rmSync(fixture.builtSource);
+      }
+      const resolved = resolvePluginRuntimeArtifact({
+        ...fixture,
+        pluginId: "fixture",
+        entryKind: "runtime",
+        origin: "bundled",
+        preferBuiltPluginArtifacts: true,
+        packageManifest:
+          neighbor === "package-local" ? { build: { bundledDist: false } } : undefined,
+      });
+      expect(resolved.source).toBe(missing ? fixture.source : fixture.builtSource);
+      expect(resolved.source).not.toBe(fs.realpathSync(stale));
     },
   );
-
-  it("keeps the bundled root build ahead of adjacent source output", () => {
-    const fixture = createBundledPluginFixture();
-    fs.writeFileSync(path.join(fixture.rootDir, "index.js"), 'module.exports = { id: "stale" };\n');
-
-    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
-      fixture.builtSource,
-    );
-  });
-
-  it("does not replace missing declared CJS output with a stale JavaScript neighbor", () => {
-    const fixture = createBundledPluginFixture(".cjs");
-    fs.rmSync(fixture.builtSource);
-    fs.writeFileSync(
-      path.join(path.dirname(fixture.builtSource), "index.js"),
-      "export default {};\n",
-    );
-
-    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
-      fixture.source,
-    );
-  });
 
   it("never borrows a checkout root build for an installed package", () => {
     const fixture = createBundledPluginFixture();
@@ -278,28 +298,15 @@ describe("resolvePluginRuntimeArtifact", () => {
 
       expect(first.source).toBe(firstPreference ? fixture.builtSource : fixture.source);
       expect(second).toEqual(first);
+      expect(
+        resolveFixture({
+          ...fixture,
+          source: firstPreference ? fixture.source : fixture.builtSource,
+          preferBuiltPluginArtifacts: !firstPreference,
+        }),
+      ).toEqual(first);
     },
   );
-
-  it("prefers the root build for source-external plugins without using package-local output", () => {
-    const fixture = createBundledPluginFixture();
-    const packageLocalSource = path.join(fixture.rootDir, "dist", "index.js");
-    fs.mkdirSync(path.dirname(packageLocalSource), { recursive: true });
-    fs.writeFileSync(packageLocalSource, 'module.exports = { id: "stale" };\n');
-
-    const resolved = resolvePluginRuntimeArtifact({
-      pluginId: "fixture",
-      entryKind: "runtime",
-      rootDir: fixture.rootDir,
-      source: fixture.source,
-      origin: "bundled",
-      preferBuiltPluginArtifacts: true,
-      packageManifest: { build: { bundledDist: false } },
-    });
-
-    expect(resolved.source).toBe(fixture.builtSource);
-    expect(resolved.source).not.toBe(fs.realpathSync(packageLocalSource));
-  });
 
   it.each([
     { entryKind: "runtime" as const, sourceName: "index.ts", artifactName: "index.js" },
@@ -366,24 +373,6 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it("aliases different physical inputs for the same logical runtime entry", () => {
-    const fixture = createBundledPluginFixture();
-    const first = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
-    const aliased = resolvePluginRuntimeArtifact({
-      pluginId: "fixture",
-      entryKind: "runtime",
-      rootDir: fixture.rootDir,
-      source: fixture.builtSource,
-      origin: "bundled",
-      preferBuiltPluginArtifacts: true,
-    });
-
-    expect(aliased).toEqual(first);
-  });
-
   it.each(["setup", "provider-discovery"] as const)(
     "keeps runtime and %s entries distinct within one plugin root",
     (entryKind) => {
@@ -408,31 +397,17 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
-  it("re-resolves after the active registry memo is cleared", () => {
+  it.each([
+    ["active registry memo", clearPluginRuntimeArtifactResolutionMemo],
+    ["registry load cache", clearPluginRegistryLoadCache],
+  ] as const)("re-resolves after the %s is cleared", (_name, clear) => {
     const fixture = createBundledPluginFixture();
     const sourceResolution = resolveFixture({
       ...fixture,
       preferBuiltPluginArtifacts: false,
     });
 
-    clearPluginRuntimeArtifactResolutionMemo();
-
-    const builtResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: true,
-    });
-    expect(sourceResolution.source).toBe(fixture.source);
-    expect(builtResolution.source).toBe(fixture.builtSource);
-  });
-
-  it("re-resolves after the registry load cache is cleared", () => {
-    const fixture = createBundledPluginFixture();
-    const sourceResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
-
-    clearPluginRegistryLoadCache();
+    clear();
 
     const builtResolution = resolveFixture({
       ...fixture,
@@ -482,60 +457,6 @@ describe("resolvePluginRuntimeArtifact", () => {
     ]);
     expect(getActivePluginChannelRegistry()).toBe(second);
   });
-
-  it.each([undefined, false, true])(
-    "keeps owner proof on the artifact actually loaded (built preference: %s)",
-    (preferBuiltPluginArtifacts) => {
-      const fixture = createBundledPluginFixture();
-      fs.writeFileSync(
-        fixture.source,
-        'export default { name: "fixture-source", register() {} };\n',
-      );
-      fs.writeFileSync(
-        fixture.builtSource,
-        'module.exports = { name: "fixture-built", register() {} };\n',
-      );
-      withEnv(
-        {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
-          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        },
-        () => {
-          const config = {
-            plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } },
-          };
-          const record = { pluginId: "fixture", origin: "bundled" as const, ...fixture };
-          const stagingRegistry = createEmptyPluginRegistry();
-          setPluginRuntimeLoadContext(
-            stagingRegistry,
-            resolvePluginRuntimeLoadContext({ config, preferBuiltPluginArtifacts }),
-          );
-          const before = withPluginRuntimeRegistryScope(stagingRegistry, () =>
-            fingerprintPluginRuntimeArtifact(record),
-          );
-          const registry = loadOpenClawPlugins({
-            cache: false,
-            config,
-            onlyPluginIds: ["fixture"],
-            preferBuiltPluginArtifacts,
-          });
-          expect(registry.plugins).toContainEqual(
-            expect.objectContaining({
-              id: "fixture",
-              name: preferBuiltPluginArtifacts ? "fixture-built" : "fixture-source",
-              status: "loaded",
-            }),
-          );
-          expect(fingerprintPluginRuntimeArtifact(record)).toBe(before);
-
-          const executedSource = preferBuiltPluginArtifacts ? fixture.builtSource : fixture.source;
-          fs.appendFileSync(executedSource, "\n// Runtime artifact replaced.\n");
-          expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(before);
-        },
-      );
-    },
-  );
 
   it("binds explicit bundled source selection before a built-preferred runtime loads", async () => {
     const { captureSystemAgentOwnerPluginArtifacts } =

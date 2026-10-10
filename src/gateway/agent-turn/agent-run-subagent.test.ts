@@ -50,6 +50,7 @@ function parameters(
 ): Parameters<typeof prepareGatewaySubagentRun>[0] {
   return {
     cfg: {},
+    activeSessionAgentId: "main",
     client: null,
     resolvedSessionKey: childSessionKey,
     request: { message: "Continue the child" },

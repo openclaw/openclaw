@@ -182,7 +182,7 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
       })
     : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
   assertCurrent();
-  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
+  const contextMessages = manager.buildSessionContext().messages;
   const leaf = manager.getLeafEntry();
   const history =
     !admission &&

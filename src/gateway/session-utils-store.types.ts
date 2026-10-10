@@ -1,3 +1,4 @@
+import type { SessionLifecycleTimestamps } from "../config/sessions/lifecycle.types.js";
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
@@ -19,6 +20,7 @@ export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
   readSource?: SessionEntryReadSource;
   capturedReadSource?: CapturedSessionEntryReadSource;
   capturedReadSources?: CapturedSessionEntryReadSource[];
+  lifecycleTimestamps?: SessionLifecycleTimestamps;
 };
 
 export type GatewaySessionStoreReadSources = Record<string, readonly SessionEntryReadSource[]>;

@@ -11,8 +11,6 @@ import {
 import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-// Imported CLI history merge helpers.
-// Deduplicates external history messages against local OpenClaw transcripts.
 import {
   enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
@@ -31,16 +29,6 @@ const INDEX_ORDINAL_BATCH_ROWS = 256;
 const INDEX_INSERT_BATCH_BYTES = 1024 * 1024;
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
-
-type ComparableHistoryMessage = {
-  externalIdentityKey?: string;
-  hasCliImageMentions: boolean;
-  cliImageTurnKey?: string;
-  role?: string;
-  text?: string;
-  driftNoteText?: string;
-  timestamp?: number;
-};
 
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
 // stored content intact; this normalized view is only for proving a redundant
@@ -61,14 +49,6 @@ function stripTrailingCliImageMentions(text: string): {
   return end === lines.length
     ? { text, stripped: false }
     : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
-}
-
-function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
-  if (role !== "user") {
-    return false;
-  }
-  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
 }
 
 function extractComparableText(
@@ -107,7 +87,9 @@ function extractComparableText(
   if (!joined) {
     return { hasCliImageMentions: false };
   }
-  const isClaudeImport = isClaudeCliImportedUserMessage(record, role);
+  const meta = asOptionalRecord(record["__openclaw"]);
+  const isClaudeImport =
+    role === "user" && normalizeOptionalString(meta?.importedFrom) === "claude-cli";
   const stripResult = isClaudeImport
     ? stripTrailingCliImageMentions(joined)
     : { text: joined, stripped: false };
@@ -123,7 +105,6 @@ function extractComparableText(
     withoutDriftNote !== rawText
       ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
       : undefined;
-  const meta = asOptionalRecord(record["__openclaw"]);
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
@@ -135,27 +116,11 @@ function extractComparableText(
   };
 }
 
-function prepareComparableMessage(
-  record: Record<string, unknown>,
-  externalIdentityKey: string | undefined,
-): ComparableHistoryMessage {
-  const role = readStringValue(record.role);
-  const comparableText = extractComparableText(record, role);
-  return {
-    externalIdentityKey,
-    hasCliImageMentions: comparableText.hasCliImageMentions,
-    ...(comparableText.cliImageTurnKey ? { cliImageTurnKey: comparableText.cliImageTurnKey } : {}),
-    role,
-    text: comparableText.text,
-    driftNoteText: comparableText.driftNoteText,
-    timestamp: asFiniteNumber(record.timestamp),
-  };
-}
-
 // External identity survives text edits, so it is the strongest match signal
 // for imported messages from Claude CLI or similar external histories.
-function resolveImportedExternalIdentityKey(message: unknown): string | undefined {
-  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+function resolveImportedExternalIdentityKey(
+  meta: Record<string, unknown> | undefined,
+): string | undefined {
   const externalId = normalizeOptionalString(meta?.externalId);
   return externalId
     ? JSON.stringify([
@@ -317,15 +282,9 @@ export class CliSessionHistoryIndex {
   private row(message: unknown, id: number, localSeq?: number): HistoryRow {
     const record = asOptionalRecord(message);
     const meta = asOptionalRecord(record?.["__openclaw"]);
-    const externalIdentityKey = resolveImportedExternalIdentityKey(message);
-    const comparable: ComparableHistoryMessage =
-      record?.role === "user" || record?.role === "assistant"
-        ? prepareComparableMessage(record, externalIdentityKey)
-        : {
-            hasCliImageMentions: false,
-            externalIdentityKey,
-            timestamp: asFiniteNumber(record?.timestamp),
-          };
+    const role = record?.role === "user" || record?.role === "assistant" ? record.role : undefined;
+    const comparable: ReturnType<typeof extractComparableText> =
+      record && role ? extractComparableText(record, role) : { hasCliImageMentions: false };
     const localImage =
       record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
     const entryId = normalizeOptionalString(meta?.id);
@@ -337,12 +296,12 @@ export class CliSessionHistoryIndex {
       message_id: entryId === undefined ? null : JSON.stringify(entryId),
       payload: localSeq === undefined ? serialized : null,
       bytes: Buffer.byteLength(serialized, "utf8"),
-      role: comparable.role ?? null,
+      role: role ?? null,
       text: comparable.text === undefined ? null : JSON.stringify(comparable.text),
       drift_text:
         comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
-      timestamp: comparable.timestamp ?? null,
-      external_key: comparable.externalIdentityKey ?? null,
+      timestamp: asFiniteNumber(record?.timestamp) ?? null,
+      external_key: resolveImportedExternalIdentityKey(meta) ?? null,
       image_key:
         localSeq === undefined
           ? (comparable.cliImageTurnKey ?? null)
@@ -602,7 +561,7 @@ export class CliSessionHistoryIndex {
             consume({
               id: duplicate.id,
               metadata: metadataChanged ? JSON.stringify(meta) : duplicate.metadata,
-              external_key: resolveImportedExternalIdentityKey({ __openclaw: meta }) ?? null,
+              external_key: resolveImportedExternalIdentityKey(meta) ?? null,
             });
             advance(imported, duplicate);
           } else {

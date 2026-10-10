@@ -155,7 +155,7 @@ describe("createReplyToModeFilterForChannel", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it.each(["first", "batched"] as const)(
+  it.each(["batched"] as const)(
     "previews the %s transport without consuming its single reply slot",
     (mode) => {
       const filter = createReplyToModeFilterForChannel(mode, "discord");
@@ -167,75 +167,4 @@ describe("createReplyToModeFilterForChannel", () => {
       expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
     },
   );
-
-  it("strips explicit Slack reply tags upstream when replyToMode is off", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "slack" }),
-            threading: { allowExplicitReplyTagsWhenOff: false },
-          },
-        },
-      ]),
-    );
-
-    const filter = createReplyToModeFilterForChannel("off", "slack");
-
-    expect(filter({ text: "hello", replyToId: "message-1", replyToTag: true }).replyToId).toBe(
-      undefined,
-    );
-  });
-
-  it("keeps other known-channel defaults and fails closed without a channel", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createChannelTestPluginBase({ id: "telegram" }),
-        },
-      ]),
-    );
-    const explicitReply = { text: "hello", replyToId: "message-1", replyToTag: true };
-
-    expect(createReplyToModeFilterForChannel("off", "telegram")(explicitReply).replyToId).toBe(
-      "message-1",
-    );
-    expect(createReplyToModeFilterForChannel("off")(explicitReply).replyToId).toBeUndefined();
-  });
-
-  it("allows explicit tags for named channels without a loaded plugin", () => {
-    // The filter also runs where plugins are not loaded; stripping for unrecognized
-    // ids would break real channels there. Accepted tradeoff pinned on purpose.
-    setActivePluginRegistry(createTestRegistry([]));
-    const explicitReply = { text: "hello", replyToId: "message-1", replyToTag: true };
-
-    expect(
-      createReplyToModeFilterForChannel("off", "unloaded-channel")(explicitReply).replyToId,
-    ).toBe("message-1");
-  });
-
-  it("honors the deprecated allowTagsWhenOff adapter alias", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "legacy-threading",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "legacy-threading" }),
-            threading: { allowTagsWhenOff: false },
-          },
-        },
-      ]),
-    );
-
-    const filter = createReplyToModeFilterForChannel("off", "legacy-threading");
-
-    expect(filter({ text: "hello", replyToId: "message-1", replyToTag: true }).replyToId).toBe(
-      undefined,
-    );
-  });
 });

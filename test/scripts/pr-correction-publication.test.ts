@@ -267,46 +267,34 @@ describePosix("correction publication authority handoff", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
   });
 
-  it("does not advance authority or start proof when the result writer fails", () => {
-    const f = fixture();
-    const result = runCorrection(f, {
-      setup: [
-        "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
-        "pr_git() {",
-        '  if [ "$*" = "hash-object --stdin" ]; then mkdir .local/prepare-push-result.env; fi',
-        '  fixture_git "$@"',
-        "}",
-      ],
-      command: [
-        "if prepare_push 4242; then exit 99; else status=$?; fi",
-        `test "$PREP_PUBLICATION_LEASE_SHA" = '${f.source}' || exit 98`,
-        'exit "$status"',
-      ].join("\n"),
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Is a directory");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    expectIncomplete(f);
-  });
-
-  it("rejects a replaced result instead of admitting whatever the writer path contains", () => {
-    const f = fixture();
-    const result = runCorrection(f, {
-      setup: [
-        "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
-        "pr_git() {",
-        '  if [ "$*" = "hash-object --no-filters -- .local/prepare-push-result.env" ]; then',
-        '    printf "\\n" >> .local/prepare-push-result.env',
-        "  fi",
-        '  fixture_git "$@"',
-        "}",
-      ],
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Correction review authority changed");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    expectIncomplete(f);
-  });
+  it.each(["writer failure", "replaced result"])(
+    "does not advance authority or start proof after %s",
+    (fault) => {
+      const f = fixture();
+      const result = runCorrection(f, {
+        setup: [
+          "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
+          "pr_git() {",
+          fault === "writer failure"
+            ? '  if [ "$*" = "hash-object --stdin" ]; then mkdir .local/prepare-push-result.env; fi'
+            : '  if [ "$*" = "hash-object --no-filters -- .local/prepare-push-result.env" ]; then printf "\\n" >> .local/prepare-push-result.env; fi',
+          '  fixture_git "$@"',
+          "}",
+        ],
+        command: [
+          "if prepare_push 4242; then exit 99; else status=$?; fi",
+          `test "$PREP_PUBLICATION_LEASE_SHA" = '${f.source}' || exit 98`,
+          'exit "$status"',
+        ].join("\n"),
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        fault === "writer failure" ? "Is a directory" : "Correction review authority changed",
+      );
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
+      expectIncomplete(f);
+    },
+  );
 
   it("preserves an exact no-op receipt and advances stale process-local authority", () => {
     const f = fixture();

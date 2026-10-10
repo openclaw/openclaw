@@ -124,7 +124,7 @@ struct ChatSessionSidebar: View {
             VStack(spacing: 0) {
                 self.batchBar
                 self.archiveUndoNotice
-                self.connectionFooter
+                self.identityFooter(now: now)
             }
             .background(.bar)
         }

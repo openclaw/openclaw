@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  captureSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "../infra/sqlite-database-admission.js";
+import {
   createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 
@@ -13,11 +17,27 @@ const chmodFailHook = vi.hoisted(() => ({
   calls: [] as unknown[],
   removeTarget: undefined as string | undefined,
 }));
-const workerAdmission = vi.hoisted(() => vi.fn<(request: SqliteWorkerAdmissionRequest) => void>());
+const workerAdmission = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../infra/sqlite-worker-operation-admission.js").requestSqliteWorkerOperationAdmission
+  >(),
+);
 
 vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-worker-operation-admission.js")>()),
-  requestSqliteWorkerOperationAdmission: workerAdmission,
+  requestSqliteWorkerOperationAdmission: (...args: Parameters<typeof workerAdmission>) => {
+    const [request] = args;
+    const facts = request.facts;
+    if (
+      facts &&
+      typeof facts === "object" &&
+      "validationPort" in facts &&
+      facts.validationPort instanceof MessagePort
+    ) {
+      facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+    }
+    workerAdmission(...args);
+  },
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -32,8 +52,7 @@ vi.mock("node:fs", async (importOriginal) => {
     }
     return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
   }) as typeof actual.chmodSync;
-  const statSync = vi.fn(actual.statSync);
-  return { ...actual, chmodSync, statSync, default: { ...actual, chmodSync, statSync } };
+  return { ...actual, chmodSync, default: { ...actual, chmodSync } };
 });
 
 const {
@@ -45,7 +64,6 @@ const { openExistingSqliteWorkerBackend } = await import("./openclaw-agent-execu
 const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
   await import("./openclaw-state-db.js");
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
-const mockedFs = await import("node:fs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const backends = new Set<ReturnType<typeof openExistingSqliteWorkerBackend>>();
 
@@ -54,7 +72,6 @@ describe("agent database permission repair", () => {
     chmodFailHook.error = undefined;
     chmodFailHook.calls = [];
     chmodFailHook.removeTarget = undefined;
-    vi.mocked(mockedFs.statSync).mockReset().mockImplementation(fs.statSync);
     workerAdmission.mockReset();
     await Promise.all([...backends].map((backend) => Promise.resolve(backend.close())));
     backends.clear();
@@ -92,7 +109,11 @@ describe("agent database permission repair", () => {
         });
         try {
           return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            backend.execute(command),
+            // This fixture runs both owners in one isolate; a port round trip would deadlock.
+            withSqliteDatabaseAdmissionExchange(
+              () => captureSqliteDatabaseAdmissions(),
+              () => backend.execute(command),
+            ),
           );
         } finally {
           admission.finish();
@@ -240,27 +261,6 @@ describe("agent database permission repair", () => {
       expect(chmodFailHook.calls.filter((target) => targets.has(String(target)))).toEqual([]);
     },
   );
-
-  it.runIf(process.platform !== "win32")("rolls back when the fresh mode cannot be read", () => {
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-stat-") },
-    };
-    const database = openOpenClawAgentDatabase(options);
-    const read = () => database.db.prepare("SELECT updated_at FROM schema_meta").get();
-    const before = read();
-    const error = Object.assign(new Error("EACCES: stat failed"), { code: "EACCES" });
-
-    expect(() =>
-      runOpenClawAgentWriteTransaction(({ db }) => {
-        db.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
-        vi.mocked(mockedFs.statSync).mockImplementationOnce(() => {
-          throw error;
-        });
-      }, options),
-    ).toThrow(error);
-    expect(read()).toEqual(before);
-  });
 
   it("commits when a transient sidecar disappears during permission repair", () => {
     const options = {

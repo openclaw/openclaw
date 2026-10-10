@@ -6,17 +6,32 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "userProfiles.catalogIdentity") {
+    return { ...command, input: structuredClone(command.input) };
+  }
+  if (command.type === "meetingTranscripts.export") {
+    return structuredClone(command);
+  }
   if (
+    command.type === "localWorkspace.get" ||
+    command.type === "localWorkspace.exists" ||
+    command.type === "pairing.allowFrom" ||
     command.type === "secrets.metadata" ||
     command.type === "secrets.execEnvironment" ||
     command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
+    command.type === "sessionUpstream.read" ||
+    command.type === "operatorApprovals.placementGrant" ||
     command.type === "operatorApprovals.history" ||
     command.type === "diagnostic.latest" ||
+    command.type === "diagnostic.configAuditFacts" ||
     command.type === "operatorApprovals.listCronGrants" ||
+    command.type === "operatorApprovals.validateCronGrant" ||
     command.type === "acpSessions.metadata" ||
+    command.type === "sessionRows.sharedFacts" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
     command.type === "workers.placementProjection"
@@ -208,20 +223,29 @@ function stringBytes(values: readonly (string | undefined)[]): number {
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
+  if (command.type === "userProfiles.catalogIdentity") {
+    return Buffer.byteLength(command.type) + Buffer.byteLength(JSON.stringify(command.input));
+  }
   if (
+    command.type === "pairing.allowFrom" ||
     command.type === "secrets.execEnvironment" ||
     command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
+    command.type === "sessionUpstream.read" ||
     command.type === "workers.placementProjection" ||
     command.type === "workers.placementPendingResults" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
     isWorkspaceJournalReadCommand(command)
   ) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   let bytes = Buffer.byteLength(command.type, "utf8");
-  if (command.type === "diagnostic.latest") {
+  if (command.type === "generatedHtmlProvenance.read") {
+    return bytes + Buffer.byteLength(command.input, "utf8");
+  }
+  if (command.type === "diagnostic.latest" || command.type === "diagnostic.configAuditFacts") {
     return bytes + Buffer.byteLength(command.input.scope, "utf8") + 16;
   }
   if (command.type === "cron.activeReceiptOwners") {
@@ -233,25 +257,32 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "workerPlacements.changeSnapshot") {
     return bytes + stringBytes(command.profileIds ?? []);
   }
+  if (command.type === "workers.placementEnvironmentOwner") {
+    return bytes + Buffer.byteLength(command.environmentId, "utf8");
+  }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
   }
   if (isChannelIngressReadCommand(command)) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
   }
+  if (command.type === "acpSessions.resume") {
+    return (
+      bytes +
+      stringBytes([command.agentId, command.backendId, command.resumeSessionId, command.sessionKey])
+    );
+  }
   if (command.type === "acpSessions.metadata") {
     return command.entries.reduce(
       (total, input) =>
         total +
-        stringBytes([
-          ...input.keys,
-          input.legacyKey,
-          input.entry?.lifecycleRevision,
-          input.entry?.sessionId,
-        ]) +
+        stringBytes([...input.keys, input.entry?.lifecycleRevision, input.entry?.sessionId]) +
         (input.entry?.sessionStartedAt === undefined ? 0 : 8),
       bytes,
     );
+  }
+  if (command.type === "sessionRows.sharedFacts") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.entries), "utf8");
   }
   if (command.type === "capture.readOnlyEvents") {
     return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
@@ -277,10 +308,16 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return bytes + Buffer.byteLength(command.purpose, "utf8");
   }
-  if (
-    command.type === "agentDeletionJournal.status" ||
-    command.type === "agentDeletionJournal.authority"
-  ) {
+  if (command.type === "agentLifecycle.read") {
+    return bytes + Buffer.byteLength(command.input, "utf8");
+  }
+  if (command.type === "agentRecovery.creationJournal") {
+    return bytes + Buffer.byteLength(command.input.agentId, "utf8");
+  }
+  if (command.type === "agentRecovery.holds") {
+    return bytes + Buffer.byteLength(command.input.statePath, "utf8");
+  }
+  if (command.type === "agentDeletionJournal.status") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {
@@ -367,6 +404,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
+  if (
+    command.type === "operatorApprovals.validateCronGrant" ||
+    command.type === "operatorApprovals.placementGrant"
+  ) {
+    return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
+  }
   if (command.type === "operatorApprovals.listCronGrants") {
     return bytes + 8;
   }
@@ -399,6 +442,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "subagents.forChildSession") {
     return bytes + Buffer.byteLength(command.childSessionKey, "utf8");
+  }
+  if (command.type === "localWorkspace.get" || command.type === "localWorkspace.exists") {
+    return bytes + Buffer.byteLength(command.input.id, "utf8");
   }
   if (command.type === "sandboxRegistry.get") {
     return bytes + Buffer.byteLength(command.containerName, "utf8");
@@ -439,11 +485,25 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes,
     );
   }
-  if (command.type === "fleet.get") {
-    return bytes + Buffer.byteLength(command.tenantId, "utf8");
-  }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
+  }
+  if (
+    command.type === "userModelAccounts.summary" ||
+    command.type === "userModelAccounts.selection"
+  ) {
+    return bytes + stringBytes([command.profileId, command.authProfileId]);
+  }
+  if (command.type === "userModelAccounts.catalog") {
+    return (
+      bytes +
+      Buffer.byteLength(
+        "profileId" in command.selection
+          ? command.selection.profileId
+          : command.selection.requesterProfileId,
+        "utf8",
+      )
+    );
   }
   if (
     command.type === "userModelAccounts.links" ||
@@ -462,7 +522,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+    return (
+      bytes +
+      ("login" in command
+        ? Buffer.byteLength(command.login, "utf8")
+        : Buffer.byteLength(command.email, "utf8") + 8)
+    );
   }
   if (
     command.type === "userProfiles.githubAttribution.resolve" ||
@@ -510,6 +575,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "workerEnvironments.snapshot") {
     return bytes + stringBytes(command.ids ?? []);
+  }
+  if (command.type === "meetingTranscripts.export") {
+    return bytes + Buffer.byteLength(JSON.stringify(command));
   }
   return bytes;
 }

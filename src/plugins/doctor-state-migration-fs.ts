@@ -29,7 +29,7 @@ export async function archiveLegacyStateSource(params: {
   const archiveBase = params.archiveDirectory
     ? path.join(params.archiveDirectory, path.basename(params.filePath))
     : params.filePath;
-  const archivedPath = `${archiveBase}.migrated`;
+  let archivedPath = `${archiveBase}.migrated`;
   try {
     if (params.archiveDirectory) {
       if ((await fs.lstat(params.filePath)).isSymbolicLink()) {
@@ -52,23 +52,16 @@ export async function archiveLegacyStateSource(params: {
         );
         return;
       }
-      const nextArchivePath = await firstFreeArchivePath(archiveBase);
-      await fs.rename(params.filePath, nextArchivePath);
-      params.changes.push(`Archived ${params.label} legacy source -> ${nextArchivePath}`);
-      return;
+      for (let index = 2; ; index++) {
+        archivedPath = `${archiveBase}.migrated.${index}`;
+        if (!(await legacyStateFileExists(archivedPath))) {
+          break;
+        }
+      }
     }
     await fs.rename(params.filePath, archivedPath);
     params.changes.push(`Archived ${params.label} legacy source -> ${archivedPath}`);
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
-  }
-}
-
-async function firstFreeArchivePath(sourcePath: string): Promise<string> {
-  for (let index = 2; ; index++) {
-    const candidate = `${sourcePath}.migrated.${index}`;
-    if (!(await legacyStateFileExists(candidate))) {
-      return candidate;
-    }
   }
 }

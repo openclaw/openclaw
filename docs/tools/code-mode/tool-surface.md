@@ -20,8 +20,12 @@ and structured transforms. Use `wait` only when `exec` returns a resumable
 
 ## `exec`
 
-`exec` starts a code-mode cell and returns one result. Input code is model
-generated and must be treated as hostile.
+`exec` starts a code-mode cell in a fresh JavaScript context and returns one
+result. Variables, functions, and imports never carry over between cells.
+`await store(key, value)` and `await load(key)` keep small JSON values across
+cells and turns in the same session, including restarts. See the
+[session store](/tools/code-mode/guest-api#session-store) for limits and commit
+rules. Input code is model generated and must be treated as hostile.
 
 Model-facing input:
 
@@ -30,7 +34,7 @@ type CodeModeExecInput = {
   title: string;
   code: string;
   restartSafe?: boolean;
-  required?: boolean;
+  awaitResults?: boolean;
 };
 ```
 
@@ -50,6 +54,8 @@ Rules:
 - Write plain JavaScript. TypeScript annotations, interfaces, and other
   TypeScript-only syntax are not accepted. Tool signatures and `API.read`
   declarations remain available as documentation for composing calls.
+- `API.read(path)` returns `{ path, description, content, bytes }`, not a string.
+  Use `(await API.read(path)).content` for the declaration text.
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.
@@ -64,7 +70,8 @@ Rules:
   [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
   turn from its transcript instead of restoring the process-local continuation.
   Recovery remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools. Leave the field omitted for ordinary calls.
+  replay-safe plugin tools. `store` and `load` are unavailable in `restartSafe`
+  cells. Leave the field omitted for ordinary calls.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.
@@ -81,6 +88,7 @@ type CodeModeResult = CodeModeCompletedResult | CodeModeWaitingResult | CodeMode
 type CodeModeCompletedResult = {
   status: "completed";
   value: unknown;
+  warnings?: string[];
   output?: CodeModeOutput[];
   telemetry: CodeModeTelemetry;
 };
@@ -139,14 +147,14 @@ as text rather than becoming Markdown links.
 
 ### Required results
 
-Use `required: true` when this program’s results are required to finish the
+Use `awaitResults: true` when this program’s results are required to finish the
 current task. The existing cell owner keeps the tool call open while the VM is
 parked, then resumes that exact continuation when pending tool results settle.
 It does not return a `waiting` handle or make model polling calls. Completed
 actions are not replayed. Failure, Stop, owner replacement, and existing run
 and tool deadlines still end the operation.
 
-`required` pauses only off-VM tool waiting. Preparation, guest execution,
+`awaitResults` pauses only off-VM tool waiting. Preparation, guest execution,
 checkpointing, and restoration share the original execution allowance; each
 settlement does **not** grant a fresh allowance. Output, memory, pending-call,
 and active-cell limits are unchanged. `yield_control` cannot abandon an
@@ -155,12 +163,12 @@ Ordinary cells retain their existing explicit-yield behavior.
 
 Required cells collect ordinary shell commands to completion. Explicit
 `background: true` remains the opt-out for intentionally detached servers.
-A shell `exec({required: true, ...})` or `agents_wait({required: true, ...})`
+A shell `exec({awaitResults: true, ...})` or `agents_wait({awaitResults: true, ...})`
 inside an ordinary cell also makes that cell required. These declarations do
 not enable `tools.exec.notifyOnExit`.
 
 For required collector results, await `agents.run(...)` in a required cell,
-or call `agents_wait({ids, required: true})`. Ordinary announcing children
+or call `agents_wait({ids, awaitResults: true})`. Ordinary announcing children
 still use their existing `sessions_yield` handoff. An accepted background
 handle is not a terminal result: this feature does not infer obligations from
 plan text or silently turn every asynchronous service into required work.
@@ -319,7 +327,8 @@ Inside the guest runtime:
 - JavaScript reserved words, specialized globals, and normalized collisions
   receive a deterministic short suffix derived from the host-only identity.
 - Exact safe names win their unsuffixed spelling. A raw tool never overwrites
-  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, output/timer helpers,
+  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, `results`, `store`,
+  `load`, output/timer helpers,
   or optional Swarm globals.
 - The normal shell `exec` tool is callable as the `exec(...)` guest global when
   policy allows it. The code-mode control `exec` is not recursively available

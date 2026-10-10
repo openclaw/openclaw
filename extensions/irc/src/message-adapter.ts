@@ -1,4 +1,3 @@
-// Irc plugin module implements message adapter behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import {
   createReplyToFanout,

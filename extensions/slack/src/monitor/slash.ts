@@ -11,7 +11,13 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
   formatCommandArgMenuTitle,
+  listNativeCommandSpecsForConfig,
+  listSkillCommandsForAgents,
+  parseCommandArgs,
+  resolveCommandArgMenu,
   resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   type CommandArgs,
@@ -55,7 +61,7 @@ import {
 } from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
-import { resolveSlackListenerEventScope } from "./event-scope.js";
+import { resolveSlackMonitorEventScope } from "./event-scope.js";
 import {
   createSlackExternalArgMenuStore,
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
@@ -97,10 +103,6 @@ type SlackArgActionHandlerArgs = Omit<SlackActionMiddlewareArgs<BlockAction>, "r
   };
 type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
-
-const loadSlashCommandsRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/command-auth-native"),
-);
 
 const loadSlashDispatchRuntime = createLazyRuntimeModule(
   () => import("./slash-dispatch.runtime.js"),
@@ -532,7 +534,7 @@ export function createSlackCommandHandler(params: {
         if (p.threadTs) {
           if (p.sessionTarget) {
             resolvedSlashRoute = p.sessionTarget;
-            isCurrentSession = captureSlackSessionTargetGuard(
+            isCurrentSession = await captureSlackSessionTargetGuard(
               ctx,
               p.sessionTarget,
               p.isSessionTargetCurrent,
@@ -573,7 +575,6 @@ export function createSlackCommandHandler(params: {
       };
 
       if (commandDefinition && supportsInteractiveArgMenus) {
-        const { resolveCommandArgMenu } = await loadSlashCommandsRuntime();
         const menuNeedsModelContext =
           !(commandArgs?.raw && !commandArgs.values) &&
           commandDefinition.args?.some(
@@ -783,16 +784,14 @@ export function createSlackCommandHandler(params: {
               return;
             }
             const pending = pendingSlashReplies.splice(0);
-            const settled = new Set<number>();
             try {
               await deliverSlashPayloads(
                 pending.map((entry) => entry.payload),
                 ({ replyIndex, visibleReplySent, error }) => {
                   const entry = pending[replyIndex];
-                  if (!entry || settled.has(replyIndex)) {
+                  if (!entry) {
                     return;
                   }
-                  settled.add(replyIndex);
                   if (error !== undefined) {
                     entry.finalization.reject(error);
                     return;
@@ -804,10 +803,9 @@ export function createSlackCommandHandler(params: {
               const unsettledError = isChannelPartialDeliveryError(error)
                 ? (error.cause ?? error)
                 : error;
-              for (const [replyIndex, entry] of pending.entries()) {
-                if (!settled.has(replyIndex)) {
-                  entry.finalization.reject(unsettledError);
-                }
+              // Settled promises retain their outcome; reject the undispatched tail too.
+              for (const entry of pending) {
+                entry.finalization.reject(unsettledError);
               }
               throw error;
             }
@@ -865,20 +863,14 @@ export async function registerSlackMonitorSlashCommands(params: {
   const { ctx, account, trackEvent } = params;
   const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) =>
-    resolveSlackListenerEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
+  const resolveEventScope = (
+    args: { body: unknown } & Pick<AllMiddlewareArgs, "context" | "client">,
+  ) =>
+    resolveSlackMonitorEventScope({
+      ...args,
+      ctx,
       onDrop: (reason) => runtime.log?.(`slack: drop slash payload (${reason})`),
     });
-
   const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
   let supportsExternalArgMenus = typeof ctx.app.options === "function";
 
@@ -932,7 +924,6 @@ export async function registerSlackMonitorSlashCommands(params: {
   };
 
   let nativeCommands: SlackNativeCommandSpec[] = [];
-  let slashCommandsRuntime: typeof import("openclaw/plugin-sdk/command-auth-native") | null = null;
   let pluginCommandRuntimeModule:
     | typeof import("openclaw/plugin-sdk/plugin-command-runtime")
     | null = null;
@@ -944,15 +935,14 @@ export async function registerSlackMonitorSlashCommands(params: {
       globalSetting: startupCfg.commands?.native,
     })
   ) {
-    slashCommandsRuntime = await loadSlashCommandsRuntime();
     const skillCommands = resolveNativeSkillsEnabled({
       providerId: "slack",
       providerSetting: account.config.commands?.nativeSkills,
       globalSetting: startupCfg.commands?.nativeSkills,
     })
-      ? slashCommandsRuntime.listSkillCommandsForAgents({ cfg: startupCfg })
+      ? listSkillCommandsForAgents({ cfg: startupCfg })
       : [];
-    nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(startupCfg, {
+    nativeCommands = listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,
       provider: "slack",
     });
@@ -968,7 +958,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   if (registration.mode === "single") {
     registerCommand(buildSlackSlashCommandMatcher(registration.name));
   } else if (registration.mode === "native") {
-    if (!slashCommandsRuntime || !pluginCommandRuntimeModule) {
+    if (!pluginCommandRuntimeModule) {
       throw new Error("Missing command runtimes for native Slack commands.");
     }
     for (const command of nativeCommands) {
@@ -976,17 +966,17 @@ export async function registerSlackMonitorSlashCommands(params: {
       registerCommand(`/${command.name}`, (cmd) => {
         const commandDefinition = pluginCommandCandidate
           ? undefined
-          : slashCommandsRuntime.findCommandByNativeName(command.name, "slack");
+          : findCommandByNativeName(command.name, "slack");
         const rawText = cmd.text?.trim() ?? "";
         const pluginCommandDispatch =
           pluginCommandCandidate?.prepareDispatch(rawText) ?? NON_PLUGIN_COMMAND_DISPATCH;
         const commandArgs = commandDefinition
-          ? slashCommandsRuntime.parseCommandArgs(commandDefinition, rawText)
+          ? parseCommandArgs(commandDefinition, rawText)
           : rawText
             ? ({ raw: rawText } satisfies CommandArgs)
             : undefined;
         const prompt = commandDefinition
-          ? slashCommandsRuntime.buildCommandTextFromArgs(commandDefinition, commandArgs)
+          ? buildCommandTextFromArgs(commandDefinition, commandArgs)
           : rawText
             ? `/${command.name} ${rawText}`
             : `/${command.name}`;
@@ -1119,7 +1109,6 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
       return;
     }
-    const { buildCommandTextFromArgs, findCommandByNativeName } = await loadSlashCommandsRuntime();
     const commandDefinition = findCommandByNativeName(parsed.command, "slack");
     const commandArgs: CommandArgs = {
       values: { [parsed.arg]: parsed.value },

@@ -16,10 +16,7 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
-import {
-  fetchNpmPackageTargetStatus,
-  type NpmMetadataCommandRunner,
-} from "./update-check-package-target.js";
+import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
   readGitReceiptFetchTarget,
   readGitBranchFetchTarget,
@@ -474,11 +471,32 @@ async function checkGitUpdateStatus(params: {
     upstreamCommit = null;
   }
 
-  const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
-  const counts =
-    sha && upstreamCommit && mergeBase
+  const mergeBases =
+    sha && upstreamCommit ? await readGit("merge-base", "--all", sha, upstreamCommit) : null;
+  let counts =
+    sha && upstreamCommit && mergeBases
       ? await readGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
       : null;
+  if (counts && mergeBases && (await readGit("rev-parse", "--is-shallow-repository")) !== "false") {
+    // A shallow common ancestor can hide commits exposed by another merge parent.
+    // Exact counts require every exclusive commit to descend from every visible
+    // merge base. Hidden ancestry is then common and cannot change the difference.
+    for (const mergeBase of mergeBases.split("\n")) {
+      // Use the argument-free form for compatibility with Git before 2.38.
+      const ancestryCounts = await Promise.all(
+        [
+          [sha, upstreamCommit],
+          [upstreamCommit, sha],
+        ].map(([tip, opposite]) =>
+          readGit("rev-list", "--count", "--ancestry-path", `${mergeBase}..${tip}`, `^${opposite}`),
+        ),
+      );
+      if (ancestryCounts.join("\t") !== counts) {
+        counts = null;
+        break;
+      }
+    }
+  }
 
   const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
 
@@ -530,42 +548,23 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const paths = { manager, lockfilePath, markerPath };
   const lockExists = await exists(lockfilePath);
   const markerExists = await exists(markerPath);
-  if (!lockExists) {
-    return {
-      ...paths,
-      status: "unknown",
-      reason: "lockfile missing",
-    };
-  }
-  if (!markerExists) {
-    return {
-      ...paths,
-      status: "missing",
-      reason: "node_modules marker missing",
-    };
-  }
-
   return {
-    ...paths,
-    status: "ok",
+    manager,
+    lockfilePath,
+    markerPath,
+    ...(!lockExists
+      ? { status: "unknown" as const, reason: "lockfile missing" }
+      : !markerExists
+        ? { status: "missing" as const, reason: "node_modules marker missing" }
+        : { status: "ok" as const }),
   };
 }
 
-export async function fetchNpmTagVersion(params: {
-  tag: string;
-  registryUrl?: string;
-  packageName?: string;
-  timeoutMs?: number;
-  spec?: string;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-  signal?: AbortSignal;
-}): Promise<NpmTagStatus> {
+export async function fetchNpmTagVersion(
+  params: Omit<Parameters<typeof fetchNpmPackageTargetStatus>[0], "target"> & { tag: string },
+): Promise<NpmTagStatus> {
   const { tag, ...options } = params;
   const res = await fetchNpmPackageTargetStatus({
     ...options,
@@ -579,17 +578,11 @@ export async function fetchNpmTagVersion(params: {
   };
 }
 
-export async function resolveNpmChannelTag(params: {
-  channel: UpdateChannel;
-  registryUrl?: string;
-  packageName?: string;
-  timeoutMs?: number;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-  signal?: AbortSignal;
-}): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
+export async function resolveNpmChannelTag(
+  params: Omit<Parameters<typeof fetchNpmTagVersion>[0], "tag" | "spec"> & {
+    channel: UpdateChannel;
+  },
+): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const { channel, ...options } = params;
   const channelTag = channelToNpmTag(channel);
   if (channel === "extended-stable") {

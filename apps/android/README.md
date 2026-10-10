@@ -17,7 +17,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - SMS is available only in third-party builds on supported telephony devices. Setup distinguishes partial read/send access. Android Settings can recover user denial, but installer or device-policy restrictions may leave SMS unavailable; OpenClaw cannot override them. Returning from Settings rereads the actual grants without restarting Gateway setup.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
-- Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
+- Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
 ## Open in Android Studio
@@ -27,6 +27,14 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 Gradle sync generates the native localization lookup and resources before IDE
 indexing. Use the repository's supported Node.js version on your PATH, as for
 the build commands below; no separate localization generation step is required.
+
+## Tool icons
+
+Chat tool activity uses the shared tool display icons with native Android glyphs.
+Command, read, edit, write, search, and fetch rows take precedence over the tool's
+configured icon; unknown tools use a puzzle piece. Tool Search calls use the
+called tool's icon. Failed rows retain their error mark, and progress cards keep
+their receipt presentation.
 
 ## Session colors
 

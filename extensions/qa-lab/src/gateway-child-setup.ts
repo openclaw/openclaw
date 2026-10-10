@@ -173,7 +173,10 @@ export async function prepareQaGatewayChild(
   lifetime: QaGatewayChildLifecycle,
 ) {
   const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
-  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  lifetime.tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  // Store discovery returns physical paths; macOS /tmp aliases must not split
+  // the fixture's configured roots from their captured database custody.
+  const tempRoot = await fs.realpath(lifetime.tempRoot);
   lifetime.tempRoot = tempRoot;
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
@@ -438,6 +441,10 @@ export async function prepareQaGatewayChild(
           encoding: "utf8",
           mode: 0o600,
         });
+        // Bootstrap commands must inspect this child's port without our placeholder listener.
+        env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+        await lifetime.portReservation?.release();
+        lifetime.portReservation = null;
         const mockAuthProviders = resolvedProvider.mockAuthProviders;
         if (
           usesPackagedCandidate &&
@@ -468,14 +475,6 @@ export async function prepareQaGatewayChild(
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");
       }
-      // Child-owned CLI commands must resolve the same ephemeral Gateway as the
-      // fixture process. Otherwise commands without their own connection flags
-      // can silently fall back to the operator's ambient local Gateway.
-      env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-
-      // Packaged repair must inspect the configured port without our placeholder listener.
-      await lifetime.portReservation?.release();
-      lifetime.portReservation = null;
       // Auth staging opens parent-owned agent stores. Release this fixture's
       // leases before packaged repair or Gateway startup takes maintenance ownership.
       await closeQaRuntimeStores(tempRoot);

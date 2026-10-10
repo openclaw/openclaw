@@ -10,7 +10,6 @@ import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
-import type { FailoverReason } from "../agents/failover/signal.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
   detectInferenceBackends,
@@ -353,7 +352,13 @@ export function resolveCandidatePresentation(
       entry.choiceId === candidate.kind ||
       entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
-  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
+  // Built-in CLI detection kinds are runtime identities, not display brands.
+  const brandId =
+    candidate.kind === "claude-cli"
+      ? "claude"
+      : candidate.kind === "codex-cli"
+        ? "openai"
+        : choice?.providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
   return {
     ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),
@@ -369,12 +374,6 @@ export function resolveSetupInferenceWorkspace(
   return resolveUserPath(
     config?.agents?.defaults?.workspace?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
   );
-}
-
-function mapFailoverReasonToSetupStatus(
-  reason?: FailoverReason | null,
-): SetupInferenceFailureStatus {
-  return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
 }
 
 export function describeSetupInferenceError(
@@ -396,7 +395,10 @@ export function describeSetupInferenceError(
           : undefined;
   return connectionError
     ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
-    : { status: mapFailoverReasonToSetupStatus(described.reason), error: described.message };
+    : {
+        status: described.reason ? SETUP_STATUS_BY_FAILOVER_REASON[described.reason] : "unknown",
+        error: described.message,
+      };
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {
@@ -460,20 +462,6 @@ export function validateSetupInferenceOwnerEvidence(params: {
     }
   }
   return undefined;
-}
-
-function resolveSetupInferenceCandidateBrandId(
-  candidate: { kind: string; modelRef: string },
-  providerId?: string,
-): string | undefined {
-  // Built-in CLI detection kinds are runtime identities, not display brands.
-  if (candidate.kind === "claude-cli") {
-    return "claude";
-  }
-  if (candidate.kind === "codex-cli") {
-    return "openai";
-  }
-  return providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */

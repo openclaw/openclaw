@@ -36,8 +36,11 @@ final class ComputerScreenActionExecutor {
     private let textGraphemePoster: TextGraphemePoster
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
-    private var leftButtonDown = false
     private var heldButtonScopeId: UUID?
+    private var leftButtonDown: Bool {
+        self.heldButtonScopeId != nil
+    }
+
     private let defaultInputScopeId = UUID()
     /// Bounded watchdog that releases a stuck left button if the matching
     /// left_mouse_up never arrives (arm expiry, disconnect, or a failed turn).
@@ -122,7 +125,7 @@ final class ComputerScreenActionExecutor {
                 try await self.automation.click(
                     target: .coordinates(point), clickType: params.action.peekabooClickType, snapshotId: nil)
             } else {
-                let button: ComputerMouseButton = params.action == .middleClick ? .middle :
+                let button: CGMouseButton = params.action == .middleClick ? .center :
                     params.action == .rightClick ? .right : .left
                 let count = params.action == .tripleClick ? 3 : params.action == .doubleClick ? 2 : 1
                 try self.rawClick(at: point, button: button, count: count, flags: modifiers)
@@ -344,7 +347,6 @@ final class ComputerScreenActionExecutor {
     private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = [], inputScopeId: UUID? = nil) {
         self.buttonReleaseTask?.cancel()
         self.buttonReleaseTask = nil
-        self.leftButtonDown = down
         self.heldButtonScopeId = down ? inputScopeId ?? self.defaultInputScopeId : nil
         self.heldButtonFlags = down ? flags : []
         guard down else { return }
@@ -520,21 +522,24 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Raw CoreGraphics primitives
 
-    private func rawClick(at point: CGPoint, button: ComputerMouseButton, count: Int, flags: CGEventFlags) throws {
+    private func rawClick(at point: CGPoint, button: CGMouseButton, count: Int, flags: CGEventFlags) throws {
+        let downType: CGEventType = button == .center ? .otherMouseDown : button == .right ? .rightMouseDown :
+            .leftMouseDown
+        let upType: CGEventType = button == .center ? .otherMouseUp : button == .right ? .rightMouseUp : .leftMouseUp
         // Build every down/up pair before posting the first down. Event creation
         // failure can then never strand a button between a successfully created
         // down and a missing up.
         let pairs = try (1...max(1, count)).map { click in
             let down = try self.mouseEventFactory(
-                button.downType,
+                downType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             let up = try self.mouseEventFactory(
-                button.upType,
+                upType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             return (down: down, up: up)
@@ -699,61 +704,36 @@ extension OpenClawComputerScrollDirection {
     }
 }
 
-/// Mouse button plus the CoreGraphics event types for the raw click path.
-private enum ComputerMouseButton {
-    case left
-    case right
-    case middle
-
-    var cgButton: CGMouseButton {
-        switch self {
-        case .left: .left
-        case .right: .right
-        case .middle: .center
-        }
-    }
-
-    var downType: CGEventType {
-        switch self {
-        case .left: .leftMouseDown
-        case .right: .rightMouseDown
-        case .middle: .otherMouseDown
-        }
-    }
-
-    var upType: CGEventType {
-        switch self {
-        case .left: .leftMouseUp
-        case .right: .rightMouseUp
-        case .middle: .otherMouseUp
-        }
-    }
-}
-
 /// Parses a portable modifier string ("shift", "cmd+alt") into CGEvent flags.
 enum ComputerModifiers {
-    static func parse(_ raw: String?) throws -> CGEventFlags {
+    enum Syntax {
+        case screen
+        case window
+    }
+
+    static func parse(_ raw: String?, syntax: Syntax = .screen) throws -> CGEventFlags {
         guard let raw, !raw.isEmpty else { return [] }
+        let source = syntax == .window ? raw.lowercased() : raw
         var flags: CGEventFlags = []
-        for piece in raw.split(whereSeparator: { $0 == "+" || $0 == "," || $0 == " " }) {
+        for piece in source.split(whereSeparator: {
+            $0 == "+" || $0 == "," || (syntax == .window ? $0.isWhitespace : $0 == " ")
+        }) {
             let key = piece.lowercased()
-            switch key {
-            case "cmd", "command", "meta", "super", "win", "windows":
-                flags.insert(.maskCommand)
-            case "shift":
-                flags.insert(.maskShift)
-            case "ctrl", "control":
-                flags.insert(.maskControl)
-            case "alt", "opt", "option":
-                flags.insert(.maskAlternate)
-            case "fn", "function":
-                flags.insert(.maskSecondaryFn)
-            default:
-                // A typo like "shfit" would otherwise silently drop the modifier
-                // and perform a materially different high-risk gesture (a plain
-                // click instead of a modifier-click); reject it instead.
-                throw ComputerActionService.ComputerActionError.invalidModifier(key)
+            let flag: CGEventFlags? = switch key {
+            case "cmd", "command", "meta", "super", "win", "windows": .maskCommand
+            case "shift": .maskShift
+            case "ctrl", "control": .maskControl
+            case "alt", "opt", "option": .maskAlternate
+            case "fn", "function": .maskSecondaryFn
+            default: nil
             }
+            // Unknown modifiers must not become an unmodified gesture.
+            guard let flag, syntax == .screen || !["super", "win", "windows", "opt"].contains(key) else {
+                throw syntax == .screen
+                    ? ComputerActionService.ComputerActionError.invalidModifier(key)
+                    : ComputerActionService.ComputerActionError.invalidRequest("unsupported modifier '\(key)'")
+            }
+            flags.formUnion(flag)
         }
         return flags
     }

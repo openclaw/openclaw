@@ -1,4 +1,5 @@
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import type {
   ClawAppliedExtension,
   ClawPackageKind,
@@ -28,25 +29,18 @@ export type PersistedClawPackageRef = {
   updatedAtMs: number;
 };
 
-export type PackageRefRow = {
-  schema_version: string;
-  agent_id: string;
-  claw_name: string;
+export type PackageRefRow = Omit<
+  DB["claw_package_refs"],
+  "independent_owner" | "installed_at_ms" | "updated_at_ms"
+> & {
   package_kind: ClawPackageKind;
   package_source: ClawPackageSource;
-  package_ref: string;
-  package_version: string;
-  package_integrity: string;
   package_status: ClawPackageRefStatus;
   relationship: ClawPackageRelationship;
   origin: ClawPackageOrigin;
   independent_owner: number | bigint;
-  extension_id: string | null;
   extension_format: ClawAppliedExtension["format"] | null;
   extension_detected_format: ClawAppliedExtension["detectedFormat"] | null;
-  extension_mapped_json: string | null;
-  extension_unavailable_json: string | null;
-  extension_adapter_identity: string | null;
   installed_at_ms: number | bigint;
   updated_at_ms: number | bigint;
 };
@@ -71,6 +65,25 @@ export function toPackageRefExtensionSqlParams(
     extension_mapped_json: extension ? JSON.stringify(extension.mapped) : null,
     extension_unavailable_json: extension ? JSON.stringify(extension.unavailable) : null,
     extension_adapter_identity: extension?.adapterIdentity ?? null,
+  };
+}
+
+export function toPackageRefSqlFields(ref: PersistedClawPackageRef) {
+  return {
+    agent_id: ref.agentId,
+    package_kind: ref.kind,
+    package_source: ref.source,
+    package_ref: ref.ref,
+    package_version: ref.version,
+    package_integrity: ref.integrity,
+    schema_version: ref.schemaVersion,
+    claw_name: ref.clawName,
+    package_status: ref.status,
+    relationship: ref.relationship,
+    origin: ref.origin,
+    independent_owner: ref.independentOwner ? 1 : 0,
+    installed_at_ms: ref.installedAtMs,
+    updated_at_ms: ref.updatedAtMs,
   };
 }
 

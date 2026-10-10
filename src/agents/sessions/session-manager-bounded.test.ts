@@ -217,6 +217,7 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
   }
 
   expect(manager.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
+  await closeOpenClawAgentDatabasesAsync(dir);
   closeOpenClawAgentDatabasesForTest(dir);
   const reopened = SessionManager.open(scope, dir);
   expect(reopened.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);

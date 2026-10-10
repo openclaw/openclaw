@@ -29,6 +29,7 @@ import type {
   ImmutableInstallRecord,
   ImmutablePreparedGeneration,
 } from "./update-immutable-install-schema.js";
+import { projectImmutableInstall } from "./update-immutable-install.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sha = "a".repeat(40);
@@ -239,6 +240,75 @@ it("persists adoption and preparation without changing the selected generation",
   expect(fs.statSync(controlPath()).mode & 0o777).toBe(0o755);
   expect(fs.statSync(journalPath()).mode & 0o777).toBe(0o644);
 });
+
+it.each(["candidate-verification-pending", "private error: token=fixture-secret /private/state"])(
+  "projects retained recovery after a fresh record read without disclosing private state (%s)",
+  (failure) => {
+    const record = beginActivation();
+    const operation = record.activation!.operation!;
+    updateImmutableInstallRecord(
+      record,
+      {
+        ...record,
+        activation: { operation: { ...operation, failure } },
+      },
+      () => {},
+    );
+    const before = controlFiles();
+    const projection = projectImmutableInstall(read());
+    expect(projection.activation).toEqual({
+      operationId: operation.operationId,
+      phase: "publishing",
+      previousSha: sha,
+      candidateSha,
+      failure: failure === "candidate-verification-pending" ? failure : "details-withheld",
+      recoveryCommand: `${descriptor.runtime.path} ${operation.recovery.helperPath}`,
+    });
+    expect(projection.prepared).toEqual({
+      sha: candidateSha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: 1234,
+    });
+    expect(projection).not.toHaveProperty("lastActivation");
+    expect(JSON.stringify(projection)).not.toContain("fixture-secret");
+    expect(JSON.stringify(projection)).not.toContain("synthetic-state-key");
+    expect(controlFiles()).toEqual(before);
+  },
+);
+
+it.each([
+  {
+    outcome: "succeeded",
+    gateway: { pid: 4242, bootId: "fixture-boot", version: "2026.10.1", buildId: "fixture-build" },
+  },
+  {
+    outcome: "rolled-back",
+    gateway: {
+      pid: 4243,
+      bootId: "restored-boot",
+      version: "2026.10.1",
+      buildId: "restored-build",
+    },
+  },
+  { outcome: "succeeded", gateway: undefined },
+] as const)(
+  "projects a historical $outcome receipt from a fresh observer",
+  ({ outcome, gateway }) => {
+    const record = beginActivation();
+    const lastResult = {
+      operationId: record.activation!.operation!.operationId,
+      outcome,
+      selectedSha: sha,
+      verifiedAtMs: 1000,
+      ...(gateway ? { gateway } : {}),
+    };
+    updateImmutableInstallRecord(record, { ...record, activation: { lastResult } }, () => {});
+    const projection = projectImmutableInstall(read());
+    expect(projection.lastActivation).toEqual(lastResult);
+    expect(projection).not.toHaveProperty("activation");
+  },
+);
 
 it("rejects a stale preparation instead of replacing a newer receipt", () => {
   const adopted = createImmutableInstallRecord(descriptor, () => {});
@@ -558,7 +628,14 @@ it.skipIf(process.platform === "win32")(
     let checks = 0;
     expect(() =>
       recovery.admit(() => {
-        if (++checks === 2) {
+        if (++checks === 1) {
+          const beforeTouch = fs.statSync(journalPath(), { bigint: true });
+          fs.chmodSync(journalPath(), 0o644);
+          const afterTouch = fs.statSync(journalPath(), { bigint: true });
+          expect(afterTouch.ctimeNs).not.toBe(beforeTouch.ctimeNs);
+          expect(afterTouch.mtimeNs).toBe(beforeTouch.mtimeNs);
+        } else {
+          recovery.assertUnchanged();
           throw new Error("executor revoked before rollback");
         }
       }),
@@ -571,9 +648,16 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each(["database", "journal"] as const)(
-  "preserves a changed immutable %s family member instead of admitting old recovery evidence",
-  async (changed) => {
+it.skipIf(process.platform === "win32").each([
+  ["database", "inode"],
+  ["journal", "inode"],
+  ["database", "bytes"],
+  ["journal", "bytes"],
+  ["database", "size"],
+  ["journal", "size"],
+] as const)(
+  "preserves immutable %s with changed %s instead of admitting old recovery evidence",
+  async (changed, mutation) => {
     beginActivation();
     createHotSqliteRollbackJournal({
       path: journalPath(),
@@ -581,9 +665,17 @@ it.skipIf(process.platform === "win32").each(["database", "journal"] as const)(
     });
     const recovery = await readImmutableInstallRecordForRecovery(root);
     const source = changed === "database" ? journalPath() : `${journalPath()}-journal`;
-    const replacement = path.join(parent, "replacement-control-bytes");
-    fs.copyFileSync(source, replacement);
-    fs.renameSync(replacement, source);
+    if (mutation === "inode") {
+      const replacement = path.join(parent, "replacement-control-bytes");
+      fs.copyFileSync(source, replacement);
+      fs.renameSync(replacement, source);
+    } else if (mutation === "bytes") {
+      const bytes = fs.readFileSync(source);
+      bytes[bytes.length - 1] = bytes.readUInt8(bytes.length - 1) ^ 1;
+      fs.writeFileSync(source, bytes);
+    } else {
+      fs.appendFileSync(source, "changed size");
+    }
     const before = controlFiles();
     expect(recovery.assertUnchanged).toThrow(/changed/u);
     expect(() => recovery.admit(() => {})).toThrow(/changed/u);

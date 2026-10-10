@@ -12,10 +12,14 @@ Supports foreground and background execution via `process`. If `process` is disa
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
+Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
+
 ## Parameters
 
 <ParamField path="command" type="string" required>
 Shell command to run.
+Gateway-hosted commands containing a literal NUL (U+0000) return an error before process launch; correct the command and retry.
+Empty arguments, newlines, and literal backslash-zero text remain valid and are not rewritten.
 </ParamField>
 
 <ParamField path="workdir" type="string" default="cwd">
@@ -27,11 +31,11 @@ Key/value environment overrides merged on top of the inherited environment.
 </ParamField>
 
 <ParamField path="yieldMs" type="number" default="10000">
-Auto-background the command after this delay (ms).
+Return a running process handle after this delay (ms). On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
 <ParamField path="background" type="boolean" default="false">
-Background the command immediately instead of waiting for `yieldMs`. The process timeout still applies after the tool returns.
+Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
 
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
@@ -51,6 +55,8 @@ Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, a
 
 <ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
 Where to execute. Omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
+
+The model-facing schema and code-mode signature list only hosts permitted by the session's host policy, and omit `sandbox` when no sandbox runtime is active. These choices are captured when the tool is created. Node connectivity is checked at execution time.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
@@ -86,6 +92,7 @@ Notes:
 - Sandboxed exec excludes that identity unless `agents.entries.<id>.tools.github.allowInSandbox: true`. This agent-only opt-in supports Docker and Podman, including role-required sandboxes: the profile is mounted read-only at `/openclaw/github`, and commands receive its managed token and Git author. Effective shared scope refuses injection with a warning; security audit warns for every opt-in. See [sandbox GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in).
 - Secret egress sets `NODE_USE_ENV_PROXY=1` so supported Node.js global `fetch` clients honor the process-scoped proxy. It does not use `NODE_OPTIONS`.
 - For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
+- Capable nodes receive channel/subagent routing context separately from custom environment overrides and inject the fixed markers themselves. See [node execution context](/nodes/node-exec#channel-and-subagent-context) for capability negotiation and mixed-version behavior.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
@@ -106,7 +113,7 @@ Notes:
 | `tools.exec.reviewer.model`          | configured agent primary | Optional provider/model override for `mode=auto` review.                                                                                                           |
 | `tools.exec.reviewer.timeoutMs`      | `30000`                  | Per-stage timeout for reviewer model preparation and completion before human fallback.                                                                             |
 | `tools.exec.node`                    | unset                    | Selects which paired node runs `host=node` commands, by id, name, or IP. Only needed when more than one eligible node is connected; see [Parameters](#parameters). |
-| `tools.exec.notifyOnExit`            | `true`                   | When true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.                                                                      |
+| `tools.exec.notifyOnExit`            | `true`                   | When true, backgrounded host exec sessions continue through an ordinary turn in their originating session on exit.                                                 |
 | `tools.exec.approvalRunningNoticeMs` | `10000`                  | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                                   |
 | `tools.exec.strictInlineEval`        | `false`                  | See [Inline eval](#inline-eval-strictinlineeval).                                                                                                                  |
 | `tools.exec.commandHighlighting`     | `false`                  | When true, approval prompts can highlight parser-derived command spans in the command text. Set globally or per agent; does not change approval policy.            |
@@ -181,6 +188,10 @@ For ordinary configured full/off execution without prompts for these forms, leav
 ### PATH handling
 
 Gateway-hosted commands use an `openclaw` launcher tied to the running Gateway's installation. Source checkouts pin any inherited TSX preload to that checkout on both Node and Bun, so the launcher also works from an agent workspace outside the checkout.
+
+Prepared child commands resolve the launcher's concrete path before they start.
+Switching an installation symlink during an update does not redirect a command
+that was already prepared. A fresh `openclaw` invocation follows the updated link.
 
 - `host=gateway`: merges your login-shell `PATH` into the exec environment. `env.PATH` overrides are rejected for host execution. The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
@@ -269,10 +280,10 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Background + poll:
+Ordinary work that yields a handle, then poll:
 
 ```json
-{"tool":"exec","command":"npm run build","background":true}
+{"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 

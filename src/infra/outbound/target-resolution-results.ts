@@ -1,13 +1,12 @@
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
-import { stripNormalizedTargetProviderPrefixes } from "./target-normalization.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import {
+  stripNormalizedTargetProviderPrefixes,
+  type ResolvedPluginMessagingTarget,
+} from "./target-normalization.js";
 
 /** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
-export type ResolvedMessagingTarget = {
-  to: string;
-  kind: ChannelDirectoryEntryKind | "channel";
-  display?: string;
-  source: "normalized" | "directory";
+export type ResolvedMessagingTarget = Omit<ResolvedPluginMessagingTarget, "resolutionSource"> & {
   resolutionSource: "plugin" | "directory" | "normalized";
 };
 

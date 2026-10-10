@@ -204,9 +204,9 @@ describe("web search runtime", () => {
     });
   });
 
-  it("accepts the prepared provider selection without rediscovering providers", () => {
+  it("accepts the prepared provider selection without rediscovering providers", async () => {
     expect(
-      hasUsableWebSearchProvider({
+      await hasUsableWebSearchProvider({
         config: {},
         runtimeWebSearch: {
           providerSource: "auto-detect",
@@ -484,7 +484,7 @@ describe("web search runtime", () => {
     } satisfies OpenClawConfig;
 
     expect(
-      hasUsableWebSearchProvider({
+      await hasUsableWebSearchProvider({
         agentDir: activeAgentDir,
         config,
         preferRuntimeProviders: true,

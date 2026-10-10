@@ -139,7 +139,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). With the default `session.groupScope: "per-group"`, group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
-- Media uploads use the same proxy environment, with `NO_PROXY` evaluated for each actual upload host independently of the WebSocket destination.
+- On Node and Bun, media uploads use the same proxy environment and managed HTTPS-proxy trust, with `NO_PROXY` evaluated for each actual upload and redirect host independently of the WebSocket destination.
 - Media proxy URLs must use HTTP or HTTPS. Invalid media proxy settings fail uploads without blocking login or text messaging.
 
 ## Call the current requester with MeowCaller (experimental)
@@ -369,7 +369,7 @@ The implicit self-number allowance applies only to DMs, not group allowlists.
 
 Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, and supply an identity reply prefix when no response prefix is configured.
 
-A liveness probe sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
+A liveness check sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
 ## Messaging and delivery
 

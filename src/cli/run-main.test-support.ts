@@ -199,7 +199,10 @@ vi.mock("commander", () => {
 
 vi.mock("./route.js", () => ({ tryRouteCli: tryRouteCliMock }));
 
-vi.mock("./gateway-cli/run-command.js", () => ({ addGatewayRunCommand: addGatewayRunCommandMock }));
+vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
+  addGatewayRunCommand: addGatewayRunCommandMock,
+}));
 
 vi.mock("../daemon/launchd.js", () => ({
   parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
@@ -333,7 +336,8 @@ vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
   tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
 }));
 
-vi.mock("./program.js", () => ({ buildProgram: buildProgramMock }));
+// mock-isolation: Exercise dispatch without constructing the real Commander program.
+vi.mock("./program/build-program.js", () => ({ buildProgram: buildProgramMock }));
 
 vi.mock("./program/program-context.js", () => ({ getProgramContext: getProgramContextMock }));
 
@@ -467,7 +471,6 @@ export {
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
   outputPrecomputedNodesHelpTextMock,
-  outputPrecomputedSubcommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,

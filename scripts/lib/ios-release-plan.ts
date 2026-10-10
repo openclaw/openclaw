@@ -74,11 +74,6 @@ export type IosReleasePlan = {
   sourceSha: string | null;
 };
 
-type DecodedVersion = {
-  legacy: boolean;
-  revision: number;
-};
-
 function parseVersionComponents(version: string): [number, number, number] | null {
   const match = /^(\d{4})\.(\d{1,2})\.(\d+)$/u.exec(version.trim());
   if (!match) {
@@ -106,10 +101,7 @@ function compareAppStoreVersions(left: string, right: string): number {
   return 0;
 }
 
-export function decodeIosAppStoreVersion(
-  gatewayVersion: string,
-  appStoreVersion: string,
-): DecodedVersion | null {
+export function decodeIosAppStoreVersion(gatewayVersion: string, appStoreVersion: string) {
   const canonicalGatewayVersion = normalizePinnedIosVersion(gatewayVersion);
   const gateway = parseVersionComponents(canonicalGatewayVersion);
   const candidate = parseVersionComponents(appStoreVersion);
@@ -361,15 +353,7 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
   return plan;
 }
 
-type ChangelogSection = {
-  body: string;
-  end: number;
-  heading: string;
-  headingLine: string;
-  start: number;
-};
-
-function changelogSections(content: string): ChangelogSection[] {
+function changelogSections(content: string) {
   const lines = content.split(/\r?\n/u);
   const starts = lines.flatMap((line, index) => (line.startsWith("## ") ? [index] : []));
   return starts.map((start, index) => {

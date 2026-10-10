@@ -13,15 +13,24 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
-import { ensureLocal, find, fromRow, getRequired, query } from "./placement-row-codec.js";
+import {
+  ensureLocal,
+  find,
+  fromRow,
+  getRequired,
+  query,
+  turnClaimValues,
+} from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.kernel.js";
+import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
+  publishPlacementWorkspaceJournalState,
 } from "./placement-turn-authority.js";
 import {
   deferTurnClaimRelease,
@@ -54,14 +63,12 @@ export class ActiveTurnClaimError extends Error {
 }
 
 function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
-  return query(db).updateTable("worker_session_placements").set({
-    turn_claim_owner: null,
-    turn_claim_id: null,
-    turn_claim_run_id: null,
-    turn_claim_generation: null,
-    turn_claim_owner_epoch: null,
-    updated_at_ms: nowMs,
-  });
+  return query(db)
+    .updateTable("worker_session_placements")
+    .set({
+      ...turnClaimValues(null),
+      updated_at_ms: nowMs,
+    });
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
@@ -79,7 +86,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     }
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     const updated = fromRow(row);
-    publishPlacementTurnClaimState(db, updated);
+    publishPlacementTurnClaimState(db, updated, current.state);
     deferWorkerTurnClaimClosed(db, path, claim);
     return updated;
   };
@@ -153,7 +160,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     if (result.numAffectedRows !== 1n) {
       throw new Error(`Session ${identity.sessionId} placement changed during turn admission`);
     }
-    publishPlacementTurnClaimState(db, getRequired(db, identity.sessionId));
+    publishPlacementTurnClaimState(db, getRequired(db, identity.sessionId), current.state);
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     return {
       sessionId: current.sessionId,
@@ -336,25 +343,25 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     clearLocalTurnClaimsAfterRestart(this: void): number {
       return write((db) => {
-        const sessionIds = executeSqliteQuerySync(
+        const placements = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_session_placements")
-            .select("session_id")
+            .select(["session_id", "state"])
             .where("turn_claim_owner", "=", "local"),
-        ).rows.map((row) => row.session_id);
+        ).rows;
         const result = executeSqliteQuerySync(
           db,
           releaseTurnQuery(db, now()).where("turn_claim_owner", "=", "local"),
         );
-        if (result.numAffectedRows !== BigInt(sessionIds.length)) {
+        if (result.numAffectedRows !== BigInt(placements.length)) {
           throw new Error("Local turn claims changed during restart recovery");
         }
-        for (const sessionId of sessionIds) {
-          publishPlacementTurnClaimCleared(db, sessionId);
+        for (const { session_id: sessionId, state } of placements) {
+          publishPlacementTurnClaimCleared(db, sessionId, parseWorkerSessionPlacementState(state));
           deferTurnClaimRelease(db, path, sessionId);
         }
-        return sessionIds.length;
+        return placements.length;
       });
     },
 
@@ -470,30 +477,17 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             .where("transition_generation", "=", current.generation)
             .where("environment_id", "=", environmentId)
             .where("active_owner_epoch", "=", ownerEpoch)
-            .where(
-              "turn_claim_owner",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim?.owner ?? null,
-            )
-            .where(
-              "turn_claim_id",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? claimId : null,
-            )
-            .where(
-              "turn_claim_run_id",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? runId : null,
-            )
-            .where(
-              "turn_claim_generation",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? placementGeneration : null,
-            )
-            .where(
-              "turn_claim_owner_epoch",
-              current.turnClaim?.owner === "worker" ? "=" : "is",
-              current.turnClaim?.ownerEpoch ?? null,
+            .where((eb) =>
+              eb.and(
+                turnClaimValues(
+                  current.turnClaim && {
+                    ...current.turnClaim,
+                    claimId,
+                    runId,
+                    generation: placementGeneration,
+                  },
+                ),
+              ),
             ),
         );
         if (result.numAffectedRows !== 1n) {
@@ -516,9 +510,12 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           if (marked.numAffectedRows !== 1n) {
             throw new Error(`Worker workspace journal changed for session ${sessionId}`);
           }
+          publishPlacementWorkspaceJournalState(db, sessionId, true);
         }
+        const updated = getRequired(db, sessionId);
+        publishPlacementTurnClaimState(db, updated, current.state);
         sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        return getRequired(db, sessionId);
+        return updated;
       });
     },
   };

@@ -209,15 +209,6 @@ it("dispatches a hosted message action without connecting to either Gateway endp
       sessionKey,
       operationalRunInstance,
     });
-    expect(
-      resolveTrustedMessageActionToolContext({
-        client: expectDefined(dispatched.mock.calls[0]?.[0].client, "bound Gateway client"),
-        request: { sessionKey, allowNativeChannelNamespace: false },
-      }),
-    ).toMatchObject({
-      ok: true,
-      messageActionAuthorization: { allowNativeChannelNamespace: false },
-    });
     expect(result.details).toMatchObject({
       ok: true,
       listener: "hosted-local",
@@ -451,37 +442,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
           request: { sessionKey, sessionId },
         }),
     );
-    expect(mismatched).toMatchObject({
-      ok: true,
-      messageActionConfig: undefined,
-      messageActionAuthorization: { allowNativeChannelNamespace: undefined },
-    });
-    const inferred = withMessageActionInvocationConfig(
-      "unrelated-host-token",
-      () => configA,
-      () =>
-        resolveTrustedMessageActionToolContext({
-          client,
-          request: { sessionKey, sessionId, allowNativeChannelNamespace: false },
-        }),
-    );
-    expect(inferred).toMatchObject({
-      ok: true,
-      messageActionAuthorization: { allowNativeChannelNamespace: false },
-    });
-    const assertedNative = withMessageActionInvocationConfig(
-      "unrelated-host-token",
-      () => configA,
-      () =>
-        resolveTrustedMessageActionToolContext({
-          client,
-          request: { sessionKey, sessionId, allowNativeChannelNamespace: true },
-        }),
-    );
-    expect(assertedNative).toMatchObject({
-      ok: true,
-      messageActionAuthorization: { allowNativeChannelNamespace: undefined },
-    });
+    expect(mismatched).toMatchObject({ ok: true, messageActionConfig: undefined });
     await expect(execute("after-publication")).rejects.toThrow(
       /not allowed by the current tool policy/,
     );

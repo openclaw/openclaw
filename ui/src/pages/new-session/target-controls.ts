@@ -56,8 +56,37 @@ export function renderAgentSelect(params: {
   `;
 }
 
+export function renderRequiredSessionPlacement(gateway: DraftGatewayState) {
+  const profile = gateway.cloudProfiles.find(
+    (candidate) => candidate.id === gateway.requiredProfile,
+  );
+  return html`<span class="new-session-page__select" role="status" data-required-placement>
+    ${
+      !gateway.placementPolicyReady
+        ? t("newSession.placementNotReady")
+        : !profile
+          ? t("newSession.requiredWorkerUnavailable")
+          : t(
+              profile.inference === "worker"
+                ? "newSession.openClawWorker"
+                : "newSession.requiredWorker",
+            )
+    }
+    ${
+      !gateway.cloudProfilesPending && (!gateway.placementPolicyReady || !profile)
+        ? html`<button
+            type="button"
+            class="btn btn--sm"
+            @click=${() => void gateway.refreshCloudProfiles()}
+          >
+            ${t("common.retry")}
+          </button>`
+        : nothing
+    }
+  </span>`;
+}
+
 export function renderNewSessionPlaceControls({
-  idPrefix,
   context,
   data,
   gateway,
@@ -69,7 +98,6 @@ export function renderNewSessionPlaceControls({
   onFocusComposer,
   requestUpdate,
 }: {
-  idPrefix?: string;
   context: ApplicationContext | undefined;
   data: NewSessionRouteData | undefined;
   gateway: DraftGatewayState;
@@ -81,6 +109,9 @@ export function renderNewSessionPlaceControls({
   onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
+  if (!catalog.isTarget(data) && (!gateway.placementPolicyReady || place.requiredPlacement)) {
+    return renderRequiredSessionPlacement(gateway);
+  }
   const browser = place.browser;
   const { machineClass, os } = place.cloudSelection;
   const nativeTerminal = catalog.isTarget(data);
@@ -128,6 +159,14 @@ export function renderNewSessionPlaceControls({
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
     : t("newSession.gateway");
+  const selectCloudOption = (kind: "os" | "machine", id: string) =>
+    place.cloudMachines[kind === "os" ? "selectOs" : "select"](
+      place.cloudProfileId,
+      id,
+      cloudProfiles,
+      submitting || pendingPlacement,
+      requestUpdate,
+    );
   return html`${
     nativeTerminal
       ? renderNewSessionTerminalHost({
@@ -137,7 +176,6 @@ export function renderNewSessionPlaceControls({
           onSelect: (hostId) => place.selectTerminalHost(hostId),
         })
       : renderWhereChip({
-          idPrefix,
           state: whereState,
           environmentQuery: browser.environmentQuery,
           onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
@@ -164,22 +202,8 @@ export function renderNewSessionPlaceControls({
             }
             place.selectCloudProfile(profileId);
           },
-          onSelectCloudOs: (osId) =>
-            place.cloudMachines.selectOs(
-              place.cloudProfileId,
-              osId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onSelectCloudMachine: (machineId) =>
-            place.cloudMachines.select(
-              place.cloudProfileId,
-              machineId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
+          onSelectCloudOs: (osId) => selectCloudOption("os", osId),
+          onSelectCloudMachine: (machineId) => selectCloudOption("machine", machineId),
           onConnectMachine,
           onManageCloudWorkers: () => {
             browser.close();
@@ -201,7 +225,6 @@ export function renderNewSessionPlaceControls({
             }}
         /></label>`
       : renderProjectChip({
-          idPrefix,
           state: projectState,
           browseAvailable: place.browseAvailable(),
           isAdmin: place.isAdmin(),
@@ -253,7 +276,6 @@ export function renderNewSessionPlaceControls({
   }${
     place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
-          idPrefix,
           state: checkoutState,
           remotePlacement: place.remotePlacement,
           repository: Boolean(place.remoteRepository),

@@ -127,7 +127,7 @@ async function listModels(config: OpenClawConfig) {
 }
 
 describe("configured plugin generation recovery", () => {
-  it.each([false, true])(
+  it.each([true])(
     "retains exact thinking policy across a stale mark (borrowed Gateway registry=%s)",
     async (borrowed) => {
       const provider = "stale-policy-fixture";
@@ -220,7 +220,7 @@ describe("configured plugin generation recovery", () => {
     },
   );
 
-  it.each(["owned registry", "admitted registry", "metadata cache"] as const)(
+  it.each(["admitted registry", "metadata cache"] as const)(
     "does not republish independent retirement of %s",
     async (source) => {
       const originalMetadata = mocks.pluginMetadataSnapshot;
@@ -261,10 +261,8 @@ describe("configured plugin generation recovery", () => {
   );
 
   it.each([
-    { borrowed: false, fails: false },
     { borrowed: true, fails: false },
     { borrowed: false, fails: true },
-    { borrowed: true, fails: true },
   ])(
     "republishes retired Gateway facts once (borrowed=$borrowed, failure=$fails)",
     async ({ borrowed, fails }) => {

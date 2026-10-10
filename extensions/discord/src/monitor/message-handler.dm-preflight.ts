@@ -25,13 +25,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
   resolvedAccountId: string;
   allowNameMatching: boolean;
   conversationId: string;
-}): Promise<{
-  commandAuthorized: boolean;
-  resolveChannelIngress: (
-    contextBinding: ChannelIngressContextBinding,
-    conversation?: { parentId?: string; threadId?: string },
-  ) => ReturnType<typeof resolveDiscordDmCommandAccess>;
-} | null> {
+}) {
   if (params.dmPolicy === "disabled") {
     logVerbose("discord: drop dm (dmPolicy: disabled)");
     return null;

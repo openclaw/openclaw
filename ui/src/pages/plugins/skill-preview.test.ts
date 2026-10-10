@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import type { ReactiveControllerHost } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { PluginsSkillsReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -33,29 +33,6 @@ const result: PluginsSkillsReadResult = {
   inventoryComplete: true,
   files: [{ path: "SKILL.md", sizeBytes: 18, status: "ready", content: "Full instructions." }],
 };
-
-describe("plugin skill preview requests", () => {
-  it.each(["selection", "reconnect"] as const)(
-    "retires a late response after %s",
-    async (change) => {
-      const { controller, request, gateway, client } = setup();
-      const response = createDeferred<PluginsSkillsReadResult>();
-      request
-        .mockReturnValueOnce(response.promise)
-        .mockResolvedValueOnce({ ...result, name: "other" });
-      const pending = controller.open(params);
-      if (change === "selection") {
-        await controller.open({ ...params, skillName: "other" });
-      } else {
-        gateway.transition({ client, phase: "reconnecting" });
-        gateway.transition({ client, phase: "connected" });
-      }
-      response.resolve(result);
-      await pending;
-      expect(controller.state?.result?.name).not.toBe("guide");
-    },
-  );
-});
 
 const lazyResult: PluginsSkillsReadResult = {
   ...result,
@@ -129,24 +106,42 @@ it("keeps selected-file failures retryable without refetching the entry or losin
   });
 });
 
-it.each(["reopen", "reconnect"])("discards selected-file results after %s", async (change) => {
-  const { controller, request, gateway, client } = setup();
-  const response = createDeferred<PluginsSkillsReadResult>();
-  request
-    .mockResolvedValueOnce(lazyResult)
-    .mockReturnValueOnce(response.promise)
-    .mockResolvedValueOnce({ ...lazyResult, version: "2.0.0" });
-  await controller.open(params);
-  const pending = controller.select("a.md");
-  if (change === "reopen") {
-    await controller.open(params);
-  } else {
-    gateway.transition({ client, phase: "reconnecting" });
-    gateway.transition({ client, phase: "connected" });
-  }
-  response.resolve(selectedResult("a.md"));
-  await pending;
-  expect(
-    controller.state?.result?.files.find((file) => file.path === "a.md")?.content,
-  ).toBeUndefined();
-});
+it.each([
+  { selectedFile: false, change: "selection" },
+  { selectedFile: false, change: "reconnect" },
+  { selectedFile: true, change: "reopen" },
+  { selectedFile: true, change: "reconnect" },
+])(
+  "retires late preview responses (selected file: $selectedFile, change: $change)",
+  async ({ selectedFile, change }) => {
+    const { controller, request, gateway, client } = setup();
+    const response = createDeferred<PluginsSkillsReadResult>();
+    if (selectedFile) {
+      request.mockResolvedValueOnce(lazyResult);
+      await controller.open(params);
+    }
+    request
+      .mockReturnValueOnce(response.promise)
+      .mockResolvedValueOnce(
+        selectedFile ? { ...lazyResult, version: "2.0.0" } : { ...result, name: "other" },
+      );
+    const pending = selectedFile ? controller.select("a.md") : controller.open(params);
+    if (change === "reopen") {
+      await controller.open(params);
+    } else if (change === "selection") {
+      await controller.open({ ...params, skillName: "other" });
+    } else {
+      gateway.transition({ client, phase: "reconnecting" });
+      gateway.transition({ client, phase: "connected" });
+    }
+    response.resolve(selectedFile ? selectedResult("a.md") : result);
+    await pending;
+    if (selectedFile) {
+      expect(
+        controller.state?.result?.files.find((file) => file.path === "a.md")?.content,
+      ).toBeUndefined();
+    } else {
+      expect(controller.state?.result?.name).not.toBe("guide");
+    }
+  },
+);

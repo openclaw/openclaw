@@ -6,11 +6,8 @@ import {
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { createWhatsAppOutboundBase } from "./outbound-base.js";
+import { whatsappOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";
-import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
-import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
@@ -47,18 +44,7 @@ async function registerDeliveredWhatsAppApprovalPayload(
 }
 
 export const whatsappChannelOutbound = {
-  ...createWhatsAppOutboundBase({
-    sendMessageWhatsApp: async (to, text, options) =>
-      await sendMessageWhatsApp(to, text, {
-        ...options,
-        preserveLeadingWhitespace: true,
-      }),
-    sendPollWhatsApp,
-    shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-    resolveTarget: ({ to, allowFrom, mode }) =>
-      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-    normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
-  }),
+  ...whatsappOutboundBase,
   sendTextOnlyErrorPayloads: true,
   renderPresentation: prepareWhatsAppApprovalPayloadForDelivery,
   afterDeliverPayload: registerDeliveredWhatsAppApprovalPayload,

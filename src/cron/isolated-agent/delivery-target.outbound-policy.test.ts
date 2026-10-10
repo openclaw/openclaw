@@ -88,6 +88,7 @@ it("delivers an allowed implicit cron directory recipient and stops a denied one
       return dispatchCronDelivery({
         cfgWithAgentDefaults: cfg,
         deps: {},
+        deliveryAttemptFence: null,
         job: {
           id: `final-effect-${to}`,
           name: "Final effect policy test",

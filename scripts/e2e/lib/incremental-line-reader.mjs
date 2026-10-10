@@ -1,4 +1,3 @@
-// Incremental line reader for streaming E2E logs.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
@@ -77,7 +76,6 @@ export function createIncrementalLineReader(filePath, options = {}) {
           pending = "";
           reset = true;
         } else {
-          contentFingerprint = nextContentFingerprint;
           return { lines: [], reset: false };
         }
       }
@@ -93,14 +91,12 @@ export function createIncrementalLineReader(filePath, options = {}) {
 
       let start = offset;
       let discardFirstLine = false;
-      let clamped = false;
       if (stats.size - start > maxReadBytes) {
         start = stats.size - maxReadBytes;
         pending = "";
-        clamped = true;
-      }
-      if (clamped && start > 0) {
-        discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        if (start > 0) {
+          discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        }
       }
 
       const text = readSlice(filePath, start, stats.size - start);

@@ -4,13 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installGatewayTestHooks, testState, writeSessionStore } from "../test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessions.test-helpers.js";
-import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
-import {
-  toolsEffectiveInventoryMocks as inventoryMocks,
-  toolsEffectiveTestDependencies,
-} from "./tools-effective.test-support.js";
+import { toolsEffectiveInventoryMocks as inventoryMocks } from "./tools-effective.test-support.js";
 
-const toolsEffectiveHandlers = createToolsEffectiveHandlers(toolsEffectiveTestDependencies);
+const { toolsEffectiveHandlers, testing } = await import("./tools-effective.js");
 
 installGatewayTestHooks();
 

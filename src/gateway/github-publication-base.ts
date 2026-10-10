@@ -1,58 +1,6 @@
-import os from "node:os";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { githubRepositoryUrl } from "../agents/github-host.js";
-
-export function githubPublicationBaseLookupArgs(
-  repository: string,
-  baseBranch: string,
-  host: string,
-): string[] {
-  return [
-    "gh",
-    "api",
-    "--hostname",
-    host,
-    `repos/${repository}/git/ref/heads/${baseBranch}`,
-    "--jq",
-    "{ref: .ref, sha: .object.sha}",
-  ];
-}
-
-export function githubPublicationBaseFetchArgs(
-  repository: string,
-  sha: string,
-  host: string,
-): string[] {
-  return [
-    "git",
-    "-c",
-    "credential.helper=",
-    "-c",
-    "credential.helper=!gh auth git-credential",
-    "-c",
-    `core.hooksPath=${os.devNull}`,
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "maintenance.auto=false",
-    "-c",
-    "gc.auto=0",
-    "fetch",
-    "--no-auto-maintenance",
-    "--no-tags",
-    "--no-write-fetch-head",
-    "--recurse-submodules=no",
-    "--",
-    githubRepositoryUrl(repository, host),
-    sha,
-  ];
-}
-
-export function githubPublicationBaseLineageArgs(ancestor: string, descendant: string): string[] {
-  return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
-}
 
 const worktreeConfigArgs: readonly string[] = [
   "git",

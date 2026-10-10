@@ -56,8 +56,9 @@ not by expecting a fresh model request to return identical words.
 ## Full Release Validation
 
 `Full Release Validation` is the manual release umbrella. Every run binds an
-exact Validation SHA + Tooling SHA tuple and rejects an `expected_sha` mismatch
-before child dispatch. Validation SHA maps to the Code SHA for product
+exact candidate C, qualification Q, and admission/publication P tuple and rejects
+an `expected_sha` mismatch before child dispatch. Fresh publication uses Q=C;
+P is independently trusted and cannot supply substitute tests. Validation SHA maps to the Code SHA for product
 validation or the Release SHA for changelog-only validation; it is not a third
 release identity. Beta-publish maps to `release_profile=beta` with
 `run_release_soak=false`. Regular stable releases use `release_profile=stable`.
@@ -71,8 +72,8 @@ without `release_gate`. Every selected failure remains blocking, including
 Windows Node failures.
 Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
-Docker seed runs all six lanes in every ordinary manual/release scope:
-`cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`,
+Docker seed runs all five lanes in every ordinary manual/release scope:
+`cron-mcp-cleanup`, `mcp-channels`, `mcp-code-mode-gateway`,
 `published-upgrade-survivor`, and `update-channel-switch`. This includes
 `npm-beta` and `npm-stable` qualification. The survivor uses `legacy-operator-state`
 with `auto-auth`, so the published driver must update
@@ -82,7 +83,11 @@ supports `legacy-operator-state`; historical targets retain `base` with `auto-au
 Missing historical catalogs keep that fallback; malformed or invalid catalogs fail.
 PRs defer the complete survivor to hourly main and Full Release Validation, while
 the other Docker seed lanes and QA Smoke retain their owner maps.
-Ordinary manual/release CI builds the full declaration-complete package. Main and
+Ordinary manual CI builds the full declaration-complete package. Full Release
+Validation's Docker seed child uses the 16-class Blacksmith runner when no release
+runner group is configured and the existing smoke package without removing
+coverage. Hosted outage overrides and retries keep their recovery route, and
+weighted lane admission remains serial. Main and
 selected PRs, including exact-head `release_gate` fallbacks, use the
 existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.
@@ -187,13 +192,15 @@ For pinned commit proof on a fast-moving branch, use the helper instead of
 `gh workflow run ... --ref main -f ref=<sha>`:
 
 ```bash
-TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 VALIDATION_SHA="<full-release-candidate-sha>"
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
 pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref release/YYYY.M.PATCH \
-  --workflow-sha "$TOOLING_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
+  --request-file <private-request-file> \
   -f validation_purpose=publish \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
@@ -209,12 +216,11 @@ publication selection; profile and filters still select the actual coverage.
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
 helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
-fresh temporary repository, including in dry runs. It then pushes one immutable
-`release-ci/*` workflow ref at the trusted Tooling SHA, passes the exact Validation
-SHA through `ref` and `expected_sha`, reuses
-strict exact-target evidence when available, and verifies every child workflow
-`headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
-it from moving `main`. Regular release branches accept only their final package
+fresh temporary repository, including in dry runs. After independent admission,
+it pushes one immutable `release-ci/*` workflow ref at Q=C and passes C through
+`ref` and `expected_sha`. Reused evidence must retain its original Q and coverage;
+every new child workflow `headSha` must match Q. Record all three roles and never
+refresh qualification from moving `main`. Regular release branches accept only their final package
 version or a matching beta prerelease.
 
 `release_profile` controls live/provider breadth passed into release checks. The
@@ -240,13 +246,13 @@ needed.
 
 For recovery, decide blocker or flake for every failed test, then classify product, harness/tooling/provenance,
 infrastructure/credential, and wrapper failures before editing. Only confirmed
-product failure changes the Code SHA. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
+product or qualification-harness failure changes C/Q. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
 validation run; never retry a failed test automatically or widen to `all`.
 Flakes get at most two explicit same-SHA reruns and a tracked fix on `main`;
 record an eligible still-failing job instead of changing tooling, re-cutting,
 or starting another Full Release Validation. Narrow evidence is not publish authorization by itself.
 
-`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. Source package preparation has a 35-minute whole-job budget so cold declaration generation and package inventory can finish before artifact upload; downstream jobs still consume only the immutable uploaded package. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 
 Full Release Validation concurrency is keyed by Validation SHA, Tooling SHA,
 rerun group, release profile, and effective soak coverage with

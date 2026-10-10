@@ -506,7 +506,7 @@ describe("scanPolicyExecApprovals", () => {
     ]);
   });
 
-  it("projects canonical main-agent approval entries", () => {
+  it("projects canonical approval entries while retaining source indices across invalid entries", () => {
     expect(
       scanPolicyExecApprovals(
         JSON.stringify({
@@ -515,7 +515,10 @@ describe("scanPolicyExecApprovals", () => {
             main: {
               security: "allowlist",
               allowlist: [
+                null,
                 { id: "entry-1", pattern: "legacy" },
+                "not-an-approval-entry",
+                { pattern: " " },
                 { id: "entry-2", pattern: "doctor" },
               ],
             },
@@ -539,14 +542,14 @@ describe("scanPolicyExecApprovals", () => {
         kind: "allowlist",
         agentId: "main",
         pattern: "legacy",
-        source: "oc://exec-approvals.json/agents/main/allowlist/#0",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#1",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:1",
         kind: "allowlist",
         agentId: "main",
         pattern: "doctor",
-        source: "oc://exec-approvals.json/agents/main/allowlist/#1",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#4",
       }),
     ]);
   });

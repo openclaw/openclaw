@@ -50,15 +50,12 @@ function resolveLogicalSessionStoreAgentId(cfg: OpenClawConfig, sessionKey: stri
     return agentId;
   }
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
-  if (persistedOwner.kind === "retired") {
-    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
-      surface: `session key "${sessionKey}"`,
-      hint: `Its recorded owner "${persistedOwner.agentId}" is no longer configured. Select a configured agent explicitly.`,
-    });
-  }
   throw new AgentSelectionRequiredError(listAgentIds(cfg), {
     surface: `session key "${sessionKey}"`,
-    hint: "Use an agent-prefixed session key or select an agent explicitly.",
+    hint:
+      persistedOwner.kind === "retired"
+        ? `Its recorded owner "${persistedOwner.agentId}" is no longer configured. Select a configured agent explicitly.`
+        : "Use an agent-prefixed session key or select an agent explicitly.",
   });
 }
 
@@ -66,7 +63,7 @@ function resolveParsedSessionStoreKey(
   cfg: OpenClawConfig,
   raw: string,
   parsed: ParsedAgentSessionKey,
-  options?: { storeAgentId?: string },
+  storeAgentId?: string,
 ): { agentId: string; sessionKey: string } {
   const parsedAgentId = normalizeAgentId(parsed.agentId);
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
@@ -81,8 +78,8 @@ function resolveParsedSessionStoreKey(
       sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
-  const agentId = options?.storeAgentId
-    ? normalizeAgentId(options.storeAgentId)
+  const agentId = storeAgentId
+    ? normalizeAgentId(storeAgentId)
     : resolveLogicalSessionStoreAgentId(cfg, "main");
   return { agentId, sessionKey: `agent:${agentId}:${rest}` };
 }
@@ -94,7 +91,7 @@ function canonicalizeParsedSessionStoreKey(
   storeAgentId?: string,
   preserveQualifiedAddress = false,
 ): string {
-  const resolved = resolveParsedSessionStoreKey(cfg, raw, parsed, { storeAgentId });
+  const resolved = resolveParsedSessionStoreKey(cfg, raw, parsed, storeAgentId);
   if (preserveQualifiedAddress && resolved.agentId === normalizeAgentId(parsed.agentId)) {
     return resolved.sessionKey;
   }
@@ -161,16 +158,13 @@ export function resolveSessionStoreAgentId(
   canonicalKey: string,
   explicitAgentId?: string,
 ): string {
+  const parsed = parseAgentSessionKey(canonicalKey);
   if (explicitAgentId) {
-    const parsed = parseAgentSessionKey(canonicalKey);
     const sessionKey = parsed
-      ? resolveParsedSessionStoreKey(cfg, canonicalKey, parsed, {
-          storeAgentId: explicitAgentId,
-        }).sessionKey
+      ? resolveParsedSessionStoreKey(cfg, canonicalKey, parsed, explicitAgentId).sessionKey
       : canonicalKey;
     return resolveSessionAgentId({ config: cfg, sessionKey, agentId: explicitAgentId });
   }
-  const parsed = parseAgentSessionKey(canonicalKey);
   return parsed
     ? normalizeAgentId(parsed.agentId)
     : resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
@@ -198,8 +192,7 @@ export function resolveSessionStoreIdentity(params: {
     };
   }
   const sessionKey = parsed
-    ? resolveParsedSessionStoreKey(params.cfg, raw, parsed, { storeAgentId: requestedAgentId })
-        .sessionKey
+    ? resolveParsedSessionStoreKey(params.cfg, raw, parsed, requestedAgentId).sessionKey
     : raw;
   const agentId = resolveSessionStoreAgentId(params.cfg, sessionKey, requestedAgentId);
   const canonicalKey = resolveSessionStoreKey({

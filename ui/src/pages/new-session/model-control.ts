@@ -99,11 +99,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           }
           this.updateMetadataState({
             ...this.metadataState,
-            status: this.metadataState.hasSnapshot
-              ? this.metadataState.status === "error"
-                ? "error"
-                : "ready"
-              : "loading",
+            status:
+              this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+                ? "ready"
+                : "loading",
           });
         } else {
           this.notify();
@@ -124,6 +123,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       },
     );
   }
+
+  private configuredDefaults = false;
 
   private get catalog(): ModelCatalogEntry[] {
     return this.metadataState.catalog;
@@ -277,15 +278,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     return true;
   }
 
-  private retryPickerCatalogs() {
-    const client = this.metadataClient;
-    const scope = this.metadataScope;
-    if (!this.metadataReader.pending && client && scope) {
-      void this.metadataReader.read();
-    }
-    this.catalogTargets.retry(client, this.agentId);
-  }
-
   invalidate(resetSelection = false) {
     if (!resetSelection && this.metadataClient) {
       invalidateModelCatalogCache(this.metadataClient, this.metadataScope);
@@ -361,6 +353,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       this.notify();
       return;
     }
+    this.configuredDefaults = options.configuredDefaults === true;
     const initialModel = options.initialModel;
     if (initialModel && initialModel !== this.initialModel) {
       this.resetSelection();
@@ -377,7 +370,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     const boundScope = this.bindMetadataSubscription(client, scope);
     const rebound = boundScope !== previousScope;
     this.pendingPreference = this.preferenceForDraft(options.preference, {
-      policy: context.config?.current.newSessionModelDefaults,
+      policy: this.modelDefaultsPolicy,
       initialModel: this.initialModel,
       initialModelPending: this.initialModelPending,
     });
@@ -432,7 +425,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     });
   }
 
-  modelSelectionBlockedReason(agent: GatewayAgentRow | undefined): string | undefined {
+  modelSelectionBlockedReason(
+    agent: GatewayAgentRow | undefined,
+    inference?: "worker",
+  ): string | undefined {
+    const runtime = this.resolveAgentRuntime({ agent, context: this.pendingContext });
     return resolveDraftModelSelectionBlockedReason({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
@@ -442,6 +439,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       accountSelected: Boolean(this.draftAccount),
       accountReady: this.accountSelectionReady(),
       metadataPending: this.metadataReader.pending,
+      inference:
+        runtime?.id === "openclaw" && runtime.cloudPlacementExecutionMode === "worker-turn"
+          ? inference
+          : undefined,
     });
   }
 
@@ -482,8 +483,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       },
       !this.initialModelPending &&
         !policy?.restricted &&
-        this.pendingContext?.config?.current.newSessionModelDefaults !== "configured" &&
-        this.pendingContext?.config?.current.newSessionModelDefaults !== null,
+        this.modelDefaultsPolicy !== "configured" &&
+        this.modelDefaultsPolicy !== null,
     );
   }
 
@@ -508,10 +509,16 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     this.notify();
   }
 
+  get modelDefaultsPolicy() {
+    return this.configuredDefaults
+      ? "configured"
+      : this.pendingContext?.config?.current.newSessionModelDefaults;
+  }
+
   private applyPendingDraftSelection() {
     const selection = this.takeDraftSelection(
       this.agentId,
-      this.pendingContext?.config?.current.newSessionModelDefaults === "configured",
+      this.modelDefaultsPolicy === "configured",
       this.pendingPreference?.fastMode,
     );
     if (!selection) {
@@ -706,7 +713,14 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       onModelSetup: () => options.context?.navigate("model-setup"),
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
-      onModelPickerOpen: () => this.retryPickerCatalogs(),
+      onModelPickerOpen: () => {
+        const metadataClient = this.metadataClient;
+        const metadataScope = this.metadataScope;
+        if (!this.metadataReader.pending && metadataClient && metadataScope) {
+          void this.metadataReader.read();
+        }
+        this.catalogTargets.retry(metadataClient, this.agentId);
+      },
       onRequestUpdate: this.notify,
     });
   }

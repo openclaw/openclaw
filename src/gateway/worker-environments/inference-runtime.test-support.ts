@@ -11,13 +11,14 @@ import * as providerStreamRuntime from "../../agents/provider-stream.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionEntryRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as diagnosticTraceRuntime from "../../infra/diagnostic-trace-context.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -188,9 +189,12 @@ export function providerStream(message = finalMessage(), options: { omitToolEnd?
 export function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    config?: OpenClawConfig;
     catalogOnlyModel?: boolean;
     accountCatalog?: PreparedAccountCatalogAccess;
+    metadataSnapshot?: preparedRuntime.PreparedModelRuntimeSnapshot["metadataSnapshot"];
     pluginRegistry?: PluginRegistry;
+    configuredRuntimeModel?: ProviderRuntimeModel;
     afterModelPreparation?: () => void;
     observeStage?: (
       stage: "factory" | "policy" | "wrapper" | "execution",
@@ -214,11 +218,11 @@ export function setup(
     activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
-    config,
-    observationConfig: config,
+    config: options.config ?? config,
+    observationConfig: options.config ?? config,
     isCurrent: () => true,
     authModes: {},
-    metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
+    metadataSnapshot: options.metadataSnapshot ?? createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
     modelCatalog: {
       entries: [
@@ -228,7 +232,7 @@ export function setup(
       routeVariants: [],
     },
     configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
+    findConfiguredRuntimeModel: () => options.configuredRuntimeModel,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
@@ -304,10 +308,12 @@ export function setup(
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });
-  vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
-    expect(target).toEqual(sessionTarget);
-    return entry;
-  });
+  const readSessionEntry = vi
+    .spyOn(sessionEntryRuntime, "readSessionEntryInWorker")
+    .mockImplementation(async (target) => {
+      expect(target).toEqual(sessionTarget);
+      return entry;
+    });
   vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
     acquireRuntimeLease,
   );
@@ -346,6 +352,7 @@ export function setup(
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
+    readSessionEntry,
     readPromptCacheContext,
     resolveAuthSelection,
     scope,

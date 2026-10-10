@@ -187,7 +187,7 @@ function loadParsedDotEnvFiles(
   return appliedKeysByFile;
 }
 
-function resolveGlobalDotEnvPaths(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.ProcessEnv) {
+function resolveGlobalDotEnvFiles(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.ProcessEnv) {
   const stateEnvPath = opts.stateEnvPath ?? path.join(resolveConfigDir(env), ".env");
   const globalEnvPaths = [...new Set([stateEnvPath, ...(opts.additionalEnvPaths ?? [])])];
   const home = resolveRequiredHomeDir(env, os.homedir);
@@ -195,11 +195,16 @@ function resolveGlobalDotEnvPaths(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.
   const hasExplicitNonDefaultStateDir =
     env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
+  const readOptions = {
+    entryFilter: opts.entryFilter,
+    quiet: opts.quiet ?? true,
+    onWarning: opts.onWarning,
+  };
   return {
-    globalEnvPaths,
-    gatewayEnvPath: hasExplicitNonDefaultStateDir
+    globalFiles: globalEnvPaths.map((filePath) => Object.assign({}, readOptions, { filePath })),
+    gatewayFile: hasExplicitNonDefaultStateDir
       ? undefined
-      : path.join(home, ".config", "openclaw", "gateway.env"),
+      : { ...readOptions, filePath: path.join(home, ".config", "openclaw", "gateway.env") },
   };
 }
 
@@ -226,18 +231,9 @@ function applyGlobalDotEnvFiles(
 /** Load global runtime dotenv files with first-wins precedence, defaulting to `process.env`. */
 export function loadGlobalRuntimeDotEnvFilesCore(opts: GlobalRuntimeDotEnvOptions = {}) {
   const env = opts.env ?? process.env;
-  const { globalEnvPaths, gatewayEnvPath } = resolveGlobalDotEnvPaths(opts, env);
-  const readOptions = {
-    entryFilter: opts.entryFilter,
-    quiet: opts.quiet ?? true,
-    onWarning: opts.onWarning,
-  };
-  const globalEnvs = globalEnvPaths.map((filePath) =>
-    readDotEnvFileCore({ ...readOptions, filePath }),
-  );
-  const gatewayEnv = gatewayEnvPath
-    ? readDotEnvFileCore({ ...readOptions, filePath: gatewayEnvPath })
-    : null;
+  const { globalFiles, gatewayFile } = resolveGlobalDotEnvFiles(opts, env);
+  const globalEnvs = globalFiles.map(readDotEnvFileCore);
+  const gatewayEnv = gatewayFile ? readDotEnvFileCore(gatewayFile) : null;
   return applyGlobalDotEnvFiles(globalEnvs, gatewayEnv, env, opts.overrideKeys, opts.onWarning);
 }
 
@@ -246,18 +242,11 @@ export async function loadGlobalRuntimeDotEnvFilesAsyncCore(
   opts: GlobalRuntimeDotEnvOptions & { env: NodeJS.ProcessEnv },
 ) {
   const { env } = opts;
-  const { globalEnvPaths, gatewayEnvPath } = resolveGlobalDotEnvPaths(opts, env);
-  const readOptions = {
-    entryFilter: opts.entryFilter,
-    quiet: opts.quiet ?? true,
-    onWarning: opts.onWarning,
-  };
+  const { globalFiles, gatewayFile } = resolveGlobalDotEnvFiles(opts, env);
   const globalEnvs: (LoadedDotEnvFile | null)[] = [];
-  for (const filePath of globalEnvPaths) {
-    globalEnvs.push(await readDotEnvFileAsyncCore({ ...readOptions, filePath }));
+  for (const file of globalFiles) {
+    globalEnvs.push(await readDotEnvFileAsyncCore(file));
   }
-  const gatewayEnv = gatewayEnvPath
-    ? await readDotEnvFileAsyncCore({ ...readOptions, filePath: gatewayEnvPath })
-    : null;
+  const gatewayEnv = gatewayFile ? await readDotEnvFileAsyncCore(gatewayFile) : null;
   return applyGlobalDotEnvFiles(globalEnvs, gatewayEnv, env, opts.overrideKeys, opts.onWarning);
 }

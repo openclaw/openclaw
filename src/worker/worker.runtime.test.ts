@@ -62,12 +62,10 @@ import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { prepareSkillBundle } from "../skills/library/bundle.js";
 import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
@@ -96,7 +94,10 @@ import {
   registerWorkerGatewayToolAvailabilityTests,
   registerWorkerGatewayToolRpcTests,
 } from "./worker-runtime-gateway-tools.suite.js";
+import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
+import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
+import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
 import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
@@ -164,6 +165,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
+  backgroundYieldMs?: number;
   execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
@@ -271,6 +273,12 @@ class FakeWorkerGateway {
     });
     if (this.rootDir) {
       await rm(this.rootDir, { recursive: true, force: true });
+    }
+  }
+
+  disconnectClients(): void {
+    for (const client of this.clients) {
+      client.terminate();
     }
   }
 
@@ -766,7 +774,9 @@ class FakeWorkerGateway {
                   "setInterval(() => undefined, 1000)",
                 )}`
               : "exec sleep 60"),
-          background: true,
+          ...(this.options.backgroundYieldMs === undefined
+            ? { background: true }
+            : { yieldMs: this.options.backgroundYieldMs }),
         }
       : {
           command:
@@ -1036,138 +1046,7 @@ describe("worker runtime", () => {
     );
   });
 
-  it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
-    const { gateway, workspaceDir, launch } = await setup();
-    await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");
-    const files = [
-      { path: "SKILL.md", content: "# Stable worker skill\n", encoding: "utf8" as const },
-    ];
-    launch.assignment.skillResources = {
-      version: 1,
-      skills: [
-        {
-          name: "stable",
-          description: "Worker fixture",
-          files,
-          revision: prepareSkillBundle(files).revision,
-        },
-      ],
-    };
-
-    const result = await runWorkerDescriptor(launch);
-
-    expect(result.status).toBe("completed");
-    expect(gateway.inferenceRequests).toHaveLength(1);
-    expect(gateway.inferenceRequests[0]?.modelRef).toEqual(MODEL_REF);
-    expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain("worker-bootstrap-marker");
-    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
-    expect(toolNames).toHaveLength(6);
-    const terminalIndex = gateway.applicationOrder.findIndex(
-      (entry) => entry === "live:lifecycle:finishing",
-    );
-    const finalTranscriptIndex = gateway.applicationOrder.findLastIndex((entry) =>
-      entry.startsWith("transcript:"),
-    );
-    expect(finalTranscriptIndex).toBeGreaterThanOrEqual(0);
-    expect(terminalIndex).toBeGreaterThan(finalTranscriptIndex);
-    expect(toolNames).toEqual(
-      expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
-    );
-    expect(gateway.liveEventRequests.some((request) => request.event.kind === "assistant")).toBe(
-      true,
-    );
-    const lifecycleEvents = gateway.liveEventRequests.flatMap((request) =>
-      request.event.kind === "lifecycle" ? [request.event.payload.phase] : [],
-    );
-    expect(lifecycleEvents).toContain("start");
-    expect(lifecycleEvents).toContain("finishing");
-    expect(lifecycleEvents).not.toContain("end");
-    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
-      kind: "lifecycle",
-      payload: { phase: "finishing", stopReason: "stop" },
-    });
-    expect(gateway.transcriptRequests.length).toBeGreaterThan(0);
-    expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual(
-      gateway.transcriptRequests.map((_request, index) => index + 3),
-    );
-    expect(
-      gateway.transcriptRequests
-        .flatMap((request) => request.messages)
-        .map((message) => message.role),
-    ).toEqual(["user", "assistant"]);
-    const lastTranscript = gateway.transcriptRequests.at(-1);
-    expect(result).toMatchObject({
-      transcriptLeafId: `leaf-${lastTranscript?.seq}`,
-      transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
-    });
-
-    const firstPrompt = gateway.inferenceRequests[0]!.context.systemPrompt;
-    expect(firstPrompt).toContain("<name>stable</name>");
-    if (result.status !== "completed") {
-      throw new Error("Expected the first worker turn to complete");
-    }
-    const next = structuredClone(launch);
-    next.assignment.runId = "worker-next-run";
-    next.assignment.turnId = "worker-next-turn";
-    next.assignment.operationalRunInstance = createOperationalRunInstanceRef(next.assignment.runId);
-    next.assignment.prompt = "Continue with the same skill.";
-    next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
-      (request) => request.messages,
-    );
-    next.assignment.transcript = {
-      baseLeafId: result.transcriptLeafId,
-      nextSeq: result.transcriptNextSeq,
-    };
-    expect((await runWorkerDescriptor(next)).status).toBe("completed");
-    expect(gateway.inferenceRequests[1]!.context.systemPrompt).toBe(firstPrompt);
-    expect(
-      gateway.inferenceRequests[1]!.context.messages.slice(
-        0,
-        next.assignment.initialMessages.length,
-      ),
-    ).toEqual(next.assignment.initialMessages);
-  });
-
-  it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
-    const { gateway, workspaceDir, launch } = await setup();
-    const canonicalWorkspaceDir = await realpath(workspaceDir);
-    const promptDir = path.join(workspaceDir, ".openclaw");
-    const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
-    await mkdir(promptDir);
-    await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
-    for (const name of ["SOUL.md", "IDENTITY.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]) {
-      await writeFile(path.join(workspaceDir, name), "unselected-workspace-bootstrap-marker");
-    }
-    await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
-    await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
-    await writeFile(literalPrompt, "unrequested-file-contents");
-    if (extra) {
-      launch.assignment.systemPrompt = literalPrompt;
-    }
-
-    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFile");
-    try {
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-      expect(
-        openedFiles.mock.calls
-          .map(([params]) => params.absolutePath)
-          .filter((filePath) => path.dirname(filePath) === canonicalWorkspaceDir),
-      ).toEqual([path.join(canonicalWorkspaceDir, "AGENTS.md")]);
-    } finally {
-      openedFiles.mockRestore();
-    }
-
-    const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
-    expect(prompt).toContain("prepared-worker-context");
-    expect.soft(prompt).toContain("Available tools:");
-    expect.soft(prompt).not.toContain("ambient-system-marker");
-    expect.soft(prompt).not.toContain("ambient-append-marker");
-    expect.soft(prompt).not.toContain("unrequested-file-contents");
-    expect.soft(prompt).not.toContain("unselected-workspace-bootstrap-marker");
-    if (extra) {
-      expect.soft(prompt).toContain(literalPrompt);
-    }
-  });
+  registerWorkerPromptTests({ setup, modelRef: MODEL_REF });
 
   registerWorkerGatewayToolAvailabilityTests({ setup });
 
@@ -1232,7 +1111,7 @@ describe("worker runtime", () => {
     ]);
     expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
       descriptor: launch.assignment.browser,
-      sessionKey: `worker:${SESSION_ID}`,
+      sessionKey: `agent:worker-agent:worker:${SESSION_ID}`,
       stateDir: expect.any(String),
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });
@@ -1341,8 +1220,8 @@ describe("worker runtime", () => {
         action: "__close_execution",
       });
       const screenshot = gateway.acceptedTranscriptRequests
-        .flatMap((request) => request.messages)
-        .find((message) => message.role === "toolResult" && message.toolName === "computer");
+        .flatMap((request) => request.messages.filter((message) => message.role === "toolResult"))
+        .find((message) => message.toolName === "computer");
       expect(screenshot).toMatchObject({
         isError: false,
         content: expect.arrayContaining([expect.objectContaining({ type: "image" })]),
@@ -1660,6 +1539,8 @@ describe("worker runtime", () => {
     });
   });
 
+  registerWorkerNativeInferenceTests({ setup });
+
   it("bounds shutdown when remote inference cancellation cannot settle", async () => {
     const { gateway, launch } = await setup({
       inferencePlans: ["hold"],
@@ -1789,9 +1670,10 @@ describe("worker runtime", () => {
     });
   });
 
-  it.each(["running", "completed", "cancelled"] as const)(
-    "keeps completed-turn background processes controllable in the managed environment (%s)",
-    async (processState) => {
+  it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
+    "keeps completed-turn commands controllable in the managed environment (%s)",
+    async (scenario) => {
+      const processState = scenario === "ordinary-yield" ? "running" : scenario;
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: [
           "background-tool",
@@ -1804,6 +1686,7 @@ describe("worker runtime", () => {
         ...(processState === "completed"
           ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
+        ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
       });
       const releaseBackground = createDeferred();
       let completionServer: Server | undefined;
@@ -2262,57 +2145,7 @@ describe("worker runtime", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "keeps exec unbound and creates no GitHub profile without a turn identity",
-    async () => {
-      const { gateway, launch } = await setup({
-        inferencePlans: ["tool", "text"],
-        execCommand: 'printf "profile=%s\\n" "${GH_CONFIG_DIR-unset}"',
-      });
-      const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
-      try {
-        await expect(
-          runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
-        ).resolves.toMatchObject({ status: "completed" });
-
-        const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult" && message.toolName === "exec",
-        );
-        expect(toolResult).toMatchObject({
-          isError: false,
-          content: [{ type: "text", text: expect.stringContaining("profile=unset") }],
-        });
-        await expect(
-          stat(path.join(environment.stateDir, "github-profiles")),
-        ).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } finally {
-        await environment.close();
-      }
-    },
-  );
-
-  it("reports a GitHub profile write failure before running inference", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.github = {
-      token: "worker-profile-write-fixture-token",
-      login: "worker-fixture",
-      branch: "openclaw/session-fixture",
-    };
-    const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
-    try {
-      // A file in the root's parent path cannot be repaired by removing github-profiles.
-      const blockedStateDir = path.join(environment.stateDir, "obstruction");
-      await writeFile(blockedStateDir, "obstruction");
-      await expect(
-        runWorkerDescriptor(launch, { environmentStateDir: blockedStateDir }),
-      ).rejects.toThrow("Worker GitHub identity profile could not be written:");
-      expect(gateway.inferenceRequests).toHaveLength(0);
-    } finally {
-      await environment.close();
-    }
-  });
+  registerWorkerGitHubFailureTests({ setup, sessionId: SESSION_ID });
 
   registerWorkerPermissionTests({ setup });
 

@@ -193,91 +193,95 @@ describe("startup migration lease", () => {
     next.release();
   });
 
-  it("rechecks external ownership inside the final lease write transaction", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    runOpenClawStateWriteTransaction(() => undefined, { env });
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    const { DatabaseSync } = requireNodeSqlite();
-    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
-      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
-      | undefined;
-    if (!originalExec) {
-      throw new Error("DatabaseSync.exec descriptor is unavailable");
-    }
-    // External custody can change after outer admission but before the verified
-    // write transaction. Its inner authority check must refuse the new owner.
-    let claimed = false;
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      if (sql === "BEGIN" && !claimed) {
-        claimed = true;
-        const claimant = new DatabaseSync(databasePath);
-        try {
-          claimant
-            .prepare(
-              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-               VALUES (?, ?, ?)`,
-            )
-            .run(
-              STATE_SUPERVISION_KEY,
-              JSON.stringify({
-                version: 1,
-                mode: "external",
-                managerId: "race-manager",
-                claimedAt: 1,
-              }),
-              1,
-            );
-        } finally {
-          claimant.close();
-        }
+  it.each([false, true])(
+    "rechecks external ownership inside the final lease write transaction (admitted owner: %s)",
+    async (admittedOwner) => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+      };
+      runOpenClawStateWriteTransaction(() => undefined, { env });
+      if (!admittedOwner) {
+        closeOpenClawStateDatabaseForTest();
       }
-      return originalExec.call(this, sql);
-    });
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      const { DatabaseSync } = requireNodeSqlite();
+      const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")
+        ?.value as ((this: import("node:sqlite").DatabaseSync, sql: string) => void) | undefined;
+      if (!originalExec) {
+        throw new Error("DatabaseSync.exec descriptor is unavailable");
+      }
+      // External custody can change after outer admission but before the verified
+      // write transaction. Its inner authority check must refuse the new owner.
+      let claimed = false;
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+        this: import("node:sqlite").DatabaseSync,
+        sql: string,
+      ) {
+        if ((sql === "BEGIN" || sql === "BEGIN IMMEDIATE") && !claimed) {
+          claimed = true;
+          const claimant = new DatabaseSync(databasePath);
+          try {
+            claimant
+              .prepare(
+                `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+               VALUES (?, ?, ?)`,
+              )
+              .run(
+                STATE_SUPERVISION_KEY,
+                JSON.stringify({
+                  version: 1,
+                  mode: "external",
+                  managerId: "race-manager",
+                  claimedAt: 1,
+                }),
+                1,
+              );
+          } finally {
+            claimant.close();
+          }
+        }
+        return originalExec.call(this, sql);
+      });
 
-    try {
-      await expect(
-        acquireStartupMigrationLeaseWithWait({
-          env,
-          owner: "unmarked",
-          now: () => 1,
-          timeoutMs: 0,
-        }),
-      ).rejects.toThrow(OpenClawStateOwnershipError);
-      expect(claimed).toBe(true);
-    } finally {
-      exec.mockRestore();
-    }
+      try {
+        await expect(
+          acquireStartupMigrationLeaseWithWait({
+            env,
+            owner: "unmarked",
+            now: () => 1,
+            timeoutMs: 0,
+          }),
+        ).rejects.toThrow(OpenClawStateOwnershipError);
+        expect(claimed).toBe(true);
+      } finally {
+        exec.mockRestore();
+      }
 
-    const verify = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        verify
-          .prepare(
-            `SELECT COUNT(*) AS count
+      const verify = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          verify
+            .prepare(
+              `SELECT COUNT(*) AS count
              FROM state_leases
              WHERE scope = 'startup-migrations' AND lease_key = 'global'`,
-          )
-          .get(),
-      ).toEqual({ count: 0 });
-      expect(
-        verify
-          .prepare(
-            `SELECT COUNT(*) AS count
+            )
+            .get(),
+        ).toEqual({ count: 0 });
+        expect(
+          verify
+            .prepare(
+              `SELECT COUNT(*) AS count
              FROM schema_meta
              WHERE meta_key IN ('state-migrations', 'startup-migrations')`,
-          )
-          .get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      verify.close();
-    }
-  });
+            )
+            .get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        verify.close();
+      }
+    },
+  );
 
   it.each([false, true])(
     "waits for a startup migration lease to be released (other host: %s)",
@@ -463,40 +467,55 @@ describe("startup migration lease", () => {
     lease.release();
   });
 
-  it("renews startup migration leases while the owner is still running", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "first",
-      timeoutMs: 0,
-    });
-
-    const onActivity = vi.fn();
-    expect(hasActiveStartupMigrationLease({ env, nowMs: 1001, onActivity })).toBe(true);
-    lease.heartbeat({ nowMs: 300_000 });
-    expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001, onActivity })).toBe(true);
-    expect(onActivity).toHaveBeenLastCalledWith({
-      owner: "first",
-      pid: process.pid,
-      heartbeatAt: 300_000,
-    });
-
-    await expect(
-      acquireStartupMigrationLeaseWithWait({
+  it.each([false, true])(
+    "renews startup migration leases while the owner is still running (admitted owner: %s)",
+    async (admittedOwner) => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+      };
+      if (admittedOwner) {
+        runOpenClawStateWriteTransaction(() => undefined, { env });
+      }
+      const { DatabaseSync } = requireNodeSqlite();
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const lease = await acquireStartupMigrationLeaseWithWait({
         env,
-        now: () => 301_001,
-        owner: "second",
+        now: () => 1000,
+        owner: "first",
         timeoutMs: 0,
-      }),
-    ).rejects.toThrow("OpenClaw startup migrations are already running");
+      });
 
-    lease.release();
-    expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
-    expect(onActivity).toHaveBeenCalledTimes(2);
-  });
+      const onActivity = vi.fn();
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 1001, onActivity })).toBe(true);
+      lease.heartbeat({ nowMs: 300_000 });
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001, onActivity })).toBe(true);
+      expect(onActivity).toHaveBeenLastCalledWith({
+        owner: "first",
+        pid: process.pid,
+        heartbeatAt: 300_000,
+      });
+
+      await expect(
+        acquireStartupMigrationLeaseWithWait({
+          env,
+          now: () => 301_001,
+          owner: "second",
+          timeoutMs: 0,
+        }),
+      ).rejects.toThrow("OpenClaw startup migrations are already running");
+
+      lease.release();
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
+      expect(onActivity).toHaveBeenCalledTimes(2);
+      if (admittedOwner) {
+        expect(
+          prepare.mock.calls.filter(([sql]) =>
+            /\b(?:integrity_check|foreign_key_check)\b/i.test(sql),
+          ),
+        ).toHaveLength(0);
+      }
+    },
+  );
 
   it("checks exact lease ownership inside the caller write transaction", async () => {
     const env = {

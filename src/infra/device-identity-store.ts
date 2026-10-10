@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -100,16 +100,9 @@ function keyPairMatches(publicKeyPem: string, privateKeyPem: string): boolean {
   try {
     deriveCanonicalEd25519PublicKeyRaw(publicKeyPem);
     deriveCanonicalEd25519PrivateKeyRaw(privateKeyPem);
-    const publicKey = crypto.createPublicKey(publicKeyPem);
-    const privateKey = crypto.createPrivateKey(privateKeyPem);
-    if (publicKey.asymmetricKeyType !== "ed25519" || privateKey.asymmetricKeyType !== "ed25519") {
-      return false;
-    }
-    const derivedPublicKey = crypto
-      .createPublicKey(privateKeyPem)
-      .export({ type: "spki", format: "der" });
-    const storedPublicKey = publicKey.export({ type: "spki", format: "der" });
-    return Buffer.from(derivedPublicKey).equals(Buffer.from(storedPublicKey));
+    return (
+      crypto.createPublicKey(privateKeyPem).export({ type: "spki", format: "pem" }) === publicKeyPem
+    );
   } catch {
     return false;
   }
@@ -324,13 +317,13 @@ export function readStoredDeviceIdentity(
   return readStoredIdentityFromDatabase(database, resolved.identityKey);
 }
 
-/** Read without creating, repairing, chmodding, or joining the writer lifecycle. */
+/** Read identity rows without creating identities or joining the writer lifecycle. */
 export function readStoredDeviceIdentityReadOnly(
   options: DeviceIdentityStoreOptions = {},
 ): StoredDeviceIdentity | null {
   const resolved = resolveDeviceIdentityStore(options);
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    withExistingOpenClawStateDatabaseReadOnly(
       (database) => {
         try {
           return readStoredIdentityFromDatabase(database, resolved.identityKey);

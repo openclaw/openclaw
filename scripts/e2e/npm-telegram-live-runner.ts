@@ -47,10 +47,6 @@ function resolvePackageTelegramOutputDir(env: NodeJS.ProcessEnv, repoRoot: strin
 }
 
 const DEFAULT_RTT_CHECK_ID = "channel-canary";
-const EXTENDED_STABLE_2026_6_35 = "2026.6.35";
-const EXTENDED_STABLE_2026_7_33 = "2026.7.33";
-const EXTENDED_STABLE_2026_7_34 = "2026.7.34";
-const EXTENDED_STABLE_2026_7_35 = "2026.7.35";
 const LEGACY_CONFIG_CUTOFF = "2026.7.2-beta.4";
 
 type HistoricalPackageConfig = OpenClawConfig & {
@@ -60,34 +56,6 @@ type HistoricalPackageConfig = OpenClawConfig & {
     >;
   };
 };
-
-function projectFrozenExtendedStableQaConfig(cfg: OpenClawConfig): HistoricalPackageConfig {
-  const { entries, ...agents } = cfg.agents ?? {};
-  const { mediaModels, modelPolicy: _modelPolicy, ...defaults } = agents.defaults ?? {};
-  const memory: NonNullable<OpenClawConfig["memory"]> & { backend: "builtin" } = {
-    backend: "builtin",
-  };
-  const plugins: NonNullable<OpenClawConfig["plugins"]> & { bundledDiscovery: "compat" } = {
-    ...cfg.plugins,
-    bundledDiscovery: "compat",
-  };
-
-  return {
-    ...cfg,
-    // The frozen candidate validates the pre-entries config shape. Keep this
-    // projection at the package harness boundary so current runtime stays canonical.
-    memory,
-    plugins,
-    agents: {
-      ...agents,
-      defaults: {
-        ...defaults,
-        ...(mediaModels?.image ? { imageGenerationModel: mediaModels.image } : {}),
-      },
-      list: Object.entries(entries ?? {}).map(([id, agent]) => Object.assign({ id }, agent)),
-    },
-  };
-}
 
 function projectLegacyPackageQaConfig(cfg: OpenClawConfig): HistoricalPackageConfig {
   const { entries, ...agents } = cfg.agents ?? {};
@@ -120,14 +88,6 @@ function projectLegacyPackageQaConfig(cfg: OpenClawConfig): HistoricalPackageCon
 
 function resolvePackageConfigMutation(env: NodeJS.ProcessEnv = process.env) {
   const packageVersion = env.OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION?.trim();
-  if (
-    packageVersion === EXTENDED_STABLE_2026_6_35 ||
-    packageVersion === EXTENDED_STABLE_2026_7_33 ||
-    packageVersion === EXTENDED_STABLE_2026_7_34 ||
-    packageVersion === EXTENDED_STABLE_2026_7_35
-  ) {
-    return projectFrozenExtendedStableQaConfig;
-  }
   const comparison = packageVersion
     ? compareReleaseVersions(packageVersion, LEGACY_CONFIG_CUTOFF)
     : null;

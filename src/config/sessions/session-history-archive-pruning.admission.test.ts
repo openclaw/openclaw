@@ -10,9 +10,11 @@ import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -459,6 +461,7 @@ it("bounds broker page reclamation and stops when its owner is revoked between u
       await expect(reclaim(1)).rejects.toThrow(/revoked|closed/);
     }),
   ).catch((error: unknown) => error);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path);
   const reopened = openOpenClawAgentDatabase(options);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(
     remaining,
@@ -568,6 +571,9 @@ it.each([
   });
   await later;
   expect(laterWriterRan).toBe(true);
+  if (outcome === "revoked") {
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
+  }
   const row = fixture.readArchive();
   if (outcome === "complete") {
     expect(row).toBeUndefined();
@@ -700,34 +706,30 @@ it("excludes peer publication until atomic legacy removal settles", async () => 
       });
     },
   );
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (
-          !attempted &&
-          removing === fixture.archivePath &&
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.identity) &&
-          request.facts.identity.nativeLocation === physicalPath
-        ) {
-          attempted = true;
-          filePresentAtGrant = fs.existsSync(fixture.archivePath);
-          try {
-            peer.exec("BEGIN IMMEDIATE");
-            peerEntered = true;
-          } catch (error) {
-            refusal = error;
-          } finally {
-            if (peer.isTransaction) {
-              peer.exec("ROLLBACK");
-            }
-          }
+  workerProbe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      !attempted &&
+      removing === fixture.archivePath &&
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      isRecord(request.facts.identity) &&
+      request.facts.identity.nativeLocation === physicalPath
+    ) {
+      attempted = true;
+      filePresentAtGrant = fs.existsSync(fixture.archivePath);
+      try {
+        peer.exec("BEGIN IMMEDIATE");
+        peerEntered = true;
+      } catch (error) {
+        refusal = error;
+      } finally {
+        if (peer.isTransaction) {
+          peer.exec("ROLLBACK");
         }
-        admit(request, grant);
-      }, attachment),
-  );
+      }
+    }
+    admit(request, grant);
+  });
   let work: ReturnType<typeof pruneAllSessionTranscriptArchivesToHighWater> | undefined;
   try {
     work = fixture.prune();

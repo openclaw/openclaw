@@ -26,8 +26,6 @@
   --oc-bg-page: var(--bg);
   --oc-bg-surface: var(--card);
   --oc-bg-elevated: var(--bg-elevated);
-  --oc-bg-recessed: var(--bg-accent);
-  --oc-bg-contrast: var(--text-strong);
 
   --oc-accent-primary: var(--accent);
   --oc-accent-primary-hover: var(--accent-hover);
@@ -38,9 +36,6 @@
   --oc-text-primary: var(--text-strong);
   --oc-text-secondary: var(--text);
   --oc-text-muted: var(--muted);
-  --oc-text-inactive: color-mix(in srgb, var(--muted) 62%, transparent);
-  --oc-text-inverse: var(--accent-foreground);
-  --oc-text-link: var(--link);
   --oc-text-on-accent: var(--primary-foreground);
 
   --oc-border-subtle: var(--border);
@@ -49,15 +44,10 @@
 
   --oc-surface-card: var(--card);
   --oc-surface-card-strong: var(--popover);
-  --oc-surface-overlay: var(--popover);
-  --oc-surface-modal-backdrop: color-mix(in srgb, var(--bg) 66%, transparent);
   --oc-surface-interactive: var(--bg-elevated);
   --oc-surface-interactive-hover: var(--bg-hover);
-  --oc-control-bg: var(--input);
-  --oc-control-bg-hover: var(--bg-hover);
   --oc-surface-accent-soft: var(--accent-subtle);
   --oc-surface-secondary-soft: var(--accent-2-subtle);
-  --oc-chart-line: var(--grid-line);
   --oc-selection-bg: var(--selection-bg);
   --oc-focus-ring: var(--ring);
 
@@ -65,7 +55,6 @@
   --oc-status-success-fg: var(--ok);
   --oc-status-warning-bg: var(--warn-subtle);
   --oc-status-warning-fg: var(--warn);
-  --oc-status-error-bg: var(--danger-subtle);
   --oc-status-error-fg: var(--danger);
   --oc-status-info-bg: var(--info-subtle);
   --oc-status-info-fg: var(--info);
@@ -92,12 +81,7 @@
   --oc-space-5: var(--space-5);
   --oc-space-6: var(--space-6);
   --oc-space-7: var(--space-7);
-  --oc-space-8: var(--space-8);
 
-  --oc-radius-sm: var(--radius-sm);
-  --oc-radius-md: var(--radius-md);
-  --oc-radius-lg: var(--radius-lg);
-  --oc-radius-xl: var(--radius-xl);
   --oc-radius-full: var(--radius-full);
   --oc-radius-surface: var(--radius-lg);
   --oc-radius-control: var(--radius-md);
@@ -106,9 +90,6 @@
 
   --oc-shadow-sm: var(--shadow-sm);
   --oc-shadow-md: var(--shadow-md);
-  --oc-shadow-lg: var(--shadow-lg);
-  --oc-layer-popover: var(--z-dropdown);
-  --oc-layer-notification: var(--z-toast);
   --oc-duration-fast: var(--duration-fast);
   --oc-duration-ui: var(--duration-normal);
   --oc-ease-out: var(--ease-out);
@@ -117,7 +98,6 @@
 
 .oc-app-surface {
   --oc-component-surface: var(--oc-surface-card);
-  --oc-component-surface-strong: var(--oc-surface-card-strong);
   --oc-component-surface-hover: var(--oc-surface-interactive);
   --oc-component-border: var(--oc-border-subtle);
   --oc-component-border-hover: color-mix(

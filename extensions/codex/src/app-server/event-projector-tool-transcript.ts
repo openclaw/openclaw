@@ -189,11 +189,12 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolCall(item: CodexThreadItem | undefined): void {
-    if (!item || !isProjectedNativeToolItem(item)) {
-      return;
-    }
-    const name = itemName(item);
-    if (name) {
+    if (item) {
+      const call = this.nativeTranscriptCall(item);
+      if (!call) {
+        return;
+      }
+      const name = call.name;
       // Native items have independent IDs, so never guess which concurrent
       // cell owns one. A possible native receipt suppresses fallback synthesis.
       for (const pending of this.codeModeNativeCallsByCallId.values()) {
@@ -201,36 +202,47 @@ export class CodexToolTranscriptProjection {
           pending.nativeItemObserved = true;
         }
       }
-      this.recordToolCall({ id: item.id, name, arguments: itemToolArgs(item) });
+      this.recordToolCall(call);
     }
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !isProjectedNativeToolItem(item) || this.resultIds.has(item.id)) {
+    if (!item || this.resultIds.has(item.id)) {
       return;
     }
-    const name = itemName(item);
-    if (name) {
-      const status = itemStatus(item);
-      const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
-      this.recordToolResult({
-        id: item.id,
-        name,
-        text:
-          approvalTimeoutExplanation ??
-          this.rawNativeToolOutputByCallId.get(item.id) ??
-          itemTranscriptResultText(item, this.progress.outputTextByItem),
-        isError: isNonSuccessItemStatus(status),
-        ...(item.type === "commandExecution" &&
-        item.aggregatedOutput == null &&
-        this.progress.isOutputTruncated(item.id)
-          ? { captureTruncated: true }
-          : {}),
-        details,
-        ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
-      });
-      this.progress.approvalTimeoutKinds.delete(item.id);
+    const call = this.nativeTranscriptCall(item);
+    if (!call) {
+      return;
     }
+    const status = itemStatus(item);
+    const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
+    this.recordToolResult({
+      id: item.id,
+      name: call.name,
+      text:
+        approvalTimeoutExplanation ??
+        this.rawNativeToolOutputByCallId.get(item.id) ??
+        itemTranscriptResultText(item, this.progress.outputTextByItem),
+      isError: isNonSuccessItemStatus(status),
+      ...(item.type === "commandExecution" &&
+      item.aggregatedOutput == null &&
+      this.progress.isOutputTruncated(item.id)
+        ? { captureTruncated: true }
+        : {}),
+      details,
+      ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
+    });
+    this.progress.approvalTimeoutKinds.delete(item.id);
+  }
+
+  private nativeTranscriptCall(item: CodexThreadItem): ToolTranscriptCallInput | undefined {
+    if (item.type === "collabAgentToolCall" || item.type === "subAgentActivity") {
+      return this.rawCallsById.get(item.id);
+    }
+    const name = itemName(item);
+    return isProjectedNativeToolItem(item) && name
+      ? { id: item.id, name, arguments: itemToolArgs(item) }
+      : undefined;
   }
 
   recordRawNativeToolItem(item: JsonObject): void {
@@ -312,7 +324,10 @@ export class CodexToolTranscriptProjection {
       typeof item.output === "string"
         ? item.output
         : collectDynamicToolContentText(item.output as CodexThreadItem["contentItems"]);
-    const execution = rawCall?.name === "exec" ? CODE_MODE_RESULT_RE.exec(responseText) : null;
+    const execution =
+      rawCall?.name === "exec" || rawCall?.name === "wait"
+        ? CODE_MODE_RESULT_RE.exec(responseText)
+        : null;
     const codeModeCall = this.codeModeNativeCallsByCallId.get(callId);
     this.codeModeNativeCallsByCallId.delete(callId);
     if (codeModeCall && !codeModeCall.nativeItemObserved) {
@@ -493,7 +508,11 @@ export class CodexToolTranscriptProjection {
   }
 
   emitAfterToolCallObservation(item: CodexThreadItem): void {
-    if (!this.shouldEmitAfterToolCallObservation(item)) {
+    if (
+      !isProjectedNativeToolItem(item) ||
+      this.afterToolCallObservedItemIds.has(item.id) ||
+      (this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item))
+    ) {
       return;
     }
     const name = itemName(item);
@@ -653,13 +672,6 @@ export class CodexToolTranscriptProjection {
       error: formatMissingToolResultError({ id: firstMissingId, name }),
       ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
     });
-  }
-
-  private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (!isProjectedNativeToolItem(item) || this.afterToolCallObservedItemIds.has(item.id)) {
-      return false;
-    }
-    return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {

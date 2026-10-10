@@ -98,6 +98,26 @@ describe("resolved model Tool Search policy", () => {
     expect(toolSearchEnabled(local)).toBe(true);
   });
 
+  it("uses in-place model normalization for transport routing", () => {
+    const resolved = normalizeResolvedModel({
+      provider: "custom-host",
+      model: model(),
+      runtimeHooks: {
+        ...resolveRuntimeHooks(),
+        normalizeProviderResolvedModelWithPlugin: ({ context }) => {
+          context.model.id = "normalized-model";
+          return context.model;
+        },
+        applyProviderResolvedTransportWithPlugin: ({ context }) => ({
+          ...context.model,
+          baseUrl: `https://transport.example/v1/${context.modelId}`,
+        }),
+      },
+    });
+    expect(resolved.id).toBe("normalized-model");
+    expect(resolved.baseUrl).toBe("https://transport.example/v1/normalized-model");
+  });
+
   it.each([
     {
       finalBaseUrl: "http://managed.example:8080/v1/",

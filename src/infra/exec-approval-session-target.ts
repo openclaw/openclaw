@@ -5,11 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   doesApprovalRequestMatchChannelAccount,
-  resolvePersistedApprovalRequestSessionEntry,
+  resolveApprovalRequestSessionDelivery,
 } from "./approval-request-account-binding.js";
 import { normalizeApprovalRequest, type ApprovalRequestInput } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
-import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
+import { resolveSessionDeliveryTarget } from "./outbound/targets-session.js";
 
 /** Delivery target recovered from an approval request's live turn-source or stored session. */
 export type ExecApprovalSessionTarget = {
@@ -49,11 +49,7 @@ function normalizeExecApprovalThreadValue(
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
+  return normalizeOptionalString(value);
 }
 
 function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {
@@ -109,20 +105,16 @@ export function resolveExecApprovalSessionTarget(params: {
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
 }): ExecApprovalSessionTarget | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
-    return null;
-  }
-  const persisted = resolvePersistedApprovalRequestSessionEntry({
+  const entry = resolveApprovalRequestSessionDelivery({
     cfg: params.cfg,
     request: params.request,
   });
-  if (!persisted) {
+  if (!entry) {
     return null;
   }
 
   const target = resolveSessionDeliveryTarget({
-    entry: persisted.entry,
+    entry,
     requestedChannel: "last",
     turnSourceChannel: normalizeOptionalString(params.turnSourceChannel),
     turnSourceTo: normalizeOptionalString(params.turnSourceTo),

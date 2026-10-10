@@ -101,13 +101,20 @@ describe("resolveMediaToolLocalRoots", () => {
       {
         root,
         bridge: createSandboxFsBridge({
-          sandbox: createSandboxTestContext({
-            overrides: {
-              workspaceDir: root,
-              agentWorkspaceDir: root,
-              readOnlyResourceMounts: [mount],
+          sandbox: {
+            ...createSandboxTestContext({
+              overrides: {
+                workspaceDir: root,
+                agentWorkspaceDir: root,
+                readOnlyResourceMounts: [mount],
+              },
+            }),
+            backend: {
+              runShellCommand: async () => {
+                throw new Error("Path resolution must not execute backend commands");
+              },
             },
-          }),
+          },
         }),
         readOnlyResourceMounts: [mount],
       },

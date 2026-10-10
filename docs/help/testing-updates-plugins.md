@@ -132,7 +132,7 @@ behavior; it does not establish Windows or macOS activation coverage. See
 
 The Docker lanes are the product-level proof. They install or update a real
 package inside Linux containers and assert behavior through CLI commands,
-Gateway startup, HTTP probes, RPC status, and filesystem state.
+Gateway startup, HTTP checks, RPC status, and filesystem state.
 
 Use focused lanes while iterating:
 
@@ -168,13 +168,13 @@ Important lanes:
 - `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
-  probes `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
+  checks `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
   Anthropic, Google Gemini, and OpenAI through env-referenced API keys, keeping
   OpenAI as the agents' primary model.
 - `test:docker:update-restart-auth` installs the candidate package, starts a
   managed token-auth Gateway, unsets caller gateway auth env for
   `openclaw update --yes --json`, and requires the candidate update command to
-  restart the Gateway before the normal probes.
+  restart the Gateway before the normal checks.
 - `test:docker:update-migration` is the cleanup-heavy published-update lane. It
   installs the latest stable release by default, starts from a configured
   Discord/Telegram-style user state, seeds package-local plugin dependency debris
@@ -212,12 +212,12 @@ pnpm test:docker:published-upgrade-survivor
 
 Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
 commit before the update and compare the installed application payload with the
-frozen tarball afterward, before candidate probes. This distinguishes different
+frozen tarball afterward, before candidate checks. This distinguishes different
 builds with the same version string. npm still owns dependency reification;
 manual tarball runs without a selected source SHA retain their existing contract.
 These generic scenarios do not require a worker-cell baseline identity artifact.
 After the update, missing or unreadable tarballs and installed payloads fail with
-the corresponding candidate identity diagnostic before any candidate probes run.
+the corresponding candidate identity diagnostic before any candidate checks run.
 
 Useful published-upgrade survivor variants:
 
@@ -234,7 +234,7 @@ OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.7.1-2 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=sqlite-volume \
 pnpm test:docker:published-upgrade-survivor
 
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.34 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.8.33 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=legacy-operator-state \
 pnpm test:docker:published-upgrade-survivor
 
@@ -357,7 +357,7 @@ For this scenario, the baseline updater must replace its running managed Gateway
 the harness checks process replacement and configured authentication. Cron owners
 are queried immediately after that first update, before any consent repair can
 conceal an incomplete migration. The default local `manual` mode passes
-`--no-restart` and starts the candidate for probes, so it does not prove an
+`--no-restart` and starts the candidate for checks, so it does not prove an
 updater-owned restart. Both modes require a clean `doctor --lint --json` report.
 
 Schema snapshots record both published `userVersion` and applied `contentVersion`
@@ -372,7 +372,7 @@ opens databases read-only and never triggers migrations or publication. See
 The before snapshot also records the baseline's configured agent roster and
 agent-scoped legacy specimens, including session rows, transcript and trajectory
 files, trajectory pointers, and skill-prompt blobs. Model catalogs and unrelated
-per-agent artifacts are outside this observer's session-migration scope. Before candidate probes or
+per-agent artifacts are outside this observer's session-migration scope. Before candidate checks or
 agent turns, each agent with existing SQLite or legacy session history must have
 a store at the candidate agent schema. The observer verifies imported session
 identities and transcript events, completed archive receipts and retained source
@@ -390,7 +390,7 @@ pass; it never permits a failed schema repair.
 
 Other scenarios keep their existing success assertions. Their deliberately
 injected legacy files can prevent the baseline from starting before an update;
-the updater must migrate those fixtures before the candidate probes. The lane
+the updater must migrate those fixtures before the candidate checks. The lane
 does not pre-repair or skip those older migration specimens.
 
 `auth-profile-v2026-7-2-beta-5` is explicitly selectable outside those aggregate
@@ -433,14 +433,25 @@ the Doctor owner tests.
 
 Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. The default budget for the
-idempotent Doctor pass is 60 seconds; override it with
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` on slower hosts.
+`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. Before the idempotent Doctor pass,
+the harness counts persisted sessions, transcript events, cron jobs, and distinct
+enabled plugin roots. Its budget is 60 seconds of fixed overhead plus 80 ms per
+session, 2 ms per event, 20 ms per cron job, and 20 seconds per plugin root,
+rounded up to whole seconds. The 60-second floor covers small states; the
+per-unit allowances provide slow-hardware headroom over the measured 473-second
+AWS run while still rejecting a twofold slowdown on that fixture. The timed
+Doctor run never determines its own budget. Counts and computed/effective limits
+appear in the scenario output and `volume-doctor-budget.json`; the summary also
+records `timings.idempotenceBudgetSeconds`. The existing
+`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` override remains
+available for explicit host calibration. The independent
+`OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT` watchdog still defaults to 900 seconds;
+increase it explicitly when scaling a fixture beyond that duration.
 
 The `Update Migration` workflow runs weekly and supports manual dispatch. Its
 default `supported-lines` baseline set resolves npm dist-tags and published
 versions at run time: `latest`, the previous stable release, `extended-stable`
-when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
+when that tag exists, and the supported floor `2026.8.33`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay

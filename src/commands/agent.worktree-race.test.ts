@@ -14,7 +14,7 @@ import {
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { holdWorkspacePreparationSnapshot } from "../agents/workspace-preparation-queue.test-support.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -100,6 +100,7 @@ async function createSessionWorktree(
   const created = await managedWorktrees.create({
     repoRoot: repo,
     name: "race-session",
+    baseRef: "main",
     ownerKind: "session",
     ownerId: sessionKey,
   });

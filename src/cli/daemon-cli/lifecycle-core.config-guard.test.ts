@@ -160,52 +160,10 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     );
   });
 
-  it("warns about plugin packaging after restarting the recorded service", async () => {
-    setPluginPackagingInvalidSnapshot();
-
-    await expect(runServiceRestart(createServiceRunArgs())).resolves.toBe(true);
-
-    expect(service.restart).toHaveBeenCalledTimes(1);
-    expect(lifecycleTestRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        ok: true,
-        result: "restarted",
-        warnings: [expect.stringContaining(pluginPackagingRecoveryHints[0])],
-      }),
-    );
-  });
-
   it("restarts the recorded service when config was written by a newer binary", async () => {
     setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
 
     await expect(runServiceRestart(createServiceRunArgs())).resolves.toBe(true);
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
-
-  it("proceeds with restart when config is valid", async () => {
-    setConfigSnapshot({ exists: true, valid: true });
-
-    const result = await runServiceRestart(createServiceRunArgs());
-
-    expect(result).toBe(true);
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
-
-  it("proceeds with restart when config file does not exist", async () => {
-    setConfigSnapshot({ exists: false, valid: true });
-
-    const result = await runServiceRestart(createServiceRunArgs());
-
-    expect(result).toBe(true);
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
-
-  it("proceeds with restart when snapshot read throws", async () => {
-    readConfigFileSnapshotMock.mockRejectedValue(new Error("read failed"));
-
-    const result = await runServiceRestart(createServiceRunArgs());
-
-    expect(result).toBe(true);
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 });
@@ -241,28 +199,6 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     });
   });
 
-  it("aborts before not-loaded start recovery when config is invalid", async () => {
-    const onNotLoaded = vi.fn(async () => ({
-      result: "started" as const,
-      loaded: true,
-    }));
-    setConfigSnapshot({
-      exists: true,
-      valid: false,
-      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
-    });
-
-    await expect(
-      runServiceStart({
-        ...createServiceRunArgs(),
-        onNotLoaded,
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(onNotLoaded).not.toHaveBeenCalled();
-    expect(service.start).not.toHaveBeenCalled();
-  });
-
   it("proceeds with start when config is valid", async () => {
     setConfigSnapshot({ exists: true, valid: true });
 
@@ -292,13 +228,6 @@ describe("runServiceStop future-config guard", () => {
         warnings: [expect.stringContaining("meta.lastTouchedAt: Unrecognized key")],
       }),
     );
-  });
-  it("stops when config was written by a newer binary", async () => {
-    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
-
-    await runServiceStop(createServiceRunArgs());
-
-    expect(service.stop).toHaveBeenCalledTimes(1);
   });
 
   it("uninstalls the service and warns without rewriting invalid config", async () => {

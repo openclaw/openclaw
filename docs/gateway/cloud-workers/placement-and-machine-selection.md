@@ -6,6 +6,21 @@ read_when: "You are choosing where a session runs, or overriding its operating s
 
 Choosing the machine a session runs on: an explicitly authorized paired device, a Crabbox cloud profile for either harness, and per-placement operating-system and machine-class overrides.
 
+## A deployment-required OpenClaw destination
+
+An operator can set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+when every session must use one OpenClaw worker profile. Control UI displays that
+destination without a chooser; it is not a user-selected cloud worker. The
+Gateway owns placement, including an empty managed workspace for a chat without
+a repository, and rejects attempts to select a local or different execution
+target. Normal users do not need manual dispatch privileges.
+
+If preparation fails, the initial message remains unsent and the existing
+placement recovery flow offers Retry or Stop. There is no local fallback. The
+optional selection procedures below apply when the Gateway has no required
+profile.
+
 ## Codex on a paired device
 
 Paired-device Codex placement requires the `codex` plugin to be installed and
@@ -107,6 +122,6 @@ Select `windows/normal` for native Windows and `windows/wsl2` for the Linux envi
 
 The provider reads `classCatalog.profiles` from `crabbox providers --json` when `classCatalog.disposition` is `mapped`. For each target it prefers amd64 entries when available; targets with only mixed or arm64 entries retain those entries. It marks the configured class as the default separately for each operating system. The catalog includes at most 64 machine options, ordered by enrollable operating system and then by catalog order. A classless profile has no invented default. Reported vCPU and RAM appear independently. RAM follows Crabbox's summary contract: positive integer GB/GiB values are shown; other units, fractional values, and missing dimensions stay unknown. macOS entries with `mixed` architecture and missing dimensions remain selectable. Native type names are never used to guess dimensions. Unmapped, missing, unknown, failed, empty, or unusable catalog metadata produces no machine selector, even if legacy `classes` are present. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
 
-Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed probes are retried by the next discovery request; a Gateway restart is not needed to recover.
+Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed checks are retried by the next discovery request; a Gateway restart is not needed to recover.
 
 Mapped Machine0 classes appear even when Crabbox omits the legacy `classes` summary. These static mappings describe class choices, not current capacity or availability. OpenClaw does not translate provider-native size catalogs into classes. Keep native size selection in Crabbox's configuration: an explicitly configured native size still takes precedence over a class, so the picker cannot override that pin or promise a resize. Acceptance of native server types through `machineClass` is backend-specific, not a universal Crabbox contract. An admitted machine choice remains fixed for that placement and is reused by provisioning retries; catalog changes do not rewrite it. `os` and `machineClass` are valid only with `profileId`, not `deviceId` or `autoDevice`. Omitting either field uses the corresponding profile default.

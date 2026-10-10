@@ -6,6 +6,7 @@ import type { InternalChannelThreadingToolContext } from "../channels/threading-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { PreparedEffectUse } from "../shared/effect-authority.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -23,6 +24,7 @@ type ScheduledMessageActionAuthority = {
   policy: ScheduledToolPolicyContext;
   assertCurrent: () => void;
   assertSourceCurrent?: () => void;
+  prepareUse?: (sourceSensitive: boolean, assertCurrent?: () => void) => Promise<PreparedEffectUse>;
   channelRequester?: CronAuthenticatedChannelRequester;
 };
 
@@ -45,8 +47,6 @@ export type MessageActionAuthorization = {
   requesterAccountId?: string;
   requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
-  /** @internal Preserves the originating channel-selection namespace across Gateway delegation. */
-  allowNativeChannelNamespace?: boolean;
   /** @internal Redeemed from the process-local turn capability. */
   scheduled?: ScheduledMessageActionAuthority;
   /** @internal Restricts writes independently of scheduled authorization. */
@@ -240,6 +240,7 @@ export function mintMessageActionTurnCapability(params: {
   const scheduled = params.scheduled;
   if (scheduled) {
     const assertSourceCurrent = scheduled.assertSourceCurrent;
+    const prepareUse = scheduled.prepareUse;
     capability.scheduled = {
       policy: structuredClone(scheduled.policy),
       ...(scheduled.channelRequester
@@ -249,6 +250,15 @@ export function mintMessageActionTurnCapability(params: {
         assertActive();
         scheduled.assertCurrent();
       },
+      ...(prepareUse
+        ? {
+            prepareUse: (sourceSensitive: boolean, assertCurrent?: () => void) =>
+              prepareUse(sourceSensitive, () => {
+                assertActive();
+                assertCurrent?.();
+              }),
+          }
+        : {}),
       ...(assertSourceCurrent
         ? {
             assertSourceCurrent: () => {

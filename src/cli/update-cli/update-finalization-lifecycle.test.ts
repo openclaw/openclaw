@@ -20,6 +20,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
+import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 const dirs = createTempDirTracker();
 let stderrWrite: MockInstance<typeof process.stderr.write>;
@@ -365,3 +366,101 @@ it("continues finalization after heartbeat errors and warns once for the run", a
   expect(warning).toHaveBeenCalledTimes(1);
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
 });
+
+it.each([false, true])(
+  "expires Doctor work at its deadline after custody and despite progress=%s",
+  async (progress) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const lifecycle = new UpdateFinalizationLifecycle(true, 1_000, () => {});
+    const custodyEntered = createDeferredCore();
+    const custodyReady = createDeferredCore();
+    const workEntered = createDeferredCore<{
+      signal: AbortSignal;
+      capture: NonNullable<ReturnType<typeof captureUpdateFinalizationDoctorOutput>>;
+    }>();
+    const settled = createDeferredCore();
+    let finished = false;
+    const running = withCliProcessScope(() =>
+      lifecycle.run(
+        "doctor",
+        async ({ signal }) => {
+          const capture = captureUpdateFinalizationDoctorOutput("pre-plugin")!;
+          capture(Buffer.from("STEP active fixture-validation"), "stderr");
+          workEntered.resolve({ signal, capture });
+          await settled.promise;
+        },
+        undefined,
+        {
+          enter: async () => {
+            custodyEntered.resolve();
+            await custodyReady.promise;
+          },
+        },
+      ),
+    ).then(
+      () => {
+        finished = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        finished = true;
+        return error;
+      },
+    );
+    const beforeCompletion = <T>(admission: Promise<T>) =>
+      Promise.race([
+        admission,
+        running.then((error) => {
+          throw error instanceof Error
+            ? error
+            : new Error("Doctor work completed before fixture admission", { cause: error });
+        }),
+      ]);
+    try {
+      await beforeCompletion(custodyEntered.promise);
+      // Custody precedes the work deadline; total phase time also includes it.
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(finished).toBe(false);
+      custodyReady.resolve();
+      const { signal, capture } = await beforeCompletion(workEntered.promise);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(signal.aborted).toBe(false);
+      if (progress) {
+        capture(Buffer.from("\nPROGRESS fixture-validation"), "stderr");
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason.message).toContain("timed out in doctor after 1000ms");
+      expect(finished).toBe(false);
+      // Reporting must join admitted work after cancellation rather than truncate its duration.
+      await vi.advanceTimersByTimeAsync(100);
+      settled.resolve();
+      expect(await running).toBe(signal.reason);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(lifecycle.phaseTimings).toEqual([
+        { phase: "doctor", startedOffsetMs: 0, durationMs: 4_600, outcome: "failed" },
+      ]);
+      lifecycle.complete(1);
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "failed",
+          stuckPhase: "doctor",
+          doctorOutput: expect.objectContaining({
+            stderr: expect.objectContaining({
+              excerpt: expect.stringContaining(
+                progress ? "PROGRESS fixture-validation" : "STEP active fixture-validation",
+              ),
+            }),
+          }),
+        }),
+      );
+    } finally {
+      custodyReady.resolve();
+      settled.resolve();
+      await running;
+    }
+  },
+);

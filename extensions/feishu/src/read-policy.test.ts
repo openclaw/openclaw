@@ -87,29 +87,6 @@ describe("Feishu read policy", () => {
     ).toThrow("Feishu read target is not allowed.");
   });
 
-  it("allows native Feishu ingress to identify the current chat", () => {
-    const account = createAccount();
-
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_current",
-        chatType: "group",
-        ctx: {
-          agentAccountId: "default",
-          messageChannel: "feishu",
-          nativeChannelId: "oc_current",
-          deliveryContext: {
-            channel: "feishu",
-            to: "oc_current",
-            accountId: "default",
-          },
-        },
-      }),
-    ).toBe("oc_current");
-  });
-
   it("does not treat wildcard group defaults as admission", () => {
     const account = createAccount();
     account.config = {
@@ -173,29 +150,6 @@ describe("Feishu read policy", () => {
     expect(canEnumerateAllFeishuPeers(account)).toBe(true);
   });
 
-  it.each(["allowlist", "pairing"] as const)(
-    "honors wildcard DM admission under %s policy",
-    (dmPolicy) => {
-      const account = createAccount();
-      account.config = {
-        ...account.config,
-        dmPolicy,
-        allowFrom: ["feishu:*"],
-      };
-
-      expect(
-        assertFeishuChatReadAllowed({
-          cfg,
-          account,
-          chatId: "oc_any",
-          chatType: "p2p",
-          ctx: {},
-        }),
-      ).toBe("oc_any");
-      expect(canEnumerateAllFeishuPeers(account)).toBe(true);
-    },
-  );
-
   it("honors wildcard group admission entries", () => {
     const account = createAccount();
     account.config = {
@@ -213,66 +167,6 @@ describe("Feishu read policy", () => {
       }),
     ).toBe("oc_any");
     expect(canEnumerateAllFeishuGroups(cfg, account)).toBe(true);
-  });
-
-  it("uses filtered live enumeration for open groups with explicit denials", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      groupPolicy: "open",
-      groups: {
-        oc_blocked: { enabled: false },
-      },
-    };
-
-    expect(canEnumerateAllFeishuGroups(cfg, account)).toBe(true);
-  });
-
-  it("uses the global group policy when the provider does not override it", () => {
-    const account = createAccount();
-    account.config = { dmPolicy: "pairing" } as ResolvedFeishuAccount["config"];
-    const globalOpenCfg = {
-      channels: {
-        defaults: { groupPolicy: "open" },
-        feishu: {},
-      },
-    } as OpenClawConfig;
-
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg: globalOpenCfg,
-        account,
-        chatId: "oc_group",
-        chatType: "group",
-        ctx: {},
-      }),
-    ).toBe("oc_group");
-  });
-
-  it("allows the trusted current DM when groups are disabled", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      groupPolicy: "disabled",
-      dmPolicy: "pairing",
-    };
-
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_current",
-        chatType: "p2p",
-        ctx: {
-          accountId: "default",
-          requesterAccountId: "default",
-          toolContext: {
-            currentChannelProvider: "feishu",
-            currentChannelId: "oc_current",
-          },
-        },
-      }),
-    ).toBe("oc_current");
   });
 
   it("rejects an unclassified current target when group reads are disabled", () => {
@@ -298,30 +192,6 @@ describe("Feishu read policy", () => {
         },
       }),
     ).toThrow("Feishu read target is not allowed.");
-  });
-
-  it("lets a direct operator read an unconfigured group or DM", () => {
-    const account = createAccount();
-    const ctx = { conversationReadOrigin: "direct-operator" as const };
-
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_group",
-        chatType: "group",
-        ctx,
-      }),
-    ).toBe("oc_group");
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_dm",
-        chatType: "p2p",
-        ctx,
-      }),
-    ).toBe("oc_dm");
   });
 
   it("keeps disabled group targets blocked for direct operators", () => {

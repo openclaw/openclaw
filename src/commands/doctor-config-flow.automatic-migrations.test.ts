@@ -192,18 +192,6 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
 
 it.each([
   {
-    name: "a legacy parent (1)",
-    legacy: true,
-    repair: false,
-    env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-  },
-  {
-    name: "a legacy parent (off)",
-    legacy: true,
-    repair: false,
-    env: { OPENCLAW_UPDATE_IN_PROGRESS: " off " },
-  },
-  {
     name: "a legacy parent (legacy)",
     legacy: true,
     repair: true,

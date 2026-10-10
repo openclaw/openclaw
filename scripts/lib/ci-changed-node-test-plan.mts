@@ -50,7 +50,7 @@ import {
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
-  type NodeTestShardGroup,
+  type NodeTestShard,
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
@@ -73,7 +73,6 @@ import {
 import {
   mergeVitestPretestBuildModes,
   resolveVitestPretestBuildMode,
-  type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
 import {
   createCompactSplitTimingGeneration,
@@ -82,21 +81,8 @@ import {
   VITEST_PRETEST_BUILD_SECONDS,
 } from "./vitest-shard-metadata.mts";
 
-type ChangedNodeTestShard = {
-  checkName: string;
-  configs: string[];
-  groups?: NodeTestShardGroup[];
-  env?: Record<string, string>;
-  includePatterns?: string[];
-  planConcurrency?: number;
-  predictedSeconds?: number;
-  predictedTestSeconds?: number;
-  pretestBuildMode?: VitestPretestBuildMode;
-  requiresDist: boolean;
-  runner: string;
-  shardName: string;
+type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
-  timeoutMinutes?: number;
 };
 type CwdOptions = { cwd?: string };
 type PlanDiagnostic = (reason: string) => void;
@@ -465,6 +451,7 @@ export function resolveChangedNodeTestTargets(
     cwd,
     broad: false,
     boundedOwners: true,
+    baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
@@ -1008,13 +995,14 @@ export function createChangedNodeTestShards(
   const canonicalTargets = prTargetPlans
     .filter(({ target }) => !target.startsWith("extensions/"))
     .filter(
-      ({ plans }) =>
+      ({ target, plans }) =>
         plans.every((plan) => plan.includePatterns) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
+          resolveVitestPretestBuildMode([{ includePatterns: [target] }]) === "private-qa" ||
           plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
         plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )
