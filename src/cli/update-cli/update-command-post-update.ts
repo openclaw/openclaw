@@ -1,5 +1,7 @@
+import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
@@ -8,6 +10,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { CLI_NAME } from "../cli-name.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import {
   shouldWaitForRecovery,
@@ -16,6 +19,7 @@ import {
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
+import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 import {
   completePostUpdateMaintenance,
   parkPostUpdateService,
@@ -656,6 +660,23 @@ async function finishSettledUpdate(
           }
         }
         return resultWithPostUpdate;
+      }
+      // The activation Doctor deferred optional inspections for this owner: the
+      // original updater, or a migrated worker it handed the marker to.
+      if (
+        resultWithPostUpdate.status === "ok" &&
+        resultWithPostUpdate.steps.some((step) => step.name === `${CLI_NAME} doctor`) &&
+        (!candidateRuntime ||
+          isTruthyEnvValue(process.env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]))
+      ) {
+        assertCurrent();
+        resultWithPostUpdate = await runPostActivationInspections({
+          root: postUpdateRoot,
+          result: resultWithPostUpdate,
+          timeoutMs: params.updateStepTimeoutMs,
+          nodeRunner: params.packageUpdateNodeRunner,
+          ownedManagedUpdateEnv: params.ownedManagedUpdateEnv,
+        });
       }
       const maintenanceFailure = await completePostUpdateMaintenance(
         params,

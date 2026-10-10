@@ -1045,4 +1045,90 @@ describe("successful update finalization ordering", () => {
       );
     });
   });
+
+  it.each([
+    { owner: "original updater", candidateRuntime: false, marker: false, runs: true },
+    { owner: "migrated worker with the marker", candidateRuntime: true, marker: true, runs: true },
+    { owner: "worker from a shipped updater", candidateRuntime: true, marker: false, runs: false },
+  ])(
+    "runs deferred Doctor inspections after the restart for the $owner",
+    async ({ candidateRuntime, marker, runs }) => {
+      const root = tempDirs.make("post-activation-inspections-");
+      const lintLog = path.join(root, "lint.json");
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(
+        path.join(root, "dist", "index.js"),
+        `require("node:fs").writeFileSync(${JSON.stringify(lintLog)}, JSON.stringify({ argv: process.argv.slice(2), inProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS ?? null }));
+process.stdout.write(JSON.stringify({ ok: false, checksRun: 3, findings: [{ checkId: "core/doctor/workspace-status", severity: "warning", message: "Plugin drift." }] }));
+process.exitCode = 1;
+`,
+      );
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+      if (marker) {
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS", "1");
+      }
+      const events: string[] = [];
+      mocks.restartService.mockImplementation(async () => {
+        events.push(
+          await fs.stat(lintLog).then(
+            () => "restart after lint",
+            () => "restart",
+          ),
+        );
+        return "ok";
+      });
+      const doctorStep = {
+        name: "openclaw doctor",
+        command: "openclaw doctor --fix",
+        cwd: root,
+        durationMs: 1,
+        exitCode: 0,
+      };
+
+      await finishSuccessfulPackageSwitch(
+        { packageRoot: root, restartEnvironment: process.env },
+        {
+          result: { status: "ok", mode: "npm", root, steps: [doctorStep], durationMs: 1 },
+          packageUpdateNodeRunner: process.execPath,
+        },
+        { candidateRuntime },
+      );
+
+      expect(events).toEqual(["restart"]);
+      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      if (!runs) {
+        await expect(fs.stat(lintLog)).rejects.toThrow();
+        expect(steps).toEqual([doctorStep]);
+        return;
+      }
+      const lint = JSON.parse(await fs.readFile(lintLog, "utf8"));
+      expect(lint.argv.slice(0, 4)).toEqual(["doctor", "--lint", "--json", "--only"]);
+      expect(lint.argv[4].split(",")).toEqual(
+        expect.arrayContaining([
+          "core/doctor/workspace-status",
+          "core/doctor/runtime-tool-schemas",
+          "core/doctor/provider-catalog-projection",
+        ]),
+      );
+      expect(lint.argv[4].split(",")).not.toContain("core/doctor/security");
+      expect(lint.inProgress).toBeNull();
+      expect(steps).toEqual([
+        doctorStep,
+        expect.objectContaining({
+          name: "post-activation doctor inspections",
+          exitCode: 1,
+          warnings: ["core/doctor/workspace-status: Plugin drift."],
+          doctorLintFindings: [
+            {
+              checkId: "core/doctor/workspace-status",
+              severity: "warning",
+              message: "Plugin drift.",
+            },
+          ],
+          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+        }),
+      ]);
+      expect(mocks.printResult.mock.lastCall?.[0].status).toBe("ok");
+    },
+  );
 });
