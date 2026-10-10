@@ -143,7 +143,7 @@ describe("runCli environment and passive startup", () => {
     envSnapshot.restore();
   });
 
-  it("preserves original state before update and Doctor dispatch with debug capture enabled", async () => {
+  it("defers capture before update, Doctor, and proxy dispatch with debug capture enabled", async () => {
     const stateDir = tempDirs.make("cli-deferred-capture-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -159,6 +159,8 @@ describe("runCli environment and passive startup", () => {
     try {
       for (const args of [
         ["update"],
+        ["proxy", "start"],
+        ["proxy", "run", "--", "synthetic-child"],
         ["--update"],
         ["doctor", "--fix", "--non-interactive"],
         ["update", "status"],

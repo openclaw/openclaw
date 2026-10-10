@@ -215,7 +215,7 @@ export function readSessionEntryCohort(
       ...(includeAuthProfileSource ? { authProfileSource } : {}),
     };
   };
-  // The transaction owner performs the one fresh probe after BEGIN; nested kernels share it.
+  // The cohort owns one consistent snapshot for its related reads.
   return database.db.isTransaction
     ? runSqliteReadOperationSync(database.db, read)
     : runSqliteDeferredTransactionSync(database.db, read);

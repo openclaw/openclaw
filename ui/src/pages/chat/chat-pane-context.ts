@@ -527,9 +527,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (readsResumed && !sourceChanged && this.presented) {
       this.markSessionRead(selectedChatSessionRow(state));
     }
-    if (wasConnected && !state.connected) {
-      // Only the connected->disconnected transition may reshape loading state;
-      // repeated disconnected snapshots must stay no-ops for pane ownership.
+    if (!state.connected && (wasConnected || sourceChanged)) {
+      // The first client can arrive after startup is already waiting for it.
+      // Preserve that loading intent; repeated disconnected snapshots stay no-ops.
       state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
     }
     const resumedHistory =

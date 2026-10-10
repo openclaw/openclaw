@@ -423,23 +423,17 @@ export async function waitForMembershipEvent(
 }
 
 export async function runTopologyScopedTopLevelScenario(params: {
-  accessToken: string;
   actorId: MatrixQaActorId;
-  actorUserId: string;
   context: MatrixQaScenarioContext;
   roomKey: string;
   tokenPrefix: string;
   withMention?: boolean;
 }) {
+  const actorUserId = params.context[`${params.actorId}UserId`];
   const roomId = resolveMatrixQaScenarioRoomId(params.context, params.roomKey);
   const result = await runConfigurableTopLevelScenario({
-    accessToken: params.accessToken,
-    actorId: params.actorId,
-    baseUrl: params.context.baseUrl,
-    observedEvents: params.context.observedEvents,
+    ...resolveMatrixQaActorSyncParams(params.context, params.actorId),
     roomId,
-    syncState: params.context.syncState,
-    syncStreams: params.context.syncStreams,
     sutUserId: params.context.sutUserId,
     timeoutMs: params.context.timeoutMs,
     tokenPrefix: params.tokenPrefix,
@@ -448,7 +442,7 @@ export async function runTopologyScopedTopLevelScenario(params: {
   assertTopLevelReplyArtifact(`reply in ${params.roomKey}`, result.reply);
   return {
     artifacts: {
-      actorUserId: params.actorUserId,
+      actorUserId,
       driverEventId: result.driverEventId,
       reply: result.reply,
       roomKey: params.roomKey,
@@ -459,7 +453,7 @@ export async function runTopologyScopedTopLevelScenario(params: {
       `room key: ${params.roomKey}`,
       `room id: ${roomId}`,
       `driver event: ${result.driverEventId}`,
-      `trigger sender: ${params.actorUserId}`,
+      `trigger sender: ${actorUserId}`,
       ...buildMatrixReplyDetails("reply", result.reply),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;

@@ -114,22 +114,20 @@ describe("canonical proof on physical database validation", () => {
         );
       const warm = observe(database.db);
       try {
-        runSqliteReadOperationSync(
-          database.db,
-          () => {
-            expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
-            expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
-          },
-          "fresh",
-        );
-        expect(warm.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
+        runSqliteReadOperationSync(database.db, () => {
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+        });
+        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
         database.db.exec("BEGIN");
         try {
           expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
-          expect(warm.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
+          expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
         } finally {
           database.db.exec("COMMIT");
         }
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
       } finally {
         warm.restore();
       }
@@ -141,13 +139,11 @@ describe("canonical proof on physical database validation", () => {
       const cold = observe(reader.database.db);
       try {
         expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true);
-        expect(cold.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
-        runSqliteReadOperationSync(
-          reader.database.db,
-          () => expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true),
-          "fresh",
+        expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+        runSqliteReadOperationSync(reader.database.db, () =>
+          expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true),
         );
-        expect(cold.counts).toEqual({ data_version: 2, schema_version: 0, user_version: 0 });
+        expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
       } finally {
         cold.restore();
         reader.database.close();

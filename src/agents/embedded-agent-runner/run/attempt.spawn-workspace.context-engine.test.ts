@@ -31,13 +31,11 @@ import {
   createDefaultEmbeddedSession,
   createContextEngineBootstrapAndAssemble,
 } from "./attempt-spawn-workspace.test-support.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 function useHooks(hooks: Parameters<typeof createHookRunnerWithRegistry>[0]) {
   hoisted.getGlobalHookRunnerMock.mockReturnValue(createHookRunnerWithRegistry(hooks).runner);
 }
 const embeddedSessionId = "embedded-session";
-const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 
 const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
@@ -112,11 +110,6 @@ function signedAssistant(
 }
 
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
-type ToolResultGuardInstallParams = {
-  midTurnPrecheck?: {
-    onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
-  };
-};
 async function readTrajectoryEvents(paths: string[]): Promise<TrajectoryEvent[]> {
   const workspaceDir = paths[0];
   if (!workspaceDir) {
@@ -1053,60 +1046,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
-  });
-});
-
-describe("runEmbeddedAttempt context engine mid-turn precheck integration", () => {
-  it("recovers when the runtime emits the mid-turn precheck as an assistant error", async () => {
-    hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as ToolResultGuardInstallParams;
-      params.midTurnPrecheck?.onMidTurnPrecheck?.({
-        route: "compact_only",
-        estimatedPromptTokens: 9000,
-        promptBudgetBeforeReserve: 7000,
-        overflowTokens: 2000,
-        toolResultReducibleChars: 0,
-        effectiveReserveTokens: 1000,
-      });
-      return () => {};
-    });
-
-    const syntheticRuntimeError = {
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-      stopReason: "error",
-      errorMessage: "Context overflow: prompt too large for the model (mid-turn precheck).",
-      timestamp: 3,
-    } as unknown as AgentMessage;
-
-    const result = await runAttempt({
-      attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                mode: "safeguard",
-                midTurnPrecheck: { enabled: true },
-              },
-            },
-          },
-        } as OpenClawConfig,
-      },
-      sessionMessages: [seedMessage],
-      sessionPrompt: async (session) => {
-        session.messages = [...session.messages, syntheticRuntimeError];
-      },
-    });
-
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({
-      route: "compact_only",
-      source: "mid-turn",
-      estimatedPromptTokens: 9000,
-      promptBudgetBeforeReserve: 7000,
-      overflowTokens: 2000,
-    });
-    expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
 

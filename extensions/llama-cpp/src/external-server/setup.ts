@@ -27,11 +27,8 @@ import {
   LLAMA_CPP_DEFAULT_PROFILE_ID as PROFILE_ID,
 } from "../auth-config.js";
 import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "../defaults.js";
-import {
-  hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
-  resolveLlamaServerRuntimeApiKey,
-} from "./auth.js";
+import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR, LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
@@ -245,6 +242,7 @@ async function discoverForSetup(
       apiKey,
       headers,
       signal: ctx.signal,
+      useRuntimeDefaults: false,
     });
     return discovery.kind === "success" ? discovery : null;
   } catch {
@@ -375,6 +373,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     apiKey,
     headers,
     signal: ctx.signal,
+    useRuntimeDefaults: false,
   });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
@@ -447,7 +446,12 @@ async function validateNonInteractiveDiscovery(
   } else {
     persistence = { kind: "remove" };
   }
-  const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers });
+  const discovery = await discoverLlamaServer({
+    baseUrl,
+    apiKey,
+    headers,
+    useRuntimeDefaults: false,
+  });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
   }
