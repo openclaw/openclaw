@@ -189,6 +189,8 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
 
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
+  protected async collectOrphanedEmbeddingCache(): Promise<void> {}
+
   protected resetProviderInitializationForRetry(): void {}
 
   protected assertRequiredProviderAvailable(): void {}

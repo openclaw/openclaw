@@ -40,18 +40,46 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
   ): Promise<number[][]>;
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
-    const max = this.cache.maxEntries;
-    if (!this.cache.enabled || !max || max <= 0) {
-      return;
-    }
+  /** Pins the database handle for a write loop and rejects once its owner closed or changed. */
+  private pinDatabaseWriteAdmission() {
     const database = this.database;
     const assertCurrent = () => {
       if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
+    return { database, assertCurrent };
+  }
+
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
+    const max = this.cache.maxEntries;
+    if (!this.cache.enabled || !max || max <= 0) {
+      return;
+    }
+    const { database, assertCurrent } = this.pinDatabaseWriteAdmission();
     while (await database.pruneEmbeddingCache(max, assertCurrent)) {
+      await yieldToEventLoop();
+    }
+  }
+
+  /**
+   * Drop cache rows for the active identities that no published chunk references.
+   * Runs only after a successful full publication, so a failed rebuild keeps the
+   * vectors a retry would reuse. Rows written at or after `before` (when the
+   * rebuild started) are kept: another sync may have cached them for chunks it
+   * has not published yet. Other identities are left to their own rebuilds.
+   */
+  protected async collectOrphanedEmbeddingCache(before: number): Promise<void> {
+    if (!this.cache.enabled) {
+      return;
+    }
+    const identities =
+      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
+    if (identities.length === 0) {
+      return;
+    }
+    const { database, assertCurrent } = this.pinDatabaseWriteAdmission();
+    while (await database.collectOrphanedEmbeddingCache(identities, before, assertCurrent)) {
       await yieldToEventLoop();
     }
   }

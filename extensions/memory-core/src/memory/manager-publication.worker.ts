@@ -17,6 +17,7 @@ import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manag
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
+  deleteOrphanedMemoryEmbeddingCacheRows,
   loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
@@ -285,6 +286,15 @@ function createPublicationBackend(
             pruneMemoryEmbeddingCache(db, command.input.maxEntries);
             return true;
           });
+        }
+        if (command.type === "cache.collect-orphans") {
+          return write(() =>
+            deleteOrphanedMemoryEmbeddingCacheRows(
+              db,
+              command.input.identities,
+              command.input.before,
+            ),
+          );
         }
         if (command.type === "cache.clear") {
           return write(() => {

@@ -52,6 +52,7 @@ import {
   memoryPublicationBatches,
   memoryPublicationHeader,
 } from "./manager-publication-transfer.js";
+import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -465,6 +466,24 @@ export class MemoryIndexDatabase {
       (await this.retryPublication(() =>
         this.runPublication(
           (scope) => scope.execute({ type: "cache.prune", input: { maxEntries } }),
+          assertCurrent,
+        ),
+      )) ?? false
+    );
+  }
+
+  /** Removes one batch of unreferenced cache rows; true means another batch may remain. */
+  async collectOrphanedEmbeddingCache(
+    identities: MemoryIndexProviderIdentity[],
+    before: number,
+    assertCurrent: () => void,
+  ): Promise<boolean> {
+    assertCurrent();
+    return (
+      (await this.retryPublication(() =>
+        this.runPublication(
+          (scope) =>
+            scope.execute({ type: "cache.collect-orphans", input: { identities, before } }),
           assertCurrent,
         ),
       )) ?? false
