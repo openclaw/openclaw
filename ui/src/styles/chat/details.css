@@ -12,6 +12,7 @@ openclaw-chat-details {
 
 .chat-gutter-stack--details .chat-gutter-header {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   width: 100%;
   pointer-events: none;
@@ -39,6 +40,15 @@ openclaw-chat-details {
 
 .chat-pane__header-trailing > openclaw-chat-details {
   flex: none;
+  /* Pane activation reveals actions without moving this click target. */
+  order: 1;
+}
+
+@container (max-width: 400px) {
+  .chat-pane__header-trailing .chat-details-toggle {
+    min-height: 24px;
+    padding-block: 2px;
+  }
 }
 
 openclaw-chat-details-session,
