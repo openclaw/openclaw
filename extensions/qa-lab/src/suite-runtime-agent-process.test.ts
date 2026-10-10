@@ -362,7 +362,7 @@ describe("qa suite runtime agent process helpers", () => {
       const command = args[2];
       expect(args[1]).toBe("memory");
       expect(gatewayRunning, `${command} Gateway ownership`).toBe(command === "search");
-      operations.push(command);
+      operations.push(...args.slice(2, 3));
       const child = createSpawnedProcess();
       queueMicrotask(() => {
         child.stdout.emit(
