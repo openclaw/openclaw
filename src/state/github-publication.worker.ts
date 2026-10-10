@@ -50,9 +50,7 @@ function requiresSource(
   if (
     input.operation === "bindWorkspaceSnapshot" ||
     input.operation === "updatePublishingFacts" ||
-    input.operation === "checkpoint" ||
-    input.operation === "failPreparation" ||
-    input.operation === "retire"
+    input.operation === "checkpoint"
   ) {
     return true;
   }
@@ -110,10 +108,6 @@ function assertMutationSource(
   source: GitHubPublicationSourcePredicate,
 ): void {
   const { selector } = source;
-  const retiring = result.operation === "retire";
-  if (retiring !== (selector.purpose === "retire")) {
-    throw new Error("GitHub publication transition source purpose changed.");
-  }
   // Validate authoritative postimages before COMMIT, so even a mismatched input
   // receipt cannot use a different session's live source capability.
   for (const row of result.rows) {
@@ -133,9 +127,6 @@ function assertMutationSource(
         (selector.repositoryBranch !== undefined && row.branch !== selector.repositoryBranch)
       ) {
         throw new Error("GitHub publication transition source repository changed.");
-      }
-      if (retiring) {
-        continue;
       }
       const workspace = source.expected.repositoryWorkspace;
       if (
@@ -276,7 +267,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
           database,
           input.row,
           input.nextAction,
-          admitted,
+          authority.assertCustody,
         ),
       ];
     case "defer":
@@ -285,7 +276,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
         selectGitHubPublicationDeferralsInDatabase(database.db, "repository", input.selection),
       );
     case "retire": {
-      // The host grants this command only while its original session is no longer current.
+      // Recovery observed the stale source while holding the workspace reservation.
       const row = repository.failStaleRepositoryGitHubPublicationInDatabase(
         database,
         input.row,

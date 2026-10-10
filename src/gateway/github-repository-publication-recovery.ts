@@ -14,7 +14,6 @@ import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
-import { prepareGitHubPublicationSource } from "./github-publication-source.js";
 import {
   listRepositoryGitHubPublicationsAsync,
   deferRepositoryGitHubPublicationClaimsAsync,
@@ -34,7 +33,6 @@ import {
   captureCheckpoint,
   resolveReceiptOwner,
 } from "./github-repository-publication-workspace.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -158,7 +156,6 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   getCommittedRuntimeConfig: () => OpenClawConfig;
   isExecuting: (requestId: string) => boolean;
   assertCurrent: () => void;
-  signal: AbortSignal;
   execute: (
     row: RepositoryGitHubPublicationRow,
     assertCustody: () => void,
@@ -325,41 +322,11 @@ export function createRepositoryGitHubPublicationRecovery(params: {
               }
               const owner = resolveReceiptOwner(row, preparedOwner);
               if (!owner) {
-                const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
-                  cfg: params.getCommittedRuntimeConfig(),
-                  key: row.session_key,
-                  agentId: row.agent_id,
-                  assertActive: assertCurrent,
-                });
-                const sourcePath = loaded.readSource?.path;
-                if (!sourcePath) {
-                  throw new GitHubPublicationRecoveryPendingError(
-                    "GitHub publication source is unavailable; retry after session storage is ready.",
-                  );
-                }
                 const assertRecovery = () => {
                   params.assertCurrent();
                   assertCurrent();
                 };
-                await failStaleRepositoryGitHubPublicationAsync(row, {
-                  assertAction: assertRecovery,
-                  assertCustody: assertRecovery,
-                  prepareSource: () =>
-                    prepareGitHubPublicationSource({
-                      sourcePath,
-                      selector: {
-                        agentId: row.agent_id,
-                        sessionKey: row.session_key,
-                        sessionId: row.session_id,
-                        lifecycleRevision: row.session_lifecycle_revision,
-                        repositoryWorkspaceId: row.workspace_id,
-                        repositoryBranch: row.branch,
-                        purpose: "retire",
-                      },
-                      signal: params.signal,
-                      assertCurrent: assertRecovery,
-                    }),
-                });
+                await failStaleRepositoryGitHubPublicationAsync(row, assertRecovery);
                 return;
               }
               await params.execute(row, assertCurrent);

@@ -291,22 +291,22 @@ export async function bindRepositoryGitHubPublicationCheckpointAsync(
 export async function failRepositoryGitHubPublicationPreparationAsync(
   row: RepositoryGitHubPublicationRow,
   nextAction: string,
-  authority: GitHubPublicationTransitionAuthority,
+  assertCustody: () => void,
 ) {
   return requireRow(
     await repositoryMutation(
       mutationScope(),
       { operation: "failPreparation", row, nextAction },
-      authority,
+      assertCustody,
     ),
   );
 }
 
 export async function failStaleRepositoryGitHubPublicationAsync(
   row: RepositoryGitHubPublicationRow,
-  authority: GitHubPublicationTransitionAuthority,
+  assertCustody: () => void,
 ) {
-  await repositoryMutation(mutationScope(), { operation: "retire", row }, authority);
+  await repositoryMutation(mutationScope(), { operation: "retire", row }, assertCustody);
 }
 
 export async function deferRepositoryGitHubPublicationClaimsAsync(

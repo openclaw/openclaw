@@ -8,7 +8,6 @@ import type { UserGitHubConnectionAuthority } from "./user-github-connections.ty
 import type { UserProfileEmailBinding } from "./user-profiles.types.js";
 
 export type GitHubPublicationSourceSelector = {
-  purpose?: "current" | "retire";
   agentId: string;
   sessionKey: string;
   sessionId: string;
