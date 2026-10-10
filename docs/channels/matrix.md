@@ -149,6 +149,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `streaming.chunkMode`: `"length"` (default, splits by character count) or `"newline"` (splits at line boundaries).
 - `historyLimit`: number of recent room messages included as `InboundHistory` when a room message triggers the agent. Falls back to `messages.groupChat.historyLimit`; effective default `0` (disabled).
 - `mediaMaxMb`: media size cap in MB for outbound sends and inbound processing. Default: `20`.
+- `mediaHoldMs`: wait up to this many milliseconds after an attachment that has no caption for the same sender's next text in the same room or thread, and answer both as one turn with the text as the attachment's caption. Clients without caption support, such as Element Web, send the file as soon as it uploads and the typed text as a separate message. Any other message in that conversation, a second attachment, or a control command dispatches the held attachment alone first; a standalone attachment is answered once the wait ends. Voice messages and captioned attachments are never held. Default: `0` (off); maximum `60000`. Per-account override: `accounts.<accountId>.mediaHoldMs`.
 
 ### Reaction settings
 

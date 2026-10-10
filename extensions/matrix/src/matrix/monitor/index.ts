@@ -51,6 +51,7 @@ import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { createMatrixMediaHold } from "./media-hold.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -213,6 +214,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let disposeAutoJoin = () => {};
   let disposeMonitorEvents = () => {};
   let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
+  let mediaHold: ReturnType<typeof createMatrixMediaHold> | null = null;
   let monitorSetupClosed = false;
   const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
     if (cleanupPromise) {
@@ -293,6 +295,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     closeTaskAdmission: () => {
       monitorSetupClosed = true;
       monitorTaskRunner.close();
+      // Held attachments run in already-admitted tasks; dispatch them now so the
+      // task drain below does not wait out the hold window.
+      void mediaHold?.flushHeld();
     },
     detachListeners: () => {
       disposeAutoJoin();
@@ -421,6 +426,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getMemberDisplayName,
       needsRoomAliasesForConfig,
     });
+    const mediaHoldMs = accountConfig.mediaHoldMs ?? 0;
+    mediaHold =
+      mediaHoldMs > 0
+        ? createMatrixMediaHold({
+            holdMs: mediaHoldMs,
+            selfUserId: auth.userId,
+            dispatch: handleRoomMessage,
+            isControlCommand: (text) => core.channel.commands.isControlCommandMessage(text, cfg),
+            logVerboseMessage,
+          })
+        : null;
     const createdThreadBindingManager = await createMatrixThreadBindingManager({
       cfg,
       accountId: effectiveAccountId,
@@ -468,7 +484,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logger,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
+      onRoomMessage: mediaHold?.onRoomMessage ?? handleRoomMessage,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 

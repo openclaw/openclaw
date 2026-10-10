@@ -38,6 +38,7 @@ import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
+import type { MatrixRoomMessageDispatchOptions } from "./media-hold.js";
 import { createRoomHistoryTracker } from "./room-history.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -110,7 +111,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
-  return async (roomId: string, event: MatrixRawEvent) => {
+  return async (
+    roomId: string,
+    event: MatrixRawEvent,
+    dispatchOptions?: MatrixRoomMessageDispatchOptions,
+  ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let inboundReplayClaim:
       | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
@@ -177,6 +182,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           claimInboundReplay: (handle) => {
             inboundReplayClaim = handle;
           },
+          absorbedEventIds: dispatchOptions?.absorbedEventIds,
         });
       const ingressContext = {
         handler: handlerConfig,

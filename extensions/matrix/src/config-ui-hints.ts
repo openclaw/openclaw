@@ -14,6 +14,10 @@ export const matrixChannelConfigUiHints = {
     label: "Mention in Bot Threads",
     help: "Override the account's bot-created thread mention policy for this Matrix room. Exact room entries replace wildcard room settings.",
   },
+  mediaHoldMs: {
+    label: "Matrix Attachment Text Wait (ms)",
+    help: "Hold an attachment sent without a caption for up to this many milliseconds so the sender's next text in the same room or thread joins it as one turn. Helps clients such as Element Web that send the file and the typed text as separate messages. Default: 0 (off); maximum 60000. A standalone attachment is answered after the wait.",
+  },
   joinIntro: {
     label: "Matrix Group Join Introduction",
     help: "Post one brief introduction when the bot joins an allowed group room (default: true). Account settings override the channel-wide setting.",
