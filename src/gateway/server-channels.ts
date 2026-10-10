@@ -1006,7 +1006,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
             })
             .finally(() => {
-              const ownsHandoff = store.lifetimes.get(id) === lifetime;
+              const ownsHandoff = store.lifetimes.get(id) === lifetime && !abort.signal.aborted;
               releaseTask();
               // Retry ingress spans backoff and preparation. A successful retry
               // transfers admission to its signal before this predecessor ends.

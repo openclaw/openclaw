@@ -1661,7 +1661,7 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
-  it.each(["superseded", "terminal"] as const)(
+  it.each(["superseded", "terminal", "exhausted"] as const)(
     "ends retry ingress with the recovery lifetime (%s)",
     async (mode) => {
       const terminal = mode === "terminal";
@@ -1672,6 +1672,9 @@ describe("server-channels auto restart", () => {
           startAccount: async ({ abortSignal, setStatus }) => {
             const stopped = waitForAbort(abortSignal);
             const generation = ++starts;
+            if (mode === "exhausted" && generation > 1) {
+              throw new Error("startup failed");
+            }
             if (generation === 2) {
               if (terminal) {
                 setStatus(
@@ -1706,6 +1709,16 @@ describe("server-channels auto restart", () => {
         await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
         await manager.startChannels();
         await flushMicrotasks(30);
+        if (mode === "exhausted") {
+          await vi.advanceTimersByTimeAsync(200);
+          await flushMicrotasks(30);
+          expect(readAccount(manager)).toMatchObject({
+            restartPending: false,
+            reconnectAttempts: 11,
+          });
+          expect(registry.httpRoutes).toEqual([]);
+          return;
+        }
         if (terminal) {
           expect(registry.httpRoutes).toEqual([]);
           expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
