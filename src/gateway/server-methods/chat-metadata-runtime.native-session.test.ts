@@ -492,7 +492,7 @@ describe("required worker inference composer policy", () => {
       },
     } satisfies Parameters<typeof readPreparedChatMetadata>[0];
     const project = (readParams: Parameters<typeof readPreparedChatMetadata>[1]) =>
-      readPreparedChatMetadata(projection, readParams, config, null);
+      readPreparedChatMetadata(projection, readParams, config, null, undefined);
     expect(project(params).requiredWorkerInferenceProfileId).toBe(expected);
     expect(project({ agentId: "main" })).not.toHaveProperty("requiredWorkerInferenceProfileId");
     expect(
