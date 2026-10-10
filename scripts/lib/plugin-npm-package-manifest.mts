@@ -1181,10 +1181,7 @@ function withPluginNpmManifestOverlay<T>(
     },
   ]
     .filter(({ value }) => value)
-    .map((overlay) => ({
-      ...overlay,
-      original: fs.readFileSync(overlay.file, "utf8"),
-    }));
+    .map((overlay) => Object.assign(overlay, { original: fs.readFileSync(overlay.file, "utf8") }));
   try {
     for (const overlay of overlays) {
       console.error(overlay.message);

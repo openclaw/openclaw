@@ -61,7 +61,7 @@ type ProjectRequirements = {
 };
 const CORE_TEST_REQUIREMENTS: ProjectRequirements = {
   roots: ["packages", "ui/config", "ui/src"],
-  paths: CORE_TEST_REQUIRED_PATHS.map((path) => ({ path })),
+  paths: CORE_TEST_REQUIRED_PATHS.map((requiredPath) => ({ path: requiredPath })),
 };
 const PROJECT_REQUIREMENTS = new Map<string, ProjectRequirements>([
   ["tsconfig.core.json", { roots: ["packages"], paths: CORE_PROD_REQUIRED_PATHS }],
