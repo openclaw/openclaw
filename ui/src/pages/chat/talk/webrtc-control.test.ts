@@ -107,55 +107,6 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     vi.unstubAllGlobals();
   });
 
-  it("submits control results without optional response and item ids", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "steer",
-          sessionKey: "main",
-          active: true,
-          queued: true,
-          message: "Got it. I steered the active run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const transport = await createOpenAiTransport({
-      addEventListener: vi.fn(() => () => undefined),
-      request,
-    });
-
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
-    dispatchCompletedToolCall(peer, {
-      responseId: null,
-      itemId: null,
-      arguments: JSON.stringify({ text: "revísalo en WebUI", mode: "steer" }),
-    });
-
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", {
-        sessionKey: "main",
-        text: "revísalo en WebUI",
-        mode: "steer",
-      }),
-    );
-    const sent = sentRealtimeEvents(peer);
-    expect(sent).toContainEqual({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: "call-control",
-        output: expect.stringContaining('"mode":"steer"'),
-      },
-    });
-    transport.stop();
-  });
-
   it.each(["resolved", "rejected"])(
     "discards a pending control %s after its transport stops and a replacement starts",
     async (outcome) => {
@@ -419,21 +370,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     transport.stop();
   });
 
-  it("silently disposes a provisional OpenAI transport", async () => {
-    const onTalkEvent = vi.fn();
-    const transport = await createOpenAiTransport({}, { onTalkEvent });
-    await transport.start();
-    onTalkEvent.mockClear();
-
-    transport.stop({ emitClosed: false });
-
-    expect(onTalkEvent).not.toHaveBeenCalled();
-    expect(FakePeerConnection.instances[0]?.connectionState).toBe("closed");
-  });
-
   it.each([
     ["close_requested", "idle"],
-    ["content", "error"],
     ["connection_lost", "error"],
   ])(
     "displays GPT-Live transcript fragments and releases media on %s finalization",

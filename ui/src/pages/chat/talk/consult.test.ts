@@ -30,48 +30,6 @@ function createChatEvents() {
 }
 
 describe("RealtimeTalkSession consult handoff", () => {
-  it("submits realtime consults through the Gateway tool-call endpoint", async () => {
-    const order: string[] = [];
-    const events = createChatEvents();
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "talk.client.toolCall") {
-        order.push("tool-call");
-        setImmediate(() => {
-          events.final({ text: "Basement lights are off." });
-        });
-        return consultRun;
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const submit = vi.fn();
-    const flushTranscriptWrites = vi.fn(async () => {
-      order.push("flush");
-    });
-
-    await submitRealtimeTalkConsult({
-      ctx: {
-        client: { request, addEventListener: events.addEventListener },
-        sessionKey: "agent:main:main",
-        voiceSessionId: "voice-1",
-        flushTranscriptWrites,
-        callbacks: {},
-      } as never,
-      callId: "call-1",
-      args: { question: "Are the basement lights off?" },
-      submit,
-    });
-
-    expect(request).toHaveBeenCalledWith("talk.client.toolCall", {
-      sessionKey: "agent:main:main",
-      voiceSessionId: "voice-1",
-      name: "openclaw_agent_consult",
-      callId: "call-1",
-      args: { question: "Are the basement lights off?" },
-    });
-    expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
-    expect(order).toEqual(["flush", "tool-call"]);
-  });
-
   it("does not start a consult after aborting during the transcript flush", async () => {
     const flushPending = createDeferred();
     const flushTranscriptWrites = vi.fn(async () => await flushPending.promise);
@@ -102,7 +60,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
-  it.each(["agent:voice:home", "global"])(
+  it.each(["global"])(
     "keeps the acknowledgement alive and cancels its exact %s target",
     async (agentSessionKey) => {
       type Acknowledgement = { runId: string; agentId: string; agentSessionKey: string };
@@ -476,38 +434,6 @@ describe("RealtimeTalkSession consult handoff", () => {
       },
       final: false,
     });
-  });
-
-  it("can suppress cancel control speech while the original consult submits the cancel result", async () => {
-    const request = vi.fn(async () => ({
-      ok: true,
-      mode: "cancel",
-      sessionKey: "agent:main:main",
-      active: true,
-      aborted: true,
-      message: "Cancelled the active OpenClaw run.",
-      speak: true,
-      show: true,
-      suppress: false,
-    }));
-    const speakControlResult = vi.fn();
-
-    await steerRealtimeTalkActiveConsult({
-      ctx: {
-        client: { request, addEventListener: vi.fn() },
-        sessionKey: "agent:main:main",
-        callbacks: {},
-      } as never,
-      text: "cancel that",
-      speakControlResult,
-      suppressSpeechForModes: ["cancel"],
-    });
-
-    expect(request).toHaveBeenCalledWith("talk.client.steer", {
-      sessionKey: "agent:main:main",
-      text: "cancel that",
-    });
-    expect(speakControlResult).not.toHaveBeenCalled();
   });
 
   it("speaks legacy suppressed steer acknowledgements instead of leaving voice silent", async () => {

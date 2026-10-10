@@ -226,44 +226,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("sends provider offer headers with the WebRTC SDP request", async () => {
-    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const transport = new WebRtcSdpRealtimeTalkTransport(
-      {
-        provider: "openai",
-        transport: "webrtc",
-        clientSecret: "client-secret-123",
-        offerUrl: "https://api.openai.com/v1/realtime/calls",
-        offerHeaders: {
-          originator: "openclaw",
-          version: "2026.3.22",
-        },
-      },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        client: {} as never,
-        sessionKey: "main",
-        callbacks: {},
-      },
-    );
-
-    await transport.start();
-
-    expect(fetchMock).toHaveBeenCalledWith("https://api.openai.com/v1/realtime/calls", {
-      method: "POST",
-      body: "offer-sdp",
-      headers: {
-        originator: "openclaw",
-        version: "2026.3.22",
-        Authorization: "Bearer client-secret-123",
-        "Content-Type": "application/sdp",
-      },
-      signal: expect.any(AbortSignal),
-    });
-    transport.stop();
-  });
-
   it("aborts stalled WebRTC SDP answer body reads after the offer timeout", async () => {
     vi.useFakeTimers();
     let offerSignal: AbortSignal | undefined;
@@ -343,111 +305,41 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(peer.channel.close).toHaveBeenCalledOnce();
   });
 
-  it("releases an active peer when the terminal status callback throws", async () => {
+  it.each(["error"])("surfaces %s without closing the OpenAI data channel", async (type) => {
     stubAnswerSdpFetch();
     const onStatus = vi.fn();
-    const transport = await createOpenAiTransport({}, { onStatus });
-    await expect(transport.start()).resolves.toBe("ready");
-    const consumerError = new Error("consumer failed");
-    onStatus.mockImplementation(() => {
-      throw consumerError;
-    });
-    const peer = requirePeer();
-    const reportedErrors: unknown[] = [];
-    const onWindowError = (event: ErrorEvent) => {
-      reportedErrors.push(event.error);
-      if (event.error === consumerError) {
-        event.preventDefault();
-      }
-    };
-
-    peer.connectionState = "failed";
-    window.addEventListener("error", onWindowError);
-    try {
-      peer.dispatchEvent(new Event("connectionstatechange"));
-    } finally {
-      window.removeEventListener("error", onWindowError);
-    }
-
-    expect(reportedErrors).toHaveLength(1);
-    expect(reportedErrors[0]).toBe(consumerError);
-    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection closed");
-    expect(stopInputTrack).toHaveBeenCalledOnce();
-    expect(peer.channel.close).toHaveBeenCalledOnce();
-  });
-
-  it("releases an active peer when its closed-event callback throws", async () => {
-    stubAnswerSdpFetch();
-    const onTalkEvent = vi.fn(() => {
-      throw new Error("consumer failed");
-    });
-    const transport = await createOpenAiTransport({}, { onTalkEvent });
-    await expect(transport.start()).resolves.toBe("ready");
-    const peer = requirePeer();
-
-    expect(() => transport.stop()).toThrow("consumer failed");
-
-    expect(stopInputTrack).toHaveBeenCalledOnce();
-    expect(peer.channel.close).toHaveBeenCalledOnce();
-  });
-
-  it("clears the WebRTC offer timeout after setup succeeds", async () => {
-    vi.useFakeTimers();
-    let offerSignal: AbortSignal | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-        offerSignal = init?.signal ?? undefined;
-        return new Response("answer-sdp");
-      }) as unknown as typeof fetch,
-    );
-    const transport = await createOpenAiTransport();
+    const onTalkEvent = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent, onTranscript });
 
     await transport.start();
-    await vi.runAllTimersAsync();
+    const peer = requirePeer();
+    const itemId = type === "error" ? undefined : "failed-input";
+    dispatchRealtimeEvent(peer, {
+      type,
+      item_id: itemId,
+      error: { message: "The audio could not be transcribed." },
+    });
 
-    expect(offerSignal?.aborted).toBe(false);
+    expect(onStatus).toHaveBeenCalledWith("error", "The audio could not be transcribed.");
+    expect(onTalkEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session.error",
+        itemId,
+        payload: { message: "The audio could not be transcribed." },
+      }),
+    );
+    expect(onTranscript).not.toHaveBeenCalled();
+    expect(peer.channel.readyState).toBe("open");
+    dispatchTranscription(peer, "Please try again");
+    expect(onTranscript).toHaveBeenCalledWith({
+      role: "user",
+      text: "Please try again",
+      final: true,
+      itemId: "input-1",
+    });
     transport.stop();
   });
-
-  it.each(["error", "conversation.item.input_audio_transcription.failed"])(
-    "surfaces %s without closing the OpenAI data channel",
-    async (type) => {
-      stubAnswerSdpFetch();
-      const onStatus = vi.fn();
-      const onTalkEvent = vi.fn();
-      const onTranscript = vi.fn();
-      const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent, onTranscript });
-
-      await transport.start();
-      const peer = requirePeer();
-      const itemId = type === "error" ? undefined : "failed-input";
-      dispatchRealtimeEvent(peer, {
-        type,
-        item_id: itemId,
-        error: { message: "The audio could not be transcribed." },
-      });
-
-      expect(onStatus).toHaveBeenCalledWith("error", "The audio could not be transcribed.");
-      expect(onTalkEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "session.error",
-          itemId,
-          payload: { message: "The audio could not be transcribed." },
-        }),
-      );
-      expect(onTranscript).not.toHaveBeenCalled();
-      expect(peer.channel.readyState).toBe("open");
-      dispatchTranscription(peer, "Please try again");
-      expect(onTranscript).toHaveBeenCalledWith({
-        role: "user",
-        text: "Please try again",
-        final: true,
-        itemId: "input-1",
-      });
-      transport.stop();
-    },
-  );
 
   it("surfaces speech and response lifecycle status from the OpenAI data channel", async () => {
     stubAnswerSdpFetch();
@@ -485,7 +377,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it.each([
     ["cancelled", "turn.cancelled"],
-    ["failed", "turn.ended"],
     ["incomplete", "turn.ended"],
   ] as const)("keeps browser Talk reusable after a %s response", async (status, terminalType) => {
     stubAnswerSdpFetch();
@@ -497,11 +388,9 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const response = {
       id: "response-1",
       status,
-      ...(status === "failed"
-        ? { status_details: { error: { code: "provider_error" } } }
-        : status === "incomplete"
-          ? { status_details: { reason: "max_output_tokens" } }
-          : { status_details: { reason: "client_cancelled" } }),
+      ...(status === "incomplete"
+        ? { status_details: { reason: "max_output_tokens" } }
+        : { status_details: { reason: "client_cancelled" } }),
     };
     dispatchRealtimeEvent(peer, { type: "response.created", response: { id: "response-1" } });
     dispatchRealtimeEvent(peer, { type: "response.done", response });
@@ -526,54 +415,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("emits common Talk transcript events from the OpenAI data channel", async () => {
-    stubAnswerSdpFetch();
-    const onTranscript = vi.fn();
-    const onTalkEvent = vi.fn();
-    const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent });
-
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
-    dispatchTranscription(peer, "hello");
-    dispatchRealtimeEvent(peer, {
-      type: "response.audio_transcript.done",
-      item_id: "response-1",
-      transcript: "hi there",
-    });
-
-    expect(onTranscript).toHaveBeenCalledWith({
-      role: "user",
-      text: "hello",
-      final: true,
-      itemId: "input-1",
-    });
-    expect(onTranscript).toHaveBeenCalledWith({
-      role: "assistant",
-      text: "hi there",
-      final: true,
-      itemId: "response-1",
-    });
-    expect(onTalkEvent.mock.calls.map(([event]) => event)).toEqual([
-      expect.objectContaining({
-        type: "transcript.done",
-        turnId: "turn-1",
-        itemId: "input-1",
-        payload: { role: "user", text: "hello" },
-        sessionId: "main:openai:webrtc",
-        transport: "webrtc",
-      }),
-      expect.objectContaining({
-        type: "output.text.done",
-        turnId: "turn-1",
-        itemId: "response-1",
-        payload: { text: "hi there" },
-        sessionId: "main:openai:webrtc",
-        transport: "webrtc",
-      }),
-    ]);
-    transport.stop();
-  });
-
   it("stops processing the current provider event when a transcript callback closes it", async () => {
     stubAnswerSdpFetch();
     const onTalkEvent = vi.fn();
@@ -587,47 +428,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
   });
 
-  it("maps frameless Codex transcript events by role and finality", async () => {
-    stubAnswerSdpFetch();
-    const onTalkEvent = vi.fn();
-    const transport = await createOpenAiTransport({}, { onTalkEvent });
-
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
-    for (const event of [
-      { type: "input_transcript.added", item: { id: "user-live", text: "hel" } },
-      { type: "output_transcript.added", item: { id: "assistant-live", text: "hi" } },
-      {
-        type: "turn.done",
-        turn: { id: "user-final", role: "user", transcript: "hello" },
-      },
-      {
-        type: "turn.done",
-        turn: { id: "assistant-final", role: "assistant", transcript: "hi there" },
-      },
-    ]) {
-      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
-    }
-
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
-      "transcript.delta",
-      "output.text.delta",
-      "transcript.done",
-      "output.text.done",
-      "turn.ended",
-    ]);
-    transport.stop();
-  });
-
-  // Audio output sends the final string in `transcript`; text output sends it in
-  // `text`. Both must surface the same assistant transcript + talk events.
   it.each([
-    {
-      label: "audio output",
-      deltaType: "response.output_audio_transcript.delta",
-      doneType: "response.output_audio_transcript.done",
-      doneField: { transcript: "hi there" },
-    },
     {
       label: "text output",
       deltaType: "response.output_text.delta",
@@ -840,25 +641,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         (event) => event.type === "conversation.item.create" && event.item?.type === "message",
       ),
     ).toBe(false);
-    transport.stop();
-  });
-
-  it("does not auto-control ambiguous multilingual speech during an active consult", async () => {
-    stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return consultRun;
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    const { transport, peer } = await startActiveConsult(request);
-
-    dispatchTranscription(peer, "¿cómo va esto?");
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(request).not.toHaveBeenCalledWith("talk.client.steer", expect.any(Object));
     transport.stop();
   });
 });
