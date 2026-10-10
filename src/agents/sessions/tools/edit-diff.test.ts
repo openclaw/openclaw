@@ -263,4 +263,24 @@ describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
       prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }], "test.ts"),
     ).toThrow(/Found 2 occurrences/);
   });
+
+  it("rejects an oldText whose occurrences overlap", () => {
+    expect(() =>
+      prepareFileEdit(
+        "a();\na();\na();\n",
+        [{ oldText: "a();\na();", newText: "b();" }],
+        "test.ts",
+      ),
+    ).toThrow(/Found 2 occurrences/);
+  });
+
+  it("rejects a fuzzy oldText whose normalized occurrences overlap", () => {
+    expect(() =>
+      prepareFileEdit(
+        "a();\na(); \na();\n",
+        [{ oldText: "a();\na();\n", newText: "b();\n" }],
+        "test.ts",
+      ),
+    ).toThrow(/Found 2 occurrences/);
+  });
 });
