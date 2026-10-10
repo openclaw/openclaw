@@ -513,6 +513,7 @@ describe("searchKeyword zero-hit fallback", () => {
           { id: "full", path: "memory/full.md", text: "alpha beta" },
           { id: "partial", path: "memory/partial.md", text: "alpha" },
           { id: "path", path: "memory/exact.md", text: "unrelated" },
+          { id: "dotted", path: "memory/dotted.md", text: "i\u0307" },
         ]) {
           insertKeywordFixture(db, row);
         }
@@ -552,6 +553,8 @@ describe("searchKeyword zero-hit fallback", () => {
         expect(relaxed.body.error).toBeUndefined();
         expect(relaxed.body.rows.map((row) => row.id).toSorted()).toEqual(["full", "partial"]);
         expect(bodyQueries()).toBe(2);
+        prepare.mockClear();
+        expect((await search("İ missing")).body.rows.map((row) => row.id)).toEqual(["dotted"]);
       } finally {
         db.close();
       }

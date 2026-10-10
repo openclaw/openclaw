@@ -140,7 +140,7 @@ export function planKeywordSearch(params: {
   if (params.matchAny) {
     // Retain the existing six-term language expansion without double-counting
     // terms already present in a different case or canonical spelling.
-    const key = (term: string) => term.normalize("NFC").toLowerCase();
+    const key = (term: string) => Array.from(term.normalize("NFC"), simpleCaseFold).join("");
     const seen = new Set(tokens.map(key));
     const expanded = extractKeywords(params.query.normalize("NFC"), params).slice(0, 6);
     for (const token of tokenizeFtsQuery(expanded.join(" "))) {

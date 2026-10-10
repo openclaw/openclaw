@@ -207,7 +207,9 @@ export async function runMemoryVectorFallback(
     { ...target, kind: "vector", query },
     {
       signal,
-      inputBytes: query.queryVec.length * 8,
+      inputBytes:
+        query.queryVec.length * 8 +
+        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0),
     },
     "vector",
   );

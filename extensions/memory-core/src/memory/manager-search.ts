@@ -429,8 +429,7 @@ export async function searchPathKeyword(params: {
   const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
   const planSubstringFilter = buildSubstringFilter(plan.substringTerms, pathColumn);
   registerSubstringSqlFunction(params.db, plan.substringTerms);
-  const exactPathQuery = params.query;
-  const matchExactPath = prepareExactPathMatcher(exactPathQuery);
+  const matchExactPath = prepareExactPathMatcher(params.query);
   // This reader consumes the query synchronously; substring plans can change
   // without replacing the original-query matcher.
   params.db.function(
@@ -467,7 +466,7 @@ export async function searchPathKeyword(params: {
     ` ORDER BY ${paths}.${score} ${direction}, ${paths}.path ASC, ${paths}.source ASC`;
   const hasExplicitExactPathHeadroom = params.exactPathLimit !== undefined;
   const exactPathLimit = Math.max(0, Math.floor(params.exactPathLimit ?? params.limit));
-  const exactCandidatePatterns = buildExactPathCandidatePatterns(exactPathQuery);
+  const exactCandidatePatterns = buildExactPathCandidatePatterns(params.query);
   type ExactPathRow = MemorySearchRow & {
     exact_path_specificity: ExactPathSpecificity;
   };
@@ -520,7 +519,7 @@ export async function searchPathKeyword(params: {
       .all(...candidateParams, exactPathLimit, ...snippet.params) as ExactPathRow[];
   };
   const useLexicalExactCandidates =
-    isAscii(exactPathQuery) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
+    isAscii(params.query) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
   let exactRows: ExactPathRow[] = [];
   if (exactCandidatePatterns.length > 0 && exactPathLimit > 0) {
     try {
