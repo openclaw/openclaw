@@ -8,6 +8,7 @@ import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
@@ -73,12 +74,7 @@ async function dependencyOwner(
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
-        (error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
+        (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
       )
     ) {
       return directory;
@@ -401,12 +397,7 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
       if (!exists) {
         continue;
       }
-      const real = await fs.realpath(source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const real = await fs.realpath(source).catch(ignoreMissingUpdateCandidateFile);
       discovered.push({ source, real });
     }
     hosts.clear();

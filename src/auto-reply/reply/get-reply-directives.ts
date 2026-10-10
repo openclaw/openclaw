@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -45,7 +46,7 @@ import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { createModelSelectionState } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { createReplyModelLevelResolver } from "./reply-model-levels.js";
@@ -397,15 +398,17 @@ export async function resolveReplyDirectives(params: {
   }
   ({ provider, model } = modelState);
 
-  let contextTokens = useFastReplyRuntime
-    ? DEFAULT_CONTEXT_TOKENS
-    : resolveContextTokens({
+  const contextTokenProjection = useFastReplyRuntime
+    ? undefined
+    : resolveModelContextTokenProjection({
         cfg,
+        allowAsyncLoad: false,
         provider,
         model,
         modelContextWindow: modelState.modelContextWindow,
         modelContextTokens: modelState.modelContextTokens,
       });
+  let contextTokens = contextTokenProjection?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
@@ -437,6 +440,7 @@ export async function resolveReplyDirectives(params: {
     resolvedElevatedLevel,
     defaultActivation: () => defaultActivation,
     contextTokens,
+    contextTokenProjection,
     effectiveModelDirective,
   });
   if (applyResult.kind === "reply") {
@@ -536,6 +540,7 @@ export async function resolveReplyDirectives(params: {
         : modelState.requestedRouteResolution,
       modelState,
       contextTokens,
+      contextTokenProjection: applyResult.contextTokenProjection,
       inlineStatusRequested,
       directiveAck,
       perMessageQueueMode,

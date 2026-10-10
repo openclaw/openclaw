@@ -102,6 +102,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
+    trigger: attempt.trigger,
     agentId: params.setup.sessionAgentId,
     sessionKey: params.setup.sandboxSessionKey,
     forceMessageTool: forceDirectMessageTool,

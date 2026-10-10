@@ -339,18 +339,16 @@ export async function withSqliteSnapshotSource<T>(
 ): Promise<T> {
   let prepared = await prepareSqliteSnapshotSource(pathname);
   try {
-    try {
-      return prepared ? await operation(prepared.location) : await operation(pathname);
-    } catch (error) {
-      if (prepared) {
-        throw error;
-      }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
+    return await operation(prepared ? prepared.location : pathname);
+  } catch (error) {
+    if (prepared) {
+      throw error;
     }
+    prepared = await prepareSqliteSnapshotSource(pathname);
+    if (!prepared) {
+      throw error;
+    }
+    return await operation(prepared.location);
   } finally {
     await prepared?.cleanupAsync();
   }

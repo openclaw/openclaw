@@ -407,7 +407,8 @@ export function readExactSessionEntriesWithLifecycle(
               const selectedById = request.selection
                 ? readSessionEntryByIdInDatabase(database, {
                     sessionId: request.selection.sessionId,
-                    projection: "list",
+                    orderBy: request.selection.orderBy,
+                    projection: request.projection === "sharing" ? "list" : "full",
                   })
                 : undefined;
               const selected = request.selection
@@ -541,7 +542,10 @@ export function readExactSessionEntriesWithLifecycle(
                 ...(request.includeParticipantRecords
                   ? {
                       participantRecords: Object.fromEntries(
-                        participantRecordsBySessionKey(database.db, request.sessionKeys),
+                        participantRecordsBySessionKey(
+                          database.db,
+                          request.sessionKeys ?? selected.value.map(({ sessionKey }) => sessionKey),
+                        ),
                       ),
                     }
                   : {}),

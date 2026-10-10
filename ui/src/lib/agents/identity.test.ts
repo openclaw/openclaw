@@ -54,40 +54,10 @@ it.each([undefined, 7_000])(
     await capability.ensure(["main"]);
     clock.mockReturnValue(now + 60_000 + Math.max(500, hint ?? 0));
     await capability.ensure(["main"]);
-    expect(request).toHaveBeenCalledTimes(10);
+    expect(request).toHaveBeenCalledTimes(8);
     expect(capability.get("main")).toBe(recovered);
   },
 );
-
-it("retains the displayed identity while sidebar and chat share a failed refresh", async () => {
-  const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-  const original = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
-  const replacement = { ...original, avatar: "/avatar/main?v=new" };
-  const failure = new Error("Gateway unavailable");
-  const request = vi.fn().mockResolvedValueOnce(original).mockRejectedValue(failure);
-  const client = createTestGatewayClient(request);
-  const capability = createAgentIdentityCapability({
-    snapshot: { client, phase: "connected" },
-    subscribe: () => () => undefined,
-  });
-  const publish = vi.fn();
-  capability.subscribe(publish);
-  await capability.ensure(["main"]);
-  clock.mockReturnValue(60_000);
-  await capability.ensure(["main"]);
-  await expect(fetchAssistantIdentity(client, "main")).rejects.toBe(failure);
-  await capability.ensure(["main"]);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(capability.get("main")).toBe(original);
-  expect(publish).toHaveBeenCalledOnce();
-
-  request.mockResolvedValueOnce(replacement);
-  clock.mockReturnValue(60_500);
-  await capability.ensure(["main"]);
-  expect(capability.get("main")).toBe(replacement);
-  expect(publish).toHaveBeenCalledTimes(2);
-});
 
 it.each([
   { name: "restart", restartPending: true, suspensionPhase: "accepting" },
@@ -129,8 +99,8 @@ it.each([
   snapshot.suspensionPhase = "accepting";
   onSnapshot(snapshot);
   await capability.ensure(["main"]);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(capability.get("main")).toBe(replacement);
+  expect(request).toHaveBeenCalledOnce();
+  expect(capability.get("main")).toBe(original);
 });
 
 it.each(["reconnect", "config", "agent"])(
@@ -289,7 +259,7 @@ it("shares identity requests between the sidebar and the selected chat", async (
 });
 
 it.each(["sidebar", "chat"])(
-  "revalidates a replaced avatar without events when %s refreshes first",
+  "shares an invalidated identity when %s refreshes first",
   async (first) => {
     const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
     const clock = vi.spyOn(Date, "now").mockReturnValue(0);
@@ -305,18 +275,19 @@ it.each(["sidebar", "chat"])(
     const publish = vi.fn();
     capability.subscribe(publish);
     await capability.ensure(["main"]);
-    clock.mockReturnValue(59_999);
-    await Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
+    clock.mockReturnValue(600_000);
+    const idle = Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
     expect(request).toHaveBeenCalledOnce();
+    await idle;
 
-    clock.mockReturnValue(60_000);
+    capability.invalidate(["main"]);
     const firstRefresh =
       first === "sidebar" ? capability.ensure(["main"]) : fetchAssistantIdentity(client, "main");
-    // A slow refresh stays shared even past another freshness window.
-    clock.mockReturnValue(120_001);
+    // A slow refresh stays shared regardless of elapsed time.
+    clock.mockReturnValue(1_200_000);
     const waitingChat = fetchAssistantIdentity(client, "main");
     expect(request).toHaveBeenCalledTimes(2);
-    expect(capability.get("main")?.avatar).toBe(oldIdentity.avatar);
+    expect(capability.get("main")).toBeNull();
     refresh.resolve(replacement);
     await firstRefresh;
     expect((await waitingChat)?.avatar).toBe(replacement.avatar);
@@ -324,8 +295,8 @@ it.each(["sidebar", "chat"])(
     await capability.ensure(["main"]);
     expect(capability.get("main")?.avatar).toBe(replacement.avatar);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(publish).toHaveBeenCalledTimes(2);
-    clock.mockReturnValue(180_000);
+    expect(publish).toHaveBeenCalledTimes(3);
+    clock.mockReturnValue(1_800_000);
     await Promise.all([capability.ensure(["main"]), fetchAssistantIdentity(client, "main")]);
     expect(request).toHaveBeenCalledTimes(2);
   },

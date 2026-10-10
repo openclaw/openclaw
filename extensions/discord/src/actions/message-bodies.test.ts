@@ -278,6 +278,29 @@ describe("Discord retained progress edits", () => {
     expect(current.content.length).toBeLessThanOrEqual(100);
   });
 
+  it("keeps a retained row's explicit icon over the tool glyph", async () => {
+    await discordMessageActions.handleAction?.({
+      channel: "discord",
+      action: "edit",
+      cfg: {
+        channels: {
+          discord: {
+            token,
+            groupPolicy: "open",
+            streaming: { progress: { label: false, toolProgress: true } },
+          },
+        },
+      },
+      params: { to: `channel:${channelId}`, messageId, message: "Generic fallback" },
+      progressSnapshot: {
+        lines: [{ kind: "tool", text: "Read", label: "Read", toolName: "read", icon: "🧪" }],
+      },
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(current.content).toBe("🧪 Read");
+  });
+
   it.each([true, false])(
     "uses the current DM channel only for its captured user target (matching: %s)",
     async (matching) => {
