@@ -36,7 +36,7 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
-  publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
+  publishRequested: (kind: ChannelApprovalKind, request: unknown) => number | Promise<number>;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;
 };
 

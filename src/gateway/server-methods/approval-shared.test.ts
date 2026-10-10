@@ -484,6 +484,45 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+  it("does not forward a request resolved during async native eligibility", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-publication-race");
+    await manager.register(record, 60_000);
+    const publishing = createDeferredCore();
+    const publication = createDeferredCore<number>();
+    const respond = vi.fn();
+    const deliverRequest = vi.fn(() => true);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        approvalEvents: {
+          publishRequested: () => {
+            publishing.resolve();
+            return publication.promise;
+          },
+          publishResolved: vi.fn(),
+        },
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: requestedEvent(record),
+      twoPhase: true,
+      deliverRequest,
+    });
+    await publishing.promise;
+    await manager.resolve(record.id, "deny", "control-ui");
+    publication.resolve(0);
+    await requestPromise;
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: "deny" }),
+      undefined,
+    );
+  });
+
   it("returns a concurrent first answer when no-route denial loses after delivery", async (testContext) => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = createTestApprovalManager(testContext);

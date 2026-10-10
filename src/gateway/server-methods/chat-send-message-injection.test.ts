@@ -84,7 +84,7 @@ vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn(() => ({})),
 }));
 vi.mock("../../auto-reply/command-auth.js", () => ({
-  resolveCommandAuthorization: vi.fn(() => ({ senderIsOwner: true })),
+  resolveCommandAuthorizationAsync: vi.fn(() => ({ senderIsOwner: true })),
 }));
 vi.mock("../../auto-reply/reply/reply-tool-authority.js", () => ({
   resolveInboundReplyToolAuthorityOverlay: vi.fn(() => ({})),

@@ -101,7 +101,7 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
 vi.mock("../infra/exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: () => null,
   listNativeExecApprovalClientLabels: () => [],
-  resolveExecApprovalInitiatingSurfaceState: (params: {
+  resolveExecApprovalInitiatingSurfaceStateAsync: async (params: {
     channel?: string | null;
     accountId?: string | null;
   }) => {

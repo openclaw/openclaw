@@ -51,7 +51,7 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
 vi.mock("./command-auth.js", () => ({
-  resolveCommandAuthorization: vi.fn(() => ({ isAuthorizedSender: true })),
+  resolveCommandAuthorizationAsync: vi.fn(() => ({ isAuthorizedSender: true })),
 }));
 vi.mock("./reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({

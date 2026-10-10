@@ -682,6 +682,23 @@ export class ExecApprovalManager<
     }, recordId);
   }
 
+  /** Delivery eligibility stays with the exact pending record across adapter awaits. */
+  isPendingDeliveryCurrent(record: ExecApprovalRecord<TPayload>): boolean {
+    if (
+      this.retired ||
+      this.pending.get(record.id)?.record !== record ||
+      record.resolvedAtMs !== undefined ||
+      record.expiresAtMs <= Date.now()
+    ) {
+      return false;
+    }
+    if (isExecApprovalRuntimeActive(this.options, record)) {
+      return true;
+    }
+    this.scheduleAuthorityClosure(record.id);
+    return false;
+  }
+
   /** Observes a registered decision; Gateway closure rejects the wait, not the approval. */
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
     this.assertNotRetired();

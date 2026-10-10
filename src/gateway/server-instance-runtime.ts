@@ -358,10 +358,53 @@ export function createGatewayInstanceRuntime(
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
+  const pendingApprovalPublications = new Map<string, Set<symbol>>();
+  const publishRequested = async (
+    kind: ChannelApprovalKind,
+    request: GatewayApprovalRequest,
+  ): Promise<number> => {
+    if (closed) {
+      return 0;
+    }
+    const publication = Symbol();
+    const publications = pendingApprovalPublications.get(request.id) ?? new Set<symbol>();
+    publications.add(publication);
+    pendingApprovalPublications.set(request.id, publications);
+    let delivered = 0;
+    try {
+      for (const subscriber of Array.from(approvalSubscribers)) {
+        if (!subscriber.eventKinds.has(kind)) {
+          continue;
+        }
+        try {
+          if (!(await subscriber.shouldHandle(request))) {
+            continue;
+          }
+          // Resolution, unsubscription, or Gateway close can retire delivery while eligibility waits.
+          if (closed || pendingApprovalPublications.get(request.id) !== publications) {
+            break;
+          }
+          if (!approvalSubscribers.has(subscriber)) {
+            continue;
+          }
+          subscriber.onRequested(request);
+          delivered += 1;
+        } catch (error) {
+          options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+        }
+      }
+    } finally {
+      publications.delete(publication);
+      if (!publications.size && pendingApprovalPublications.get(request.id) === publications) {
+        pendingApprovalPublications.delete(request.id);
+      }
+    }
+    return delivered;
+  };
+
   const publish = (
     kind: ChannelApprovalKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
-    shouldDeliver?: (subscriber: GatewayApprovalEventSubscriber) => boolean,
   ): number => {
     if (closed) {
       return 0;
@@ -372,9 +415,6 @@ export function createGatewayInstanceRuntime(
         continue;
       }
       try {
-        if (shouldDeliver && !shouldDeliver(subscriber)) {
-          continue;
-        }
         callback(subscriber);
         delivered += 1;
       } catch (error) {
@@ -388,12 +428,9 @@ export function createGatewayInstanceRuntime(
     createAgentTurnFacade,
     approvalEvents: {
       publishRequested: (kind, request) =>
-        publish(
-          kind,
-          (subscriber) => subscriber.onRequested(request as GatewayApprovalRequest),
-          (subscriber) => subscriber.shouldHandle(request as GatewayApprovalRequest),
-        ),
+        publishRequested(kind, request as GatewayApprovalRequest),
       publishResolved: (kind, resolved) => {
+        pendingApprovalPublications.delete((resolved as GatewayApprovalResolved).id);
         publish(kind, (subscriber) => subscriber.onResolved(resolved as GatewayApprovalResolved));
       },
     },
@@ -452,6 +489,7 @@ export function createGatewayInstanceRuntime(
       recoveryTyping.close();
       releaseRecoveryRuntime();
       approvalSubscribers.clear();
+      pendingApprovalPublications.clear();
       routeCoordinator.close();
     },
   };

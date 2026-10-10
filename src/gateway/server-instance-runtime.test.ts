@@ -294,7 +294,7 @@ describe("createGatewayInstanceRuntime", () => {
     });
   });
 
-  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", () => {
+  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
     const registry = createRegistry({});
     const first = createGatewayInstanceRuntime({
       getContext: createContext,
@@ -321,29 +321,65 @@ describe("createGatewayInstanceRuntime", () => {
       expiresAtMs: 2,
     } as ExecApprovalRequest;
 
-    expect(second.approvalEvents.publishRequested("exec", request)).toBe(0);
-    expect(first.approvalEvents.publishRequested("plugin", request)).toBe(0);
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(1);
+    expect(await second.approvalEvents.publishRequested("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequested("plugin", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequested("exec", request)).toBe(1);
     expect(onRequested).toHaveBeenCalledOnce();
 
     unsubscribe();
     unsubscribe();
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequested("exec", request)).toBe(0);
 
     const declined = vi.fn();
     first.nativeApprovals.subscribe({
       eventKinds: new Set(["exec"]),
-      shouldHandle: () => false,
+      shouldHandle: async () => false,
       onRequested: declined,
       onResolved: vi.fn(),
     });
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
+    expect(await first.approvalEvents.publishRequested("exec", request)).toBe(0);
     expect(declined).not.toHaveBeenCalled();
     first.close();
     expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
     second.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
   });
+
+  it.each(["unsubscribe", "resolve", "close"] as const)(
+    "retires native approval delivery when %s wins an async eligibility wait",
+    async (retire) => {
+      const eligibility = createDeferred<boolean>();
+      const runtime = createGatewayInstanceRuntime({
+        getContext: createContext,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      const onRequested = vi.fn();
+      const unsubscribe = runtime.nativeApprovals.subscribe({
+        eventKinds: new Set(["exec"]),
+        shouldHandle: () => eligibility.promise,
+        onRequested,
+        onResolved: vi.fn(),
+      });
+      const publication = runtime.approvalEvents.publishRequested("exec", {
+        id: "pending-eligibility",
+        request: { command: "echo test" },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      });
+      if (retire === "unsubscribe") {
+        unsubscribe();
+      } else if (retire === "resolve") {
+        runtime.approvalEvents.publishResolved("exec", { id: "pending-eligibility" });
+      } else {
+        runtime.close();
+      }
+      eligibility.resolve(true);
+      expect(await publication).toBe(0);
+      expect(onRequested).not.toHaveBeenCalled();
+      runtime.close();
+    },
+  );
 
   it("rejects methods outside each closed internal principal", async () => {
     const runtime = createGatewayInstanceRuntime({
