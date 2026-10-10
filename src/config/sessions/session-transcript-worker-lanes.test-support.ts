@@ -27,7 +27,6 @@ const observed = vi.hoisted(() => ({
   closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
-  replaceWorkers: [] as Array<() => () => Promise<void>>,
 }));
 
 vi.mock("../../infra/worker-task-capacity.js", async (importOriginal) => {
@@ -127,11 +126,6 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
       Promise.resolve(),
     );
     let nextSlot = 0;
-    observed.replaceWorkers.push(() => {
-      const previous = worker;
-      worker = poolOptions.prepareWorker?.();
-      return async () => previous?.releaseResources?.();
-    });
     return {
       async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
         const execute = async () => {

@@ -40,7 +40,6 @@ export function createSessionStoreSummaryReaderStub(
     return consume({
       reader: {
         ...workerReaders.createSessionHistoryWorkerReaders(runRequest),
-        generation: 0,
         assertCurrent() {},
       },
       database: { agentId, path: pathname, env: scope.env ?? {} },

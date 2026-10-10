@@ -8,10 +8,7 @@ import {
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  createOpenClawAgentDatabasePathMatcher,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
@@ -159,8 +156,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       ...structuredClone({ ...request.params, target: undefined }),
       target: capturedTarget,
     };
-    if (captured.kind === "recent-page" && captured.params.exactArchivePath) {
-      captured.params.exactArchivePath = path.resolve(captured.params.exactArchivePath);
+    if (captured.kind === "recent-page") {
+      if (captured.params.exactArchivePath) {
+        captured.params.exactArchivePath = path.resolve(captured.params.exactArchivePath);
+      } else {
+        delete captured.params.exactArchivePath;
+      }
     }
     return captured;
   }
@@ -311,8 +312,6 @@ export async function readSessionHistoryPageInWorker(
   try {
     const resolved = await prepareSqliteTranscriptReadScope(capturedScope, signal);
     signal?.throwIfAborted();
-    stateContext.maintenanceScope?.assertAdmission();
-    stateContext.admission.assertCurrent();
     // Key normalization needs no second store discovery after the physical target is prepared.
     const entryValidationKey = bound.entryValidationScope
       ? resolveSqliteScope({
@@ -343,18 +342,6 @@ export async function readSessionHistoryPageInWorker(
               registryPath: stateContext.admission.databasePath,
             })
           : undefined;
-      const primaryPath = sourceReads ? undefined : createOpenClawAgentDatabasePathMatcher();
-      primaryPath?.(currentSource.path, currentSource.path);
-      const assertStateCurrent = () => {
-        signal?.throwIfAborted();
-        stateContext.maintenanceScope?.assertAdmission();
-        stateContext.admission.assertCurrent();
-        sourceReads?.assertSourceCurrent();
-        if (primaryPath && !primaryPath.isCurrent()) {
-          throw new Error("Session store changed while preparing its metadata. Retry the request.");
-        }
-      };
-      assertStateCurrent();
       const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
         transcript: {
           agentId: preparedTarget.agentId,
@@ -394,8 +381,10 @@ export async function readSessionHistoryPageInWorker(
       pendingHistoryBytes += additionalBytes;
       inputBytes += additionalBytes;
       const assertCurrent = () => {
+        signal?.throwIfAborted();
+        stateContext.maintenanceScope?.assertAdmission();
+        stateContext.admission.assertCurrent();
         owner.assertCurrent();
-        assertStateCurrent();
       };
       let result: SessionHistoryWorkerResult;
       const exactArchiveRead =
@@ -415,7 +404,7 @@ export async function readSessionHistoryPageInWorker(
                 ? capturedRequest.params.options.readOnly
                 : false;
       let retriedProjection = false;
-      const readPage = () => readQueuedHistory(input, `${owner.generation}:${key}`, owner, signal);
+      const readPage = () => readQueuedHistory(input, key, owner, signal);
       try {
         if (exactArchiveRead) {
           const page = await readPage();
@@ -427,7 +416,6 @@ export async function readSessionHistoryPageInWorker(
           result = await readRestoredSessionTranscript(
             capturedScope,
             async () => {
-              assertCurrent();
               let page: ForegroundHistoryResult;
               try {
                 page = await readPage();
@@ -438,7 +426,6 @@ export async function readSessionHistoryPageInWorker(
                       !capturedRequest.params.options.readOnly)) &&
                   isSessionTranscriptProjectionUnavailableError(error)
                 ) {
-                  assertCurrent();
                   startSessionTranscriptIndexReconcile({
                     ...databaseOptions,
                     preferredSessionId: preparedTarget.sessionId,
@@ -452,7 +439,6 @@ export async function readSessionHistoryPageInWorker(
                 ) {
                   throw error;
                 }
-                assertCurrent();
                 retriedProjection = true;
                 startSessionTranscriptIndexReconcile({
                   ...databaseOptions,
@@ -467,7 +453,6 @@ export async function readSessionHistoryPageInWorker(
                     signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
                   );
                 } catch (waitError) {
-                  assertCurrent();
                   if (
                     waitError === error ||
                     (waitError instanceof Error &&
@@ -480,7 +465,6 @@ export async function readSessionHistoryPageInWorker(
                 } finally {
                   clearTimeout(timer);
                 }
-                assertCurrent();
                 page = await readPage();
               }
               if (page.kind === "cold-metadata") {
@@ -494,20 +478,13 @@ export async function readSessionHistoryPageInWorker(
               coldRead: {
                 target: preparedTarget,
                 readMetadata: async (phase) => {
-                  assertCurrent();
                   const metadata =
                     phase === "initial"
-                      ? await readQueuedHistory(
-                          metadataInput,
-                          `${owner.generation}:${metadataKey}`,
-                          owner,
-                          signal,
-                        )
+                      ? await readQueuedHistory(metadataInput, metadataKey, owner, signal)
                       : await owner.readColdMetadata({
                           sessionId: metadataInput.sessionId,
                           env,
                         });
-                  assertCurrent();
                   if (metadata.kind !== "cold-metadata") {
                     throw new Error(
                       "Session history worker returned history instead of cold metadata",
@@ -524,25 +501,14 @@ export async function readSessionHistoryPageInWorker(
           error instanceof SessionHistoryDeltaPreparationError &&
           capturedRequest.kind === "delta"
         ) {
-          // Failed execution/retirement has joined. Recover inside the retained
-          // scope so primary revocation and release failures still refuse it.
-          owner.assertCurrent();
           result = { kind: "delta", ...error.partial };
         } else {
           throw error;
         }
       }
-      await sourceReads?.revalidate(() => {
-        owner.assertCurrent();
-        assertStateCurrent();
-      });
       return {
         result,
-        assertCurrent: () => {
-          owner.assertCurrent();
-          assertStateCurrent();
-          sourceReads?.assertCurrent();
-        },
+        assertCurrent,
       };
     });
     const { assertCurrent, result } = acquired;

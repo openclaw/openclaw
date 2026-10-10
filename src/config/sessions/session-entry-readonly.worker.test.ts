@@ -411,87 +411,6 @@ it("propagates raw worker failure without calling the optional-data consumer", a
   });
 });
 
-it.each(["consumer", "cleanup"] as const)(
-  "rejects registry revocation during %s",
-  async (phase) => {
-    await withOpenClawTestState({ label: "readonly-entry-registry" }, async ({ env, path }) => {
-      const storePath = path("shared.sqlite");
-      const sessionKey =
-        phase === "consumer" ? "agent:main:retained" : "agent:main:cron:job:run:cleanup";
-      if (phase === "consumer") {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, env, sessionKey },
-          {
-            sessionId: "retained-session",
-            updatedAt: 1,
-            skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
-          },
-        );
-      } else {
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
-        writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
-      }
-      const pool = targetDiscoveryLane.pool;
-      const rotate = pool.rotate.bind(pool);
-      const closeResources = pool.closeResources.bind(pool);
-      let cleanupCalled = false;
-      const invalidateAfterCleanup = () => {
-        if (!cleanupCalled) {
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        }
-      };
-      const rotateCleanup =
-        phase === "cleanup"
-          ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
-              await rotate();
-              invalidateAfterCleanup();
-            })
-          : undefined;
-      const resourceCleanup =
-        phase === "cleanup"
-          ? vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
-              await closeResources(key);
-              invalidateAfterCleanup();
-            })
-          : undefined;
-      let consumed = false;
-      try {
-        await expect(
-          withSessionEntryReadOnlyInWorker(
-            {
-              sessionKey,
-              storePath,
-              env,
-              ...(phase === "consumer" ? { hydrateSkillPromptRefs: false } : {}),
-            },
-            () => {},
-            async (read) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              consumed = true;
-              if (phase === "consumer") {
-                expect(read.value?.skillsSnapshot?.prompt).toBe("Full stored prompt");
-                await Promise.resolve();
-                invalidateRegisteredAgentDatabasesMemo({ env });
-              }
-              return read.value;
-            },
-          ),
-        ).rejects.toThrow("registry changed");
-        if (phase === "cleanup") {
-          expect(cleanupCalled).toBe(true);
-        }
-        expect(consumed).toBe(true);
-      } finally {
-        rotateCleanup?.mockRestore();
-        resourceCleanup?.mockRestore();
-      }
-    });
-  },
-);
-
 it("retains the registry witness even when the first read rejects before returning a snapshot", async () => {
   await withOpenClawTestState({ label: "readonly-registry-witness" }, async ({ env }) => {
     const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
@@ -565,7 +484,9 @@ it.runIf(process.platform !== "win32").each([
         },
       );
       if (retarget) {
-        await expect(pending).rejects.toThrow("Session store alias changed during discovery");
+        await expect(pending).rejects.toThrow(
+          "Session database target changed outside captured discovery custody",
+        );
       } else {
         await expect(pending).resolves.toMatchObject({ sessionId: "original" });
       }
