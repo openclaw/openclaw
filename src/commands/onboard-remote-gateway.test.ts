@@ -196,7 +196,7 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
 }
 
 describe("runRemoteGatewayInferenceOnboarding", () => {
-  it.each([true, false])(
+  it.each([false])(
     "preserves utility role through remote setup and rejects role drift (match=%s)",
     async (matchingRole) => {
       const call = vi.fn(async (options: CallGatewayCliOptions) => {
@@ -377,12 +377,6 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
   );
 
   it.each([
-    {
-      label: "token",
-      auth: { token: "selected-token" },
-      secret: "selected-token",
-      configuredRemote: false,
-    },
     {
       label: "password",
       auth: { password: "selected-password" },

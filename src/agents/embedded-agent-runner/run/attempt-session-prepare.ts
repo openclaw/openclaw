@@ -136,10 +136,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const extensionFactories = buildEmbeddedExtensionFactories({
     cfg: attempt.config,
     sessionManager: input.sessionManager,
-    provider: attempt.provider,
-    modelId: attempt.modelId,
     model: attempt.model,
-    contextTokenBudget: attempt.contextTokenBudget,
     agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,

@@ -579,12 +579,11 @@ describe("buildOpenAIProvider", () => {
       expect(openai?.api).toBe("openai-chatgpt-responses");
       expect(openai?.auth).toBe("oauth");
       expect(openai?.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
-      expect(openai?.models.map((model) => model.id)).toEqual([
-        "gpt-5.6-sol",
-        "gpt-5.5",
-        "gpt-5.6-terra",
-        "gpt-5.3-codex-spark",
-      ]);
+      const shown = openai?.models.map((model) => model.id) ?? [];
+      expect(shown).toEqual(["gpt-5.6-sol", "gpt-5.5", "gpt-5.6-terra", "gpt-5.3-codex-spark"]);
+      // Entitlement keeps hidden rows that the picker omits.
+      const hidden = ["codex-auto-review", "codex-internal-fallback"];
+      expect(result.outcomes?.[0]?.listedModelIds).toEqual([...shown, ...hidden]);
       expect(openai?.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
         contextWindow: 372_000,
         compat: {

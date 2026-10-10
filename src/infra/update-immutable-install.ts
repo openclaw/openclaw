@@ -330,6 +330,10 @@ export async function prepareImmutableUpdate(params: {
     status: ImmutableUpdateResult["status"],
     reason?: string,
   ): ImmutableUpdateResult => ({ status, reason, installation, targetSha, steps, warnings });
+  const preparedResult = (record: ImmutableInstallRecord): ImmutableUpdateResult => ({
+    ...result("prepared", "activation unavailable"),
+    installation: projectImmutableInstall(record),
+  });
   try {
     if (params.sha !== undefined && !SHA.test(params.sha)) {
       throw new Error("--sha requires a full lowercase 40-hex commit SHA.");
@@ -441,10 +445,7 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         assertCurrent();
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(record),
-        };
+        return preparedResult(record);
       }
       assertCurrent();
       const stage = await fs.mkdtemp(path.join(descriptor.root, ".openclaw-immutable-"));
@@ -562,10 +563,7 @@ export async function prepareImmutableUpdate(params: {
         const { recordImmutablePreparedGeneration } =
           await import("./package-update-activation-immutable.js");
         const recorded = recordImmutablePreparedGeneration(record, prepared, assertCurrent);
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(recorded),
-        };
+        return preparedResult(recorded);
       } catch (error) {
         cleanupUncertain = hasCommandProcessCleanupError(error);
         throw error;

@@ -11,7 +11,6 @@ import {
   loadTranscriptEvents,
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
-  readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteSequence,
   type TranscriptMessageAppendOptions,
@@ -31,6 +30,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
 import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
@@ -365,15 +365,13 @@ export async function readVisibleSessionTranscriptMessageEntries(
 }
 
 /**
- * Reads the latest visible assistant text by scoped identity.
+ * Reads the latest persisted assistant text by scoped identity.
  */
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
   const scope = bindSessionTranscriptStoreScope(params);
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  return readRestoredSessionTranscript(scope, () => readLatestTranscriptAssistantText(scope));
+  return readLatestTranscriptAssistantTextAsync(scope);
 }
 
 /**

@@ -199,13 +199,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/mcp-server-form.ts",
@@ -560,13 +553,6 @@
       "name": "title",
       "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
       "text": "Mode"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/profile/profile-hero.ts",
-      "text": "OpenClaw"
     },
     {
       "count": 1,
