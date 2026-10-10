@@ -1,5 +1,7 @@
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import type { AdmissionOperations } from "../infra/sqlite-database-admission.worker.test-support.js";
+import { SqliteWorkerBroker } from "../infra/sqlite-worker-broker.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -154,7 +156,7 @@ describe("client voice session store", () => {
     }
   });
 
-  it("refreshes tool facts after local writes, rollback, and foreign commits", async () => {
+  it("refreshes tool facts after local writes, rollback, and worker commits without freshness probes", async () => {
     const home = await createTempHomeEnv("openclaw-voice-facts-");
     try {
       const options = { agentId: "main" };
@@ -166,6 +168,9 @@ describe("client voice session store", () => {
           options,
         );
       write({});
+      const probes = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
+        /data_version/iu.test(sql) ? "freshness" : null,
+      );
       const first = readVoiceSessionFacts("main", "voice-1");
       expect(first).toMatchObject({ status: "open" });
       expect(() =>
@@ -177,22 +182,35 @@ describe("client voice session store", () => {
       expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ status: "open" });
       write({ transcriptCapable: true });
       expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ transcriptCapable: true });
-      const foreign = new DatabaseSync(database.path);
+      const broker = new SqliteWorkerBroker();
       try {
-        foreign
-          .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
-          .run(
-            JSON.stringify({ ...original, status: "closed", hasUserTranscript: true }),
-            "talk-client-voice-sessions",
-            "voice-1",
-          );
+        const store = await broker.open<AdmissionOperations>({
+          moduleUrl: new URL(
+            "../infra/sqlite-database-admission.worker.test-support.ts",
+            import.meta.url,
+          ),
+          databasePath: database.path,
+          input: undefined,
+        });
+        await broker.runOperation(store!, (scope) =>
+          scope.execute({
+            type: "writeRows",
+            input: {
+              sql: `UPDATE cache_entries
+            SET value_json = json_set(value_json, '$.status', 'closed', '$.hasUserTranscript', json('true'))
+            WHERE scope = 'talk-client-voice-sessions' AND key = 'voice-1'`,
+            },
+          }),
+        );
       } finally {
-        foreign.close();
+        await broker.close();
       }
       expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({
         status: "closed",
         hasUserTranscript: true,
       });
+      expect(probes.counts).toEqual({ freshness: 0 });
+      probes.restore();
     } finally {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();

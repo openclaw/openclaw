@@ -83,7 +83,10 @@ Target floor: Safari/WebKit 26.2, Chrome/Edge and Firefox from the last ~6 month
 
 ## Tests
 
-- Mount with `mountSolid()` and always dispose. Settle with `flush()` plus outcome-based waits; `flush()` does not settle promises.
+- Use `mountSolid(() => view, options)` from `ui/src/test-helpers/mount-solid.ts`; it returns scoped queries, `container`, and an idempotent `unmount()`. Roots dispose after each test and before shared-worker reset. Explicit `unmount()` supports teardown assertions; caller-supplied containers remain, while helper-created containers are removed.
+- Use `createSolidApplicationContextProvider(context)` from `solid-application-context.tsx` as the mount's `wrapper`. It shares the Lit harness's Gateway snapshot/event fixtures. `setContext(next)` retires and remounts consumers under the new provider; unmounting consumers never disposes the application capabilities.
+- Import `flush` and `waitForSolid` from `solid-settle.ts`. Flush synchronous signal writes; await an observable assertion with `waitForSolid(() => expect(...))` for async outcomes. `flush()` does not settle promises or browser layout. Retained Lit children still need their own `updateComplete` boundary; `components/option-card.test.ts` demonstrates this mixed-renderer harness.
+- Use `renderSolidRef(() => ref, { targetElement, ...options })` from `render-solid-ref.ts` for ref behaviors. It forwards container/wrapper/query/hydration options that Testing Library beta.3 drops. Create effects and cleanup in the owned factory; the returned ref callback runs unowned.
 - Follow [test authoring](../../../docs/help/testing/writing-tests.md) and [test-audit](../test-audit/SKILL.md) when changing tests. Record focused wall time and CI seconds in the PR; preserve TSX test discovery and owner routing.
 - Keep assertions; replace harness. Delete tests only when the behavior they protect is gone.
 - The quantitative chat gates (zero textarea writes, constant stream work, retained identity, heap/idle budgets, zero removed markdown nodes) and the `WeakRef` + `collectGarbageForTest` suites must stay green.

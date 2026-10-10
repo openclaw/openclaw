@@ -331,26 +331,6 @@ function resolveAuthorityModelPolicy(
   });
 }
 
-function assertAllowedAuthProfileOverride(params: {
-  authProfileId: string | undefined;
-  authorityPolicy: RuntimeLlmPolicy | undefined;
-  pluginPolicy: RuntimeLlmPolicy | undefined;
-}): void {
-  if (!params.authProfileId) {
-    return;
-  }
-  if (
-    params.authorityPolicy?.allowAuthProfileOverride === true ||
-    params.pluginPolicy?.allowAuthProfileOverride === true
-  ) {
-    return;
-  }
-  throw completionError(
-    "LLM_COMPLETION_NOT_AUTHORIZED",
-    "Plugin LLM completion cannot override the auth profile. Enable plugins.entries.<id>.llm.allowAuthProfileOverride to authorize it.",
-  );
-}
-
 function assertModelAllowed(params: {
   kind: "override" | "completion";
   resolvedModelRef: string | null;
@@ -383,36 +363,6 @@ function assertModelAllowed(params: {
       `Plugin LLM completion ${target} "${params.resolvedModelRef}" is not allowlisted${usage}${owner}.`,
     );
   }
-}
-
-function assertAllowedModelOverride(params: {
-  resolvedModelRef: string | null;
-  pluginPolicyId: string | undefined;
-  authorityPolicy: RuntimeLlmPolicy | undefined;
-  pluginPolicy: RuntimeLlmPolicy | undefined;
-}): void {
-  if (
-    params.authorityPolicy?.allowModelOverride !== true &&
-    params.pluginPolicy?.allowModelOverride !== true
-  ) {
-    throw completionError(
-      "LLM_COMPLETION_NOT_AUTHORIZED",
-      "Plugin LLM completion cannot override the target model.",
-    );
-  }
-  // Host and operator policy are independent trust boundaries. When both
-  // configure a restriction, an override must satisfy their intersection.
-  assertModelAllowed({
-    kind: "override",
-    resolvedModelRef: params.resolvedModelRef,
-    policy: params.authorityPolicy,
-  });
-  assertModelAllowed({
-    kind: "override",
-    resolvedModelRef: params.resolvedModelRef,
-    policy: params.pluginPolicy,
-    policyOwnerPluginId: params.pluginPolicyId,
-  });
 }
 
 export function createRuntimeLlm(
@@ -457,6 +407,18 @@ export function createRuntimeLlm(
         : undefined;
       const pluginPolicy = pluginLlmConfig ? buildPolicyFromEntry(pluginLlmConfig) : undefined;
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
+      const policies = [
+        { policy: authorityPolicy },
+        { policy: pluginPolicy, policyOwnerPluginId: pluginPolicyId },
+      ];
+      const assertOverrideAllowed = (
+        permission: "allowModelOverride" | "allowAuthProfileOverride",
+        message: string,
+      ) => {
+        if (!policies.some(({ policy }) => policy?.[permission] === true)) {
+          throw completionError("LLM_COMPLETION_NOT_AUTHORIZED", message);
+        }
+      };
       const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
       const audit = {
         caller,
@@ -489,20 +451,20 @@ export function createRuntimeLlm(
       assertCurrent();
       source.assertModelAllowed(normalizedSelection);
       const resolvedModelRef = modelKey(normalizedSelection.provider, normalizedSelection.model);
-      assertModelAllowed({ kind: "completion", resolvedModelRef, policy: authorityPolicy });
-      assertModelAllowed({
-        kind: "completion",
-        resolvedModelRef,
-        policy: pluginPolicy,
-        policyOwnerPluginId: pluginPolicyId,
-      });
-      if (requestedModel) {
-        assertAllowedModelOverride({
-          resolvedModelRef,
-          pluginPolicyId,
-          authorityPolicy,
-          pluginPolicy,
-        });
+      // Host and operator restrictions intersect, with completion policy checked first.
+      for (const kind of ["completion", "override"] as const) {
+        if (kind === "override") {
+          if (!requestedModel) {
+            break;
+          }
+          assertOverrideAllowed(
+            "allowModelOverride",
+            "Plugin LLM completion cannot override the target model.",
+          );
+        }
+        for (const policy of policies) {
+          assertModelAllowed({ kind, resolvedModelRef, ...policy });
+        }
       }
 
       const isolatedRequest = isIsolatedAgentRuntimeRequest(params);
@@ -520,11 +482,12 @@ export function createRuntimeLlm(
       if (isolatedRequest) {
         // Direct completions preserve the shipped model@profile contract under model
         // override authority. Isolated credential routing requires separate authority.
-        assertAllowedAuthProfileOverride({
-          authProfileId: executionProfile ?? requestedModelProfile,
-          authorityPolicy,
-          pluginPolicy,
-        });
+        if (executionProfile ?? requestedModelProfile) {
+          assertOverrideAllowed(
+            "allowAuthProfileOverride",
+            "Plugin LLM completion cannot override the auth profile. Enable plugins.entries.<id>.llm.allowAuthProfileOverride to authorize it.",
+          );
+        }
         const result = await runIsolatedAgentRuntimeCompletion({
           request: requestSignal === params.signal ? params : { ...params, signal: requestSignal },
           cfg,

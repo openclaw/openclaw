@@ -637,6 +637,7 @@ async function augmentConfiguredOllamaCatalogModels(params: {
 const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
   ({
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
+    supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ config, model, provider }) => {
       if (model.api !== "ollama") {
         return undefined;
@@ -665,19 +666,7 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
       matchesOllamaContextOverflowError(errorMessage),
     classifyFailoverReason: ({ errorMessage }) =>
       errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined,
-  }) satisfies Pick<
-    ProviderPlugin,
-    | "createStreamFn"
-    | "normalizeToolSchemas"
-    | "inspectToolSchemas"
-    | "buildReplayPolicy"
-    | "resolveReasoningOutputMode"
-    | "resolveThinkingProfile"
-    | "normalizeResolvedModel"
-    | "wrapStreamFn"
-    | "matchesContextOverflowError"
-    | "classifyFailoverReason"
-  >;
+  }) satisfies Partial<ProviderPlugin>;
 
 export default definePluginEntry({
   id: "ollama",

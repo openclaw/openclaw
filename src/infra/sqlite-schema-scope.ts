@@ -59,31 +59,34 @@ export function publishSqliteSchemaChange(
   owner.scopeRevision = scope.revision;
 }
 
-export type SqliteReadOperationRevision = {
+type SqliteReadRevision = {
   schema: SqliteSchemaFacts;
-  dataVersion: number;
   mutationRevision: number;
 };
 
+export type SqliteReadOperationRevision = SqliteReadRevision & { writeRevision: number };
+
 export type SqliteReadScopeRevision = Readonly<
-  SqliteReadOperationRevision & {
-    snapshot: object | undefined;
-  }
+  SqliteReadRevision &
+    (
+      | { snapshot: undefined; writeRevision: number }
+      | { snapshot: object; writeRevision: undefined }
+    )
 >;
 
 export type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;
 
 export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
+  writable: boolean;
   admitted: boolean;
   revision: number;
   facts?: SqliteSchemaFacts;
-  dataVersion?: number;
-  observedDataVersion?: number;
   readDepth: number;
-  readDataVersion?: number;
   mutationRevision: number;
+  rollbackRevision: number;
   mutationDepth: number;
   transactionOpen: boolean;
+  transactionSnapshot?: object;
   transactionMutationRevision?: number;
   transactionRead: boolean;
   transactionCatalogBound: boolean;
@@ -94,6 +97,7 @@ export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
   capturing: boolean;
   readRevision?: SqliteReadScopeRevision;
   transactionalSchema: boolean;
+  transactionalTempSchema: boolean;
   transactionBaseFacts?: SqliteSchemaFacts;
   transactionalFacts: boolean;
   snapshot?: object;
@@ -103,6 +107,7 @@ export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
   authorizerActive: boolean;
   processRevision?: number;
   mutationListeners?: Set<SchemaMutationListener>;
+  isolatedTempTables: Set<string>;
   installTempTrackingSchema?: (schema: SqliteTempTrackingSchema) => void;
 };
 
@@ -112,13 +117,38 @@ export function observeSqliteTransactionState(
 ): void {
   const inTransaction = database.isTransaction;
   if (owner.transactionOpen !== inTransaction) {
-    owner.readDataVersion = undefined;
     if (owner.transactionOpen) {
       // A read error can roll back SQLite without passing through a tracked write.
       owner.mutationRevision += 1;
+      owner.rollbackRevision += 1;
     }
     owner.transactionOpen = inTransaction;
     owner.transactionMutationRevision = undefined;
+    owner.transactionSnapshot = undefined;
+    owner.transactionRead = false;
+    owner.transactionCatalogBound = false;
+  }
+}
+
+export function finishSqliteReadScope(
+  database: DatabaseSync,
+  owner: SqliteSchemaOwner,
+  wasTransaction: boolean,
+  expiresRead: boolean,
+  succeeded: boolean,
+  openingMutationRevision?: number,
+): void {
+  const inTransaction = database.isTransaction;
+  if (!succeeded && wasTransaction && !inTransaction) {
+    owner.mutationRevision += 1;
+    owner.rollbackRevision += 1;
+  }
+  owner.transactionOpen = inTransaction;
+  if (!wasTransaction || !inTransaction) {
+    owner.transactionMutationRevision = inTransaction ? openingMutationRevision : undefined;
+  }
+  if (wasTransaction !== inTransaction || expiresRead) {
+    owner.transactionSnapshot = undefined;
     owner.transactionRead = false;
     owner.transactionCatalogBound = false;
   }
