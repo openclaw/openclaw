@@ -1,10 +1,28 @@
-import { findSqlCharacter } from "./sqlite-schema-sql.js";
+import { findSqlCharacter, normalizeSqlWhitespace } from "./sqlite-schema-sql.js";
 
 // Conservative matching also covers multi-statement migration batches and catalog repairs.
 // False positives only revoke prepared facts; SQL is still executed by SQLite unchanged.
-function changesSchema(sql: string): boolean {
-  return /\b(?:CREATE|ALTER|DROP|REINDEX|VACUUM)\b|\bPRAGMA\b[\s\S]*\b(?:user_version|schema_version|writable_schema)\b[\s\S]*[=(]/i.test(
-    sql,
+function changesSchema(sql: string): boolean | "temp" {
+  if (
+    !/\b(?:CREATE|ALTER|DROP|REINDEX|VACUUM)\b|\bPRAGMA\b[\s\S]*\b(?:user_version|schema_version|writable_schema)\b[\s\S]*[=(]/i.test(
+      sql,
+    )
+  ) {
+    return false;
+  }
+  return changesOnlyTemporaryTable(sql) ? "temp" : true;
+}
+
+function changesOnlyTemporaryTable(sql: string): boolean {
+  const normalized = normalizeSqlWhitespace(sql);
+  const end = findSqlCharacter(normalized, ";");
+  if (end >= 0 && normalized.slice(end + 1).trim() !== "") {
+    return false;
+  }
+  // An unqualified DROP may resolve to MAIN; only the explicit TEMP namespace is local.
+  return (
+    /^CREATE\s+(?:TEMP|TEMPORARY)\s+TABLE\b/iu.test(normalized) ||
+    /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:temp|"temp"|`temp`|\[temp\])\s*\./iu.test(normalized)
   );
 }
 

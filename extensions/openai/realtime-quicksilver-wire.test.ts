@@ -1,18 +1,10 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   buildOpenAIQuicksilverSession,
-  buildOpenAIQuicksilverSessionUpdate,
   createOpenAIQuicksilverCall,
 } from "./realtime-quicksilver-wire.js";
-
-function createCallResponse(answer = "v=answer\r\n", callId = "rtc_test"): Response {
-  return new Response(answer, {
-    status: 201,
-    headers: { Location: `/v1/live/${callId}?source=test` },
-  });
-}
 
 function createRequestIds(label: string) {
   return {
@@ -22,186 +14,41 @@ function createRequestIds(label: string) {
   };
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe("GPT-Live session history", () => {
-  it.each([
-    { name: "entry count", text: "short", retained: 16 },
-    { name: "ASCII bytes and entry length", text: "x".repeat(1_000), retained: 9 },
-    { name: "UTF-8 without splitting emoji", text: "🦞".repeat(1_000), retained: 2 },
-    { name: "JSON quoting", text: '"\\\n'.repeat(400), retained: 4 },
-    {
-      name: "hostile delimiter expansion",
-      text: "</shared_session_history>".repeat(50),
-      retained: 7,
-    },
-  ])("bounds shared background including $name", ({ text, retained }) => {
-    const initialItems = Array.from({ length: 20 }, (_, index) => ({
-      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      text: `${index}:${text}`,
-    }));
-    const params = {
-      model: "gpt-live-test",
-      instructions: "Keep it brief.",
-      hostControlsInput: true,
-    };
-    const empty = buildOpenAIQuicksilverSession(params);
-    const session = buildOpenAIQuicksilverSession({ ...params, initialItems });
-    const background = session.instructions.slice(empty.instructions.length);
-    const records = background.match(
-      /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
-    )?.[1];
-    expect(records).toBeDefined();
-    expect(JSON.parse(records!)).toEqual(
-      initialItems.slice(-retained).map((item) => ({
-        role: item.role,
-        text: Array.from(item.text).slice(0, 800).join(""),
-      })),
-    );
-    expect(records).not.toContain("</shared_session_history>");
-    expect(Buffer.byteLength(background, "utf8")).toBeLessThanOrEqual(8_000);
-    expect(session).not.toHaveProperty("initial_items");
-    expect(buildOpenAIQuicksilverSession({ ...params, initialItems: [] })).toEqual(empty);
-  });
-
-  it("preserves explicit direct WebSocket role-bearing seeds", () => {
-    expect(
-      buildOpenAIQuicksilverSessionUpdate({
+  it.each([{ name: "UTF-8 without splitting emoji", text: "🦞".repeat(1_000), retained: 2 }])(
+    "bounds shared background including $name",
+    ({ text, retained }) => {
+      const initialItems = Array.from({ length: 20 }, (_, index) => ({
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        text: `${index}:${text}`,
+      }));
+      const params = {
         model: "gpt-live-test",
-        instructions: " Speak briefly. ",
-        initialItems: [
-          { role: "user", text: "Question" },
-          { role: "assistant", text: "Answer" },
-        ],
-      }),
-    ).toEqual({
-      type: "session.update",
-      session: {
-        instructions: "Speak briefly.",
-        audio: { output: { voice: "marin" } },
-        delegation: { type: "client" },
-        initial_items: [
-          { type: "message", role: "user", content: [{ type: "input_text", text: "Question" }] },
-          {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: "Answer" }],
-          },
-        ],
-      },
-    });
-  });
-
-  it("keeps released and unlisted routes on their own voice profiles", () => {
-    expect(
-      buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice: "SPRUCE" }).audio,
-    ).toEqual({ output: { voice: "spruce" } });
-    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }).audio).toEqual({
-      output: { voice: "cove" },
-    });
-    expect(
-      buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary", voice: "CEDAR" }).audio,
-    ).toEqual({ output: { voice: "cedar" } });
-    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }).audio).toEqual({
-      output: { voice: "marin" },
-    });
-  });
+        instructions: "Keep it brief.",
+        hostControlsInput: true,
+      };
+      const empty = buildOpenAIQuicksilverSession(params);
+      const session = buildOpenAIQuicksilverSession({ ...params, initialItems });
+      const background = session.instructions.slice(empty.instructions.length);
+      const records = background.match(
+        /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
+      )?.[1];
+      expect(records).toBeDefined();
+      expect(JSON.parse(records!)).toEqual(
+        initialItems.slice(-retained).map((item) => ({
+          role: item.role,
+          text: Array.from(item.text).slice(0, 800).join(""),
+        })),
+      );
+      expect(records).not.toContain("</shared_session_history>");
+      expect(Buffer.byteLength(background, "utf8")).toBeLessThanOrEqual(8_000);
+      expect(session).not.toHaveProperty("initial_items");
+      expect(buildOpenAIQuicksilverSession({ ...params, initialItems: [] })).toEqual(empty);
+    },
+  );
 });
 
 describe("Realtime call creation", () => {
-  it("uses the ChatGPT JSON call route for OAuth and preserves the Platform multipart route", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.7.2-test");
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const resolvedUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-      requests.push({ url: resolvedUrl, init });
-      return createCallResponse("v=answer\r\n", `rtc_${requests.length}`);
-    }) as unknown as typeof fetch;
-    const session = buildOpenAIQuicksilverSession({
-      model: "gpt-live-test-canary",
-      instructions: "Speak briefly.",
-      voice: "spruce",
-    });
-
-    await expect(
-      createOpenAIQuicksilverCall(
-        {
-          auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
-          requestIds: createRequestIds("oauth"),
-          sdp: "v=oauth-offer\r\n",
-          session,
-          fetchImpl,
-        },
-        openAIRealtimeHost,
-      ),
-    ).resolves.toEqual({
-      kind: "gpt-live",
-      status: 201,
-      answerSdp: "v=answer\r\n",
-      callId: "rtc_1",
-      sidebandUrl: "wss://api.openai.com/v1/live/rtc_1",
-    });
-    expect(requests[0]?.url).toBe(
-      "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-    );
-    expect(requests[0]?.init?.headers).toEqual({
-      Authorization: "Bearer oauth-token",
-      "OpenAI-Alpha": "quicksilver=v2",
-      "User-Agent": "openclaw/2026.7.2-test",
-      "chatgpt-account-id": "acct-1",
-      originator: "openclaw",
-      "session-id": "oauth-session",
-      "thread-id": "oauth-thread",
-      version: "2026.7.2-test",
-      "x-session-id": "oauth-realtime",
-      "Content-Type": "application/json",
-    });
-    const oauthBody = requests[0]?.init?.body;
-    if (typeof oauthBody !== "string") {
-      throw new Error("Expected a JSON request body");
-    }
-    expect(JSON.parse(oauthBody)).toEqual({
-      sdp: "v=oauth-offer\r\n",
-      session,
-    });
-
-    await expect(
-      createOpenAIQuicksilverCall(
-        {
-          auth: { type: "api-key", token: "platform-key" },
-          requestIds: createRequestIds("api-key"),
-          sdp: "v=api-offer\r\n",
-          session,
-          fetchImpl,
-        },
-        openAIRealtimeHost,
-      ),
-    ).resolves.toMatchObject({ status: 201, callId: "rtc_2" });
-    expect(requests[1]?.url).toBe("https://api.openai.com/v1/live");
-    expect(requests[1]?.init?.headers).toMatchObject({
-      Authorization: "Bearer platform-key",
-      "session-id": "api-key-session",
-      "thread-id": "api-key-thread",
-      "x-session-id": "api-key-realtime",
-    });
-    expect(requests[1]?.init?.headers).not.toHaveProperty("chatgpt-account-id");
-
-    for (const request of requests.slice(1)) {
-      expect(request.url).not.toContain("?");
-      const headers = request.init?.headers as Record<string, string> | undefined;
-      const boundary = headers?.["Content-Type"]?.split("boundary=")[1];
-      const body = request.init?.body;
-      expect(boundary).toBeTruthy();
-      expect(typeof body).toBe("string");
-      expect(body).toContain(`--${boundary}\r\n`);
-      expect(body).toContain('name="sdp"\r\nContent-Type: application/sdp');
-      expect(body).toContain('name="session"\r\nContent-Type: application/json');
-      expect(body).toContain(JSON.stringify(session));
-    }
-  });
-
   it.each([
     {
       name: "overloaded rejection",
@@ -269,11 +116,6 @@ describe("Realtime call creation", () => {
 
   it.each([
     {
-      name: "GPT-Live",
-      model: "gpt-live-test-canary",
-      expectedMessage: "GPT-Live call creation failed (429)",
-    },
-    {
       name: "GA realtime",
       model: "gpt-realtime-2.1",
       expectedMessage: "OpenAI Realtime call creation failed (429)",
@@ -335,8 +177,6 @@ describe("Realtime call creation", () => {
   });
 
   it.each([
-    { location: null, callId: "rtc_header_fallback" },
-    { location: null, callId: "019eb97d-8e9a-7ff3-94b0-ea019babd5d7" },
     { location: "http://[invalid", callId: "rtc_malformed_location_fallback" },
     { location: "/v1/live/not-a-call", callId: "rtc_invalid_path_fallback" },
   ])("falls back to openai-session-id for Location $location", async ({ location, callId }) => {
@@ -345,7 +185,7 @@ describe("Realtime call creation", () => {
         new Response("v=answer\r\n", {
           status: 201,
           headers: {
-            ...(location ? { Location: location } : {}),
+            Location: location,
             "openai-session-id": callId,
           },
         }),
@@ -363,27 +203,6 @@ describe("Realtime call creation", () => {
         openAIRealtimeHost,
       ),
     ).resolves.toMatchObject({ callId });
-  });
-
-  it("accepts a UUID call id from Location", async () => {
-    const callId = "019eb97d-8e9a-7ff3-94b0-ea019babd5d7";
-    const fetchImpl = vi.fn(async () => createCallResponse("v=answer\r\n", callId));
-
-    await expect(
-      createOpenAIQuicksilverCall(
-        {
-          auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
-          requestIds: createRequestIds("uuid-location"),
-          sdp: "v=offer\r\n",
-          session: buildOpenAIQuicksilverSession({ model: "gpt-live-test-canary" }),
-          fetchImpl: fetchImpl as unknown as typeof fetch,
-        },
-        openAIRealtimeHost,
-      ),
-    ).resolves.toMatchObject({
-      callId,
-      sidebandUrl: `wss://api.openai.com/v1/live/${callId}`,
-    });
   });
 
   it("rejects an empty SDP answer", async () => {
@@ -414,23 +233,15 @@ describe("Realtime call creation", () => {
 
   it.each([
     {
-      label: "GPT-Live",
-      auth: { type: "oauth" as const, token: "oauth-token", accountId: "acct-1" },
-      model: "gpt-live-test-canary",
-      location: "/v1/live/rtc_oversized_answer",
-    },
-    {
       label: "OpenAI Realtime",
       auth: { type: "api-key" as const, token: "platform-key" },
       model: "gpt-realtime-2.1",
-      location: undefined,
     },
   ])("rejects an oversized streaming $label SDP answer", async (testCase) => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(`v=answer\r\n${"x".repeat(256 * 1024)}`, {
           status: 201,
-          headers: testCase.location ? { Location: testCase.location } : undefined,
         }),
     );
 

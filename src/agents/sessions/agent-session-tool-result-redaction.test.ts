@@ -361,8 +361,6 @@ describe("AgentSession model-visible tool-result redaction", () => {
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
         sessionManager,
-        provider: model.provider,
-        modelId: model.id,
         model,
       }),
     });

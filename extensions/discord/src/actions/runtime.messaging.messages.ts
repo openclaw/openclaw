@@ -125,6 +125,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               active: true,
               seed: `${ctx.accountId}:${channelId}`,
               initialSnapshot: snapshot,
+              toolIcons: true,
             }).getText(),
             {
               maxChars: Math.min(ctx.accountConfig.textChunkLimit ?? 2000, 2000),

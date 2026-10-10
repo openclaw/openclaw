@@ -35,6 +35,10 @@ import {
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
+  getSessionEntryAsync,
+  getSessionEntryByIdAsync,
+} from "../../plugin-sdk/session-store-runtime-internal.js";
+import {
   captureSessionInitializationOwner,
   createSessionInitialization,
 } from "../../sessions/session-initialization.js";
@@ -81,14 +85,6 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
-}
-
-async function getSessionEntryAsync(
-  params: RuntimeSessionStoreReadParams,
-): Promise<SessionEntry | undefined> {
-  const { readSessionEntryReadOnlyInWorker } =
-    await import("../../config/sessions/session-entry-read-runtime.js");
-  return await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
 }
 
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
@@ -704,6 +700,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     createSessionEntry,
     getSessionEntry,
     getSessionEntryAsync,
+    getSessionEntryByIdAsync,
     listSessionEntries,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],

@@ -465,6 +465,9 @@ describe("ClickClack discussion service contracts", () => {
     vi.mocked(harness.runtime.agent.session.getSessionEntry).mockImplementation(({ sessionKey }) =>
       entries.get(sessionKey),
     );
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockImplementation(
+      async ({ sessionKey }) => entries.get(sessionKey),
+    );
 
     entries.set(deletedKey, {
       sessionId: "session-deleted",

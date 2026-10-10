@@ -135,6 +135,11 @@ before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
+A failed local embedding request preserves keyword access to a matching index
+and records the degraded provider in memory status and Gateway logs. A real model
+or index-configuration mismatch still pauses search instead of serving
+mismatched data.
+
 **Explicit provider unavailable.** If you name any other provider explicitly
 (for example `openai`, `ollama`, `gemini`) and it becomes unavailable at
 request time (bad auth, network failure), `memory_search` reports memory as
@@ -222,6 +227,13 @@ incognito exclusions still apply.
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
 provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
 the managed server endpoints before rebuilding the index.
+
+OpenAI-compatible embedding requests honor the caller's deadline, including
+the longer indexing budget, without an earlier HTTP header or body timeout.
+Deep status probes make one attempt using the provider's query budget: normally
+60 seconds for remote providers or 5 minutes for `local`, unless the provider
+supplies its own query budget. Managed server readiness keeps its separate
+budget. A stalled probe reports `memory embedding probe timed out after Ns`.
 
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.

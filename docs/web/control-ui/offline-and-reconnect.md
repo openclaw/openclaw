@@ -104,6 +104,15 @@ account checks still decide whether cached conversations may appear. No
 Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
+Reloads reuse cached build-versioned fonts, themes, and the web manifest without
+contacting the Gateway. The service worker retains the current build and at most
+two previous builds, so open tabs can still load their original assets. Uploaded
+profile avatars use private browser caching only when the URL matches the image's
+content revision; unversioned URLs and external avatar fallbacks still revalidate.
+Content-addressed plugin interface assets stay in the private browser HTTP cache
+across grant renewal; requests reaching the Gateway still require current plugin
+authorization, and plugin data remains subject to per-call RPC authorization.
+
 Online navigations still go directly to the network so reverse-proxy HTTP
 authentication dialogs work normally. If the browser reports itself online
 despite a broken connection, navigation keeps that network behavior. An open

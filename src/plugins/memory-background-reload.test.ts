@@ -124,6 +124,7 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
 
 function registerMemoryWorkspaceWatch(workspace: string) {
   const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
+  let nextSubscription = createDeferredCore();
   const files: MemoryWorkspaceFiles = {
     assertCurrent() {},
     listFiles: listMemoryFiles,
@@ -139,6 +140,8 @@ function registerMemoryWorkspaceWatch(workspace: string) {
         notify: AsyncLocalStorage.bind(() => onChange("change")),
         signal: watchSignal,
       });
+      nextSubscription.resolve();
+      nextSubscription = createDeferredCore();
       await new Promise<void>((resolve) => {
         watchSignal.addEventListener("abort", () => resolve(), { once: true });
       });
@@ -151,7 +154,7 @@ function registerMemoryWorkspaceWatch(workspace: string) {
     memoryFiles: files,
     bridge: { readFile: unused, writeFile: unused, stat: unused },
   });
-  return { subscriptions, release };
+  return { subscriptions, release, nextSubscription: () => nextSubscription.promise };
 }
 
 it("retires live watchers and starts successor indexing without a search or turn", async ({
@@ -168,7 +171,9 @@ it("retires live watchers and starts successor indexing without a search or turn
       },
     },
   };
-  const { subscriptions, release } = registerMemoryWorkspaceWatch(state.workspaceDir);
+  const { subscriptions, release, nextSubscription } = registerMemoryWorkspaceWatch(
+    state.workspaceDir,
+  );
   const instances: PluginInstance[] = [];
   let closeInitial: (() => Promise<void>) | undefined;
   try {
@@ -209,7 +214,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     const service = registration.service;
     assert(service.apiVersion !== 2);
     const context = { config, stateDir: state.stateDir, logger };
+    const successorWatching = nextSubscription();
     await service.start(context);
+    await withinTest(successorWatching, signal);
     expect(subscriptions).toHaveLength(2);
     expect(subscriptions[1]!.signal.aborted).toBe(false);
     await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
@@ -223,7 +230,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     expect(await withinTest(indexedChunks.promise, signal)).toBeGreaterThan(0);
     await service.stop?.(context);
     expect(subscriptions[1]!.signal.aborted).toBe(true);
+    const restartedWatching = nextSubscription();
     await service.start(context);
+    await withinTest(restartedWatching, signal);
     expect(subscriptions).toHaveLength(3);
     await expect(current.instance.dispose()).resolves.toEqual({ errors: [] });
     expect(subscriptions.every((subscription) => subscription.signal.aborted)).toBe(true);
