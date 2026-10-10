@@ -42,6 +42,7 @@ let radioId = 0;
 export const nextSettingsRadioName = () => `settings-radio-${++radioId}`;
 
 export function settingsSwitchClick(event: MouseEvent, props: SettingsToggleControl) {
+  // SAFETY: Both renderers bind this listener directly to the native switch input.
   const input = event.currentTarget as HTMLInputElement;
   if (!input.matches(":disabled") && !props.disabled && input.checked !== props.checked) {
     props.onAct?.(input.checked);
@@ -49,6 +50,7 @@ export function settingsSwitchClick(event: MouseEvent, props: SettingsToggleCont
 }
 
 export function settingsSwitchChange(event: Event, props: SettingsToggleControl) {
+  // SAFETY: Both renderers bind this listener directly to the native switch input.
   const input = event.currentTarget as HTMLInputElement;
   if (input.matches(":disabled") || props.disabled || props.onChange(input.checked) === false) {
     input.checked = props.checked;
@@ -59,6 +61,7 @@ export function settingsSwitchKeyDown(event: KeyboardEvent, props: SettingsToggl
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
     return;
   }
+  // SAFETY: Both renderers bind this listener directly to the native switch input.
   const input = event.currentTarget as HTMLInputElement;
   if (input.matches(":disabled") || props.disabled) {
     return;
@@ -79,6 +82,7 @@ export function settingsToggleRowClick(event: MouseEvent, props: SettingsToggleC
   if (event.target instanceof Element && event.target.closest(".settings-toggle")) {
     return;
   }
+  // SAFETY: Both renderers bind this listener directly to the settings row div.
   const input = (event.currentTarget as HTMLElement).querySelector<HTMLInputElement>(
     'input[role="switch"]',
   );
@@ -93,6 +97,7 @@ export function settingsRadioClick<T extends string, Label>(
   value: T,
   props: SettingsSegmentedProps<T, Label>,
 ) {
+  // SAFETY: Both renderers bind this listener directly to a native radio input.
   const input = event.currentTarget as HTMLInputElement;
   if (props.mode === "buttons" || props.disabled || input.matches(":disabled")) {
     return;
@@ -107,6 +112,7 @@ export function settingsRadioChange<T extends string, Label>(
   value: T,
   props: SettingsSegmentedProps<T, Label>,
 ) {
+  // SAFETY: Both renderers bind this listener directly to a native radio input.
   const input = event.currentTarget as HTMLInputElement;
   if (props.mode === "buttons" || !input.checked) {
     return;
@@ -124,6 +130,7 @@ export function settingsRadioChange<T extends string, Label>(
 }
 
 export function settingsRadioKeyDown(event: KeyboardEvent) {
+  // SAFETY: Both renderers bind this listener directly to a native radio input.
   const input = event.currentTarget as HTMLInputElement;
   const group = input.closest('[role="radiogroup"]');
   if (!group || input.matches(":disabled")) {

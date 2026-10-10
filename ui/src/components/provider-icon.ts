@@ -1,9 +1,10 @@
 import { html } from "lit";
+import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { icons } from "./icons.ts";
 import {
   providerFallbackLetter,
   resolveCloudProfileIconData,
-  resolveProviderIconData,
+  resolveProviderIconName,
   type CloudProfileIdentity,
 } from "./provider-icon-data.ts";
 
@@ -19,9 +20,13 @@ export {
 export function resolveCloudProfileIcon(profile?: CloudProfileIdentity) {
   const data = resolveCloudProfileIconData(profile);
   const icon =
-    data.icon.kind === "brand"
-      ? renderBrandIcon(data.icon.assetPath, data.icon.icon, "cloud-provider-icon")
-      : icons[data.icon.name];
+    data.providerId !== undefined
+      ? renderBrandIcon(
+          inferControlUiPublicAssetPath(`cloud-provider-icons/${data.providerId}.svg`),
+          data.providerId,
+          "cloud-provider-icon",
+        )
+      : icons[data.iconName];
   return {
     label: data.label,
     icon: html`<span class="cloud-profile-icon" aria-hidden="true">${icon}</span>`,
@@ -48,8 +53,12 @@ export function renderProviderFallbackIcon(label: string, options?: { className?
 }
 
 export function renderProviderBrandIcon(provider: string, options?: { className?: string }) {
-  const data = resolveProviderIconData(provider);
-  return data.kind === "brand"
-    ? renderBrandIcon(data.assetPath, data.icon, options?.className?.trim() ?? "")
+  const icon = resolveProviderIconName(provider);
+  return icon
+    ? renderBrandIcon(
+        inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`),
+        icon,
+        options?.className?.trim() ?? "",
+      )
     : renderProviderFallbackIcon(provider, options);
 }

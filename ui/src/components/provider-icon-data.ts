@@ -1,4 +1,3 @@
-import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 
 const PROVIDER_ICON_NAMES = new Set([
@@ -171,7 +170,7 @@ export function providerIdFromModelRef(modelRef: string): string | null {
 }
 
 /** Icon asset name for a (normalized, lowercase) provider id, or null when no brand mark ships. */
-function resolveProviderIconName(provider: string): string | null {
+export function resolveProviderIconName(provider: string): string | null {
   const normalized = provider.trim().toLowerCase();
   const icon = PROVIDER_ICON_ALIASES[normalized] ?? normalized;
   if (PROVIDER_ICON_NAMES.has(icon)) {
@@ -223,54 +222,35 @@ export function compareCloudProfiles(
   );
 }
 
-export type BrandIconData = {
-  kind: "brand";
-  assetPath: string;
-  icon: string;
-};
-
-export type ProviderIconData = BrandIconData | { kind: "fallback"; letter: string };
-
 export function providerFallbackLetter(label: string): string {
   return takeGraphemes(label.trim().toUpperCase(), 1) || "?";
-}
-
-export function resolveProviderIconData(provider: string): ProviderIconData {
-  const icon = resolveProviderIconName(provider);
-  return icon
-    ? {
-        kind: "brand",
-        assetPath: inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`),
-        icon,
-      }
-    : { kind: "fallback", letter: providerFallbackLetter(provider) };
 }
 
 /** Cloud identity is distinct from model-provider identity (Google Cloud versus Gemini). */
 type CloudProfileIconData = {
   label: string;
-  icon: BrandIconData | { kind: "symbol"; name: "server" | "box" | "cloud" };
-};
+} & (
+  | { providerId: string; iconName?: never }
+  | { providerId?: never; iconName: "server" | "box" | "cloud" }
+);
 
 export function resolveCloudProfileIconData(profile?: CloudProfileIdentity): CloudProfileIconData {
   const id = cloudProfileBackendId(profile);
   const brand = CLOUD_PROVIDERS.get(id);
   const label =
     brand?.label ?? (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
-  const icon: CloudProfileIconData["icon"] = brand?.brand
+  return brand?.brand
     ? {
-        kind: "brand",
-        assetPath: inferControlUiPublicAssetPath(`cloud-provider-icons/${brand.brand}.svg`),
-        icon: brand.brand,
+        label,
+        providerId: brand.brand,
       }
     : {
-        kind: "symbol",
-        name:
+        label,
+        iconName:
           id === "machine0" || id === "incus"
             ? "server"
             : id === "local-container"
               ? "box"
               : "cloud",
       };
-  return { label, icon };
 }

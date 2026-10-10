@@ -30,6 +30,7 @@ function setButtonLabel(button: HTMLButtonElement, label: string, showFeedback =
 }
 
 export async function handleCopyButton(event: Event, text: string, idleLabel: string) {
+  // SAFETY: Callers bind this handler directly to native button click events.
   const button = event.currentTarget as HTMLButtonElement | null;
   if (!button || button.dataset.copyState === "copying") {
     return false;
