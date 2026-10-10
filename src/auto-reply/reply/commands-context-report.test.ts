@@ -150,6 +150,34 @@ async function withTranscript(
 }
 
 describe("buildContextReply", () => {
+  it.each<{ resolved?: number; authored?: number; expected: number }>([
+    { expected: 32_768 },
+    { resolved: 65_536, expected: 65_536 },
+    { resolved: 200_000, expected: 200_000 },
+    { authored: 16_384, expected: 16_384 },
+  ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
+    const params = makeParams("/context json", false, { contextTokens: 200_000 });
+    params.provider = "ollama";
+    params.model = "qwen2.5:7b";
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      sessionId: "local-context",
+      updatedAt: 1,
+      modelProvider: params.provider,
+      model: params.model,
+      agentHarnessId: "openclaw",
+      contextTokens: 32_768,
+      contextTokensSource: "resolved-v1",
+    };
+    params.contextTokenProjection = {
+      contextTokens: testCase.resolved,
+      authoredContextTokens: testCase.authored,
+    };
+
+    const result = await buildContextReply(params);
+    expect(JSON.parse(result.text ?? "{}").session.contextTokens).toBe(testCase.expected);
+  });
+
   it("describes compactable transcript counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(

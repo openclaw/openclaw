@@ -48,6 +48,10 @@ import { withTempConfig } from "./test-temp-config.js";
 const roots: string[] = [];
 const firstSource = 'export default { id: "native-ui" };';
 
+function responseHeader(response: ReturnType<typeof createResponse>, name: string) {
+  return response.setHeader.mock.calls.findLast(([header]) => header.toLowerCase() === name)?.[1];
+}
+
 function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-")));
   roots.push(rootDir);
@@ -282,6 +286,12 @@ describe("native Control UI browser assets", () => {
             );
             const asset = await sendRequest(server, { path: assetUrl, headers: { cookie } });
             expect(asset.res.statusCode).toBe(200);
+            expect(responseHeader(asset, "cache-control")).toBe(
+              "private, max-age=31536000, immutable",
+            );
+            expect(String(responseHeader(asset, "vary")).toLowerCase().split(/,\s*/)).not.toContain(
+              "cookie",
+            );
             expect(asset.end.mock.calls[0]?.[0]?.toString()).toBe(source);
             if (basePath) {
               expect(
@@ -488,7 +498,10 @@ describe("native Control UI browser assets", () => {
         const head = await read(entry.entryUrl, "HEAD");
         expect(head.res.statusCode).toBe(200);
         expect(head.getBody()).toBe("");
-        expect((await read(entry.entryUrl, "POST")).res.statusCode).toBe(405);
+        expect(responseHeader(head, "cache-control")).toBe("private, max-age=31536000, immutable");
+        const unsupported = await read(entry.entryUrl, "POST");
+        expect(unsupported.res.statusCode).toBe(405);
+        expect(unsupported.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
 
         const nextSource = 'export default { id: "native-ui", version: 2 };';
         fs.writeFileSync(path.join(fixture.directory, "index.js"), nextSource);
@@ -508,13 +521,10 @@ describe("native Control UI browser assets", () => {
             status: "failed",
           }),
         ).toBe(true);
-        fs.writeFileSync(
-          path.join(fixture.directory, "index.js"),
-          "export default { version: 3 };",
-        );
         fs.writeFileSync(path.join(fixture.directory, "lazy.js"), "export const value = 'third';");
         const third = await reloadControlUiPluginCatalog("native-ui");
         expect(third.diagnostics).toEqual([]);
+        expect(third.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
         expect(
           reportControlUiPluginActivation(browser, {
             pluginId: "native-ui",
@@ -525,6 +535,9 @@ describe("native Control UI browser assets", () => {
         // Failed activations still use the first renderer, including its later imports.
         const retainedChunk = await read(entry.entryUrl.replace(/index\.js$/u, "lazy.js"));
         expect(retainedChunk.res.statusCode).toBe(200);
+        expect(responseHeader(retainedChunk, "cache-control")).toBe(
+          "private, max-age=31536000, immutable",
+        );
         expect(retainedChunk.end.mock.calls[0]?.[0]?.toString()).toBe(firstChunk);
         expect((await read(entry.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
 
@@ -831,14 +844,22 @@ describe("native Control UI browser assets", () => {
           { cookie: cookieForGrant({ generation: "stale-generation" }) },
         ];
         for (const headers of unauthorizedHeaders) {
-          expect(
-            (await sendRequest(server, { path: entry.entryUrl, headers })).res.statusCode,
-          ).toBe(401);
+          const denied = await sendRequest(server, { path: entry.entryUrl, headers });
+          expect(denied.res.statusCode).toBe(401);
+          expect(responseHeader(denied, "cache-control")).toBe("no-store");
         }
         expect(
           (await sendRequest(server, { path: entry.entryUrl, authorization: "Bearer test-token" }))
             .res.statusCode,
         ).toBe(200);
+        for (const invalidRevision of ["latest", "", "0".repeat(64)]) {
+          const missing = await sendRequest(server, {
+            path: entry.entryUrl.replace(entry.revision, invalidRevision),
+            headers: { cookie },
+          });
+          expect(missing.res.statusCode).toBe(404);
+          expect(responseHeader(missing, "cache-control")).toBe("no-store");
+        }
         for (const suffix of [
           "source.ts",
           "index.js.map",
@@ -847,11 +868,9 @@ describe("native Control UI browser assets", () => {
           "%252e%252e/server.js",
           "missing.js",
         ]) {
-          expect(
-            (await sendRequest(server, { path: prefix + suffix, headers: { cookie } })).res
-              .statusCode,
-            suffix,
-          ).toBe(404);
+          const missing = await sendRequest(server, { path: prefix + suffix, headers: { cookie } });
+          expect(missing.res.statusCode, suffix).toBe(404);
+          expect(responseHeader(missing, "cache-control"), suffix).toBe("no-store");
         }
       },
     });

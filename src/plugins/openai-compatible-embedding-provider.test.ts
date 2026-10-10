@@ -2,6 +2,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { Agent, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMemorySearchDeadlineControl,
@@ -292,6 +293,37 @@ afterEach(async () => {
 });
 
 describe("openai-compatible generic embedding provider", () => {
+  it.each([true, false])("preserves caller-owned HTTP deadlines: signal=%s", async (withSignal) => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+    const requests: Dispatcher.DispatchOptions[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with the same Agent receiver.
+    const dispatch = Agent.prototype.dispatch;
+    const spy = vi.spyOn(Agent.prototype, "dispatch").mockImplementation(function (
+      this: Agent,
+      options,
+      handler,
+    ) {
+      requests.push(options);
+      return dispatch.call(this, options, handler);
+    });
+    try {
+      await expect(
+        provider.embedBatch(["document"], {
+          inputType: "document",
+          ...(withSignal ? { signal: new AbortController().signal } : {}),
+        }),
+      ).resolves.toEqual([[0.1, 0.2, 0.3]]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.headersTimeout).toBe(withSignal ? 0 : undefined);
+      expect(requests[0]?.bodyTimeout).toBe(withSignal ? 0 : undefined);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("forwards readiness phases without pausing reconciliation", async () => {
     const server = await startEmbeddingServer();
     const release = vi.fn();

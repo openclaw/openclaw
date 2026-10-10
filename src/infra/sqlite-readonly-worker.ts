@@ -372,13 +372,7 @@ export function runSqliteReadOnlyWorker(
     }
     if (scopedOptions.mode === "auth-profile-rows" || scopedOptions.mode === "operation") {
       const launch = captureSqliteReadOnlyWorkerLaunch(scopedOptions.env, scopedOptions.source);
-      const observation = trackWorkerRequest(
-        "sqlite_read",
-        classifyWorkerRequest(
-          scopedOptions.mode === "operation" ? scopedOptions.command.type : scopedOptions.mode,
-        ),
-        scopedOptions.signal,
-      );
+      const observation = trackSqliteRead(scopedOptions);
       const operation = scope.readTail.then(() =>
         runSqliteScopedReadWorker(pathname, scopedOptions, launch, scope, observation),
       );
@@ -410,16 +404,20 @@ export function runSqliteReadOnlyWorker(
   });
 }
 
+function trackSqliteRead(options: SqliteAuthProfileReadOptions | SqliteReadOnlyOperationOptions) {
+  return trackWorkerRequest(
+    "sqlite_read",
+    classifyWorkerRequest(options.mode === "operation" ? options.command.type : options.mode),
+    options.signal,
+  );
+}
+
 async function runSqliteScopedReadWorker(
   pathname: string,
   options: SqliteAuthProfileReadOptions | SqliteReadOnlyOperationOptions,
   launch: SqliteReadOnlyWorkerLaunch,
   scope?: SqliteReadOnlyWorkerScope,
-  observation = trackWorkerRequest(
-    "sqlite_read",
-    classifyWorkerRequest(options.mode === "operation" ? options.command.type : options.mode),
-    options.signal,
-  ),
+  observation = trackSqliteRead(options),
 ): Promise<SqliteReadOnlyWorkerValue> {
   try {
     options.signal?.throwIfAborted();

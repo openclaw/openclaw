@@ -17,6 +17,7 @@ import { redactProviderResponseErrorText } from "../agents/provider-request-head
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
+import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
@@ -291,6 +292,16 @@ async function createEmbeddingHttpError(
   return error;
 }
 
+// The caller owns the deadline; Undici's defaults must not cut short a slow batch.
+const fetchWithCallerDeadline: typeof fetchWithRuntimeDispatcher = (url, init) =>
+  fetchWithRuntimeDispatcher(url, {
+    ...init,
+    dispatcher: init?.dispatcher?.compose(
+      (dispatch) => (options, handler) =>
+        dispatch({ ...options, headersTimeout: 0, bodyTimeout: 0 }, handler),
+    ),
+  });
+
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
@@ -329,6 +340,7 @@ async function postEmbeddingRequest(params: {
         body: JSON.stringify(body),
       },
       signal: callOptions?.signal,
+      fetchImpl: callOptions?.signal ? fetchWithCallerDeadline : undefined,
       ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
