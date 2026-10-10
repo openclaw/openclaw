@@ -213,6 +213,9 @@ agent in one place.
 A WebChat turn and its background completions stay in WebChat unless an external
 route is explicitly selected. The session's saved external route is retained for
 callers that intentionally use it; it does not override the current turn's origin.
+Internally triggered media tasks can use a WebChat channel sentinel without an
+interactive WebChat origin; their media admission still pins the saved external
+route.
 
 An outbound `send` request can set `sessionKey` to mirror delivered output into
 a different transcript. This does not rebind that transcript's delivery route:
