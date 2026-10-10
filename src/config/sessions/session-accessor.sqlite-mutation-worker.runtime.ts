@@ -135,6 +135,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
   using sourceGuard = prepareSessionColdSourceGuard(
     data.plan.databaseOptions,
     data.plan.kind === "cold-restore" ? data.plan.guard?.sources : undefined,
+    data.sourceMatches,
   );
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
@@ -150,8 +151,21 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
           return mutateSessionColdTranscriptInWorker(
             data.plan,
             coldRecords,
-            (database) => {
+            (database, sourceValidation) => {
               transactionDatabase = database.db;
+              // Native admission can service the grant before its message arrives.
+              for (const { index, matches } of data.sourceMatches ?? []) {
+                const match = sourceValidation?.conversationMatches.find(
+                  (value) => value.index === index,
+                );
+                if (!match) {
+                  throw new Error("Cold restoration omitted its source alternatives");
+                }
+                for (const alternative of match.alternatives) {
+                  Atomics.store(matches, alternative + 1, 1);
+                }
+                Atomics.store(matches, 0, 1);
+              }
               waitForSqliteReclamationCommit(commitGate, () =>
                 port.postMessage({ type: "commit-request", operationId: 0 }),
               );

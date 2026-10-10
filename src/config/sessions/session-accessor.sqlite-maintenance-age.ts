@@ -8,8 +8,8 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
+import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
 import {
-  getSessionMaintenanceActivityAt,
   shouldPreserveMaintenanceEntry,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";

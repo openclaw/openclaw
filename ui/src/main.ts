@@ -41,6 +41,9 @@ installMissingStylesheetRecovery();
 if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
   swUrl.searchParams.set("v", currentControlUiBuildId);
+  if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
+    swUrl.searchParams.set("session-entry", "1");
+  }
   navigator.serviceWorker.addEventListener("message", (event) => {
     if (controlUiWorkerActivationRetires(event.data)) {
       void scheduleStaleChunkReload({

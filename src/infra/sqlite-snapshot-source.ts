@@ -189,10 +189,7 @@ export function startSqliteReadOnlyLocationAsync(
               if (flightSignal.aborted) {
                 if (!cleanup) {
                   cleanup = prepared.startCleanup();
-                  void cleanup.result.then(
-                    () => retained.operation.service(),
-                    () => retained.operation.service(),
-                  );
+                  void cleanup.result.then(service, service);
                 }
                 cleanup.service();
                 const removed = cleanup.read();
@@ -217,6 +214,7 @@ export function startSqliteReadOnlyLocationAsync(
             }
           }),
         );
+        const service = () => retained.operation.service();
         try {
           task = staging.start(
             {
@@ -231,10 +229,7 @@ export function startSqliteReadOnlyLocationAsync(
             },
             flightSignal,
           );
-          void task.result.then(
-            () => retained.operation.service(),
-            () => retained.operation.service(),
-          );
+          void task.result.then(service, service);
         } catch (error) {
           retained.reject(error);
         }
@@ -344,18 +339,16 @@ export async function withSqliteSnapshotSource<T>(
 ): Promise<T> {
   let prepared = await prepareSqliteSnapshotSource(pathname);
   try {
-    try {
-      return prepared ? await operation(prepared.location) : await operation(pathname);
-    } catch (error) {
-      if (prepared) {
-        throw error;
-      }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
+    return await operation(prepared ? prepared.location : pathname);
+  } catch (error) {
+    if (prepared) {
+      throw error;
     }
+    prepared = await prepareSqliteSnapshotSource(pathname);
+    if (!prepared) {
+      throw error;
+    }
+    return await operation(prepared.location);
   } finally {
     await prepared?.cleanupAsync();
   }

@@ -56,6 +56,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "get"
   | "getAsync"
   | "getWithMoveAsync"
+  | "readCurrentMoveAuthority"
   | "getPlacementMoveAsync"
   | "readProjection"
   | "readRecoveryCandidates"

@@ -1,7 +1,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
+import {
+  assertAgentDatabaseTerminalOpenAllowed,
+  revalidateAgentDatabaseTerminalOpenAsync,
+} from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -19,6 +22,7 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
@@ -34,6 +38,10 @@ import {
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
+import {
+  targetDiscoveryLane,
+  type SessionHistoryWorkerLane,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -41,10 +49,13 @@ import type {
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
-import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "./transcript-target-binding.js";
 
 type SessionTranscriptHydrationReader = {
-  target: ReturnType<typeof captureSessionTranscriptTargetBinding>;
+  target: CapturedSessionTranscriptTargetBinding;
   assertCurrent: () => void;
   read: () => Promise<PreparedSessionTranscriptHydration>;
   readCohort?: (
@@ -128,6 +139,7 @@ export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
   limits?: { maxBytes: number; maxEvents: number },
   signal?: AbortSignal,
+  lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
   const incognito = captureIncognitoSessionHistoryBinding(source);
   if (incognito) {
@@ -167,16 +179,44 @@ export function prepareSessionTranscriptHydration(
     signal?.throwIfAborted();
     const options = toDatabaseOptions(resolvedScope);
     const databasePath = resolveOpenClawAgentSqlitePath(options);
-    assertAgentDatabaseTerminalOpenAllowed(databasePath);
+    await revalidateAgentDatabaseTerminalOpenAsync(
+      databasePath,
+      () => signal?.throwIfAborted(),
+      signal,
+    );
     try {
-      const result = await withSessionHistoryWorkerDatabase(options, async (owner) => {
-        try {
-          return await readInWorker(owner, resolvedScope);
-        } finally {
-          // An absent-store reply must not hide a revoked read owner.
-          owner.assertCurrent();
-        }
-      });
+      const result = await withSessionHistoryWorkerDatabase(
+        options,
+        async (owner) => {
+          const assertReadCurrent = () => {
+            signal?.throwIfAborted();
+            owner.assertCurrent();
+          };
+          try {
+            return await readRestoredSessionTranscript(
+              target,
+              () => readInWorker(owner, resolvedScope),
+              {
+                assertCurrent: assertReadCurrent,
+                coldRead: {
+                  target: resolvedScope,
+                  readMetadata: async () => {
+                    const metadata = await owner.readColdMetadata({
+                      sessionId: resolvedScope.sessionId,
+                      env: target.env,
+                    });
+                    return metadata.archive;
+                  },
+                },
+              },
+            );
+          } finally {
+            // An absent-store reply must not hide a revoked read owner.
+            owner.assertCurrent();
+          }
+        },
+        lane,
+      );
       signal?.throwIfAborted();
       return result;
     } finally {
@@ -216,40 +256,60 @@ export function prepareSessionTranscriptHydration(
                 path: scope.storePath,
                 env: scope.env,
               };
-              await runOpenClawAgentWriteAdmission(
-                database,
-                async (_identity, assertOwner) => {
-                  assertSource();
-                  const assertNative = captureSessionEntryNativeMutationWitness([database]);
-                  const prepared = await owner.readTranscript(
-                    {
-                      target: scope,
-                      resolvedScope: resolved,
-                      expectedIdentity,
-                      limits: contextLimits,
-                      admission,
-                      transcript: capturedSelection,
+              // Restoration needs the writer too; leave FIFO before handling a cold miss.
+              await readRestoredSessionTranscript(
+                scope,
+                () =>
+                  runOpenClawAgentWriteAdmission(
+                    database,
+                    async (_identity, assertOwner) => {
+                      assertSource();
+                      const assertNative = captureSessionEntryNativeMutationWitness([database]);
+                      const prepared = await owner.readTranscript(
+                        {
+                          target: scope,
+                          resolvedScope: resolved,
+                          expectedIdentity,
+                          limits: contextLimits,
+                          admission,
+                          transcript: capturedSelection,
+                        },
+                        signal,
+                      );
+                      signal?.throwIfAborted();
+                      assertOwner();
+                      assertSource();
+                      assertNative();
+                      const consumed = consume(prepared);
+                      if (isPromiseLike(consumed)) {
+                        void Promise.resolve(consumed).catch(() => {});
+                        throw new Error("Transcript cohort consumers must remain synchronous");
+                      }
+                      assertSource();
+                      assertNative();
                     },
+                    true,
+                    undefined,
                     signal,
-                  );
-                  signal?.throwIfAborted();
-                  assertOwner();
-                  assertSource();
-                  assertNative();
-                  const consumed = consume(prepared);
-                  if (isPromiseLike(consumed)) {
-                    void Promise.resolve(consumed).catch(() => {});
-                    throw new Error("Transcript cohort consumers must remain synchronous");
-                  }
-                  assertSource();
-                  assertNative();
+                  ),
+                {
+                  assertCurrent: assertSource,
+                  coldRead: {
+                    target: resolved,
+                    readMetadata: async () => {
+                      const metadata = await owner.readColdMetadata({
+                        sessionId: resolved.sessionId,
+                        env: scope.env,
+                      });
+                      return metadata.archive;
+                    },
+                  },
                 },
-                true,
-                undefined,
-                signal,
               );
             },
             signal,
+            // Cohort consumption holds the writer through read failure and reader cleanup.
+            targetDiscoveryLane,
           );
         }
       : undefined;

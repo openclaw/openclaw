@@ -12,6 +12,10 @@ import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.kernel.js";
+import {
+  publishPlacementTurnClaimState,
+  publishPlacementWorkspaceResultState,
+} from "./placement-turn-authority.js";
 import type { PlacementTurnClaimReceipt } from "./placement-turn-claims.types.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
@@ -114,6 +118,8 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
         const record = getRequired(db, sessionId);
+        publishPlacementWorkspaceResultState(db, sessionId, null);
+        publishPlacementTurnClaimState(db, record, current.state);
         return { placement: record, closedClaim: releasedClaim ?? undefined };
       });
     },

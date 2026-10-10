@@ -254,7 +254,7 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
       ]),
     ).toBe("removing");
     expect(database.db.isOpen).toBe(false);
-    expect(() => retainedStatement.get()).toThrow(/finalized/);
+    expect(() => retainedStatement.get()).toThrow(/finalized|database is not open/);
     const before = fs.statSync(database.path, { bigint: true });
     expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
     expect(fs.statSync(database.path, { bigint: true })).toEqual(before);

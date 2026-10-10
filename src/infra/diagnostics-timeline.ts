@@ -290,17 +290,7 @@ function startDiagnosticsTimelineSpan(
     ...(options.attributes ? { attributes: options.attributes } : {}),
     ...(options.omitErrorMessage ? { omitErrorMessage: true } : {}),
   };
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
-      attributes: span.attributes,
-    },
-    { config: span.config, env: span.env },
-  );
+  emitDiagnosticsTimelineEvent({ type: "span.start", ...span }, span);
   return span;
 }
 
@@ -324,12 +314,8 @@ function emitFinishedDiagnosticsTimelineSpan(
   emitDiagnosticsTimelineEvent(
     {
       type: failure ? "span.error" : "span.end",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
+      ...span,
       durationMs: performance.now() - span.startedAt,
-      attributes: span.attributes,
       ...(failure
         ? {
             errorName: failure.error instanceof Error ? failure.error.name : typeof failure.error,
@@ -342,7 +328,7 @@ function emitFinishedDiagnosticsTimelineSpan(
           }
         : {}),
     },
-    { config: span.config, env: span.env },
+    span,
   );
 }
 

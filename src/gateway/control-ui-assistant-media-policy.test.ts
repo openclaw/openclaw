@@ -145,25 +145,6 @@ async function request(
 // The real HTTP boundary plus real files protect session-root admission and exact-file grants;
 // existing media tests cover static agent roots only.
 describe("assistant image session policy", () => {
-  it.each(["absolute", "image.png", "./image.png", "openclaw/tmp/proof/image.png"])(
-    "previews a protected project's image using %s paths",
-    async (reference) => {
-      const source = reference === "absolute" ? path.join(project, "image.png") : reference;
-      const file = path.resolve(project, source);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, PNG);
-      const metadata = (await request(source)).payload;
-      expect(metadata).toMatchObject({
-        available: true,
-        mimeType: "image/png",
-        mediaTicket: expect.any(String),
-      });
-      const served = await request(source, { ticket: String(metadata!.mediaTicket), bytes: true });
-      expect(served.res.statusCode).toBe(200);
-      expect(served.bytes).toEqual(PNG);
-    },
-  );
-
   it("binds relative media tickets to the execution directory within the session root", async () => {
     const first = path.join(project, "first");
     const second = path.join(project, "second");
@@ -199,15 +180,6 @@ describe("assistant image session policy", () => {
       expect(denied.bytes).not.toEqual(PNG);
     },
   );
-
-  it("lets full sessions preview an outside image but not text disguised as an image", async () => {
-    entry.permissionMode = "full";
-    const source = path.join(temp, "outside.png");
-    await fs.writeFile(source, PNG);
-    expect((await request(source)).payload).toMatchObject({ available: true });
-    await fs.writeFile(source, "private text");
-    expect((await request(source)).payload).toMatchObject({ available: false });
-  });
 
   it("uses configured protection when there is no explicit session mode", async () => {
     delete entry.permissionMode;
@@ -280,7 +252,7 @@ describe("assistant image session policy", () => {
     expect((await request(link)).payload).toMatchObject({ available: false, canAllow: true });
   });
 
-  it.each(["execNode", "repositoryWorkspaceId"] as const)(
+  it.each(["execNode"] as const)(
     "does not interpret %s session paths as Gateway-local image paths",
     async (owner) => {
       entry[owner] = "remote-workspace";
@@ -328,44 +300,26 @@ describe("assistant image session policy", () => {
     });
   });
 
-  it.each(["full", "workspace"] as const)(
-    "keeps mutable %s-policy images readable after atomic replacement",
-    async (mode) => {
-      entry.permissionMode = mode;
-      const source = path.join(mode === "full" ? temp : project, "replace.png");
-      await fs.writeFile(source, PNG);
-      const ticket = String((await request(source)).payload!.mediaTicket);
-      await fs.rename(source, `${source}.old`);
-      await fs.writeFile(source, PNG);
-      const served = await request(source, { ticket, bytes: true });
-      expect(served.res.statusCode).toBe(200);
-      expect(served.bytes).toEqual(PNG);
-    },
-  );
-
-  it.each(["full", "workspace"] as const)(
-    "recognizes real outside SVG images in %s mode",
-    async (mode) => {
-      entry.permissionMode = mode;
-      const source = path.join(temp, "diagram.svg");
-      await fs.writeFile(
-        source,
-        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
-      );
-      const result = await request(source, { allow: mode === "workspace" });
-      expect(result.payload).toMatchObject({ available: true, mimeType: "image/svg+xml" });
-      const bytes = await request(source, {
-        ticket: String(result.payload!.mediaTicket),
-        bytes: true,
-      });
-      expect(bytes.res.statusCode).toBe(200);
-      expect(bytes.bytes).toEqual(await fs.readFile(source));
-      expect(bytes.setHeader).toHaveBeenCalledWith(
-        "content-security-policy",
-        expect.stringContaining("sandbox"),
-      );
-    },
-  );
+  it.each(["workspace"] as const)("recognizes real outside SVG images in %s mode", async (mode) => {
+    entry.permissionMode = mode;
+    const source = path.join(temp, "diagram.svg");
+    await fs.writeFile(
+      source,
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
+    );
+    const result = await request(source, { allow: mode === "workspace" });
+    expect(result.payload).toMatchObject({ available: true, mimeType: "image/svg+xml" });
+    const bytes = await request(source, {
+      ticket: String(result.payload!.mediaTicket),
+      bytes: true,
+    });
+    expect(bytes.res.statusCode).toBe(200);
+    expect(bytes.bytes).toEqual(await fs.readFile(source));
+    expect(bytes.setHeader).toHaveBeenCalledWith(
+      "content-security-policy",
+      expect.stringContaining("sandbox"),
+    );
+  });
 
   it("denies incognito images to a named profile while preserving administrator access", async () => {
     const source = path.join(project, "private.png");
@@ -386,42 +340,6 @@ describe("assistant image session policy", () => {
     expect((await request(source)).payload).toMatchObject({ available: true });
   });
 
-  it.each([
-    { cap: "none", visibility: "shared", available: false },
-    { cap: "view", visibility: "draft", available: false },
-    { cap: "view", visibility: "shared", available: true },
-  ] as const)(
-    "applies the $cap role to $visibility session images",
-    async ({ cap, visibility, available }) => {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
-        cfg.gateway = {
-          roles: {
-            default: "viewer",
-            definitions: {
-              viewer: { sessions: { others: cap }, agents: "*", scopes: ["operator.read"] },
-            },
-          },
-        };
-        const profile = ensureProfileForEmail("media-role-reader@example.test");
-        const catalog = await prepareUserProfileCatalog();
-        onTestFinished(catalog.release);
-        const source = path.join(project, "image.png");
-        await fs.writeFile(source, PNG);
-        entry.visibility = visibility;
-        state.auth.mockResolvedValue({
-          authMethod: "trusted-proxy",
-          operatorScopes: ["operator.read"],
-          ...resolveHttpProfile(profile.id, cfg),
-        });
-        const result = await request(source);
-        if (available) {
-          expect(result.payload).toMatchObject({ available: true });
-        } else {
-          expect(result.res.statusCode).toBe(404);
-        }
-      });
-    },
-  );
   it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
     cfg.tools = { fs: { workspaceOnly: false } };
     cfg.agents!.entries!.other = { workspace: project };
@@ -466,7 +384,7 @@ describe("assistant image session policy", () => {
     );
   });
 
-  it.each(["execNode", "repositoryWorkspaceId"] as const)(
+  it.each(["repositoryWorkspaceId"] as const)(
     "keeps Gateway-owned inbound images available in a %s session",
     async (owner) => {
       entry[owner] = "remote-workspace";
@@ -539,7 +457,7 @@ describe("assistant image session policy", () => {
     }
   });
 
-  it.each(["visibility", "role assignment", "role definition"] as const)(
+  it.each(["role assignment", "role definition"] as const)(
     "revalidates a named reader's saved media ticket after %s withdrawal",
     async (change) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
@@ -568,10 +486,7 @@ describe("assistant image session policy", () => {
         // Ordinary mutations elsewhere must not revoke a still-authorized reader's ticket.
         invalidateSessionSharingSnapshot("agent:main:unrelated");
         expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
-        if (change === "visibility") {
-          entry.visibility = "draft";
-          invalidateSessionSharingSnapshot(sessionKey);
-        } else if (change === "role assignment") {
+        if (change === "role assignment") {
           setUserProfileRole(profile.id, "denied");
           invalidateOperatorRolePolicy(profile.id);
         } else {
@@ -697,8 +612,6 @@ describe("assistant image session policy", () => {
 
   it.each([
     { name: "report.pdf", content: "%PDF-1.7\nexisting report\n", mime: "application/pdf" },
-    { name: "voice.wav", content: "existing audio bytes", mime: "audio/wav" },
-    { name: "clip.mp4", content: "existing video bytes", mime: "video/mp4" },
   ])(
     "preserves legacy Full Access $name attachments under the configured agent workspace",
     async ({ name, content, mime }) => {

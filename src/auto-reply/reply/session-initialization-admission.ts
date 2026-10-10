@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.reset.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
@@ -29,7 +31,7 @@ export type InitSessionStateAttemptContext = {
   isSystemEvent: boolean;
   retargetedSession: boolean;
   sessionKey: string;
-  storeWriterIdentity?: string;
+  inputDeliveryKey?: string;
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
@@ -44,6 +46,58 @@ export function resolveInitializationSessionReader(
     return undefined;
   }
   return reader;
+}
+
+/** Reset hooks and parent forks require hot transcripts before taking the writer lane. */
+export async function prepareReplySessionInitialization(
+  params: InitSessionStateParams,
+  attemptContext: InitSessionStateAttemptContext,
+) {
+  const reader = resolveInitializationSessionReader(params, attemptContext);
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    reader?.assertCurrent();
+  };
+  const parentSessionKey = normalizeOptionalString(params.ctx.ParentSessionKey);
+  const snapshot = await loadReplySessionInitializationSnapshot(
+    {
+      agentId: attemptContext.agentId,
+      storePath: attemptContext.storePath,
+      sessionKey: attemptContext.sessionKey,
+      relatedSessionKeys: parentSessionKey ? [parentSessionKey] : [],
+    },
+    {
+      reader,
+      includeColdMetadata: true,
+      assertCurrent,
+    },
+  );
+  const { restoreSessionColdTranscript } =
+    await import("../../config/sessions/session-cold-storage.js");
+  const restoreTargets = [
+    attemptContext.sessionKey,
+    ...(parentSessionKey ? [parentSessionKey] : []),
+  ].map((sessionKey) => ({ sessionKey, sessionId: snapshot.readEntry(sessionKey)?.sessionId }));
+  for (const { sessionKey, sessionId } of restoreTargets) {
+    if (
+      sessionId &&
+      (snapshot.coldArchives === undefined ||
+        snapshot.coldArchives.some((archive) => archive.session_id === sessionId))
+    ) {
+      assertCurrent();
+      await restoreSessionColdTranscript(
+        {
+          sessionKey,
+          sessionId,
+          agentId: attemptContext.agentId,
+          storePath: attemptContext.storePath,
+        },
+        assertCurrent,
+      );
+    }
+  }
+  assertCurrent();
+  return parentSessionKey;
 }
 
 export function resolveReplySessionInitializationOptions(

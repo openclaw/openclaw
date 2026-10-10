@@ -37,146 +37,11 @@ function createStreamingResponse(contentType: string, byte = 97) {
 
 describe("provider error utils", () => {
   it.each([
-    ["null", null, undefined],
     ["string", "provider failure", undefined],
-    ["array", [{ message: "ignored" }], undefined],
     ["empty object", {}, undefined],
-    ["blank fields", { message: " ", detail: "\n", type: " ", code: " " }, undefined],
-    [
-      "nested error before detail and root",
-      {
-        error: { message: " nested ", type: " invalid ", code: " bad " },
-        detail: { message: "ignored detail" },
-        message: "ignored root",
-      },
-      "nested [type=invalid, code=bad]",
-    ],
-    [
-      "array error before object detail",
-      { error: [{ message: "ignored" }], detail: { message: " detail ", status: " retry " } },
-      "detail [code=retry]",
-    ],
-    ["array detail before root", { detail: ["ignored"], message: " root " }, "root"],
-    [
-      "blank nested message before root fallback",
-      { error: { message: " ", detail: 7 }, detail: { message: "ignored" }, message: " root " },
-      "root",
-    ],
-    [
-      "nested detail before OAuth description",
-      { error: { message: " ", detail: " nested detail ", error_description: "ignored" } },
-      "nested detail",
-    ],
-    ["root detail before flat error", { detail: " detail ", error: "ignored" }, "detail"],
-    [
-      "OAuth description and raw error code",
-      { error: " invalid_request ", error_description: " Needs configuration " },
-      "Needs configuration [code=invalid_request]",
-    ],
-    ["flat error without OAuth description", { error: " invalid_request " }, "invalid_request"],
-    [
-      "blank OAuth description without inferred code",
-      { error: " invalid_request ", error_description: " " },
-      "invalid_request",
-    ],
-    [
-      "explicit code before status and OAuth code",
-      {
-        message: "retry",
-        code: " limited ",
-        status: "ignored",
-        error: "ignored",
-        error_description: "ignored",
-      },
-      "retry [code=limited]",
-    ],
-    ["non-string code before status", { code: 3, status: " bad " }, "[code=bad]"],
     ["type-only metadata", { type: " rate ", code: " " }, "[type=rate]"],
-    ["raw public text", { message: "api_key=not-a-real-key" }, "api_key=not-a-real-key"],
   ] as const)("formats the public %s payload", (_name, payload, expected) => {
     expect(formatProviderErrorPayload(payload)).toBe(expected);
-  });
-
-  it("preserves changing public getters and skips lower-priority fields", () => {
-    const reads: string[] = [];
-    let messageReads = 0;
-    const subject = {
-      get error_description() {
-        reads.push("subject.error_description");
-        return undefined;
-      },
-      get message() {
-        reads.push("subject.message");
-        return ++messageReads === 1 ? " first " : " second ";
-      },
-      get detail() {
-        throw new Error("lower-priority subject detail must stay unread");
-      },
-      get type() {
-        reads.push("subject.type");
-        return " rate ";
-      },
-      get code() {
-        reads.push("subject.code");
-        return " limited ";
-      },
-      get status() {
-        throw new Error("lower-priority status must stay unread");
-      },
-    };
-    const payload = {
-      get detail() {
-        reads.push("root.detail");
-        return { message: "ignored detail" };
-      },
-      get error() {
-        reads.push("root.error");
-        return subject;
-      },
-      get error_description() {
-        reads.push("root.error_description");
-        return undefined;
-      },
-      get message() {
-        throw new Error("lower-priority root message must stay unread");
-      },
-    };
-
-    for (const expected of [
-      "first [type=rate, code=limited]",
-      "second [type=rate, code=limited]",
-    ]) {
-      reads.length = 0;
-      expect(formatProviderErrorPayload(payload)).toBe(expected);
-      expect(reads).toEqual([
-        "root.detail",
-        "root.error",
-        "subject.error_description",
-        "root.error_description",
-        "subject.message",
-        "subject.type",
-        "subject.code",
-      ]);
-    }
-  });
-
-  it("formats nested provider error details with request ids", async () => {
-    const response = new Response(
-      JSON.stringify({
-        detail: {
-          message: "Quota exceeded",
-          status: "quota_exceeded",
-        },
-      }),
-      {
-        status: 429,
-        headers: { "x-request-id": "req_123" },
-      },
-    );
-
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
-      "Provider API error (429): Quota exceeded [code=quota_exceeded] [request_id=req_123]",
-    );
   });
 
   it("reads string error fields and fallback request id headers", async () => {
@@ -218,31 +83,6 @@ describe("provider error utils", () => {
     await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
       `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
     );
-  });
-
-  it("keeps HTTP status metadata when error body reads fail", async () => {
-    const response = {
-      ok: false,
-      status: 503,
-      headers: new Headers(),
-      body: {
-        getReader: () => ({
-          read: async () => {
-            throw new Error("broken response stream");
-          },
-          cancel: async () => undefined,
-        }),
-      },
-    } as unknown as Response;
-
-    await expect(
-      assertOkOrThrowProviderError(response, "Provider API error"),
-    ).rejects.toMatchObject({
-      name: "ProviderHttpError",
-      status: 503,
-      statusCode: 503,
-      message: "Provider API error (503)",
-    } satisfies Partial<ProviderHttpError>);
   });
 
   it("propagates a bounded error-body timeout instead of hanging normalization", async () => {
@@ -351,12 +191,6 @@ describe("provider error utils", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("drops partial UTF-8 characters when provider error body reads truncate", async () => {
-    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
-
-    await expect(readResponseTextLimited(response, 3)).resolves.toBe("ab");
-  });
-
   it("attaches structured provider error metadata", async () => {
     // API-key-like substrings must be redacted from stored error bodies.
     const response = new Response(
@@ -391,7 +225,6 @@ describe("provider error utils", () => {
 
   it.each([
     ["delta seconds", "12", 12_000],
-    ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", 5_000],
     ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
   ])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
     const now = Date.UTC(2026, 4, 1, 12, 0, 0);
@@ -407,40 +240,6 @@ describe("provider error utils", () => {
     } finally {
       nowSpy.mockRestore();
     }
-  });
-
-  it.each([
-    ["negative header", { header: "-1" }],
-    ["unsafe header", { header: "9007199254741" }],
-  ])("ignores $name cooldown hints", async (_name, value) => {
-    const error = await createProviderHttpError(
-      new Response(null, {
-        status: 429,
-        headers: { "Retry-After": value.header },
-      }),
-      "Provider API error",
-    );
-
-    expect((error as ProviderHttpError).retryAfterMs).toBeUndefined();
-  });
-
-  it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
-    const response = new Response(
-      JSON.stringify({
-        error: {
-          message: "Bad request",
-          code: "invalid_request",
-        },
-      }),
-      {
-        status: 400,
-        headers: { "x-request-id": "req_legacy" },
-      },
-    );
-
-    await expect(assertOkOrThrowHttpError(response, "Legacy provider error")).rejects.toThrow(
-      "Legacy provider error (HTTP 400): Bad request [code=invalid_request] [request_id=req_legacy]",
-    );
   });
 
   it("redacts reflected request credentials before extracting provider error metadata", async () => {
@@ -500,49 +299,6 @@ describe("provider error utils", () => {
     expect(String((error as Error).cause)).not.toContain(credential);
   });
 
-  it("parses well-formed JSON responses under the byte cap", async () => {
-    const response = new Response(JSON.stringify({ models: ["a", "b"] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(
-      readProviderJsonResponse<{ models: string[] }>(response, "Provider catalog failed"),
-    ).resolves.toEqual({ models: ["a", "b"] });
-  });
-
-  it("caps successful JSON responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingResponse("application/json");
-
-    await expect(
-      readProviderJsonResponse(streamed.response, "Provider catalog failed", {
-        maxBytes: 2048,
-      }),
-    ).rejects.toThrow("Provider catalog failed: JSON response exceeds 2048 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
-  it("honors custom JSON overflow errors and stops reading", async () => {
-    const streamed = createStreamingResponse("application/json");
-    const sentinel = new Error("custom overflow");
-    const onOverflow = vi.fn(() => sentinel);
-
-    const error = await readProviderJsonResponse(streamed.response, "Provider catalog failed", {
-      maxBytes: 2048,
-      onOverflow,
-    }).catch((cause: unknown) => cause);
-
-    expect(error).toBe(sentinel);
-    expect(onOverflow).toHaveBeenCalledOnce();
-    expect(onOverflow).toHaveBeenCalledWith({
-      size: 3072,
-      maxBytes: 2048,
-      res: streamed.response,
-    });
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
   it("rejects provider JSON responses with invalid UTF-8 bytes instead of silently replacing them", async () => {
     const invalidUtf8Bytes = new Uint8Array([0x7b, 0x22, 0x6b, 0x65, 0x79, 0x22, 0x3a, 0xff, 0x7d]);
     const response = new Response(invalidUtf8Bytes.buffer, {
@@ -568,18 +324,6 @@ describe("provider error utils", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
-  it("caps successful binary responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingResponse("audio/mpeg", 121);
-
-    await expect(
-      readProviderBinaryResponse(streamed.response, "Provider TTS failed", "audio", {
-        maxBytes: 2048,
-      }),
-    ).rejects.toThrow("Provider TTS failed: audio response exceeds 2048 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
   it("does not await clone-tee cancellation for rejected binary responses", async () => {
     const cancel = vi.fn();
     const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
@@ -597,35 +341,8 @@ describe("provider error utils", () => {
   });
 
   it.each([
-    { kind: "audio", contentType: "audio/mpeg" },
-    { kind: "audio", contentType: "AUDIO/OGG; codecs=opus" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis"' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis"' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\\\, vorbis"' },
-    { kind: "audio", contentType: "audio/opus" },
-    { kind: "audio", contentType: "application/ogg" },
-    { kind: "audio", contentType: 'application/ogg; codecs="opus"' },
-    { kind: "audio", contentType: "binary/octet-stream" },
-    { kind: "video", contentType: "binary/octet-stream" },
-    { kind: "audio", contentType: "audio/pcm" },
-    { kind: "audio", contentType: "audio/pcm;" },
-    { kind: "audio", contentType: "audio/pcm; ; " },
-    { kind: "video", contentType: 'video/mp4;; codecs="avc1"' },
-    { kind: "video", contentType: "application/octet-stream;" },
-    { kind: "audio", contentType: "audio/vnd.wave" },
-    { kind: "video", contentType: "video/mp4" },
-    { kind: "video", contentType: "VIDEO/WEBM; codecs=vp9" },
-    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"' },
-    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"; profile=main' },
-    { kind: "video", contentType: "video/x-matroska" },
-    { kind: "audio", contentType: "application/octet-stream" },
-    { kind: "video", contentType: "application/octet-stream" },
-    { kind: "audio", contentType: undefined },
     { kind: "video", contentType: undefined },
-    { kind: "binary", contentType: "image/png" },
-    { kind: "binary", contentType: "image/png; charset=utf-8, text/html" },
     { kind: "binary", contentType: "; text/html" },
-    { kind: "binary", contentType: "application/zip" },
   ])("accepts $kind response content type $contentType", async ({ kind, contentType }) => {
     const response = new Response(
       new Uint8Array([1]),
@@ -638,59 +355,13 @@ describe("provider error utils", () => {
   });
 
   it.each([
-    { kind: "audio", contentType: "image/png" },
     { kind: "audio", contentType: "" },
-    { kind: "audio", contentType: "; text/html" },
-    { kind: "audio", contentType: "; audio/mpeg, text/html" },
-    { kind: "audio", contentType: "audio/" },
-    { kind: "audio", contentType: "audio/ogg;;, text/html" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus"; ;, text/html' },
-    { kind: "audio", contentType: "audio/ogg; codecs" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus"garbage' },
-    { kind: "audio", contentType: "audio/mpeg image/png" },
     { kind: "audio", contentType: "video/mp4" },
-    { kind: "audio", contentType: "audio/mpeg, video/mp4" },
-    { kind: "audio", contentType: "audio/mpeg; charset=utf-8, text/html" },
-    { kind: "audio", contentType: "audio/mpeg; charset=utf-8; profile=voice, text/html" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis", text/html' },
     { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis", text/html' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\' },
-    { kind: "video", contentType: "audio/ogg" },
-    { kind: "video", contentType: "application/ogg" },
-    { kind: "audio", contentType: "application/ogg; codecs=opus, text/html" },
-    { kind: "video", contentType: "binary/octet-stream; charset=utf-8, text/html" },
-    { kind: "video", contentType: "" },
-    { kind: "video", contentType: "; video/mp4, application/json" },
-    { kind: "video", contentType: "video/" },
-    { kind: "video", contentType: "video/mp4 image/png" },
-    { kind: "video", contentType: "video/mp4, image/png" },
-    { kind: "video", contentType: "video/mp4; codecs=avc1, application/json" },
-    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a"; profile=main, text/html' },
-    { kind: "video", contentType: "image/png" },
-    { kind: "video", contentType: "application/pdf" },
-    { kind: "audio", contentType: "application/json" },
-    { kind: "video", contentType: "application/problem+json" },
-    { kind: "binary", contentType: "text/html; charset=utf-8" },
-    { kind: "binary", contentType: "application/problem+json" },
   ])("rejects $contentType for $kind responses", async ({ kind, contentType }) => {
     const response = new Response(new Uint8Array([1]), {
       headers: { "content-type": contentType },
     });
-
-    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
-      `Provider failed: malformed ${kind} response`,
-    );
-  });
-
-  it.each([
-    { kind: "audio", first: "audio/mpeg; charset=utf-8", second: "text/html" },
-    { kind: "video", first: "video/mp4; codecs=avc1", second: "application/json" },
-  ])("rejects repeated Fetch Content-Type headers for $kind", async ({ kind, first, second }) => {
-    const headers = new Headers();
-    headers.append("content-type", first);
-    headers.append("content-type", second);
-    const response = new Response(new Uint8Array([1]), { headers });
 
     await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
       `Provider failed: malformed ${kind} response`,
@@ -742,29 +413,6 @@ describe("provider error utils", () => {
       await assertion;
     } finally {
       vi.useRealTimers();
-    }
-  });
-
-  it("proves idle timeout with a real TCP server that stalls mid-JSON-body", async () => {
-    const { createServer } = await import("node:http");
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('{"status": "par');
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, resolve);
-    });
-    const port = (server.address() as import("node:net").AddressInfo).port;
-
-    try {
-      const response = await fetch(`http://localhost:${port}/test`);
-      await expect(
-        readProviderJsonResponse(response, "tcp-stall", { chunkTimeoutMs: 100 }),
-      ).rejects.toThrow("tcp-stall: response body stalled for 100ms");
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 });

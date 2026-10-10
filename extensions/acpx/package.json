@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.79.0",
-    "@agentclientprotocol/codex-acp": "1.12.0",
-    "@openclaw/fs-safe": "0.24.2",
-    "acpx": "0.19.1",
-    "smol-toml": "1.8.0",
+    "@agentclientprotocol/claude-agent-acp": "0.85.1",
+    "@agentclientprotocol/codex-acp": "2.1.1",
+    "@openclaw/fs-safe": "0.25.0",
+    "acpx": "0.19.4",
+    "smol-toml": "1.9.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

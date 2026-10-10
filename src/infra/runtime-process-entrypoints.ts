@@ -50,6 +50,7 @@ export const runtimeProcessEntrypoints = {
   sessionMessageRewriteDomain: runtimeProcessEntrypoint(
     "config/sessions/session-message-rewrite.worker",
   ),
+  sessionDiskBudget: runtimeProcessEntrypoint("config/sessions/disk-budget.worker"),
   sessionTranscriptStats: runtimeProcessEntrypoint(
     "config/sessions/session-transcript-stats.worker",
   ),
@@ -78,6 +79,7 @@ export const runtimeProcessEntrypoints = {
     "agents/embedded-agent-runner/provider-prompt-state.worker",
   ),
   updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
+  immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
   updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
   updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
   doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),

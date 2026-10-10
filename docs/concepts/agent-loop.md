@@ -130,6 +130,8 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.
 
+When a required turn exhausts its retries with only reasoning or empty output, OpenClaw reports an error and saves the try-again notice in chat history. This also applies when compaction occurs between retries. Whitespace and zero-width characters alone do not count as a visible answer.
+
 If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. A progress message fully delivered to the current conversation counts as the answer only when it is the last tool batch of the settled turn and the turn then produces no output: the model wrote it after every other tool result, so a finalization pass could only repeat it. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
 
 An optional turn that explicitly finishes with `NO_REPLY` does not need a finalization pass, even after a settled tool failure. The failure remains recorded; a rejected Skill Workshop review still fails without making extra model requests to compose a reply.
@@ -164,6 +166,14 @@ The same publication decision covers agent frames, chat finals, progress snapsho
 and session lifecycle notifications. Execution settlement and cleanup continue
 independently of event publication.
 
+For completed `chat.send` turns, clients may request compaction, fork, or rewind
+as soon as they receive chat `final`. These requests join the published turn's
+remaining transcript and admission cleanup before mutating the session. A
+competing live turn still returns an active-run error.
+Lifecycle delivery captures registrations before listeners run, and later chat
+terminal publication keeps the producer's original registration. Reusing a run ID
+during a listener callback cannot make its replacement terminal.
+
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and
 result codes without copying prompts, messages, tool arguments, tool results,
@@ -189,6 +199,15 @@ finality is published only after execution settles. A new attempt clears the
 prior outcome before preparation. Later workflow errors or aborts cannot
 reclassify completed execution; cron persistence, delivery, and yielded-parent
 continuation retain their separate outcomes.
+
+A yielded end while the parent task is waiting does not commit a terminal outcome.
+If dispatch then fails, the Gateway still publishes and retains that failure for
+chat replay and conversation history.
+
+Chat errors wait for terminal session persistence, including any failure notice,
+so an immediate history reload includes the recorded failure. Successful and
+aborted chat terminals do not wait for this write. If persistence fails, the
+Gateway logs the write failure and still delivers the live chat error.
 
 History keeps a run active while its terminal session write is pending. Once
 that write succeeds, history and session activity show the recorded end time

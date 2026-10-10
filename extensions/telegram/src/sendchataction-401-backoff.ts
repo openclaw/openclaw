@@ -49,12 +49,7 @@ function is401Error(error: unknown): boolean {
   // whose message contains the substring "401" — that must NOT trigger the 401
   // suspension path. The sibling classifiers in network-errors.ts also use
   // error_code before message heuristics; see hasTelegramErrorCode.
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "error_code" in error &&
-    typeof error.error_code === "number"
-  ) {
+  if (typeof error === "object" && "error_code" in error && typeof error.error_code === "number") {
     return error.error_code === 401;
   }
   // Fallback for non-Telegram errors without a structured error_code:

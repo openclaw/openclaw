@@ -646,6 +646,22 @@ function migrationProjection(section, value, sanitize = (text) => text) {
   throw new Error();
 }
 
+function projectMigrationSections(read, sanitize) {
+  return Object.fromEntries(
+    ["doctor", "sessions", "archives", "sibling"].map((section) => {
+      try {
+        return [
+          section,
+          { availability: "captured", ...migrationProjection(section, read(section), sanitize) },
+        ];
+      } catch {
+        omissions[`migration-${section}`] ??= reasons[3];
+        return [section, { availability: "unavailable" }];
+      }
+    }),
+  );
+}
+
 // A native read-only open can create missing WAL sidecars or require journal recovery.
 // This bootstrap observer never copies operator databases or imports a migrating runtime reader.
 function assertNativeSqliteObservationSafe(handles, label) {
@@ -847,16 +863,7 @@ function captureMigrationEvidence(stateRoot, artifactRoot, observationRoot) {
       };
     },
   };
-  return Object.fromEntries(
-    Object.entries(sources).map(([section, read]) => {
-      try {
-        return [section, { availability: "captured", ...migrationProjection(section, read()) }];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  return projectMigrationSections((section) => sources[section]());
 }
 
 function sessionMigrationProjection(raw, kind, runId, sanitize = (text) => text) {
@@ -1136,13 +1143,17 @@ function armPostCoreCapture() {
   }
 }
 
-async function pluginIdentities(stateRoot, artifactRoot) {
-  const unavailable = {
+function unknownPluginIdentity() {
+  return {
     availability: "unknown",
     evidence: "persisted index + current bytes; not observed loaded modules",
     reader: "SQLite or historical fallback; missing/error is not absence",
     plugins: [],
   };
+}
+
+async function pluginIdentities(stateRoot, artifactRoot) {
+  const unavailable = unknownPluginIdentity();
   const handles = [];
   try {
     // The existing reader opens SQLite read-only. Fence every file it may read;
@@ -2074,12 +2085,7 @@ export function publishDiagnostics(
   } catch {
     // Do not promote a partial or unbound receipt into a reported Doctor outcome.
   }
-  report.pluginIdentity = {
-    availability: "unknown",
-    evidence: "persisted index + current bytes; not observed loaded modules",
-    reader: "SQLite or historical fallback; missing/error is not absence",
-    plugins: [],
-  };
+  report.pluginIdentity = unknownPluginIdentity();
   if (snapshot.pluginIdentity?.availability === "observed") {
     try {
       const plugins = boundedList(snapshot.pluginIdentity.plugins).map((entry) => {
@@ -2120,23 +2126,13 @@ export function publishDiagnostics(
       omissions["plugin identity"] = reasons[3];
     }
   }
-  report.migration = Object.fromEntries(
-    ["doctor", "sessions", "archives", "sibling"].map((section) => {
-      try {
-        const value = snapshot.migration?.[section];
-        if (value?.availability !== "captured") {
-          throw new Error();
-        }
-        return [
-          section,
-          { availability: "captured", ...migrationProjection(section, value, sanitize) },
-        ];
-      } catch {
-        omissions[`migration-${section}`] ??= reasons[3];
-        return [section, { availability: "unavailable" }];
-      }
-    }),
-  );
+  report.migration = projectMigrationSections((section) => {
+    const value = snapshot.migration?.[section];
+    if (value?.availability !== "captured") {
+      throw new Error();
+    }
+    return value;
+  }, sanitize);
   writeReport(artifactRoot, destination, "failure.json", report, publicLimit);
   if (Object.keys(omissions).length) {
     process.stderr.write(

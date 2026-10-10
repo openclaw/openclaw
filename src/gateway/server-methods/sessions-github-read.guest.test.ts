@@ -83,6 +83,7 @@ describe.each(methods)("registered guest %s", (method) => {
                 ? {
                     personal: null,
                     shared: null,
+                    sharedUnavailableReason: "unsupported_workspace",
                     pendingPersonal: null,
                     latestShared: receipt,
                   }

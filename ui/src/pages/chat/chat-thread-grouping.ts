@@ -25,8 +25,11 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
+  readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+
+const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
   return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
@@ -138,34 +141,28 @@ function stampReplyAttribution(
   }
   for (const [index, item] of items.entries()) {
     const { sender, message, turnSource } = states[index]!;
-    if (item.kind === "stream") {
+    if (item.kind === "group") {
+      // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
-        item.replyToSender = sender;
-        item.replyToMessage = message;
+        item.replyShared = true;
       }
+      if (item.role !== "assistant" || hasForwardedSource(item)) {
+        continue;
+      }
+      const currentSource =
+        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+          ? runPrompts.get(item.runId)
+          : undefined;
+      if (turnSource) {
+        item.replyTurnSource = turnSource;
+      }
+      if (currentSource) {
+        item.replyCurrentSource = currentSource;
+      }
+    } else if (item.kind !== "stream") {
       continue;
     }
-    if (item.kind !== "group") {
-      continue;
-    }
-    // Every strip follows the thread: an unattributed source is "You" only in 1:1.
-    if (shared) {
-      item.replyShared = true;
-    }
-    if (item.role !== "assistant" || hasForwardedSource(item)) {
-      continue;
-    }
-    const currentSource =
-      item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-        ? runPrompts.get(item.runId)
-        : undefined;
-    if (turnSource) {
-      item.replyTurnSource = turnSource;
-    }
-    if (currentSource) {
-      item.replyCurrentSource = currentSource;
-    }
-    if (shared && sender) {
+    if (shared && (item.kind === "stream" || sender)) {
       item.replyToSender = sender;
       item.replyToMessage = message;
     }
@@ -271,6 +268,10 @@ function groupChatItems(
     if (
       !currentGroup ||
       startsProjectedTurn ||
+      // Each automation input owns a turn, including old rows without a projected marker.
+      Boolean(
+        readAutomationRun(item.message) || readAutomationRun(currentGroup.messages[0]?.message),
+      ) ||
       (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
@@ -554,20 +555,19 @@ export function collapseCompletedTurnWork(
       // the answer stays last. Nothing moves past a handoff, which keeps a
       // handoff's own sentence above its work, and nothing moves when any of
       // it failed or ended the run: that stays where it happened.
-      const answer = finalReplyIndex >= 0 ? terminalReply : undefined;
       const trailing = turn.slice(finalReplyIndex + 1);
       const answerLast =
-        answer?.runId !== undefined &&
+        terminalReply.runId !== undefined &&
         trailing.length > 0 &&
         trailing.every(
           (item) =>
             isCollapsibleWorkGroup(item) &&
-            item.runId === answer.runId &&
+            item.runId === terminalReply.runId &&
             !groupHasFailedResult(item) &&
             !groupEndsRunInFailure(item),
         );
       result.push(
-        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, answer] : turn),
+        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, terminalReply] : turn),
       );
       continue;
     }
@@ -616,10 +616,7 @@ export function collapseCompletedTurnWork(
       session?.key === opts.sessionKey &&
       terminalReply.runId !== undefined &&
       session.lastRunId === terminalReply.runId &&
-      (session.status === "done" ||
-        session.status === "failed" ||
-        session.status === "timeout" ||
-        session.status === "killed") &&
+      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
       typeof runtimeMs === "number" &&
       Number.isFinite(runtimeMs) &&
       runtimeMs >= 0

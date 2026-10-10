@@ -58,7 +58,7 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   // stripping runs on the raw text that still carries them. A literal has to
   // accept both forms or an identity built only from a ZWJ sequence can be
   // stripped but never matched.
-  if (Array.from(literal).every((character) => JOINER_ONLY.test(character))) {
+  if (!literal || JOINER_ONLY.test(literal)) {
     // Nothing survives normalization. Emitting the optional joiner class alone
     // would match the empty string, i.e. every message.
     return "";
@@ -281,13 +281,10 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
     return { patterns: [], unicode: false };
   }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  const agentGroupChat = agentConfig?.groupChat;
-  if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return { patterns: agentGroupChat.mentionPatterns ?? [], unicode: false };
-  }
-  const globalGroupChat = cfg.messages?.groupChat;
-  if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return { patterns: globalGroupChat.mentionPatterns ?? [], unicode: false };
+  for (const groupChat of [agentConfig?.groupChat, cfg.messages?.groupChat]) {
+    if (groupChat && Object.hasOwn(groupChat, "mentionPatterns")) {
+      return { patterns: groupChat.mentionPatterns ?? [], unicode: false };
+    }
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
   return { patterns: derived, unicode: derived.length > 0 };

@@ -8,7 +8,7 @@ import { listSessionChildEntriesReadOnly } from "../config/sessions/session-acce
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
+import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -16,6 +16,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
@@ -30,7 +31,12 @@ function searchTool(
   config: OpenClawConfig,
   options: Parameters<typeof createMemorySearchTool>[0] = {},
 ) {
-  const tool = createMemorySearchTool({ config, agentId: "main", ...options });
+  const tool = createMemorySearchTool({
+    config,
+    agentId: "main",
+    runInBackgroundContext: runInMemoryTestBackgroundContext,
+    ...options,
+  });
   if (!tool) {
     throw new Error("memory_search tool missing");
   }
@@ -131,7 +137,12 @@ describe("memory_search real manager", () => {
         await fs.mkdir(workspace, { recursive: true });
         await fs.writeFile(path.join(workspace, "USER.md"), marker);
         const manager = fixture.requireManager(
-          await getMemorySearchManager({ cfg, agentId, purpose: "cli" }),
+          await getMemorySearchManager({
+            runInBackgroundContext: runInMemoryTestBackgroundContext,
+            cfg,
+            agentId,
+            purpose: "cli",
+          }),
         );
         fixture.trackManager(manager);
         await manager.sync({ reason: "cli", force: true });

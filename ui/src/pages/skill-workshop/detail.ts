@@ -48,11 +48,12 @@ export function renderDetail(
   const created = history.findLast((entry) => entry.action === "create");
   const change = latestChanges(snapshot.changes).get(target.name);
   const unused = skill ? unusedDays(skill, change, props.mode) : null;
-  const description =
-    skill?.description ||
-    (viewer.status === "ready" && target.filePath === "SKILL.md"
+  const ownDescription =
+    viewer.status === "ready" && target.filePath === "SKILL.md"
       ? splitFrontmatter(viewer.result.content).description
-      : undefined);
+      : undefined;
+  // A saved version describes itself; the live inventory describes today's copy.
+  const description = target.versionId ? ownDescription : skill?.description || ownDescription;
   const meta = [
     skill ? renderUses(skill.useCount) : null,
     skill?.lastUsedAtMs
@@ -155,12 +156,8 @@ function renderMarkdown(source: string) {
 }
 
 function renderInstructions(viewer: WorkshopViewer, props: SkillWorkshopViewProps) {
-  const pending = renderLoadState(viewer);
-  if (pending) {
-    return pending;
-  }
   if (viewer.status !== "ready") {
-    return nothing;
+    return renderLoadState(viewer);
   }
   const { target } = viewer;
   const { body } = splitFrontmatter(viewer.result.content);
@@ -216,7 +213,7 @@ function renderInstructions(viewer: WorkshopViewer, props: SkillWorkshopViewProp
     }
     ${
       viewer.current !== undefined
-        ? renderDiff(splitFrontmatter(viewer.current).body, body)
+        ? renderDiff(viewer.current, viewer.result.content)
         : renderMarkdown(body)
     }
   `;
@@ -420,16 +417,18 @@ function diffLines(before: string, after: string): DiffLine[] | null {
   return lines;
 }
 
-/** Reads like the change itself: the saved version's lines in red, today's in green. */
+/**
+ * Reads like the change itself: the saved version's lines in red, today's in green.
+ * Frontmatter is compared too, so a metadata-only change is not reported as a match.
+ */
 function renderDiff(current: string, version: string) {
   const lines = diffLines(version, current);
-  if (lines === null) {
-    return html`<p class="sw-diff__same">${t("skillWorkshop.viewer.diffTooLarge")}</p>
-      ${renderMarkdown(version)}`;
-  }
-  if (lines.every((line) => line.kind === "same")) {
-    return html`<p class="sw-diff__same">${t("skillWorkshop.viewer.noDiff")}</p>
-      ${renderMarkdown(version)}`;
+  if (lines === null || lines.every((line) => line.kind === "same")) {
+    const message = t(
+      lines === null ? "skillWorkshop.viewer.diffTooLarge" : "skillWorkshop.viewer.noDiff",
+    );
+    return html`<p class="sw-diff__same">${message}</p>
+      ${renderMarkdown(splitFrontmatter(version).body)}`;
   }
   const sign = (kind: DiffLine["kind"]) => (kind === "add" ? "+" : kind === "remove" ? "−" : "");
   return html`<div class="sw-diff">

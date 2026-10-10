@@ -45,19 +45,18 @@ export function sameAbsolutePath(a: string, b: string): boolean {
 }
 
 /** Client-side affordance check; the Gateway remains the realpath authority. */
-function isWorkspaceContainedPath(workspace: string, candidate: string): boolean {
-  const root = comparableAbsolutePath(workspace);
-  const target = comparableAbsolutePath(candidate);
-  if (!root || !target) {
-    return false;
-  }
-  return target === root || target.startsWith(root === "/" ? root : `${root}/`);
-}
-
-/** Checks a path against every configured or Gateway-approved workspace spelling. */
 export function isKnownWorkspacePath(
   workspaceRoots: readonly string[],
   candidate: string,
 ): boolean {
-  return workspaceRoots.some((root) => isWorkspaceContainedPath(root, candidate));
+  const target = comparableAbsolutePath(candidate);
+  return (
+    target !== null &&
+    workspaceRoots.some((workspace) => {
+      const root = comparableAbsolutePath(workspace);
+      return (
+        root !== null && (target === root || target.startsWith(root === "/" ? root : `${root}/`))
+      );
+    })
+  );
 }

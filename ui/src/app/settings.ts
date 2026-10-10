@@ -4,6 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeTabIconPreference,
   normalizeUiAppearancePreference,
@@ -25,6 +26,7 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { loadBackgroundPreference, saveBackgroundPreference } from "./settings-background.ts";
 import { normalizeTerminalFontFamily } from "./terminal-font.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
@@ -56,7 +58,12 @@ type ScopedSessionSelection = {
 
 type PersistedUiSettings = Omit<
   UiSettings,
-  "token" | "sessionKey" | "lastActiveSessionKey" | "selectedAgentId" | "navCollapsed"
+  | "token"
+  | "sessionKey"
+  | "lastActiveSessionKey"
+  | "selectedAgentId"
+  | "navCollapsed"
+  | "background"
 > & {
   token?: never;
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
@@ -92,10 +99,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
     return undefined;
   }
   const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
+  if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {
     return undefined;
   }
   if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
@@ -150,16 +154,9 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 100;
   }
-  let best: TextScaleStop = TEXT_SCALE_STOPS[0];
-  let bestDist = Math.abs(value - best);
-  for (const stop of TEXT_SCALE_STOPS) {
-    const dist = Math.abs(value - stop);
-    if (dist < bestDist) {
-      best = stop;
-      bestDist = dist;
-    }
-  }
-  return best;
+  return TEXT_SCALE_STOPS.reduce((best, stop) =>
+    Math.abs(value - stop) < Math.abs(value - best) ? stop : best,
+  );
 }
 
 export const UI_APPEARANCE_DEFAULTS = {
@@ -194,6 +191,8 @@ export type UiSettings = {
   tabIcon?: TabIconPreference;
   // Device-local: custom terminal faces must be installed on the browser computer.
   terminalFontFamily?: string;
+  // Personal metadata: persisted only after identity is known, never in the general mirror.
+  background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
@@ -246,9 +245,10 @@ function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
 }
 
-function normalizeBooleanSetting<T extends boolean | undefined>(value: unknown, fallback: T) {
-  return typeof value === "boolean" ? value : fallback;
-}
+type BooleanSettingKey = {
+  [K in keyof UiPreferences]-?: UiPreferences[K] extends boolean | undefined ? K : never;
+}[keyof UiPreferences] &
+  keyof PersistedUiSettings;
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -415,6 +415,11 @@ let unpersistedSettings: UiPreferences | null = null;
 type LivePreferenceOwner = { gatewayUrl: () => string; refresh: () => void };
 let livePreferenceOwner: LivePreferenceOwner | null = null;
 
+/** Refresh the mounted preference projection after an identity-only mirror change. */
+export function refreshUiPreferences(): void {
+  livePreferenceOwner?.refresh();
+}
+
 /** Bind local writes to the mounted runtime, never its credentials. */
 export function bindUiPreferences(owner: LivePreferenceOwner): () => void {
   livePreferenceOwner = owner;
@@ -440,7 +445,8 @@ export function loadUiPreferences(
     (!targetGatewayUrl ||
       gatewayOriginScope(cached.gatewayUrl) === gatewayOriginScope(targetGatewayUrl))
   ) {
-    return targetGatewayUrl ? { ...cached, gatewayUrl: targetGatewayUrl } : cached;
+    const gatewayUrl = targetGatewayUrl ?? cached.gatewayUrl;
+    return { ...cached, gatewayUrl, background: loadBackgroundPreference(gatewayUrl) };
   }
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
   const storage = getSafeLocalStorage();
@@ -476,7 +482,7 @@ export function loadUiPreferences(
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return defaults;
+      return { ...defaults, background: loadBackgroundPreference(defaults.gatewayUrl) };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -498,6 +504,10 @@ export function loadUiPreferences(
             ),
           )
         : null;
+    const booleanSetting = <K extends BooleanSettingKey>(key: K) => {
+      const value = parsed[key];
+      return typeof value === "boolean" ? value : defaults[key];
+    };
     const settings: UiPreferences = {
       gatewayUrl,
       sessionKey: scopedSessionSelection.sessionKey,
@@ -508,34 +518,20 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
+      background: loadBackgroundPreference(gatewayUrl),
       tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
-      chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
-      chatShowToolCalls: normalizeBooleanSetting(
-        parsed.chatShowToolCalls,
-        defaults.chatShowToolCalls,
-      ),
-      chatPersistCommentary: normalizeBooleanSetting(
-        parsed.chatPersistCommentary,
-        defaults.chatPersistCommentary,
-      ),
-      chatShowTaskProgress: normalizeBooleanSetting(
-        parsed.chatShowTaskProgress,
-        defaults.chatShowTaskProgress,
-      ),
-      chatCollapseTaskProgress: normalizeBooleanSetting(
-        parsed.chatCollapseTaskProgress,
-        defaults.chatCollapseTaskProgress,
-      ),
+      chatShowThinking: booleanSetting("chatShowThinking"),
+      chatShowToolCalls: booleanSetting("chatShowToolCalls"),
+      chatPersistCommentary: booleanSetting("chatPersistCommentary"),
+      chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
+      chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
-      composerHoldToRecord: normalizeBooleanSetting(
-        parsed.composerHoldToRecord,
-        defaults.composerHoldToRecord,
-      ),
+      composerHoldToRecord: booleanSetting("composerHoldToRecord"),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -559,15 +555,9 @@ export function loadUiPreferences(
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
-      sidebarLiveActivity: normalizeBooleanSetting(
-        parsed.sidebarLiveActivity,
-        defaults.sidebarLiveActivity,
-      ),
+      sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
-      showAdvancedSettings: normalizeBooleanSetting(
-        parsed.showAdvancedSettings,
-        defaults.showAdvancedSettings,
-      ),
+      showAdvancedSettings: booleanSetting("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
       textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,
@@ -720,8 +710,9 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
+  saveBackgroundPreference(next.gatewayUrl, next.background);
   const serialized = JSON.stringify(persisted);
-  const { token: _token, ...preferences } = next;
+  const { token: _token, background: _background, ...preferences } = next;
   unpersistedSettings = preferences;
   try {
     const { pageUrl } = deriveDefaultGatewayUrl();

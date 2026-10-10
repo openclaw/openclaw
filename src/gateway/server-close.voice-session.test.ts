@@ -1,5 +1,5 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import { DatabaseSync } from "node:sqlite";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -9,7 +9,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import * as sessionTurn from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import * as sessionTurn from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitTrustedDiagnosticEvent,
@@ -17,14 +17,14 @@ import {
 } from "../infra/diagnostic-events.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import * as agentDatabase from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import * as agentDatabase from "../state/openclaw-agent-write-admission.js";
 import { readVoiceSessionRecordInTransaction } from "../talk/client-voice-session-store.js";
+import { ensureClientVoiceAgentSessionEntry } from "../talk/client-voice-session-write.js";
 import { seedSession } from "../talk/client-voice-session.fixture.test-support.js";
 import {
   appendClientVoiceTranscript,
   createOrResumeClientVoiceSession,
-  ensureClientVoiceAgentSessionEntry,
   registerClientVoiceConsultRun,
 } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
@@ -110,7 +110,7 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
     finishGatewayClose = kernel.closeOnStartupFailure;
     const target = { agentId: "main", sessionKey: "agent:main:voice-close" };
     await ensureClientVoiceAgentSessionEntry(target);
-    const voiceSessionId = createOrResumeClientVoiceSession({ ...target, origin: "client" });
+    const voiceSessionId = await createOrResumeClientVoiceSession({ ...target, origin: "client" });
     const relayTarget = { agentId: "main", sessionKey: "agent:main:main" };
     await seedSession(relayTarget.sessionKey, { channel: "discord", to: "channel:voice-updates" });
     const { client } = makeClient("relay-close-client", "operator", ["operator.admin"]);
@@ -142,7 +142,7 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
     });
     providerCallbacks?.onReady?.();
     const relayOwner = expectDefined(relaySessions.get(relay.relaySessionId), "Relay owner");
-    ensureTalkRealtimeRelayVoiceSession({
+    await ensureTalkRealtimeRelayVoiceSession({
       relaySessionId: relay.relaySessionId,
       connId: client.connId,
       sessionKey: relayTarget.sessionKey,
@@ -154,7 +154,7 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
     toolRun = root
       .run(async () => {
         const runId = `run-${relay.relaySessionId}`;
-        registerClientVoiceConsultRun({
+        await registerClientVoiceConsultRun({
           ...relayTarget,
           voiceSessionId: relay.relaySessionId,
           runId,
@@ -169,7 +169,7 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
         toolStarted.resolve();
         await releaseTool.promise;
         const failedWrite = vi
-          .spyOn(agentDatabase, "runOpenClawAgentWriteTransaction")
+          .spyOn(agentDatabase, "runOpenClawAgentWorkerWrite")
           .mockImplementationOnce(() => {
             throw new Error("synthetic tool persistence failure");
           });
@@ -202,9 +202,9 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
     await toolStarted.promise;
     expect(areDiagnosticsEnabledForProcess()).toBe(false);
     let acceptedSignal: AbortSignal | undefined;
-    const append = sessionTurn.appendTranscriptMessage;
+    const append = sessionTurn.appendExpectedSessionTranscriptTurn;
     const observer = vi
-      .spyOn(sessionTurn, "appendTranscriptMessage")
+      .spyOn(sessionTurn, "appendExpectedSessionTranscriptTurn")
       .mockImplementationOnce(async (...args) => {
         acceptedSignal = getAsyncWorkSignal();
         entered.resolve();
@@ -261,9 +261,9 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
       awaitGateBeforeSettlement(providerClosing.promise, closing, "Provider close was not joined"),
       signal,
     );
-    expect(() =>
+    await expect(
       createOrResumeClientVoiceSession({ ...target, origin: "client", voiceSessionId: "too-late" }),
-    ).toThrow("Voice session persistence admission is closed");
+    ).rejects.toThrow("Voice session persistence admission is closed");
     // Provider event dispatch need not inherit the asynchronous close caller's context.
     providerCallbacks?.onTranscript?.("assistant", "Final words during provider close", true);
     releaseProvider.resolve();

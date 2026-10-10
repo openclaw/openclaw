@@ -431,13 +431,13 @@ Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
 blocks. On direct Anthropic API-key Messages routes, OpenClaw enables
 `inHistorySystemUpdates` for Opus 4.8, Opus 5/5.5, Sonnet 5/5.5, Fable 5/5.1,
-and Mythos 5/5.1. It pins the stable system prefix and appends changed, added,
+and Mythos 5/5.1. It pins the complete system prompt and appends changed, added,
 or removed prompt sections as system messages after the current user turn.
 Workspace instructions, skills, and permission changes therefore preserve the
-earlier prefix. Changing the provider, model, or transport, or compacting the
-session, starts a new prefix series. After a Gateway restart, the series
-continues only when the current stable prefix matches the last saved rendered
-prefix.
+earlier prefix. Changing the provider, model, transport, or selected personal
+profile, or compacting the session, starts a new prefix series. After a Gateway restart, the saved series
+continues and any refreshed sections arrive as appended updates. Dynamic suffix
+changes use the same update path.
 
 These routes also keep runtime context append-only as turn-scoped system
 messages, without user-message delimiters. OpenClaw sends
@@ -623,16 +623,20 @@ for the node command and security boundary.
 ## Live model discovery
 
 With an Anthropic API key configured, OpenClaw refreshes the Claude catalog from
-Anthropic's models endpoint, so newly published snapshots of supported model
-families appear without an OpenClaw release. Models the shipped catalog already
-describes always keep their published metadata and pricing.
+Anthropic's models endpoint, so newly published models appear without an
+OpenClaw release. Models the shipped catalog already describes keep their
+published metadata and pricing.
 
-A newly discovered model is only offered when Anthropic's advertised
-capabilities match the request shaping OpenClaw would apply to it. A brand-new
-model generation therefore stays hidden until OpenClaw adds support for it,
-rather than appearing in the picker and failing every request. Discovery is
-advisory: without an API key, or if the endpoint is unreachable, the shipped
-catalog is used unchanged.
+Each listed row carries the thinking and effort capabilities Anthropic
+advertises for it (adaptive thinking, whether thinking can be disabled, and
+`xhigh`/`max` effort) as `params.claudeCapabilities` on the catalog row.
+Request shaping and the offered thinking levels follow those capabilities, so a
+new model gets the request shape it accepts on its first turn. Rows without
+them (shipped models absent from the listing, configured rows, and catalogs
+saved before discovery ran) keep OpenClaw's model-id rules. An unknown model
+whose listing carries no capability data stays hidden.
+Discovery is advisory: without an API key, or if the endpoint is unreachable,
+the shipped catalog is used unchanged.
 
 <a id="thinking-defaults-(claude-opus-5%2C-sonnet-5%2C-mythos-5%2C-fable-5%2C-4.8%2C-and-4.6)" />
 <a id="thinking-defaults-claude-opus-5-sonnet-5-mythos-5-fable-5-4-8-and-4-6" />
