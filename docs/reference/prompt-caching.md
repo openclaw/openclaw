@@ -11,6 +11,11 @@ Prompt caching lets a model provider reuse an unchanged prompt prefix (system/de
 
 OpenClaw normalizes provider usage into `cacheRead` and `cacheWrite` wherever the upstream API exposes those counters. Usage summaries (`/status` and similar) fall back to the last transcript usage entry when the live session snapshot lacks cache counters; a nonzero live value always wins over the fallback.
 
+OpenAI-compatible routes accept both nested `prompt_tokens_details.cached_tokens`
+and top-level `cached_tokens` counters, including the forms documented by Together
+and StepFun. When a provider omits cache counters, its cache hit rate is unknown;
+the absence of telemetry does not mean the provider processed every token again.
+
 Provider references:
 
 - [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
@@ -169,6 +174,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
+- One-hour retention is requested only for Claude model generations documented by AWS as supporting it. Older cache-capable models keep five-minute checkpoints when `cacheRetention: "long"` is selected, without sending an unsupported TTL field.
 - The stable system prefix is checkpointed separately from dynamic runtime additions. Conversation checkpoints advance through retained history, including tool results; transient runtime-context carriers remain outside the cached prefix. Bedrock Mantle's Anthropic Messages transport also preserves the separate stable system boundary.
 - Nova Micro, Lite, Pro, Premier (`amazon.nova-{micro,lite,pro,premier}-v1:0`), and Nova 2 Lite (`amazon.nova-2-lite-v1:0`) support explicit checkpoints in `system` and `messages`, including their AWS geographic inference profiles and foundation-model ARNs. Both `short` and `long` use Nova's five-minute TTL; `none` disables explicit checkpoints. OpenClaw does not add tool checkpoints for Nova.
 - Other non-Claude Bedrock models remain at `cacheRetention: "none"`.
@@ -203,6 +209,7 @@ DeepSeek cache construction on OpenRouter is best-effort and can take a few seco
 - Eligible model families: `gemini-2.5*` and `gemini-3*` (excludes Live/preview variants outside that prefix match, for example `gemini-live-2.5-flash-preview`).
 - When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource containing the stable system prefix above the cache boundary plus tools and tool configuration - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
 - The volatile system suffix travels first inside the current turn's hidden runtime-context carrier, before other runtime facts. This carrier is transient, so suffix changes reuse the same resource without accumulating history. Stable-prefix or tool changes create a new resource. If creation fails or the prompt has no cache boundary, the complete system prompt stays inline.
+- Automatic resources also belong to the effective request credentials and headers. Changing credentials, project headers, or other request-header overrides creates a new resource. Cached inference uses the same credentials as resource creation; OAuth token refreshes conservatively rebuild the resource. Reissued secret placeholders for the same credential preserve its identity.
 - You can still pass a pre-existing Gemini cached-content handle through as `params.cachedContent` (or legacy `params.cached_content`); an explicit handle skips the automatic cache-management path entirely.
 - This is separate from Anthropic/OpenAI prompt-prefix caching: OpenClaw manages a provider-native `cachedContents` resource for Gemini instead of injecting inline cache markers.
 
@@ -391,6 +398,11 @@ diagnostics:
 ### What to inspect
 
 Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
+
+When an adapter marks cache telemetry unavailable, observations omit its cache
+read/write counts and preserve the last measured comparison baseline. A later
+reported zero still counts as a measured miss. This distinction applies to local
+engines with optional cache metrics as well as compatible cloud APIs.
 
 The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 

@@ -149,6 +149,8 @@ const UpdateImmutableInstallSchema = closedObject({
       ]),
       previousSha: ImmutableGenerationSha,
       candidateSha: ImmutableGenerationSha,
+      failure: Type.Optional(NonEmptyString),
+      recoveryCommand: Type.Optional(NonEmptyString),
     }),
   ),
   lastActivation: Type.Optional(
@@ -157,6 +159,14 @@ const UpdateImmutableInstallSchema = closedObject({
       outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("rolled-back")]),
       selectedSha: ImmutableGenerationSha,
       verifiedAtMs: Type.Integer({ minimum: 0 }),
+      gateway: Type.Optional(
+        closedObject({
+          pid: Type.Integer({ minimum: 1 }),
+          bootId: NonEmptyString,
+          version: NonEmptyString,
+          buildId: NonEmptyString,
+        }),
+      ),
     }),
   ),
   prepared: Type.Optional(

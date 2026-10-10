@@ -7,13 +7,17 @@ import {
 import {
   getAdmittedSqliteSchemaFacts,
   getSqliteReadScopeRevision,
-  type SqliteReadScopeRevision,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
+import {
+  getStateSchemaVersionAdmission,
+  rememberStateSchemaVersionAdmission,
+  type StateSchemaVersionFacts,
+} from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
@@ -25,49 +29,39 @@ type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
 export type StateSchemaContentVersionRowReader = (
   db: DatabaseSync,
 ) => { value_json: string | null } | undefined;
-const contentVersionQueries = createSqliteQueryCache((db) => {
-  const query = prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>(
-    db,
-    () =>
-      getNodeSqliteKysely<StateSchemaVersionDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", CONTENT_VERSION_KEY),
-  );
-  let retained: { revision: SqliteReadScopeRevision; version: number } | undefined;
-  return {
-    readRow: () => query().rows[0],
-    readVersion(readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow) {
-      const revision = getSqliteReadScopeRevision(db);
-      if (revision && retained?.revision === revision) {
-        return retained.version;
-      }
-      retained = undefined;
-      const version = parseContentVersion(
-        tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
-      );
-      if (revision && getSqliteReadScopeRevision(db) === revision) {
-        retained = { revision, version };
-      }
-      return version;
-    },
-  };
-});
+const contentVersionQuery = createSqliteQueryCache((db) =>
+  prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>(db, () =>
+    getNodeSqliteKysely<StateSchemaVersionDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", CONTENT_VERSION_KEY),
+  ),
+);
 
 /** Content and its marker commit together, even while older readers retain their version floor. */
 export function readStateSchemaContentVersion(
   db: DatabaseSync,
   published?: number,
-  readRow?: StateSchemaContentVersionRowReader,
+  readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
 ): number {
+  const admitted = getStateSchemaVersionAdmission(db);
+  if (admitted) {
+    return Math.max(published ?? admitted.userVersion, admitted.contentVersion);
+  }
   const schema = getAdmittedSqliteSchemaFacts(db);
-  const version = published ?? schema?.userVersion ?? readSqliteUserVersion(db);
-  // A caller-provided version floor belongs to this read, not the retained marker.
-  return Math.max(version, contentVersionQueries(db).readVersion(readRow));
+  const version = schema?.userVersion ?? readSqliteUserVersion(db);
+  const revision = getSqliteReadScopeRevision(db);
+  const contentVersion = parseContentVersion(
+    tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
+  );
+  if (!revision || getSqliteReadScopeRevision(db) === revision) {
+    rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
+  }
+  return Math.max(published ?? version, contentVersion);
 }
 
 export function readStateSchemaContentVersionRow(db: DatabaseSync) {
-  return contentVersionQueries(db).readRow();
+  return contentVersionQuery(db)().rows[0];
 }
 
 function parseContentVersion(valueJson: string | null | undefined): number {
@@ -95,8 +89,7 @@ function parseContentVersion(valueJson: string | null | undefined): number {
   return contentVersion;
 }
 
-/** Valid only for the unchanged read snapshot that produced these versions. */
-export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
+export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
 
 export function assertSupportedStateSchemaVersion(
   db: DatabaseSync,
@@ -107,6 +100,7 @@ export function assertSupportedStateSchemaVersion(
   try {
     const userVersion =
       prepared?.userVersion ??
+      getStateSchemaVersionAdmission(db)?.userVersion ??
       getAdmittedSqliteSchemaFacts(db)?.userVersion ??
       readSqliteUserVersion(db);
     const contentVersion =
