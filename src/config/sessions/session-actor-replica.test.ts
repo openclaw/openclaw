@@ -1,10 +1,13 @@
 import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
   sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -210,6 +213,16 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 1, label: "other" });
     const snapshot = hydrate(fixture);
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 2, label: "changed" });
+    expect(fixture.replica.read()).toEqual(snapshot);
+    using sibling = openNodeSqliteDatabase(fixture.database.path);
+    withSqliteDatabaseWriteScope(sibling, [other.sessionKey], () =>
+      runSqliteImmediateTransactionSync(sibling, () => {
+        sibling
+          .prepare("UPDATE session_nodes SET updated_at = 3 WHERE session_key = ?")
+          .run(other.sessionKey);
+        expect(fixture.replica.read()).toBeUndefined();
+      }),
+    );
     expect(fixture.replica.read()).toEqual(snapshot);
 
     // A second logical key can point at the actor's existing physical window.

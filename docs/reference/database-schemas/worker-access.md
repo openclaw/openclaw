@@ -299,8 +299,10 @@ facts from the actor's replica. Message payload hydration, admitted-user role
 validation, and cold or off-path history retain bounded reads; transcript metadata
 does not stand in for message contents.
 
-A cold actor hydrates its entry, participants, membership, pending-input custody,
-and transcript metadata in one autocommit statement. The versioned hot state
+A cold actor read hydrates its entry, participants, membership, pending-input
+custody, and transcript metadata in one autocommit statement. A cold phase
+command uses that same statement inside its own write transaction, without a
+preceding read request. The versioned hot state
 includes exact anchors, idempotency identities, model-context membership, and
 the entry's lifecycle, recovery, and final-delivery fields. Anchor availability
 is explicit when the display projection is unready. When canonical facts
@@ -313,7 +315,11 @@ Typed commands cover input acceptance, run adoption and pre-hook checkpoints,
 tool results, transcript events, turn completion, pre-send custody, and delivery
 settlement. Each command uses one synchronous transaction and the resident
 preimage through the existing mutation kernels. Only a confirmed commit installs
-the new postimage. Phase-local pure reducers can join the next command; a
+the new postimage. Commands may omit the expected version and use their admitted
+preimage. An explicit version mismatch returns a typed `stale-version` outcome
+with the current postimage before running any phase mutation. A caller can retry
+once with that version; an unknown outcome is never retryable.
+Phase-local pure reducers can join the next command; a
 remaining reducer batch commits before that phase settles. These batches do not
 move input, tool-result, or delivery acknowledgement across its required durable
 boundary. Compositions retain actor lifetime across asynchronous work, while
@@ -324,8 +330,12 @@ The MAIN replica retains complete committed hot state. A synchronous snapshot
 reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
-Existing session publications and the owning database's in-process write token
-invalidate incomplete or superseded state before reuse. Partial entry or
+Existing session publications and in-process write receipts invalidate only
+the affected logical keys and shared transcript/window dependencies. Unrelated
+session snapshots survive. Raw writes with unknown coverage, schema changes,
+lost writers, and explicitly global maintenance retain database-wide fences.
+Scoped receipt counters share the physical admission lifetime; inactive actor
+paths do not allocate them or add worker requests. Partial entry or
 transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.

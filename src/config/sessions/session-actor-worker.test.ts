@@ -2,6 +2,8 @@ import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_t
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
@@ -324,12 +326,27 @@ it("fences a commit whose settlement is lost and rehydrates its durable state wi
 
 it("invalidates resident facts on native writes and keeps missing, replaced, and closed targets distinct", async () => {
   await withActor((f) => {
+    const otherKey = "agent:main:other-native-writer";
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      writeSessionEntry(f.database, otherKey, { sessionId: "other-session", updatedAt: 1 }),
+    );
     const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
       /^select\b/iu.test(sql) ? "select" : null,
     );
     try {
       const initial = f.read();
       expect(reads.counts.select).toBe(1);
+      expect(f.read()).toEqual(initial);
+      expect(reads.counts.select).toBe(1);
+      using sibling = openNodeSqliteDatabase(f.database.path);
+      withSqliteDatabaseWriteScope(sibling, [otherKey], () =>
+        runSqliteImmediateTransactionSync(sibling, () => {
+          sibling
+            .prepare("UPDATE session_nodes SET updated_at = 2 WHERE session_key = ?")
+            .run(otherKey);
+          expect(() => f.read()).toThrow("Session actor has an unsettled database writer");
+        }),
+      );
       expect(f.read()).toEqual(initial);
       expect(reads.counts.select).toBe(1);
       f.database.db
