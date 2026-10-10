@@ -149,7 +149,10 @@ async function syncWorkboardLifecycleEvent(params: {
     | undefined;
   const isAttemptTerminalState =
     params.observation.state === "failed" || params.observation.state === "succeeded";
-  if (params.readSessions && isAttemptTerminalState) {
+  // Hooks without a matching card skip Gateway session discovery entirely,
+  // preserving the sweep's inactive-board rule: unrelated successful turns
+  // must not acquire a configured-agent sessions.list read.
+  if (params.readSessions && isAttemptTerminalState && cards.length > 0) {
     try {
       const snapshot = await params.readSessions({ includeUnknown: false });
       liveness = {
@@ -187,12 +190,14 @@ async function syncWorkboardLifecycleEvent(params: {
       isLiveWorkboardLifecycleSession(soleMatch)
     );
   };
+  const deferredCompletions = new Set<string>();
   const updates = Promise.all(
     cards.map(async (card) => {
-      const state =
-        isAttemptTerminalState && isLiveRunForCard(card)
-          ? ("running" as const)
-          : params.observation.state;
+      const deferToRunOwners = isAttemptTerminalState && isLiveRunForCard(card);
+      if (deferToRunOwners && params.observation.state === "succeeded") {
+        deferredCompletions.add(card.id);
+      }
+      const state = deferToRunOwners ? ("running" as const) : params.observation.state;
       return await params.store.syncLifecycle(card.id, {
         ...LIFECYCLE_TARGETS[state],
         sourceUpdatedAt: params.observation.sourceUpdatedAt,
@@ -212,10 +217,20 @@ async function syncWorkboardLifecycleEvent(params: {
       });
     }),
   );
+  // A deferred completion has not settled; nudging attached automation now
+  // would run it against a still-running card with no later settlement trigger
+  // for sessions without a run-level end hook. The settlement writer carries
+  // the nudge instead: subagent_ended and settled agent_end match here, and
+  // the sweep reports settled completions through onSettled. Debounce and
+  // cron-origin exclusion stay owned by the nudge handler.
+  const nudgeCards =
+    deferredCompletions.size === 0
+      ? cards
+      : cards.filter((card) => !deferredCompletions.has(card.id));
   await Promise.all([
     updates,
     params.onMatched?.({
-      cards,
+      cards: nudgeCards,
       ...(params.source.sessionKey ? { sessionKey: params.source.sessionKey } : {}),
     }),
   ]);
@@ -331,8 +346,10 @@ async function syncWorkboardLifecycleSessions(params: {
   sessions: readonly WorkboardLifecycleSession[];
   complete?: boolean;
   now?: number;
+  onSettled?: (cards: readonly WorkboardCard[]) => void | Promise<void>;
 }): Promise<number> {
   const now = params.now ?? Date.now();
+  const settledCompletions: WorkboardCard[] = [];
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
   const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
   const ambiguousWorkboardSuffixes = new Set<string>();
@@ -413,7 +430,15 @@ async function syncWorkboardLifecycleSessions(params: {
       })
     ) {
       count += 1;
+      if (observation.state === "succeeded") {
+        settledCompletions.push(card);
+      }
     }
+  }
+  // Sweep-settled completions carry the same automation nudge that an
+  // immediate event-path settlement would have requested.
+  if (settledCompletions.length > 0) {
+    await params.onSettled?.(settledCompletions);
   }
   return count;
 }
@@ -488,6 +513,7 @@ export function createWorkboardLifecycleService(params: {
   readSessions: (
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
+  onSettled?: WorkboardLifecycleMatchHandler;
   now?: () => number;
 }): WorkboardLifecycleService {
   let generation = 0;
@@ -575,6 +601,15 @@ export function createWorkboardLifecycleService(params: {
                   cards,
                   ...snapshot,
                   now: params.now?.() ?? Date.now(),
+                  ...(params.onSettled
+                    ? {
+                        onSettled: async (settled) => {
+                          if (generation === owner) {
+                            await params.onSettled?.({ cards: settled });
+                          }
+                        },
+                      }
+                    : {}),
                 });
                 if (generation !== owner) {
                   return;

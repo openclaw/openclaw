@@ -49,6 +49,10 @@ export default definePluginEntry({
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+      // Attempt-level completions deferred while their run is active settle in
+      // the sweep for sessions without a run-level end hook; carry their
+      // automation nudge into the same debounced owner.
+      onSettled: automationNudge.nudge,
     });
     resourceServices.push(lifecycleSync);
     api.session.controls.registerControlUiDescriptor({

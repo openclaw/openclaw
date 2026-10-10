@@ -23,6 +23,23 @@ export async function createLinkedCard(
   });
 }
 
+export function execution(
+  sessionKey: string,
+  runId = "run-1",
+  status: WorkboardExecution["status"] = "running",
+): WorkboardExecution {
+  return {
+    id: `exec-${runId}`,
+    kind: "agent-session",
+    mode: "autonomous",
+    status,
+    sessionKey,
+    runId,
+    startedAt: 1000,
+    updatedAt: 1000,
+  };
+}
+
 export function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
