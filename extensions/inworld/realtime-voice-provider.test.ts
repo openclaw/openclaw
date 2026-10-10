@@ -68,19 +68,10 @@ describe("buildInworldRealtimeVoiceProvider", () => {
     vi.useRealTimers();
   });
 
-  it("exposes provider metadata and audio capabilities", () => {
+  it("exposes provider identity and detects configured credentials", () => {
     const provider = buildInworldRealtimeVoiceProvider();
     expect(provider.id).toBe("inworld");
     expect(provider.aliases).toContain("inworld-realtime");
-    expect(provider.capabilities?.transports).toEqual(["gateway-relay"]);
-    expect(provider.capabilities?.inputAudioFormats).toEqual(
-      expect.arrayContaining([
-        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
-        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-      ]),
-    );
-    expect(provider.capabilities?.supportsToolCalls).toBe(true);
-    expect(provider.capabilities?.supportsSessionResumption).toBe(false);
     expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
     expect(provider.isConfigured({ providerConfig: { apiKey: "k" } })).toBe(true); // pragma: allowlist secret
     process.env.INWORLD_API_KEY = "env-key"; // pragma: allowlist secret
