@@ -390,13 +390,11 @@ export function streamOpenAICompletionsRequest(
         async *[Symbol.asyncIterator]() {
           // Parse only after provider acceptance; JSON bodies are consumed here too.
           if (!params.stream) {
-            // SAFETY: Chat Completions JSON uses the documented message wire shape;
-            // the shared reducer handles these fields alongside SDK stream chunks.
             yield (await boundResponseBody(response, {
               maxBytes: 16 * 1024 * 1024,
               onOverflow: ({ maxBytes }) =>
                 new Error(`Chat Completions JSON response exceeds ${maxBytes} bytes`),
-            }).json()) as OpenAI.Chat.Completions.ChatCompletion;
+            }).json()) as OpenAI.Chat.Completions.ChatCompletion; // SAFETY: Provider JSON follows the Chat Completions wire contract.
             return;
           }
           const data = await request;
