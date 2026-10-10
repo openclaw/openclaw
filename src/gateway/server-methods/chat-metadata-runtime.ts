@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
@@ -529,6 +531,13 @@ export function createGatewayChatMetadataRuntime(params: {
       const acpMeta = await withCurrentReadAuthority(authority, () =>
         prepareSessionAcpMeta({ ...readParams, sessionEntry }, deps.getConfig()),
       );
+      const runtimeOwnership = await withCurrentReadAuthority(authority, () =>
+        readSessionRuntimeOwnershipAsync({
+          ...readParams,
+          sessionEntry,
+          config: deps.getConfig(),
+        }),
+      );
       await withCurrentReadAuthority(authority, () => {});
       return {
         isCurrent: projection.isCurrent,
@@ -542,6 +551,7 @@ export function createGatewayChatMetadataRuntime(params: {
             },
             deps.getConfig(),
             acpMeta,
+            runtimeOwnership,
             readAccountSelection,
           ),
       };
@@ -562,6 +572,7 @@ export function createGatewayChatMetadataRuntime(params: {
       neutral: PreparedChatMetadataProjection,
       session: PreparedChatMetadataProjection,
       acpMeta: SessionAcpMeta | null,
+      runtimeOwnership: AgentHarnessSessionRuntimeOwnership | undefined,
       readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
     ): ChatStartupProjectionResult => ({
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
@@ -576,6 +587,7 @@ export function createGatewayChatMetadataRuntime(params: {
               },
               deps.getConfig(),
               acpMeta,
+              runtimeOwnership,
               readAccountSelection,
             ),
           }),
@@ -607,9 +619,14 @@ export function createGatewayChatMetadataRuntime(params: {
         readRequesterProfileId: readParams.readRequesterProfileId,
       });
       const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
+      const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
+        ...readParams,
+        config: deps.getConfig(),
+      });
       return {
         isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () => assemble(readNeutral, readSession, acpMeta, readAccountSelection),
+        read: () =>
+          assemble(readNeutral, readSession, acpMeta, runtimeOwnership, readAccountSelection),
       };
     };
     if (readParams.readPolicy !== "ready" && hasSessionContext) {
@@ -638,9 +655,13 @@ export function createGatewayChatMetadataRuntime(params: {
       return undefined;
     }
     if (readParams.readPolicy === "ready") {
-      return assemble(neutral.projection, session.projection, null);
+      return assemble(neutral.projection, session.projection, null, undefined);
     }
     const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
+    const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
+      ...readParams,
+      config: deps.getConfig(),
+    });
     if (
       replacement ||
       pending ||
@@ -650,7 +671,7 @@ export function createGatewayChatMetadataRuntime(params: {
     ) {
       return undefined;
     }
-    return assemble(neutral.projection, session.projection, acpMeta);
+    return assemble(neutral.projection, session.projection, acpMeta, runtimeOwnership);
   };
 
   const invalidate = (retainNotifiedFacts = false) => {
