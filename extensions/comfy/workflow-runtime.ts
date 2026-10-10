@@ -381,7 +381,7 @@ async function waitForComfyHistory(
 ): Promise<unknown> {
   const { baseUrl, headers: requestHeaders, mode, ...request } = params;
   const headers = new Headers(requestHeaders);
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = performance.now() + params.timeoutMs;
   const read = <T>(path: string, kind: "history" | "status", timeoutMs: number) =>
     readJsonResponse<T>({
       ...request,
@@ -432,7 +432,7 @@ function resolveComfyRemainingMs(
   defaultTimeoutMs = timeoutMs,
 ) {
   const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  const remainingMs = deadline - Date.now();
+  const remainingMs = deadline - performance.now();
   if (remainingMs <= 0) {
     throw new Error(`Comfy workflow did not finish within ${Math.ceil(timeoutMs / 1000)}s`);
   }
