@@ -166,7 +166,10 @@ export async function takeControlUiScreenshotFrame(
     }
     if (options.animationFrameBeforeCapture) {
       await page.evaluate(
-        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
       );
     }
     const frame = await captureControlUiFrame(page, options.elements ?? [], options);

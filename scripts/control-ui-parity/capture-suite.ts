@@ -64,7 +64,7 @@ suite.define(() => {
           // Hash the recipe source, not absolute fixture paths, so two worktrees compare.
           recipes: await Promise.all(
             [
-              "capture.test.ts",
+              "capture-suite.ts",
               "scenarios.ts",
               "fixtures.ts",
               "fixture-fingerprint.ts",

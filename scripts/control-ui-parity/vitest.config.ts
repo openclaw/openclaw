@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     ...sharedVitestConfig.test,
     name: "control-ui-parity",
-    include: ["scripts/control-ui-parity/capture.test.ts"],
+    include: ["scripts/control-ui-parity/capture-suite.ts"],
     exclude: ["node_modules/**"],
     environment: "node",
     pool: "forks",

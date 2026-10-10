@@ -89,8 +89,9 @@ frozen harness and browser installation, then run `diff` on the two printed
 directories. Review the comparison gallery, including the three known exceptions,
 alongside each lane's focused behavior tests.
 
-Run the opt-in report tests through the repository Vitest wrapper:
+The report contracts run in the standard tooling test project. The capture
+matrix is an opt-in suite loaded only by the parity command.
 
 ```sh
-node scripts/run-vitest.mjs run --config scripts/control-ui-parity/report.vitest.config.ts --configLoader runner scripts/control-ui-parity/report.test.ts --maxWorkers=1
+pnpm test test/scripts/control-ui-parity.test.ts --maxWorkers=1
 ```

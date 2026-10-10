@@ -3,9 +3,14 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
-import { fingerprintFixtures } from "./fixture-fingerprint.ts";
-import { compareCaptures, hash, writeGallery, type Capture } from "./report.ts";
+import { fingerprintFixtures } from "../../scripts/control-ui-parity/fixture-fingerprint.ts";
+import {
+  compareCaptures,
+  hash,
+  writeGallery,
+  type Capture,
+} from "../../scripts/control-ui-parity/report.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 async function fixture(pixel: number | readonly number[], width = 1, id = "scene--profile") {
