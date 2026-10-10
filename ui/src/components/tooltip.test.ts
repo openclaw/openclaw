@@ -76,12 +76,12 @@ function expectSharedTooltipSkin(tooltip: TooltipElement) {
   expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
   if (root.adoptedStyleSheets?.length) {
     const animationNames = root.adoptedStyleSheets
-      .flatMap((sheet) => [...sheet.cssRules])
+      .flatMap((sheet) => Array.from(sheet.cssRules))
       .filter(
         (rule): rule is CSSMediaRule =>
           rule instanceof CSSMediaRule && rule.conditionText === "(prefers-reduced-motion: reduce)",
       )
-      .flatMap((rule) => [...rule.cssRules])
+      .flatMap((rule) => Array.from(rule.cssRules))
       .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
       .map((rule) => rule.style.animationName);
     // WebKit serializes the `animation: none` shorthand as `animation: auto`.
