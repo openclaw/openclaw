@@ -12,6 +12,7 @@ import type {
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { createSolidControlUiBuildPlugin } from "../src/cli/plugins-build-solid.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
@@ -3523,6 +3524,7 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
+      createSolidControlUiBuildPlugin(uiRoot),
       {
         name: "workboard-state-projections",
         setup(builder) {

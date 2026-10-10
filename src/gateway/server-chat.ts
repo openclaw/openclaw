@@ -29,11 +29,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  isAcpSessionKey,
-  isSubagentSessionKey,
-  parseCronRunScopeSuffix,
-} from "../sessions/session-key-utils.js";
+import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
@@ -60,7 +56,6 @@ import {
   shouldHideHeartbeatChatOutput,
 } from "./server-chat-heartbeat.js";
 import {
-  createSessionEventSnapshotBuilder,
   createSessionLifecyclePublisher,
   type SessionEventSnapshotDependencies,
 } from "./server-chat-lifecycle-publication.js";
@@ -85,9 +80,6 @@ import type {
 import type { ToolEventRecipientRegistry } from "./server-chat-tool-recipients.js";
 import { createChatTranscriptPublication } from "./server-chat-transcript-publication.js";
 import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
-import { hasSessionChangeReceivers } from "./session-change-receivers.js";
-import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
-import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -314,13 +306,6 @@ export function createAgentEventHandler({
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
 
-  const cancelPendingChatDeltaFlush = (clientRunId: string) => {
-    const record = chatRunState.runs.get(clientRunId);
-    if (record) {
-      cancelPendingLiveTextFlush(record, "chat");
-    }
-  };
-
   const clearPendingTerminalLifecycleError = (runId: string, lifecycleGeneration?: string) => {
     const pending = pendingTerminalLifecycleErrors.get(runId);
     if (!pending) {
@@ -350,19 +335,15 @@ export function createAgentEventHandler({
       : null;
   };
 
-  const buildSessionEventSnapshot = createSessionEventSnapshotBuilder({
-    loadGatewaySessionLifecycleSnapshotForEvent,
-    resolveSessionActiveRunState,
-  });
-
-  const publishSessionLifecycle = createSessionLifecyclePublisher({
+  const sessionLifecyclePublisher = createSessionLifecyclePublisher({
     broadcastToConnIds,
     sessionEventSubscribers,
     getSessionRowProjection,
     persistGatewaySessionLifecycleEventForEvent,
-    buildSnapshot: (sessionKey, event, agentId, phase, read) =>
-      buildSessionEventSnapshot(sessionKey, event, agentId, true, phase === "start", event, read),
+    loadGatewaySessionLifecycleSnapshotForEvent,
+    resolveSessionActiveRunState,
   });
+  const buildSessionEventSnapshot = sessionLifecyclePublisher.buildSnapshot;
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
     if (sessionKey.trim().toLowerCase() !== "global") {
@@ -571,62 +552,16 @@ export function createAgentEventHandler({
           sessionId: evt.sessionId,
           persistence: terminalPersistence,
         });
-        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) =>
-          withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) => {
-            if (opts?.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
-              return;
-            }
-            const sessionEventConnIds = sessionEventSubscribers.getAll();
-            if (!hasSessionChangeReceivers(sessionEventConnIds)) {
-              return;
-            }
-            broadcastToConnIds(
-              "sessions.changed",
-              {
-                sessionKey,
-                ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-                phase: lifecyclePhase,
-                runId: evt.runId,
-                ...(clientRunId !== evt.runId ? { clientRunId } : {}),
-                ts: evt.ts,
-                ...buildSessionEventSnapshot(
-                  sessionKey,
-                  snapshotEvent,
-                  sessionAgentId,
-                  true,
-                  true,
-                  evt,
-                  read,
-                ),
-              },
-              sessionEventConnIds,
-              {
-                dropIfSlow: true,
-                ...(read && projection
-                  ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
-                  : {}),
-              },
-            );
-          });
-        // Terminal writes serialize with restart markers. Reload only after the
-        // write so subscribers see the canonical post-race session state.
-        void terminalPersistence
-          .then(
-            async () => {
-              await broadcastSessionChange();
-            },
-            async (err: unknown) => {
-              logError(
-                `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
-              );
-              await broadcastSessionChange(evt);
-            },
-          )
-          .catch((error: unknown) => {
-            logError(
-              `gateway: terminal session snapshot publication failed: ${formatErrorMessage(error)}`,
-            );
-          });
+        sessionLifecyclePublisher.publish({
+          event: evt,
+          phase: lifecyclePhase,
+          sessionKey,
+          agentId: sessionAgentId,
+          clientRunId,
+          persistence: terminalPersistence,
+          projection,
+          publishLifecycle: opts?.publishLifecycle,
+        });
       } else {
         settleTrackedTerminal?.({
           runId: evt.runId,
@@ -666,7 +601,7 @@ export function createAgentEventHandler({
 
   const broadcastChatDelta = (delivery: ChatDelivery, text: string) => {
     const { sessionKey, agentId, clientRunId, sourceRunId, seq } = delivery;
-    cancelPendingChatDeltaFlush(clientRunId);
+    cancelPendingLiveTextFlush(chatRunState.runs.get(clientRunId), "chat");
     const run = chatRunState.getOrCreate(clientRunId);
     if (
       transcriptPublication.holdDelta(clientRunId, () =>
@@ -779,7 +714,7 @@ export function createAgentEventHandler({
   };
 
   const flushBufferedChatDeltaIfNeeded = (delivery: ChatDelivery) => {
-    cancelPendingChatDeltaFlush(delivery.clientRunId);
+    cancelPendingLiveTextFlush(chatRunState.runs.get(delivery.clientRunId), "chat");
     broadcastBufferedChatDelta(delivery);
   };
 
@@ -1031,9 +966,7 @@ export function createAgentEventHandler({
 
   const flushBufferedAgentDeltaIfNeeded = (clientRunId: string) => {
     const run = chatRunState.runs.get(clientRunId);
-    if (run) {
-      cancelPendingLiveTextFlush(run, "agent");
-    }
+    cancelPendingLiveTextFlush(run, "agent");
     const states = Object.values(run?.agentText ?? {});
     states.sort(
       (a, b) => (a.bufferedEvent?.payload.seq ?? 0) - (b.bufferedEvent?.payload.seq ?? 0),
@@ -1231,12 +1164,7 @@ export function createAgentEventHandler({
           controlUiVisible: isControlUiVisible,
         }
       : undefined;
-    // A detached worker may reuse its correlation id under a new claim.
-    // Retire its old text before the new owner can append or flush it.
-    if (chatRunState.runs.get(clientRunId)?.bufferIsCurrent?.() === false) {
-      chatRunState.clearRun(clientRunId);
-      agentRunSeq.delete(evt.runId);
-    }
+    transcriptPublication.observeAgentEvent(evt, clientRunId, isCurrent);
     const eventForClients = prepareAgentWirePayload(evt, clientRunId, chatRunState, isCurrent);
     const isAborted =
       isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
@@ -1618,7 +1546,7 @@ export function createAgentEventHandler({
       (lifecyclePhase === "start" ||
         (lifecyclePhase === "model" && runContext && isControlUiVisible))
     ) {
-      publishSessionLifecycle({
+      sessionLifecyclePublisher.publish({
         event: evt,
         phase: lifecyclePhase,
         sessionKey,

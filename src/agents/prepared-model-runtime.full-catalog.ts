@@ -36,6 +36,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -614,19 +615,6 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
   return snapshot;
 }
 
-export type PreparedModelRuntimeCatalogAccess = Readonly<{
-  initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>;
-  isCurrent: () => boolean;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
-  refreshExpiredModelCatalog: () => void;
-  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadFullModelCatalog"]>;
-  loadNativeModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>;
-  loadAuth: NonNullable<Parameters<typeof bindPreparedModelRuntimeAuth>[1]["load"]>;
-}>;
 export function createPreparedModelRuntimeSnapshot(
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
   agentFacts: PreparedModelRuntimeAgentFacts,

@@ -5,12 +5,16 @@ import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import { SQLITE_WORKER_MAX_MESSAGE_BYTES, SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+  type SqliteWorkerAdmissionTimeoutError,
+} from "./sqlite-worker-contract.js";
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
   attachment?: { value: unknown };
-  refusal?: SqliteWorkerError;
+  refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };
   settled?: true;
   sourceReservations?: true;
