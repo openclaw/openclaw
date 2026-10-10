@@ -387,3 +387,42 @@ it.each([false, true])(
     });
   },
 );
+
+it.each([false, true])(
+  "settles a shipped Agents API binding in the worker (rollback: %s)",
+  async (rollback) => {
+    await withNativeBindingFixture("agentsapi", async (fixture) => {
+      const legacy = {
+        sessionId: "synthetic-agentsapi-session",
+        authFingerprint: "3c26b68488ce497a69d2c9fce9ee19c461fa67a3d959b0dc3bafe5718c56119d",
+      };
+      fixture.bindingStore.register(fixture.bindingKey, legacy);
+      const before = fixture.readEntry();
+      const failure = new Error("synthetic legacy deletion COMMIT refusal");
+      let commitSeen = false;
+      observeNativeGrants((request, facts) => {
+        if (request.stage === "commit" && facts.kind === "session-native-binding") {
+          commitSeen = true;
+          expect(fixture.readBinding()).toBeUndefined();
+          if (rollback) {
+            throw failure;
+          }
+        }
+      });
+      const sql = observeHostDataSql();
+      try {
+        if (rollback) {
+          await expect(fixture.remove()).rejects.toBe(failure);
+        } else {
+          await expect(fixture.remove()).resolves.toMatchObject({ deleted: true });
+        }
+        expect(commitSeen).toBe(true);
+        expect(bindingWrites(sql.queries)).toEqual([]);
+        expect(fixture.readBinding()).toEqual(rollback ? legacy : undefined);
+        expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
+      } finally {
+        sql.restore();
+      }
+    });
+  },
+);

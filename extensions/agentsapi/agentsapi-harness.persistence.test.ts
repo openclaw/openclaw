@@ -16,15 +16,17 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
 import { registerNativeLifecycleTests } from "./agentsapi-harness.lifecycle.test-helpers.js";
+import { registerMigrationTests } from "./agentsapi-harness.migration.test-helpers.js";
 import {
   connectedEnvironment,
   createAttempt,
   executorFixture,
   registerHarness,
+  mockClient,
   reopenState,
   requireExecutorHarness,
 } from "./agentsapi-harness.persistence.test-helpers.js";
-import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
+import { createTurn } from "./agentsapi.test-support.js";
 
 const { createSession, fetchWithSsrFGuardMock, resolveProviderAuth } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -1033,13 +1035,4 @@ it.each(["auth failure", "authority revoked", "missing key", "oauth credential"]
   },
 );
 
-function mockClient(sessionId: string) {
-  const session = vi
-    .spyOn(AgentsApiClient.prototype, "session")
-    .mockResolvedValue(createHostedSession("idle"));
-  const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
-  const update = vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
-  const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
-  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
-  return { create, update, message, session };
-}
+registerMigrationTests(fetchWithSsrFGuardMock);
