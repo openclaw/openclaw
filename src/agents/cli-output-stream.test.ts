@@ -496,6 +496,60 @@ describe("createCliJsonlStreamingParser", () => {
     finishFrames(parser, init("session-commentary"), ...frames);
     expect(commentaryTexts).toEqual(expected);
   });
+
+  it("delivers every event in a lifecycle batch from one source line", () => {
+    const compactionDeltas: unknown[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+      },
+      providerId: "claude-cli",
+      // A hook may report a full cycle for one input line: the batch contract
+      // requires every event in the returned array to reach the consumer.
+      parseJsonlLifecycleEvent: () => [
+        { kind: "compaction", phase: "start" },
+        { kind: "compaction", phase: "end", completed: true },
+      ],
+      onAssistantDelta: () => undefined,
+      onCompaction: (delta) => compactionDeltas.push(delta),
+    });
+
+    parser.push('{"type":"system","subtype":"status","status":"compacting"}\n');
+    parser.finish();
+
+    expect(compactionDeltas).toEqual([{ phase: "start" }, { phase: "end", completed: true }]);
+  });
+
+  it("preserves repeated identical compaction records across cycles", () => {
+    const compactionDeltas: unknown[] = [];
+    const statusLine = '{"type":"system","subtype":"status","status":"compacting"}';
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+      },
+      providerId: "claude-cli",
+      parseJsonlLifecycleEvent: (line) => {
+        const parsed = JSON.parse(line) as { subtype?: unknown; status?: unknown };
+        return parsed.subtype === "status" && parsed.status === "compacting"
+          ? { kind: "compaction", phase: "start" }
+          : null;
+      },
+      onAssistantDelta: () => undefined,
+      onCompaction: (delta) => compactionDeltas.push(delta),
+    });
+
+    // Two operator-driven compactions emit byte-identical status records; both
+    // cycles must reach the consumer. Replay freshness is the owning
+    // transport's decision, not the shared parser's.
+    parser.push([statusLine, statusLine].join("\n"));
+    parser.finish();
+
+    expect(compactionDeltas).toEqual([{ phase: "start" }, { phase: "start" }]);
+  });
 });
 
 it.each([

@@ -236,6 +236,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           observeSessionId(parsed);
         }
         for (const event of lifecycle.events) {
+          // Deliver every event in the batch exactly as the owning backend
+          // reported it. Replay identity and freshness are the owning
+          // transport's decision, not the shared parser's: the Anthropic
+          // transport already drops pre-input-start output through its
+          // msg_lifecycle_v1 guard, and blanket source-line suppression would
+          // silently drop completions and legitimate repeated cycles.
           params.onCompaction?.(cliOutputLifecycle.projectCliBackendLifecycleEvent(event));
         }
       }
