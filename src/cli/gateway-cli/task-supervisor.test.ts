@@ -16,7 +16,6 @@ const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   bindWindowsTaskLauncher: vi.fn(),
 }));
 
-vi.mock("koffi", () => ({ default: {} }));
 vi.mock("../../process/supervisor/service-child-windows-task-launcher.js", () => ({
   bindWindowsTaskLauncher,
 }));
@@ -92,7 +91,7 @@ describe("Windows Gateway task supervisor", () => {
       const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
       await runWindowsGatewayTaskSupervisor();
       expect(spawn).toHaveBeenCalledOnce();
-      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(expect.anything(), launcher);
+      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(launcher);
     },
   );
 

@@ -85,7 +85,12 @@
     "@openclaw/fs-safe": {
       "owner": "core:filesystem-safety",
       "class": "core-runtime",
-      "risk": ["filesystem", "path-safety"]
+      "risk": ["native", "filesystem", "path-safety", "secret-input"]
+    },
+    "@openclaw/proc-safe": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "process-execution", "service-manager"]
     },
     "@silvia-odwyer/photon-node": {
       "owner": "core:media",
@@ -210,9 +215,9 @@
       "risk": ["archive-parser", "untrusted-files"]
     },
     "koffi": {
-      "owner": "core:process-execution",
+      "owner": "core:worktree-filesystem",
       "class": "core-runtime",
-      "risk": ["native", "ffi", "process-execution", "secret-input"]
+      "risk": ["native", "ffi", "filesystem"]
     },
     "kysely": {
       "owner": "core:sqlite-storage",

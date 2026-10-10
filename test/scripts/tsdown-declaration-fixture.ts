@@ -144,7 +144,6 @@ export function createFixture(groups: readonly string[], root: string) {
     "@openclaw/fs-safe",
     "@openclaw/proc-safe",
     "@silvia-odwyer/photon-node",
-    "koffi",
     "playwright-core",
     "web-tree-sitter",
     "tree-sitter-bash",
