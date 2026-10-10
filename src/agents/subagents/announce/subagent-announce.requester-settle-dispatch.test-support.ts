@@ -32,7 +32,7 @@ export function useRequesterSettleDispatchFixture() {
     resetCommandQueueStateForTest();
     startTurn.mockReset();
     deliver.mockReset();
-    loadRequester.mockReset().mockReturnValue({
+    loadRequester.mockReset().mockResolvedValue({
       cfg: {},
       canonicalKey: REQUESTER_KEY,
       entry: { sessionId: "requester-session", updatedAt: 1 },

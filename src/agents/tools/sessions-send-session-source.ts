@@ -2,6 +2,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
+import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withSubagentSessionSource } from "../subagents/spawn/subagent-session-source.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
@@ -32,7 +33,10 @@ export function createSessionsSendSessionReaders(cfg: OpenClawConfig) {
     });
   return {
     readTarget,
-    readRequester: async (sessionKey: string, agentId: string) => {
+    readRequester: async (
+      sessionKey: string,
+      agentId: string,
+    ): Promise<GatewaySessionStoreTargetWithStore | undefined> => {
       const source = captureIncognitoSessionSource({ agentId, sessionKey });
       if (!source) {
         return readTarget(sessionKey, agentId);
@@ -44,6 +48,7 @@ export function createSessionsSendSessionReaders(cfg: OpenClawConfig) {
       return {
         agentId,
         canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
         storePath: "kind" in source ? source.path : source.actor.path,
         store: { [sessionKey]: entry },
       };
