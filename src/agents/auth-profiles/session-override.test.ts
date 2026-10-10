@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -126,60 +127,73 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("rotates unavailable auth state without restoring concurrent session management fields", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
-          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
-        },
-        order: {
-          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
-        },
-      });
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
-      );
+  it.each([false, true])(
+    "rotates unavailable auth without restoring concurrent fields (locked=%s)",
+    async (locked) => {
+      await withAuthState(async (state) => {
+        const agentDir = state.agentDir();
+        await fs.mkdir(agentDir, { recursive: true });
+        authStoreMocks.state.hasSource = true;
+        authStoreMocks.state.store = createAuthStoreWithProfiles({
+          profiles: {
+            [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+            [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
+          },
+          order: {
+            openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
+          },
+        });
+        authStoreMocks.isProfileInCooldown.mockImplementation(
+          (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
+        );
 
-      const sessionKey = "agent:main:main";
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const scope = { storePath, sessionKey };
-      await replaceSessionEntry(scope, {
-        sessionId: "s1",
-        updatedAt: 1,
-        label: "before",
-        pinnedAt: 1,
-        compactionCount: 1,
-        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
-        authProfileOverrideSource: "auto",
-        authProfileOverrideCompactionCount: 0,
-      });
-      const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
-      expect(sessionEntry).toBeDefined();
-      const sessionStore = { [sessionKey]: sessionEntry! };
+        const sessionKey = "agent:main:main";
+        const storePath = path.join(state.sessionsDir(), "sessions.json");
+        const scope = { storePath, sessionKey };
+        await replaceSessionEntry(scope, {
+          sessionId: "s1",
+          updatedAt: 1,
+          label: "before",
+          pinnedAt: 1,
+          compactionCount: 1,
+          authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+          authProfileOverrideSource: "auto",
+          authProfileOverrideCompactionCount: 0,
+          modelSelectionLocked: locked,
+          agentHarnessId: locked ? "codex" : "openclaw",
+          contextTokens: 888_000,
+          contextTokensSource: "resolved-v1",
+          contextBudgetStatus: contextBudgetStatusFixture({ contextTokenBudget: 888_000 }),
+        });
+        const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
+        expect(sessionEntry).toBeDefined();
+        const sessionStore = { [sessionKey]: sessionEntry! };
 
-      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
-      const resolved = await resolveSession({
-        agentDir,
-        sessionEntry: sessionEntry!,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
+        await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+        const resolved = await resolveSession({
+          agentDir,
+          sessionEntry: sessionEntry!,
+          sessionStore,
+          sessionKey,
+          storePath,
+        });
 
-      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
-      const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
-      expect(persisted?.label).toBe("renamed");
-      expect(persisted?.pinnedAt).toBeUndefined();
-      expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
-      expect(sessionStore[sessionKey]?.label).toBe("renamed");
-      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
-    });
-  });
+        expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
+        const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
+        expect(persisted?.label).toBe("renamed");
+        expect(persisted?.pinnedAt).toBeUndefined();
+        expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+        expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
+        expect(sessionStore[sessionKey]?.label).toBe("renamed");
+        expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+        for (const entry of [persisted, sessionStore[sessionKey]]) {
+          expect(entry?.contextTokens).toBe(locked ? 888_000 : undefined);
+          expect(entry?.contextTokensSource).toBe(locked ? "resolved-v1" : undefined);
+          expect(entry?.contextBudgetStatus?.contextTokenBudget).toBe(locked ? 888_000 : undefined);
+        }
+      });
+    },
+  );
 
   it("clears a persisted automatic override when every auth profile is in cooldown", async () => {
     await withAuthState(async (state) => {
@@ -258,6 +272,8 @@ describe("resolveSessionAuthProfileOverride", () => {
           updatedAt: 2,
           label: "manually selected",
           authProfileOverride: latestProfileId,
+          contextTokens: 111_000,
+          contextTokensSource: "runtime",
           ...(source ? { authProfileOverrideSource: source } : {}),
         };
         if (persisted) {
@@ -524,28 +540,41 @@ describe("session auth-profile rotation", () => {
     });
   });
 
-  it("keeps a healthy automatic profile across compaction when auth order is implicit", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      configureMixedOpenAiAuthStore();
-      authStoreMocks.state.store.order = undefined;
-      const sessionEntry = createAutomaticSessionEntry({
-        model: OPENAI_MODEL_ID,
-        authProfileOverride: API_PRIMARY_PROFILE_ID,
-        compactionCount: 1,
-        authProfileOverrideCompactionCount: 0,
-      });
-      const sessionStore = { "agent:main:main": sessionEntry };
+  it.each(["auto", undefined] as const)(
+    "keeps a healthy profile's context across compaction (source=%s)",
+    async (source) => {
+      await withAuthState(async (state) => {
+        const agentDir = state.agentDir();
+        await fs.mkdir(agentDir, { recursive: true });
+        configureMixedOpenAiAuthStore();
+        authStoreMocks.state.store.order = undefined;
+        const sessionEntry = createAutomaticSessionEntry({
+          model: OPENAI_MODEL_ID,
+          authProfileOverride: API_PRIMARY_PROFILE_ID,
+          authProfileOverrideSource: source,
+          contextTokens: 888_000,
+          contextTokensSource: "resolved-v1",
+          compactionCount: 1,
+          authProfileOverrideCompactionCount: 0,
+        });
+        const sessionStore = { "agent:main:main": sessionEntry };
 
-      expect(await resolveSession({ agentDir, sessionEntry, sessionStore })).toBe(
-        API_PRIMARY_PROFILE_ID,
-      );
-      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
-      expect(sessionEntry.updatedAt).toBe(1);
-    });
-  });
+        expect(await resolveSession({ agentDir, sessionEntry, sessionStore })).toBe(
+          API_PRIMARY_PROFILE_ID,
+        );
+        expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+        expect(sessionEntry.authProfileOverrideCompactionCount).toBe(source ? 0 : 1);
+        expect(sessionEntry.contextTokens).toBe(888_000);
+        expect(sessionEntry.contextTokensSource).toBe("resolved-v1");
+        if (source) {
+          expect(sessionEntry.updatedAt).toBe(1);
+        } else {
+          expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+          expect(sessionEntry.updatedAt).toBeGreaterThan(1);
+        }
+      });
+    },
+  );
 
   it("rotates a cooled multi-route OpenAI session within its physical route", async () => {
     await withAuthState(async (state) => {

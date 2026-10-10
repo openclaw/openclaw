@@ -132,6 +132,8 @@ describe("applyModelOverrideToSessionEntry", () => {
       model: "claude-sonnet-4-6",
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
       contextTokens: 160_000,
       contextBudgetStatus: contextBudgetStatus({
         updatedAt: before,
@@ -332,30 +334,50 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
   });
 
-  it("marks profile-only switches as pending when requested", () => {
-    const entry: SessionEntry = {
-      sessionId: "sess-profile-switch",
-      updatedAt: Date.now() - 5_000,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      authProfileOverride: "oldprofile",
-      authProfileOverrideSource: "user",
-    };
+  it.each([
+    { name: "account change", profile: "newprofile", contextTokens: undefined },
+    { name: "source promotion", profile: "oldprofile", contextTokens: 888_000 },
+    { name: "account removal", profile: undefined, contextTokens: undefined },
+  ])(
+    "marks profile-only $name as pending and qualifies its context",
+    ({ profile, contextTokens }) => {
+      const entry: SessionEntry = {
+        sessionId: "sess-profile-switch",
+        updatedAt: Date.now() - 5_000,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "oldprofile",
+        authProfileOverrideSource: "auto",
+        contextTokens: 888_000,
+        contextTokensSource: "resolved-v1",
+        contextBudgetStatus: contextBudgetStatus({
+          updatedAt: 1,
+          provider: "openai",
+          model: "gpt-5.4",
+          contextTokenBudget: 888_000,
+        }),
+      };
 
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      profileOverride: "newprofile",
-      markLiveSwitchPending: true,
-    });
+      const result = applyModelOverrideToSessionEntry({
+        entry,
+        selection: {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+        profileOverride: profile,
+        markLiveSwitchPending: true,
+      });
 
-    expect(result.updated).toBe(true);
-    expect(entry.authProfileOverride).toBe("newprofile");
-    expect(entry.liveModelSwitchPending).toBe(true);
-  });
+      expect(result.updated).toBe(true);
+      expect(entry.authProfileOverride).toBe(profile);
+      expect(entry.liveModelSwitchPending).toBe(true);
+      expect(entry.contextTokens).toBe(contextTokens);
+      expect(entry.contextTokensSource).toBe(
+        contextTokens === undefined ? undefined : "resolved-v1",
+      );
+      expect(entry.contextBudgetStatus?.contextTokenBudget).toBe(contextTokens);
+    },
+  );
 
   it.each([
     { preserveAuthProfileOverride: undefined, expectedProfile: undefined },

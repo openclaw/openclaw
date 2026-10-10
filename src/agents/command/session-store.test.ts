@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
@@ -10,7 +10,9 @@ import {
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { recordCliCompactionInStore } from "./session-store.js";
 import {
   createRunResult,
@@ -18,6 +20,7 @@ import {
   seedSessionStore,
   updateSessionStoreAfterAgentRun,
   withTempSessionStore,
+  withSession,
 } from "./session-store.test-support.js";
 import { resolveSession } from "./session.js";
 
@@ -31,56 +34,6 @@ vi.mock("../model-selection.js", () => ({
 
 const sessionId = "test-session";
 const sessionKey = "agent:main:explicit:test-session";
-type Update = Parameters<typeof updateSessionStoreAfterAgentRun>[0];
-type Compact = Parameters<typeof recordCliCompactionInStore>[0];
-
-async function withSession(
-  run: (fixture: {
-    storePath: string;
-    sessionStore: Record<string, SessionEntry>;
-    seed: (patch?: Partial<SessionEntry>) => Promise<SessionEntry>;
-    update: (params?: Partial<Update>) => Promise<void>;
-    compact: (
-      params: Pick<Compact, "compactionKind" | "expectedSession" | "tokensAfter">,
-    ) => Promise<SessionEntry | undefined>;
-    read: () => SessionEntry | undefined;
-  }) => Promise<void>,
-) {
-  await withTempSessionStore(async ({ storePath }) => {
-    const sessionStore: Record<string, SessionEntry> = {};
-    await run({
-      storePath,
-      sessionStore,
-      seed: async (patch = {}) => {
-        const entry: SessionEntry = { sessionId, updatedAt: 1, ...patch };
-        await seedSessionStore(storePath, { [sessionKey]: entry });
-        sessionStore[sessionKey] = entry;
-        return entry;
-      },
-      update: (params = {}) =>
-        updateSessionStoreAfterAgentRun({
-          cfg: {},
-          sessionId,
-          sessionKey,
-          storePath,
-          sessionStore,
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.5",
-          result: createRunResult({ sessionId, provider: "openai", model: "gpt-5.5" }),
-          ...params,
-        }),
-      compact: (params) =>
-        recordCliCompactionInStore({
-          agentId: "main",
-          sessionKey,
-          sessionStore,
-          storePath,
-          ...params,
-        }),
-      read: () => loadPersistedSessionEntry(storePath, sessionKey),
-    });
-  });
-}
 
 function contextBudgetStatus(
   overrides: Partial<NonNullable<SessionEntry["contextBudgetStatus"]>> = {},
@@ -1001,4 +954,36 @@ describe("recordCliCompactionInStore", () => {
       });
     },
   );
+});
+
+afterEach(resetContextWindowCacheForTest);
+
+it("retains curated model-owned capacity after accounting and cold projection", async () => {
+  const provider = "deepseek",
+    model = "deepseek-v4-flash",
+    expected = 1_000_000;
+  resetContextWindowCacheForTest();
+  await withSession(async ({ seed, update, read }) => {
+    await seed({ agentHarnessId: "openclaw" });
+    await update({
+      defaultProvider: provider,
+      defaultModel: model,
+      result: createRunResult({ sessionId, provider, model, agentHarnessId: "openclaw" }),
+    });
+    const persisted = read();
+    expect(persisted).toMatchObject({
+      contextTokens: expected,
+      contextTokensSource: "resolved-v1",
+    });
+    resetContextWindowCacheForTest();
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: persisted,
+        provider,
+        model,
+        agentHarnessId: "openclaw",
+        resolvedContextTokens: undefined,
+      }),
+    ).toBe(expected);
+  });
 });

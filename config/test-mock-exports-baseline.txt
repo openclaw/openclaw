@@ -3644,7 +3644,6 @@
 ["src/auto-reply/reply/agent-runner-memory.tools.test.ts","../../agents/embedded-agent-runner/run-entry.js","effdff4ce459d1699b8847b6fe7923619983492ac969911bd621d8655e04de48",1]
 ["src/auto-reply/reply/agent-runner-memory.tools.test.ts","../../agents/embedded-agent.js","84db64860d7e204ff9895bfd217a0807599d344018f17c08a80e355a8e4ae616",1]
 ["src/auto-reply/reply/agent-runner-node-authority.test.ts","../../agents/agent-tools.js","1c03ac56f6febb9e111895708fae096a476c0c413093c446e7dcd2ca628e7110",1]
-["src/auto-reply/reply/agent-runner-result-accounting.test.ts","../../agents/context.js","4cef96735daf10254a18adcae342b9a9a16109803c51d5d7531987aeb4c0c4e7",1]
 ["src/auto-reply/reply/agent-runner-result-accounting.test.ts","../../agents/fast-mode.js","77437f6a0c51f90553faed1231181204325c0bb459af09a8d46e3481bd81c570",1]
 ["src/auto-reply/reply/agent-runner-result-accounting.test.ts","../../agents/live-model-switch.js","e29e14e47f96560c04e073d5b082862c7d5e145d7e9cb02a30c7b3cfb0932e70",1]
 ["src/auto-reply/reply/agent-runner-result-accounting.test.ts","../../agents/model-selection.js","1c9292acb70dea67c8b9ba111bbc888e0c61b32b186dd1aa54e1efdbb91890c6",1]

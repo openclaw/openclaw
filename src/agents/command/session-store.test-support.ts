@@ -11,7 +11,10 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
-import { updateSessionStoreAfterAgentRun as updateSessionStoreAfterAgentRunBase } from "./session-store.js";
+import {
+  recordCliCompactionInStore,
+  updateSessionStoreAfterAgentRun as updateSessionStoreAfterAgentRunBase,
+} from "./session-store.js";
 
 export async function seedSessionFixture(
   storePath: string,
@@ -91,4 +94,57 @@ export function createRunResult(
   meta: Partial<Omit<EmbeddedAgentRunResult["meta"], "agentMeta">> = {},
 ): EmbeddedAgentRunResult {
   return { meta: { durationMs: 1, ...meta, agentMeta } };
+}
+
+const sessionId = "test-session";
+const sessionKey = "agent:main:explicit:test-session";
+type Update = Parameters<typeof updateSessionStoreAfterAgentRun>[0];
+type Compact = Parameters<typeof recordCliCompactionInStore>[0];
+
+export async function withSession(
+  run: (fixture: {
+    storePath: string;
+    sessionStore: Record<string, SessionEntry>;
+    seed: (patch?: Partial<SessionEntry>) => Promise<SessionEntry>;
+    update: (params?: Partial<Update>) => Promise<void>;
+    compact: (
+      params: Pick<Compact, "compactionKind" | "expectedSession" | "tokensAfter">,
+    ) => Promise<SessionEntry | undefined>;
+    read: () => SessionEntry | undefined;
+  }) => Promise<void>,
+) {
+  await withTempSessionStore(async ({ storePath }) => {
+    const sessionStore: Record<string, SessionEntry> = {};
+    await run({
+      storePath,
+      sessionStore,
+      seed: async (patch = {}) => {
+        const entry: SessionEntry = { sessionId, updatedAt: 1, ...patch };
+        await seedSessionStore(storePath, { [sessionKey]: entry });
+        sessionStore[sessionKey] = entry;
+        return entry;
+      },
+      update: (params = {}) =>
+        updateSessionStoreAfterAgentRun({
+          cfg: {},
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.5",
+          result: createRunResult({ sessionId, provider: "openai", model: "gpt-5.5" }),
+          ...params,
+        }),
+      compact: (params) =>
+        recordCliCompactionInStore({
+          agentId: "main",
+          sessionKey,
+          sessionStore,
+          storePath,
+          ...params,
+        }),
+      read: () => loadPersistedSessionEntry(storePath, sessionKey),
+    });
+  });
 }

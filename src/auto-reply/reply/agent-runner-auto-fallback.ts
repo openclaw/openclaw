@@ -8,10 +8,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  resolveCollapsedSessionAuthPinSource,
-  resolveSessionAuthProfileOverrideSource,
-} from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -137,26 +134,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
       ) {
         return null;
       }
-      const shouldClearAuthProfile =
-        resolveSessionAuthProfileOverrideSource(persistedEntry) === "auto";
-      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-      return {
-        providerOverride: undefined,
-        modelOverride: undefined,
-        modelOverrideSource: undefined,
-        modelOverrideRouteResolution: undefined,
-        modelOverrideFallbackOriginProvider: undefined,
-        modelOverrideFallbackOriginModel: undefined,
-        ...(shouldClearAuthProfile
-          ? {
-              authProfileOverride: undefined,
-              authProfileOverrideSource: undefined,
-              authProfileOverrideCompactionCount: undefined,
-            }
-          : {}),
-        fallbackNotice: undefined,
-        updatedAt: persistedEntry.updatedAt,
-      };
+      return clearAutoFallbackPrimaryProbeSelection(persistedEntry);
     },
   );
   // The persisted comparison owns selection freshness. Publish its updated
