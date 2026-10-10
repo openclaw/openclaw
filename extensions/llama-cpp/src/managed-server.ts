@@ -276,14 +276,21 @@ export async function resolveLlamaCppModelDownloadSize(
     return artifact.expectedSize;
   }
   // HEAD is advisory setup metadata; cached model reuse stays offline-capable.
-  const { response, release } = await fetchWithSsrFGuard({
+  const result = await fetchWithSsrFGuard({
     url: artifact.url,
     init: { method: "HEAD" },
     signal,
     requireHttps: true,
     policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(artifact.url),
     auditContext: "llama-cpp-model-resolve",
+  }).catch(() => {
+    signal?.throwIfAborted();
+    return undefined;
   });
+  if (!result) {
+    return undefined;
+  }
+  const { response, release } = result;
   try {
     const size = response.ok ? Number(response.headers.get("content-length")) : 0;
     return Number.isSafeInteger(size) && size > 0 ? size : undefined;

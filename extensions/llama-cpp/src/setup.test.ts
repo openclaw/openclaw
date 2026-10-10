@@ -1,4 +1,3 @@
-import "./setup.test-support.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -18,10 +17,12 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
 } from "./defaults.js";
-import { downloadVerifiedFile, type LlamaDownloadProgress } from "./llama-server-install.js";
+import type { LlamaDownloadProgress } from "./llama-server-install.js";
 import { resolveLlamaCppModelCandidates } from "./model-catalog.js";
-import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 import { authContext, config, GIB, mocks, modelPath, tempRoot } from "./setup.test-support.js";
+
+const { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } = await import("./setup.js");
+const { downloadVerifiedFile } = await import("./llama-server-install.js");
 
 const CUSTOM_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf";
@@ -226,7 +227,10 @@ describe("llama.cpp managed setup", () => {
       sharedDisk: true,
     });
     const recipe = resolveLlamaCppModelCandidates(await mocks.hardware(), "metal").recipes.at(-1)!;
-    mocks.ensureModel.mockImplementation(async ({ source }) => {
+    mocks.ensureModel.mockImplementation(async ({ source, cacheDir }) => {
+      if (cacheDir !== tempRoot) {
+        throw new Error("not cached here");
+      }
       if (source === recipe.model.params?.modelPath) {
         return modelPath;
       }
@@ -236,6 +240,9 @@ describe("llama.cpp managed setup", () => {
       throw new Error("not cached");
     });
     const ctx = authContext(true);
+    const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    assert.ok(provider);
+    provider.localService = { command: path.join(tempRoot, "llama-server") };
     const result = await runLlamaCppSetup(ctx);
     expect(result.defaultModel).toBe(`llama-cpp/${recipe.model.id}`);
     expect(ctx.prompter.confirm).toHaveBeenCalledWith(

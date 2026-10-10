@@ -1,4 +1,3 @@
-import "./setup.test-support.js";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -8,8 +7,9 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
 } from "./defaults.js";
-import { runLlamaCppSetup } from "./setup.js";
 import { authContext, GIB, mocks, modelPath, tempRoot } from "./setup.test-support.js";
+
+const { runLlamaCppSetup } = await import("./setup.js");
 
 function authoredChatContext(source: string, confirm = true): ProviderAuthContext {
   const ctx = authContext(confirm);
@@ -38,19 +38,28 @@ describe("llama.cpp authored model setup", () => {
     { source: "hf:owner/repo/custom.gguf", size: "1.2 GB" },
     { source: "https://models.example/custom.gguf", size: "1.2 GB" },
     { source: "https://models.example/no-head.gguf", size: "size unknown", headStatus: 405 },
+    { source: "https://models.example/broken-head.gguf", size: "size unknown", headError: true },
   ])(
     "offers the selected uncached $source instead of the hardware recommendation",
-    async ({ source, size, headStatus }) => {
+    async ({ source, size, headStatus, headError }) => {
       vi.mocked(os.totalmem).mockReturnValue(512 * GIB);
       const ctx = authoredChatContext(source);
-      mocks.downloadFetch.mockImplementation(async () => ({
-        response: source.startsWith("https:")
-          ? new Response(null, { status: headStatus, headers: { "content-length": "1200000000" } })
-          : Response.json([
-              { path: "custom.gguf", size: 1_200_000_000, lfs: { oid: "a".repeat(64) } },
-            ]),
-        release: vi.fn(),
-      }));
+      mocks.downloadFetch.mockImplementation(async () => {
+        if (headError) {
+          throw new Error("HEAD connection closed");
+        }
+        return {
+          response: source.startsWith("https:")
+            ? new Response(null, {
+                status: headStatus,
+                headers: { "content-length": "1200000000" },
+              })
+            : Response.json([
+                { path: "custom.gguf", size: 1_200_000_000, lfs: { oid: "a".repeat(64) } },
+              ]),
+          release: vi.fn(),
+        };
+      });
       const selected = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models[1];
 
       const result = await runLlamaCppSetup(ctx);

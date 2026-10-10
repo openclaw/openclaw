@@ -276,7 +276,8 @@ async function resolveSetupPlan(
     return { kind: "chat", candidate, cachedPath: configuredPath };
   }
 
-  const provider = candidate?.provider ?? buildLlamaCppProviderConfig();
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const provider = existing?.localService ? existing : buildLlamaCppProviderConfig();
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   if (candidate) {
     const source = resolveLlamaCppModelSource(candidate.model);
@@ -365,7 +366,6 @@ async function resolveSetupPlan(
     return undefined;
   }
 
-  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   if (localMemoryIntent && existing && (!existing.localService || existing.models.length > 0)) {
     await ctx.prompter.note(
       "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
