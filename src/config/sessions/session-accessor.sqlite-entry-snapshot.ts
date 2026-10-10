@@ -67,14 +67,16 @@ export function captureSessionEntrySnapshot(
   if (selected.row.window_json !== undefined) {
     const revision = readSqliteNativeMutationRevision(database.db);
     if (revision !== undefined) {
+      let row: SessionEntryWindowRow | null = null;
+      if (selected.row.window_json) {
+        // SAFETY: The SQLite JSON subquery serializes this owner's typed scalar projection.
+        row = JSON.parse(selected.row.window_json) as SessionEntryWindowRow;
+      }
       window = {
         database: database.db,
         revision,
         sessionId: selected.row.current_session_id,
-        row: selected.row.window_json
-          ? // SAFETY: The SQLite JSON subquery serializes this owner's typed scalar projection.
-            (JSON.parse(selected.row.window_json) as SessionEntryWindowRow)
-          : null,
+        row,
       };
     }
   }
