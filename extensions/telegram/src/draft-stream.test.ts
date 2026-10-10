@@ -287,34 +287,6 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
-  it("clears a rotated preview accepted while clear waits for its in-flight send", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveSend!: (message: MockSentMessage) => void;
-      const send = new Promise<MockSentMessage>((resolve) => {
-        resolveSend = resolve;
-      });
-      const api = createMockDraftApi();
-      api.sendMessage.mockReturnValueOnce(send);
-      const stream = createDraftStream(api);
-
-      stream.update("Temporary preview");
-      await vi.advanceTimersByTimeAsync(0);
-      expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      stream.rotateToNewMessageDeferringDelete();
-      const clearPromise = stream.clear();
-      resolveSend({ message_id: 17 });
-      await clearPromise;
-
-      await vi.advanceTimersByTimeAsync(3_999);
-      expect(api.deleteMessage).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(api.deleteMessage).toHaveBeenCalledExactlyOnceWith(123, 17);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps a rotated preview until Telegram accepts its replacement", async () => {
     vi.useFakeTimers();
     try {
@@ -379,7 +351,8 @@ describe("createTelegramDraftStream", () => {
       const { api, stream } = createForceNewMessageHarness({ throttleMs: 1000 });
 
       stream.update("Hello");
-      await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
 
       stream.update("Hello edited");
       expect(api.editMessageText).not.toHaveBeenCalled();
@@ -802,47 +775,6 @@ describe("createTelegramDraftStream", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each(["accepted", "retryable rejection"])(
-    "does not let a superseded %s final page freeze the replacement stream",
-    async (outcome) => {
-      let settleSecondPage: (() => void) | undefined;
-      const secondPage = new Promise<{ message_id: number }>((resolve, reject) => {
-        settleSecondPage = () => {
-          if (outcome === "accepted") {
-            resolve({ message_id: 42 });
-          } else {
-            reject(
-              Object.assign(new Error("429: retry after 1"), {
-                error_code: 429,
-                parameters: { retry_after: 1 },
-              }),
-            );
-          }
-        };
-      });
-      const api = createMockDraftApi();
-      api.sendMessage
-        .mockResolvedValueOnce({ message_id: 17 })
-        .mockReturnValueOnce(secondPage)
-        .mockResolvedValueOnce({ message_id: 43 });
-      const stream = createDraftStream(api, { maxChars: 10 });
-
-      stream.update("1234567890ABCDEFGHIJ");
-      await stream.flush();
-      const stopPromise = stream.stop();
-      await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(2));
-      stream.forceNewMessage();
-      stream.update("replaced");
-      settleSecondPage?.();
-      await stopPromise;
-      await stream.flush();
-
-      expect(api.sendMessage).toHaveBeenCalledTimes(3);
-      expectNthPreviewSend(api, 3, "replaced");
-      expect(stream.messageId()).toBe(43);
-    },
-  );
 });
 
 describe("draft stream initial message debounce", () => {

@@ -685,7 +685,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         try {
           await flushSignalInboundEntries(entries, admissionLifecycle, settle);
         } catch (err) {
-          await lifecycle?.onAbandoned();
+          await lifecycle?.onFailed?.(err);
           throw err;
         }
       },

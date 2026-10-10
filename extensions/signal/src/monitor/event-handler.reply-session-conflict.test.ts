@@ -175,7 +175,7 @@ describe("signal durable dispatch failure recovery", () => {
           id: eventId,
           attempts,
           lastAttemptAt: expect.any(Number),
-          lastError: "turn-abandoned",
+          lastError: CONFLICT_ERROR.message,
         }),
       ]);
       const record = pending[0];
@@ -215,7 +215,7 @@ describe("signal durable dispatch failure recovery", () => {
           throw new Error(`Expected Signal seed claim ${attempt}`);
         }
         await queue.release(claim, {
-          lastError: "turn-abandoned",
+          lastError: CONFLICT_ERROR.message,
           releasedAt: secondAttempt.lastAttemptAt,
         });
       }
