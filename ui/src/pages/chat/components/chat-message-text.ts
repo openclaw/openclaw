@@ -262,10 +262,9 @@ export function renderMessageMarkdown(
     const terminalPart = parts[1].trim() ? 1 : 0;
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
   }
+  const content = renderMarkdownMedia({ messageKey, source, parts }, media);
   const text = html`
-    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">
-      ${renderMarkdownMedia({ messageKey, source, parts }, media)}
-    </div>
+    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">${content}</div>
   `;
   // Exhausted recovery keeps the preview visible and offers manual re-entry.
   if (recoverFullMessage && disclosure?.onRetryFullMessage) {
