@@ -11,8 +11,13 @@ import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/i
 import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/registry-loaded.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveRuntimeAccountSnapshot } from "./channels-account.js";
 import { respondUnavailable } from "./response.js";
+import {
+  captureGatewayRequestOperatorGuard,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -98,15 +103,27 @@ function webLoginHandler<
       accountId?: string;
       provider: WebLoginProvider;
       run: NonNullable<WebLoginGateway[M]>;
+      assertRequestCurrent: () => void;
     },
     respond: RespondFn,
   ) => Promise<void>,
 ): GatewayRequestHandlers[string] {
-  return async ({ params, respond, context }) => {
+  return async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
     try {
+      const authority = params.preserveRunning
+        ? readGatewayRequestMutationAuthority(options)
+        : undefined;
+      const assertOperatorCurrent = params.preserveRunning
+        ? captureGatewayRequestOperatorGuard(options)
+        : undefined;
+      const assertRequestCurrent = () => {
+        authority?.assertCurrent();
+        assertOperatorCurrent?.();
+      };
       const accountId = params.accountId;
       const provider = resolveWebLoginProvider(params.channel);
       if (!provider) {
@@ -139,7 +156,12 @@ function webLoginHandler<
       await handle(
         params,
         context,
-        { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[M]> },
+        {
+          accountId,
+          provider,
+          run: run.bind(gateway) as NonNullable<WebLoginGateway[M]>,
+          assertRequestCurrent,
+        },
         respond,
       );
     } catch (err) {
@@ -153,24 +175,34 @@ export const webHandlers: GatewayRequestHandlers = {
     "web.login.start",
     validateWebLoginStartParams,
     "loginWithQrStart",
-    async (params, context, { accountId, provider, run }, respond) => {
+    async (params, context, { accountId, provider, run, assertRequestCurrent }, respond) => {
+      if (params.preserveRunning && params.force) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "force and preserveRunning cannot both be true"),
+        );
+        return;
+      }
       const runtime = context.getRuntimeSnapshot();
       const account = accountId
         ? resolveRuntimeAccountSnapshot({ runtime, channelId: provider.id, accountId })
         : runtime.channels[provider.id];
       const wasRunning = account?.running === true;
       const forceLogin = Boolean(params.force);
-      const stoppedBeforeLogin = forceLogin || !wasRunning;
+      const stoppedBeforeLogin = !params.preserveRunning && (forceLogin || !wasRunning);
       if (stoppedBeforeLogin) {
         await context.stopChannel(provider.id, accountId);
       }
+      assertRequestCurrent();
       const result = await run({
         force: forceLogin,
         timeoutMs: params.timeoutMs,
         verbose: Boolean(params.verbose),
         accountId,
       });
-      const stoppedAfterQrTakeover = !stoppedBeforeLogin && Boolean(result.qrDataUrl);
+      const stoppedAfterQrTakeover =
+        !params.preserveRunning && !stoppedBeforeLogin && Boolean(result.qrDataUrl);
       if (stoppedAfterQrTakeover) {
         await context.stopChannel(provider.id, accountId);
       }
@@ -186,7 +218,8 @@ export const webHandlers: GatewayRequestHandlers = {
     "web.login.wait",
     validateWebLoginWaitParams,
     "loginWithQrWait",
-    async (params, context, { accountId, provider, run }, respond) => {
+    async (params, context, { accountId, provider, run, assertRequestCurrent }, respond) => {
+      assertRequestCurrent();
       const result = await run({
         timeoutMs: params.timeoutMs,
         accountId,
@@ -194,7 +227,31 @@ export const webHandlers: GatewayRequestHandlers = {
         currentQrDataUrl: params.currentQrDataUrl,
       });
       if (result.connected) {
-        await context.startChannel(provider.id, accountId);
+        if (params.preserveRunning) {
+          const confirmedAccountId = normalizeOptionalAccountId(result.accountId);
+          if (
+            !confirmedAccountId ||
+            (accountId !== undefined &&
+              normalizeOptionalAccountId(accountId) !== confirmedAccountId)
+          ) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "QR login must confirm the requested account before activating its saved credentials",
+              ),
+            );
+            return;
+          }
+          // Existing monitors retain their captured credentials until this exact account rotates.
+          assertRequestCurrent();
+          await context.stopChannel(provider.id, confirmedAccountId);
+          assertRequestCurrent();
+          await context.startChannel(provider.id, confirmedAccountId);
+        } else {
+          await context.startChannel(provider.id, accountId);
+        }
       }
       respond(true, result, undefined);
     },

@@ -1,5 +1,6 @@
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
+import { initialWeixinQrState } from "../../lib/channels/weixin-qr-state.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -19,6 +20,7 @@ export function createChannelsViewProps(
 ): ChannelsProps {
   const { channels, config, presentation, wizardHost, ...props } = overrides;
   const channelState: ChannelsState = {
+    weixinLogin: initialWeixinQrState(),
     client: null,
     connected: true,
     channelsLoading: false,
@@ -41,6 +43,12 @@ export function createChannelsViewProps(
     ...channels,
   };
   return {
+    weixinActivationBusy: false,
+    weixinRestartRequired: false,
+    weixinActivationMessage: null,
+    onWeixinStart: () => {},
+    onWeixinClose: () => {},
+    onWeixinVerify: () => {},
     channels: channelState,
     config: { ...createInitialConfigState(), ...config },
     presentation: {

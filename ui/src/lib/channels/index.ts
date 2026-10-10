@@ -15,6 +15,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
+import type { WeixinQrState } from "./weixin-qr-state.ts";
 
 type ChannelGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -23,6 +24,8 @@ type ChannelGatewayClient = {
 type ChannelLogoutResult = {
   cleared: boolean;
 };
+
+type WeixinQrControllerFactory = typeof import("./weixin-qr.ts").createWeixinQrController;
 
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
@@ -39,6 +42,7 @@ type ChannelGateway = {
 };
 
 export type ChannelsState = {
+  weixinLogin?: WeixinQrState;
   client: ChannelGatewayClient | null;
   connected: boolean;
   channelsLoading: boolean;
@@ -61,6 +65,9 @@ export type ChannelsState = {
 };
 
 export type ChannelCapability = {
+  startWeixin: (createController: WeixinQrControllerFactory) => Promise<void>;
+  verifyWeixin: (code: string) => Promise<void>;
+  closeWeixin: () => Promise<void>;
   readonly state: ChannelsState;
   refresh: (probe?: boolean) => Promise<void>;
   refreshPairing: () => Promise<void>;
@@ -424,6 +431,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   const listeners = new Set<(state: ChannelsState) => void>();
   let currentChannelReadAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.read");
   let currentPairingAuthSignature = resolveChannelPairingAuthSignature(gateway.snapshot);
+  let currentWeixinHello = gateway.snapshot.hello;
   let currentWhatsAppAdminAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.admin");
   let disposed = false;
   let channelsInvalidated = false;
@@ -502,6 +510,9 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
         await refreshChannels(true);
       }
     });
+  let weixin: ReturnType<typeof import("./weixin-qr.ts").createWeixinQrController> | null = null;
+  const getWeixinClient = () =>
+    !disposed && state.connected && currentWhatsAppAdminAccess ? state.client : null;
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
@@ -517,6 +528,15 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     currentWhatsAppAdminAccess = nextWhatsAppAdminAccess;
     state.client = snapshot.client;
     state.connected = connected;
+    if (
+      clientChanged ||
+      connectionChanged ||
+      pairingAuthChanged ||
+      currentWeixinHello !== snapshot.hello
+    ) {
+      weixin?.invalidate();
+    }
+    currentWeixinHello = snapshot.hello;
     if (clientChanged || connectionChanged || channelReadAccessChanged) {
       channelsInvalidated = false;
       state.channelsLoading = false;
@@ -566,6 +586,23 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     get state() {
       return state;
     },
+    async startWeixin(createController) {
+      if (!getWeixinClient()) {
+        return;
+      }
+      // The lazy Channels page supplies its login runtime; app boot never imports it.
+      weixin ??= createController({
+        getClient: getWeixinClient,
+        setState: (login) => {
+          state.weixinLogin = login;
+          publish();
+        },
+        refresh: () => refreshChannels(true),
+      });
+      return weixin.start();
+    },
+    verifyWeixin: async (code) => weixin?.verify(code),
+    closeWeixin: async () => weixin?.close(),
     refresh: refreshChannels,
     refreshPairing: () => run(() => loadChannelPairing(state)),
     approvePairing: async (params) => {
@@ -592,6 +629,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       if (disposed) {
         return;
       }
+      weixin?.invalidate();
       disposed = true;
       channelsInvalidated = false;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;

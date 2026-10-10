@@ -65,6 +65,20 @@ Gateway if it is offline.
 
 ## Login
 
+In the Control UI, open **Channels** and find **Personal Weixin**. Page login
+requires an installed plugin that supports browser QR login. Select **Connect**,
+scan the displayed QR code with your phone, and confirm the login. If the plugin
+requests a verification code, enter it on the page. Closing the login cancels
+that attempt.
+
+Page login keeps an existing Weixin account running while you scan. Cancelling
+or closing a reconnect attempt does not interrupt that account's messaging.
+
+For a disabled plugin, select **Enable and connect** and follow any required
+Gateway restart notice. A saved account offers **Reconnect**; normal messaging
+does not require another scan. If page login is unsupported, use the CLI flow
+below. The page checks plugin support before starting a new login.
+
 Run QR login on the same machine that runs the Gateway:
 
 ```bash

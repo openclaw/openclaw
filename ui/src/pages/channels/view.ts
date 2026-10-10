@@ -19,6 +19,7 @@ import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
+import { renderWeixinLogin } from "./view.weixin.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 const CHANNEL_CARD_STATES = {
@@ -44,7 +45,9 @@ export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(snapshot);
   // Key both lists so status updates cannot retarget an in-flight channel click.
   const connected = channelOrder.filter((key) => channelSnapshotEntryIsActive(snapshot, key));
-  const available = channelOrder.filter((key) => !channelSnapshotEntryIsActive(snapshot, key));
+  const available = channelOrder.filter(
+    (key) => key !== "openclaw-weixin" && !channelSnapshotEntryIsActive(snapshot, key),
+  );
   const showingStaleSnapshot = Boolean(
     props.channels.channelsLoading &&
     props.channels.channelsSnapshot &&
@@ -121,7 +124,7 @@ export function renderChannels(props: ChannelsProps) {
           }
         `,
       )}
-      ${renderChannelPairingQueue(props)}
+      ${renderWeixinLogin(props)} ${renderChannelPairingQueue(props)}
     `)}
     ${
       selected
@@ -174,6 +177,9 @@ function resolveChannelPlugin(props: ChannelsProps, key: string) {
 }
 
 function resolveChannelLabel(props: ChannelsProps, key: string): string {
+  if (key === "openclaw-weixin") {
+    return t("channels.weixin.title");
+  }
   const snapshot = props.channels.channelsSnapshot;
   const labels = snapshot?.channelLabels;
   return (

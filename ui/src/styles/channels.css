@@ -76,6 +76,43 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
+.weixin-login {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.weixin-login__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.weixin-login__heading h2 {
+  margin: 0;
+  font-size: var(--control-ui-text-lg);
+}
+
+.weixin-login__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.weixin-login__body {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.weixin-login__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .channels-detail,
 .channels-wizard {
   display: flex;
