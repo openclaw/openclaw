@@ -14,7 +14,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
-import type { DatabaseFileIdentity } from "../../../infra/sqlite-worker-identity.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
@@ -211,7 +210,6 @@ export async function preparePersistedCurrentUserTurn(params: {
     signal: params.signal,
     manager: sessionManager,
   });
-  let originalSource: { storePath: string; identity?: DatabaseFileIdentity } | undefined;
   const assertCurrent = () => {
     assertOwned();
     reader.assertCurrent();
@@ -233,22 +231,11 @@ export async function preparePersistedCurrentUserTurn(params: {
       : withSessionTranscriptReadSource(
           scope,
           native,
-          ({ scope: captured, expectedIdentity, assertCurrent: assertSource }) => {
-            originalSource ??= { storePath: captured.storePath, identity: expectedIdentity };
-            if (
-              captured.storePath !== originalSource.storePath ||
-              expectedIdentity?.key !== originalSource.identity?.key ||
-              expectedIdentity?.birthtime !== originalSource.identity?.birthtime
-            ) {
-              throw new Error(
-                "Persisted user turn changed its database owner before replay admission",
-              );
-            }
-            return operation(
+          ({ scope: captured, assertCurrent: assertSource }) =>
+            operation(
               { ...scope, agentId: captured.agentId, storePath: captured.storePath },
               assertSource,
-            );
-          },
+            ),
           signal,
         );
   };
@@ -407,23 +394,9 @@ export async function preparePersistedCurrentUserTurn(params: {
       }
     };
     assertCurrent();
-    const selected = getOwnedSessionTranscriptReader(scope);
-    if (selected) {
-      selected.assertCurrent();
-      // Prompt preparation needs no detached witness. Read at the synchronous core-entry boundary.
-      return async (onAdmitted) => {
-        await readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
-      };
-    }
-    const current = await readCurrentTurn(replaySignal, (prepared) => {
-      accept(prepared);
-    });
+    // Read once at core entry; prompt preparation does not reserve a database incarnation.
     return async (onAdmitted) => {
-      await withSource(replaySignal, (target, assertSource) =>
-        validate(target, assertSource, current, replaySignal, (prepared) => {
-          accept(prepared, onAdmitted);
-        }),
-      );
+      await readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
     };
   };
 }

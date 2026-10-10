@@ -738,7 +738,11 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     ensureContextEnginesInitialized: vi.fn(),
   }));
 
+  // mock-isolation: This harness supplies synthetic engines without registering live plugins.
   vi.doMock("../../context-engine/registry.js", () => ({
+    hasSameContextEngineInstance: (left: unknown, right: unknown) => left === right,
+    isContextEngineAbortRejection: (error: unknown, signal?: AbortSignal) =>
+      signal?.aborted === true && error === signal.reason,
     resolveContextEngine: resolveContextEngineMock,
     resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
     resolveLogicalTurnContextEngines: async () => {
