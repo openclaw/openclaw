@@ -2550,7 +2550,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-decision-prefilter.test.ts","../../../plugins/runtime/gateway-request-scope.js","1406892fbcdd6fa81599e438147742aeafbbbb46eab44453f8a6e1c9c469d398",1]
 ["src/agents/embedded-agent-runner/run/attempt-execution-phase.test-support.ts","../wait-for-idle-before-flush.js","d5d617b0c687a3ac9f3ae899e86579c0ac0c63ee3cf58adbeadaab0ef437f1ca",1]
 ["src/agents/embedded-agent-runner/run/attempt-execution-phase.test-support.ts","./abortable.js","5ea023f7eaa1913c71a0f7d1e24febc4744c7cc7eb958a17d684c1aaf1070f8e",1]
-["src/agents/embedded-agent-runner/run/attempt-execution-phase.test-support.ts","./attempt-finalize.js","de228a79879cbf80423f819e466eaa6e3d04bcafdb05e79a22fef6c3f8cfe150",1]
 ["src/agents/embedded-agent-runner/run/attempt-execution-phase.test-support.ts","./attempt-history-prepare.js","c4269344b5700cab0cc91a853563eff14e178363ae974626f9a77b041e673f64",1]
 ["src/agents/embedded-agent-runner/run/attempt-execution-phase.test-support.ts","./attempt-settle.js","09eb4b52f406f89b275923f8f84045cd54996a5cf851c8b058e69d22dc861581",1]
 ["src/agents/embedded-agent-runner/run/attempt-execution-phase.test-support.ts","./attempt-stream-prepare.js","511df2d1d8f4529712a856d428f22a60bc013f1aec0a13e46777379e4d9b1216",1]
