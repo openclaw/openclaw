@@ -28,6 +28,7 @@ import {
   writeSecretStoreEntriesInDatabase,
   rollbackSecretStoreEntryWriteInDatabase,
   deleteSecretStoreEntryInDatabase,
+  updateSecretStoreAllowedHostsInDatabase,
 } from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -219,6 +220,12 @@ export function executeSharedStateCommand(
     return command.type === "secrets.rollback"
       ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
       : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
+  }
+  if (command.type === "secrets.allowedHosts") {
+    return updateSecretStoreAllowedHostsInDatabase(
+      { ...command.input, database: writeOptions },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);

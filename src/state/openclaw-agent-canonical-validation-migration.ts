@@ -150,10 +150,17 @@ export function withLegacyCanonicalSessionValidationTriggers(schema: string): st
     );
 }
 
+export const LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES = Object.freeze(
+  [
+    ...`${LEGACY_ENTRY_VALIDITY_TRIGGERS_SQL}\n${LEGACY_CANONICAL_PENDING_TRIGGERS_SQL}`.matchAll(
+      /CREATE TRIGGER IF NOT EXISTS (\w+)/gu,
+    ),
+  ].map((match) => match[1]!),
+);
+
 /** The offline schema owner retires raw-writer tracking before publishing schema 25. */
 export function migrateCanonicalSessionWriterValidation(db: DatabaseSync): void {
-  const triggers = `${LEGACY_ENTRY_VALIDITY_TRIGGERS_SQL}\n${LEGACY_CANONICAL_PENDING_TRIGGERS_SQL}`;
-  for (const [, name] of triggers.matchAll(/CREATE TRIGGER IF NOT EXISTS (\w+)/gu)) {
+  for (const name of LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES) {
     db.exec(`DROP TRIGGER IF EXISTS ${name}`);
   }
   ensureColumn(db, "session_key_contract", "canonical_ready TEXT");

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -514,7 +515,8 @@ suite.define(() => {
       const retainedReply = activePane
         .locator(".chat-group")
         .filter({ hasText: "Reply retained in the transcript." });
-      const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
+      const progressCard = activePane.locator('[data-progress-card-placement="details"]');
+      await openChatDetails(activePane);
       await retainedReply.waitFor({ state: "visible" });
       expect(await retainedReply.locator(".chat-reply-attribution").count()).toBe(0);
       await progressCard.waitFor({ state: "visible" });
@@ -729,6 +731,7 @@ suite.define(() => {
       await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
       await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await openChatDetails(activePane);
       await progressCard.waitFor({ state: "visible" });
       await expect
         .poll(() =>

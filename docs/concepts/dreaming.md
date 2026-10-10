@@ -20,7 +20,10 @@ When the cron scheduler is disabled (`cron.enabled: false` or
 preserving existing jobs. Startup cleanup of historical dreaming artifacts waits
 for each agent's pending database preparation before running, including managed
 background cleanup after a restart or upgrade. Database preparation failures are
-reported with repair guidance. Explicitly disabling dreaming removes jobs carrying
+reported with repair guidance. If an agent database is still absent after preparation,
+cleanup completes without creating it; concurrent first creation is not a cleanup failure.
+Existing databases remain protected against replacement during cleanup.
+Explicitly disabling dreaming removes jobs carrying
 its canonical declaration key in the active cron store.
 
 ## What dreaming writes

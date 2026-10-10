@@ -18,6 +18,7 @@ import {
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { waitForClawHubPublicVersion } from "./lib/clawhub-publication-state.mjs";
 import { validateClawHubRecoveryManifest } from "./plugin-clawhub-recovery.mjs";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import { verifyPublishedClawHubPackage } from "./verify-clawhub-published-artifact.mjs";
@@ -548,9 +549,48 @@ export async function verifyClawHubPostpublish({
   });
   const transactions = downloaded.transactions;
   validateClawHubParentAuthorization(receipt, transactions);
-  let validatedRecoveryManifest;
-  if (recoveryManifest) {
-    validatedRecoveryManifest = validateClawHubRecoveryManifest(recoveryManifest);
+  const childArtifacts = await listRunArtifacts(child.id, context);
+  let originalManifest = recoveryManifest;
+  if (!originalManifest) {
+    const manifestName = `openclaw-clawhub-recovery-manifest-${child.id}-${child.run_attempt}`;
+    const manifests = childArtifacts.filter((artifact) => artifact.name === manifestName);
+    if (
+      manifests.length > 1 ||
+      (manifests.length === 0 && (completedProducer || !verifyPublication))
+    ) {
+      throw new Error("Missing or ambiguous sealed ClawHub original attempt roster.");
+    }
+    if (manifests.length === 1) {
+      const { archiveBytes: manifestArchiveBytes } = await downloadArtifact(
+        manifests[0],
+        child,
+        context,
+        MAX_RECEIPT_BYTES + 4096,
+        {
+          jobName: "Seal exact ClawHub recovery manifest",
+          stepName: "Upload sealed recovery manifest",
+          runStatePolicy: "completed-producer-success",
+        },
+      );
+      const manifestFiles = inspectActionsArtifactZip(
+        manifestArchiveBytes,
+        ["recovery-manifest.json"],
+        {
+          maxEntryBytes: MAX_RECEIPT_BYTES,
+          maxExpandedBytes: MAX_RECEIPT_BYTES,
+        },
+      );
+      originalManifest = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          manifestFiles.get("recovery-manifest.json"),
+        ),
+      );
+    }
+  }
+  const validatedRecoveryManifest = originalManifest
+    ? validateClawHubRecoveryManifest(originalManifest)
+    : undefined;
+  if (validatedRecoveryManifest) {
     const recoveryTransactions = validatedRecoveryManifest.packages.map(
       ({ name, version, inventoryDigest, artifactName, artifactSha256, artifactSize }) => ({
         name,
@@ -568,7 +608,6 @@ export async function verifyClawHubPostpublish({
       throw new Error("ClawHub recovery manifest changed the authorized transaction roster.");
     }
   }
-  const childArtifacts = await listRunArtifacts(child.id, context);
   const evidence = {
     schemaVersion: 1,
     repository: REPOSITORY,
@@ -584,24 +623,31 @@ export async function verifyClawHubPostpublish({
     receiptArtifactId: receiptArtifact.id,
     receiptArtifactDigest: receiptArtifact.digest,
     packages: [],
+    publicationAttempts: (validatedRecoveryManifest?.packages ?? []).map(
+      ({ name, version, attemptId, publicationStatus }) => ({
+        name,
+        version,
+        attemptId,
+        publicationStatus,
+      }),
+    ),
     complete: false,
   };
   await mkdir(outputDir, { recursive: true });
   const save = () =>
     writeFile(join(outputDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
   await save();
-  if (!verifyPublication) {
-    if (!validatedRecoveryManifest) {
-      throw new Error("Recovery authorization preflight requires the sealed recovery manifest.");
-    }
+  if (!verifyPublication && validatedRecoveryManifest) {
     evidence.outcome = "authorized-recovery-roster";
     evidence.packages = validatedRecoveryManifest.packages;
     evidence.complete = true;
     await save();
     return evidence;
   }
+  // One scan worker turn (25 minutes) plus its five-minute scheduled admission.
+  const publicationDeadline = Date.now() + 30 * 60 * 1000;
   // Registry reads carry no GitHub credentials. Each package is checked against
-  // the exact bytes and inventory authorized by the successful parent.
+  // the exact bytes and inventory authorized by the sealed parent.
   for (let index = 0; index < transactions.packages.length; index += 8) {
     const results = await Promise.allSettled(
       transactions.packages.slice(index, index + 8).map(async (entry) => {
@@ -664,6 +710,21 @@ export async function verifyClawHubPostpublish({
           : entry.version.includes("-beta.")
             ? "beta"
             : "latest";
+        const original = validatedRecoveryManifest?.packages.find(
+          (item) => item.name === entry.name,
+        );
+        const observed = evidence.publicationAttempts.find((item) => item.name === entry.name);
+        // Historical successful publishers have no attempt roster. Their authenticated
+        // transaction bytes still verify, but cannot authorize waiting on an unknown attempt.
+        if (original) {
+          await waitForClawHubPublicVersion(original, {
+            deadline: publicationDeadline,
+            fetchImpl,
+            onState: (publication) => {
+              observed.publication = publication;
+            },
+          });
+        }
         const verified = await verifyPublishedClawHubPackage({
           expectedArtifactDir: artifactDir,
           packageName: entry.name,

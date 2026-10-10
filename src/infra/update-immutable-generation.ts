@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import fsSync, { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -14,10 +16,105 @@ import {
 } from "./package-update-activation-paths.js";
 import { isPathInside } from "./path-guards.js";
 import { collectGitRuntimeErrors, readGitRuntimeArtifactIdentity } from "./update-git-runtime.js";
+import type { ImmutableInstallRecord } from "./update-immutable-install-schema.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import type { CommandRunner } from "./update-runner-types.js";
 
+/** The activation owner and its diagnostics compare the same three contracts. */
+export async function readImmutableSchemaContracts(record: ImmutableInstallRecord) {
+  const read = async (root: string) =>
+    parsePackageOpenClawSchemaVersions(
+      JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")),
+    );
+  const current = await read(record.descriptor.current.path);
+  const candidate = record.prepared ? await read(record.prepared.path) : undefined;
+  const reasons: string[] = [];
+  if (!current) {
+    reasons.push("Current generation schema contract is missing or unreadable.");
+  }
+  if (!candidate) {
+    reasons.push("Prepared candidate schema contract is unknown.");
+  }
+  if (candidate && !isDeepStrictEqual(candidate, record.prepared?.schemaVersions)) {
+    reasons.push("Candidate schema contract does not match its preparation receipt.");
+  }
+  if (current && candidate) {
+    for (const kind of ["state", "agent"] as const) {
+      if (current[kind] !== candidate[kind]) {
+        reasons.push(
+          `Immutable activation does not support the ${kind} schema crossing ${current[kind]} → ${candidate[kind]}; offline migration is required before cutover.`,
+        );
+      }
+    }
+  }
+  return { current, candidate, reasons };
+}
+
 type GenerationEntry = { file: string; stat: Stats };
+
+/** Call only after the build cgroup is extinct; the private copy becomes root-owned. */
+export async function copyImmutableGeneration(source: string, destination: string): Promise<void> {
+  const parent = await fs.lstat(path.dirname(destination));
+  if (!parent.isDirectory() || parent.uid !== 0 || (parent.mode & 0o077) !== 0) {
+    throw new Error("Immutable materialization requires a root-private parent directory.");
+  }
+  await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
+  const pending = [destination];
+  for (const file of pending) {
+    const stat = await fs.lstat(file);
+    await fs.lchown(file, 0, 0);
+    if (stat.isDirectory()) {
+      for (const entry of await fs.readdir(file)) {
+        pending.push(path.join(file, entry));
+      }
+    }
+  }
+}
+
+async function assertImmutableGitConfig(root: string): Promise<void> {
+  // A build can edit Git configuration. Privileged verification must never run
+  // its clean filters, fsmonitor, includes, credential helpers or transport hooks.
+  const metadata = path.join(root, ".git");
+  const commonDirectory = await fs
+    .lstat(path.join(metadata, "commondir"))
+    .catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return null;
+      }
+      throw error;
+    });
+  if (!(await fs.lstat(metadata)).isDirectory() || commonDirectory) {
+    throw new Error("Immutable generation requires independent Git metadata.");
+  }
+  const config = await fs.readFile(path.join(root, ".git", "config"), "utf8");
+  let section = "";
+  const keys: Record<string, readonly string[]> = {
+    core: [
+      "repositoryformatversion",
+      "filemode",
+      "bare",
+      "logallrefupdates",
+      "ignorecase",
+      "precomposeunicode",
+    ],
+    remote: ["url", "fetch"],
+    branch: ["remote", "merge"],
+  };
+  for (const line of config.split(/\r?\n/u)) {
+    if (/^\s*(?:[#;].*)?$/u.test(line)) {
+      continue;
+    }
+    const header = /^\s*\[(core|remote|branch)(?:\s+"[^"\\]*")?\]\s*$/iu.exec(line);
+    if (header) {
+      section = header[1]!.toLowerCase();
+      continue;
+    }
+    const assignment = /^\s*([a-z]+)\s*=\s*[^\\]*$/iu.exec(line);
+    if (!assignment || !keys[section]?.includes(assignment[1]!.toLowerCase())) {
+      throw new Error("Immutable generation contains unsupported Git configuration.");
+    }
+  }
+}
 
 /** Preparation and verification must inspect their selected tree, not the caller's Git context. */
 export function resolveImmutableGenerationEnv(
@@ -147,10 +244,8 @@ export async function verifyImmutableGeneration(
   }
   const sealed = options.sealed !== false;
   await inspectGenerationTree(root, sealed);
+  await assertImmutableGitConfig(root);
   if (sealed) {
-    if (!(await fs.lstat(path.join(root, ".git"))).isDirectory()) {
-      throw new Error("A sealed generation requires its own Git metadata directory.");
-    }
     const alternates = await fs
       .readFile(path.join(root, ".git", "objects", "info", "alternates"), "utf8")
       .catch((error: unknown) => {

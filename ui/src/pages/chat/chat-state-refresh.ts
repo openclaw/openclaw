@@ -62,6 +62,8 @@ type ChatMetadataBinding = {
   scope: { agentId?: string; sessionKey: string };
   version: number;
   sessionFactsInvalidated: boolean;
+  // Only a reply received by this pane binding can suppress the informational hint.
+  requiredWorkerInferenceProfileId?: string;
   sessionRefreshPending?: boolean;
   sessionFactsRetryPending?: boolean;
   sessionFactsRequest?: { version: number; promise: Promise<void> };
@@ -71,6 +73,11 @@ type ChatMetadataBinding = {
   unsubscribe: () => void;
 };
 const metadataBindings = new WeakMap<ChatPageHost, ChatMetadataBinding>();
+
+export function readChatRequiredWorkerInferenceProfileId(host: ChatPageHost): string | undefined {
+  const binding = metadataBindings.get(host);
+  return binding?.isCurrent() ? binding.requiredWorkerInferenceProfileId : undefined;
+}
 
 export function retireChatMetadataRequests(host: ChatPageHost): void {
   metadataBindings.get(host)?.catalogRequest?.controller.abort();
@@ -175,6 +182,11 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
       (update) => {
         if (!binding.isCurrent()) {
           return;
+        }
+        binding.requiredWorkerInferenceProfileId =
+          update.type === "result" ? update.result.requiredWorkerInferenceProfileId : undefined;
+        if (update.type === "invalidated") {
+          host.requestUpdate?.();
         }
         if (update.type === "invalidated" || update.type === "loading") {
           binding.sessionRefreshPending =
