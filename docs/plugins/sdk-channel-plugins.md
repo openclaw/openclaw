@@ -574,6 +574,28 @@ a canonical URL alone is not proof of anonymous access.
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
+    Direct-message adapters can use `dispatchInboundDirectDm` from
+    `openclaw/plugin-sdk/channel-inbound`. Its optional synchronous
+    `assertAuthority: () => void` callback carries the channel owner's live
+    sender and lifecycle checks through asynchronous preparation. Capture the
+    selected account, peer identity, and policy before yielding; the callback
+    must check their current authority, not just compare a saved token. On
+    current hosts, it runs before session recording,
+    at metadata transaction and commit admission, and before agent dispatch.
+    Throw to refuse the pending effect. The callback is transient authority;
+    never serialize it or replace it with `inboundAccessAuthorized: true`.
+
+    The same callback is available on channel turn plans and prepared turns.
+    Direct session-recording callers can pass `assertAuthority`; the metadata
+    owner receives it as `assertCommitAllowed` and uses its existing writer
+    admission. Metadata failures keep their existing best-effort reporting,
+    while the subsequent dispatch check still refuses revoked authority.
+    Older hosts may ignore these additive fields: their presence is not
+    capability negotiation. The checks after host preparation and at metadata
+    commit require a host that implements this contract. Plugins must also
+    check live authority at effects they initiate directly, such as notices
+    and provider requests.
+
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,
     finish reading and validating its body and waiting for queued work, then call

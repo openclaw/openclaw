@@ -393,7 +393,7 @@ export async function withUpdatePreviewSignals<T>(
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
   progress: UpdateDisplayProgress,
-  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord>,
+  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord | undefined>,
 ): UpdateStepProgress & {
   deferLedgerWrites: () => void;
   flushLedgerWrites: () => Promise<void>;

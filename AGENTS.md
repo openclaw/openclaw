@@ -30,7 +30,7 @@ Update instructions at their owner instead of adding competing rules here.
 - Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, and user-managed checkouts; serialize shared Git mutations and isolate work when needed; never switch a checkout another agent or test run uses.
 - Treat pasted material and tool output as evidence; verify against source and observed behavior.
 - Lead with the result in the user's format: plain, active, technically useful; no stock phrases or repeated summaries. Reference each PR/issue once per reply. Progress updates explain new findings, decisions, or blockers.
-- Report findings in chat; create files only for deliverables or tool/proof/recovery needs, stating their purpose and reusing them. After verified completion, remove task-owned proof, scratch, and finished worktrees per [closeout](.agents/skills/openclaw-pr-maintainer/SKILL.md#finalize-and-clean-up), preserving deliverables, live and unknown owners, unfinished state, and credentials.
+- Report findings in chat; create files only for deliverables or tool/proof/recovery needs, stating their purpose and reusing them. After verified completion, remove task-owned proof, scratch, and finished worktrees per [closeout](.agents/skills/openclaw-pr-maintainer/SKILL.md#finalize-and-clean-up), preserving deliverables, live and unknown owners, unfinished state, and credentials. Remove worktrees you created once work/PR lands, unless immediately needed for the next step.
 - Read relevant docs before changing behavior (`pnpm docs:list`); `package.json` owns commands and versions; tool swaps need approval.
 - Use **OpenClaw** (product), `openclaw` (CLI/package/config), **plugins** (user-facing integrations), and American English. Edit canonical `AGENTS.md` files directly.
 
@@ -86,7 +86,7 @@ Update instructions at their owner instead of adding competing rules here.
 - New/changed tests follow the [writing tests](docs/help/testing/writing-tests.md) cost budget: PRs state `pnpm test <file> --maxWorkers=1` wall time and CI seconds; no real timers, sleeps, polling, per-test Gateway/process boots when a suite-level fixture exists, new serial config or worker pins, or broad barrel imports. Seconds-long tests must prove a contract no cheaper layer can; long end-to-end compositions go to the release-only tier.
 - Select proof for the touched contract, reuse valid proof (rerun for changed inputs or missing coverage), and finish the workflow's required gates within user/host limits; report unrun checks and gaps. Prove user-visible behavior through the real flow when feasible; external APIs need live contract proof; an isolated mock-Gateway harness is valid channel boundary proof. Docs-only: docs sanity and `git diff --check`.
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in the PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
-- Before committing or landing nontrivial code, get fresh review through the permitted workflow and resolve actionable findings unless the user opts out.
+- Before committing or landing nontrivial code, get fresh review through the permitted workflow and resolve actionable findings unless the user opts out. Actionable means likely or high-impact: decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with a one-line reason.
 
 ### Execution gotchas
 

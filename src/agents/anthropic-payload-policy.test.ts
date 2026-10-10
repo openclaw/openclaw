@@ -115,16 +115,20 @@ describe("anthropic payload policy", () => {
         {
           type: "compact_20260112",
           trigger: { type: "input_tokens", value: expectedThreshold },
+          instructions: expect.stringContaining("Do not call any tools"),
         },
       ],
     });
   });
 
-  it("keeps compaction opt-in and preserves authored context management", () => {
+  it("honors the compaction opt-out and preserves authored context management", () => {
     const disabledPolicy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
       contextWindow: 200_000,
       enableServerCompaction: true,
-      extraParams: {},
+      extraParams: { anthropicServerCompaction: false },
     });
     const disabledPayload = simpleTextPayload();
     applyAnthropicPayloadPolicyToParams(disabledPayload, disabledPolicy, new Set());
