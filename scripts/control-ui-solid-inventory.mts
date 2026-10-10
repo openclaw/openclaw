@@ -106,6 +106,155 @@ function isLitLoad(node: ts.Node): boolean {
   );
 }
 
+type LitReference = { kind: "namespace" } | { kind: "member"; name: string };
+type LitBinding = {
+  imported?: LitReference;
+  initializer?: ts.Expression;
+  property?: string;
+};
+
+// Sibling views may use the same local name for different Lit exports.
+function createLitNameResolver(tree: ts.SourceFile) {
+  const scopes = new WeakMap<ts.Node, Map<string, LitBinding>>();
+  const scopeFor = (node: ts.Node, functionOnly = false): ts.Node => {
+    for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+      if (
+        ts.isSourceFile(scope) ||
+        ts.isFunctionLikeDeclaration(scope) ||
+        ts.isClassStaticBlockDeclaration(scope)
+      )
+        return scope;
+      if (
+        !functionOnly &&
+        (ts.isBlock(scope) ||
+          ts.isModuleBlock(scope) ||
+          ts.isCaseBlock(scope) ||
+          ts.isCatchClause(scope) ||
+          ts.isForStatement(scope) ||
+          ts.isForInStatement(scope) ||
+          ts.isForOfStatement(scope))
+      )
+        return scope;
+    }
+    return tree;
+  };
+  const bind = (scope: ts.Node, name: string, binding: LitBinding) => {
+    let entries = scopes.get(scope);
+    if (!entries) {
+      entries = new Map();
+      scopes.set(scope, entries);
+    }
+    entries.set(name, binding);
+  };
+  const bindPattern = (scope: ts.Node, name: ts.BindingName, binding: LitBinding): void => {
+    if (ts.isIdentifier(name)) {
+      bind(scope, name.text, binding);
+      return;
+    }
+    for (const element of name.elements) {
+      if (!ts.isBindingElement(element)) continue;
+      const property =
+        ts.isObjectBindingPattern(name) && !element.dotDotDotToken
+          ? nameOf(element.propertyName ?? element.name)
+          : undefined;
+      bindPattern(
+        scope,
+        element.name,
+        ts.isObjectBindingPattern(name) ? { ...binding, property } : {},
+      );
+    }
+  };
+  const collect = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      const lit = isLitModule(node.moduleSpecifier);
+      const clause = node.importClause;
+      if (clause?.name) bind(scopeFor(node), clause.name.text, {});
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings))
+        bind(scopeFor(node), bindings.name.text, lit ? { imported: { kind: "namespace" } } : {});
+      if (bindings && ts.isNamedImports(bindings))
+        for (const specifier of bindings.elements)
+          bind(
+            scopeFor(node),
+            specifier.name.text,
+            lit
+              ? {
+                  imported: {
+                    kind: "member",
+                    name: (specifier.propertyName ?? specifier.name).text,
+                  },
+                }
+              : {},
+          );
+    }
+    if (ts.isImportEqualsDeclaration(node))
+      bind(
+        scopeFor(node),
+        node.name.text,
+        ts.isExternalModuleReference(node.moduleReference) &&
+          isLitModule(node.moduleReference.expression)
+          ? { imported: { kind: "namespace" } }
+          : {},
+      );
+    if (ts.isVariableDeclaration(node)) {
+      const isVar =
+        ts.isVariableDeclarationList(node.parent) &&
+        !(node.parent.flags & ts.NodeFlags.BlockScoped);
+      bindPattern(scopeFor(node, isVar), node.name, { initializer: node.initializer });
+    }
+    if (ts.isFunctionLikeDeclaration(node))
+      for (const parameter of node.parameters)
+        bindPattern(node, parameter.name, { initializer: parameter.initializer });
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name)
+      bind(scopeFor(node), node.name.text, {});
+    if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name)
+      bind(node, node.name.text, {});
+    node.forEachChild(collect);
+  };
+  collect(tree);
+  const lookup = (node: ts.Identifier): LitBinding | undefined => {
+    for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+      const binding = scopes.get(scope)?.get(node.text);
+      if (binding) return binding;
+    }
+    return undefined;
+  };
+  const resolve = (node: ts.Node, seen = new Set<LitBinding>()): LitReference | undefined => {
+    node = unwrap(node);
+    if (ts.isAwaitExpression(node)) return resolve(node.expression, seen);
+    if (isLitLoad(node)) return { kind: "namespace" };
+    if (ts.isIdentifier(node)) {
+      const binding = lookup(node);
+      if (!binding || seen.has(binding)) return undefined;
+      if (binding.imported) return binding.imported;
+      if (!binding.initializer) return undefined;
+      seen.add(binding);
+      const reference = resolve(binding.initializer, seen);
+      return binding.property
+        ? reference?.kind === "namespace"
+          ? { kind: "member", name: binding.property }
+          : undefined
+        : reference;
+    }
+    if (ts.isPropertyAccessExpression(node) && resolve(node.expression, seen)?.kind === "namespace")
+      return { kind: "member", name: node.name.text };
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      resolve(node.expression, seen)?.kind === "namespace"
+    ) {
+      const argument = unwrap(node.argumentExpression);
+      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))
+        return { kind: "member", name: argument.text };
+    }
+    return undefined;
+  };
+  return (node: ts.Node) => {
+    const reference = resolve(node);
+    return reference?.kind === "member" ? reference.name : nameOf(node);
+  };
+}
+
 export function countMigrationSources(root: string, sources: ReadonlyMap<string, string>) {
   using parser = createNativeTypeScriptParser({ cwd: root });
   const result = new Map<string, MigrationMetrics>();
@@ -121,68 +270,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
       );
     }
     const metrics = emptyMetrics();
-    const aliases = new Map<string, string>();
-    const namespaces = new Set<string>();
-    for (const statement of tree.statements) {
-      if (!ts.isImportDeclaration(statement) || !isLitModule(statement.moduleSpecifier)) continue;
-      const bindings = statement.importClause?.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
-      if (bindings && ts.isNamedImports(bindings)) {
-        for (const binding of bindings.elements)
-          aliases.set(binding.name.text, (binding.propertyName ?? binding.name).text);
-      }
-    }
-    const canonicalName = (node: ts.Node) => {
-      const expression = unwrap(node);
-      const name = nameOf(expression);
-      return ts.isIdentifier(expression) && name ? (aliases.get(name) ?? name) : name;
-    };
-    const isLitNamespace = (node: ts.Node): boolean => {
-      const expression = unwrap(node);
-      return (
-        isLitLoad(expression) || (ts.isIdentifier(expression) && namespaces.has(expression.text))
-      );
-    };
-    const collectBindings = (node: ts.Node): void => {
-      if (
-        ts.isImportEqualsDeclaration(node) &&
-        ts.isExternalModuleReference(node.moduleReference) &&
-        isLitModule(node.moduleReference.expression)
-      )
-        namespaces.add(node.name.text);
-      if (ts.isVariableDeclaration(node) && node.initializer) {
-        const initializer = unwrap(node.initializer);
-        if (isLitNamespace(initializer)) {
-          if (ts.isIdentifier(node.name)) namespaces.add(node.name.text);
-          if (ts.isObjectBindingPattern(node.name)) {
-            for (const binding of node.name.elements) {
-              if (!ts.isIdentifier(binding.name)) continue;
-              if (binding.dotDotDotToken) {
-                namespaces.add(binding.name.text);
-                continue;
-              }
-              const imported = nameOf(binding.propertyName ?? binding.name);
-              if (imported) aliases.set(binding.name.text, imported);
-            }
-          }
-        } else if (ts.isIdentifier(node.name)) {
-          if (ts.isIdentifier(initializer) && aliases.has(initializer.text))
-            aliases.set(node.name.text, aliases.get(initializer.text)!);
-          if (ts.isPropertyAccessExpression(initializer) && isLitNamespace(initializer.expression))
-            aliases.set(node.name.text, initializer.name.text);
-          if (
-            ts.isElementAccessExpression(initializer) &&
-            isLitNamespace(initializer.expression) &&
-            initializer.argumentExpression
-          ) {
-            const imported = nameOf(initializer.argumentExpression);
-            if (imported) aliases.set(node.name.text, imported);
-          }
-        }
-      }
-      node.forEachChild(collectBindings);
-    };
-    collectBindings(tree);
+    const canonicalName = createLitNameResolver(tree);
     const visit = (node: ts.Node): void => {
       // Count module references, including side-effect imports, exports, import types,
       // and dynamic imports. Comments and ordinary strings never become imports.
