@@ -11,6 +11,7 @@ import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { VERSION } from "../../version.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
@@ -18,6 +19,12 @@ import * as packageDestination from "./update-command-package-destination.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
+
+// Channel inference belongs to the synthetic installed driver, not the candidate release.
+vi.mock("../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../version.js")>()),
+  VERSION: "2026.9.3",
+}));
 
 export const targetMetadata = {
   target: "2026.9.2",
@@ -39,7 +46,7 @@ export function installFreshUpdateFixture() {
     fs.mkdirSync(fixture.root);
     fs.writeFileSync(
       path.join(fixture.root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+      JSON.stringify({ name: "openclaw", version: VERSION }),
     );
     vi.stubEnv("HOME", home);
     vi.stubEnv("OPENCLAW_PROFILE", undefined);
