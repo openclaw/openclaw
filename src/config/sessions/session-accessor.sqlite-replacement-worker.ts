@@ -543,7 +543,7 @@ export async function runSessionEntryWorkerMutation<T>(
         throw new Error("Session entry mutation commit omitted its publication keys");
       }
       admitted = { admission, retained };
-      // This command's native kernel supplies the typed publication, not external input.
+      // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
       publication.begin(
         committed.changedKeys,
