@@ -5,6 +5,35 @@ import { renderSettingsSegmented } from "./settings-ui.ts";
 import "./settings-save-indicator.ts";
 import startupStyles from "../styles.css?inline";
 
+function drawRadioGroups(
+  container: Element,
+  { value = "first", busy = false, disabled = false, expanded = false } = {},
+  onChange = vi.fn(),
+) {
+  const options = [
+    { value: "first", label: "First" },
+    { value: "second", label: "Second" },
+    { value: "locked", label: "Locked", disabled: true },
+  ];
+  render(
+    html`<fieldset ?disabled=${busy}>
+      ${renderSettingsSegmented({
+        value,
+        disabled,
+        ariaLabel: "Schedule",
+        options: expanded ? [...options, { value: "third", label: "Third" }] : options,
+        onChange,
+      })}${renderSettingsSegmented({
+        value: "second",
+        options,
+        ariaLabel: "Other schedule",
+        onChange,
+      })}
+    </fieldset>`,
+    container,
+  );
+}
+
 it("animates Applying before lazy settings styles load", async () => {
   const container = document.createElement("div");
   // Keep lazy route keyframes from masking a missing startup animation owner.
@@ -56,24 +85,11 @@ it("restores segmented controls after fieldset busy state while preserving disab
   document.body.append(container);
   const onChange = vi.fn();
   const draw = (busy: boolean, disabled = false) =>
-    render(
-      html`<fieldset ?disabled=${busy}>
-        ${renderSettingsSegmented({
-          value: "first",
-          disabled,
-          ariaLabel: "Schedule",
-          options: [
-            { value: "first", label: "First" },
-            { value: "second", label: "Second" },
-            { value: "locked", label: "Locked", disabled: true },
-          ],
-          onChange,
-        })}
-      </fieldset>`,
-      container,
-    );
+    drawRadioGroups(container, { busy, disabled }, onChange);
   const disabledStates = () =>
-    [...container.querySelectorAll("input[type=radio]")].map((radio) => radio.matches(":disabled"));
+    [...container.querySelector('[role="radiogroup"]')!.querySelectorAll("input[type=radio]")].map(
+      (radio) => radio.matches(":disabled"),
+    );
   try {
     draw(false);
     expect(disabledStates()).toEqual([false, false, true]);
@@ -96,6 +112,29 @@ it("restores segmented controls after fieldset busy state while preserving disab
     expect(onChange).not.toHaveBeenCalled();
     draw(false);
     expect(disabledStates()).toEqual([false, false, true]);
+  } finally {
+    render(null, container);
+    container.remove();
+  }
+});
+
+it("keeps externally updated radio selections checked and independent as options change", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const draw = (value: string, expanded = false) => drawRadioGroups(container, { value, expanded });
+  const selected = () =>
+    [...container.querySelectorAll('[role="radiogroup"]')].map((group) =>
+      [...group.querySelectorAll<HTMLInputElement>("input:checked")].map((input) => input.value),
+    );
+  try {
+    draw("second");
+    expect(selected()).toEqual([["second"], ["second"]]);
+    draw("first");
+    expect(selected()).toEqual([["first"], ["second"]]);
+    draw("third", true);
+    expect(selected()).toEqual([["third"], ["second"]]);
+    draw("second", true);
+    expect(selected()).toEqual([["second"], ["second"]]);
   } finally {
     render(null, container);
     container.remove();

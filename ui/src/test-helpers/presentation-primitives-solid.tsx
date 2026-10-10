@@ -39,7 +39,10 @@ function Card(props: { label: string; kind?: string; children: JSX.Element }) {
     <section class="presentation-fixture__card" data-example={props.label}>
       <h2>{props.label}</h2>
       <div
-        class={`presentation-fixture__body${props.kind ? ` presentation-fixture__body--${props.kind}` : ""}`}
+        class={[
+          "presentation-fixture__body",
+          { [`presentation-fixture__body--${props.kind}`]: Boolean(props.kind) },
+        ]}
       >
         {props.children}
       </div>
@@ -282,13 +285,13 @@ function Feedback() {
           <PanelIconButton
             label="Refresh panel"
             icon={<Icon name="refresh" />}
-            className="btn btn--icon"
+            class="btn btn--icon"
             onClick={() => recordAction("refresh")}
           />
           <PanelIconButton
             label="Busy panel"
             icon={<Icon name="refresh" />}
-            className="btn btn--icon"
+            class="btn btn--icon"
             onClick={() => recordAction("unexpected")}
             disabled
             busy

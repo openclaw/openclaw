@@ -4,7 +4,11 @@ import "./presentation-primitives-fixture.css";
 
 const query = new URLSearchParams(location.search);
 export const group = query.get("group") ?? "settings";
-document.documentElement.dataset.theme = query.get("theme") === "light" ? "light" : "dark";
+const theme = query.get("theme") === "light" ? "light" : "dark";
+document.documentElement.dataset.theme = theme;
+document.documentElement.dataset.themeMode = theme;
+document.documentElement.classList.add(`wa-${theme}`);
+document.documentElement.style.colorScheme = theme;
 document.documentElement.dir = query.get("direction") === "rtl" ? "rtl" : "ltr";
 export const root = document.createElement("main");
 root.className = "presentation-fixture";
@@ -13,7 +17,9 @@ document.body.append(root);
 
 export function recordAction(action: string) {
   const output = document.querySelector<HTMLOutputElement>("#fixture-outcome");
-  if (output) output.value = action;
+  if (output) {
+    output.value = action;
+  }
 }
 
 export function finishFixture() {

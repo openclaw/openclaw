@@ -56,6 +56,29 @@ openclaw-panel-loading-skeleton {
     box-sizing: border-box;
   }
 
+  /* Unported shadow-root parents cannot inherit the shared shimmer styles. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--skeleton-base, var(--bg-muted));
+    border-radius: var(--radius-md);
+  }
+
+  .skeleton::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 25%,
+      var(--skeleton-highlight, var(--bg-hover)) 50%,
+      transparent 75%
+    );
+    content: "";
+    transform: translateX(-100%);
+    animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+    will-change: transform;
+  }
+
   .line {
     height: 10px;
   }
@@ -237,6 +260,15 @@ openclaw-panel-loading-skeleton {
     padding: 12px;
   }
 
+  @keyframes shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+
   @keyframes panel-skeleton-spin {
     to {
       transform: rotate(360deg);
@@ -244,7 +276,8 @@ openclaw-panel-loading-skeleton {
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .desktop-spinner {
+    .desktop-spinner,
+    .skeleton::after {
       animation: none;
     }
   }

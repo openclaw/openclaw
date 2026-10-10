@@ -8,14 +8,14 @@ openclaw-panel-empty-state {
   flex: 1 1 auto;
 
   .empty-state {
-    display: flex;
+    display: grid;
     box-sizing: border-box;
     width: 100%;
     min-height: 0;
     flex: 1 1 auto;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    justify-items: center;
     padding: 24px;
     color: var(--muted);
     text-align: center;
@@ -23,22 +23,26 @@ openclaw-panel-empty-state {
   }
 
   .empty-state__icon {
-    display: inline-flex;
+    display: contents;
+  }
+
+  .empty-state::before,
+  .empty-state__icon > :not([slot="action"]) {
+    grid-area: 1 / 1;
     width: 32px;
     height: 32px;
-    align-items: center;
-    justify-content: center;
     margin-bottom: 18px;
     color: var(--muted);
 
-    > svg {
-      width: 32px;
-      height: 32px;
-      stroke-width: 1.5px;
-    }
+    stroke-width: 1.5px;
+  }
+
+  .empty-state::before {
+    content: "";
   }
 
   .empty-state__title {
+    grid-area: 2 / 1;
     color: var(--text);
     font-size: calc(16px * var(--control-ui-text-scale, 1));
     font-weight: 500;
@@ -46,6 +50,7 @@ openclaw-panel-empty-state {
   }
 
   .empty-state__description {
+    grid-area: 3 / 1;
     max-width: 320px;
     margin: 8px 0 0;
     color: var(--muted);
@@ -53,7 +58,8 @@ openclaw-panel-empty-state {
     line-height: 1.45;
   }
 
-  .empty-state > [slot="action"] {
+  .empty-state__icon > [slot="action"] {
+    grid-area: 4 / 1;
     margin-top: 16px;
   }
 }

@@ -5,6 +5,16 @@ import { SettingsSegmented, SettingsToggle, SettingsToggleRow } from "./settings
 
 afterEach(cleanup);
 
+it("uses the visible title to name a toggle without moving caller-owned DOM", () => {
+  const title = document.createElement("span");
+  title.textContent = "Rich title";
+  const view = render(() => (
+    <SettingsToggleRow title={title} checked={false} onChange={() => {}} />
+  ));
+  expect(title.parentElement).toBe(view.container.querySelector(".settings-row__title"));
+  expect(view.getByRole("switch", { name: "Rich title" })).toBeTruthy();
+});
+
 it("runs the current standalone activation callback before proposing the change", () => {
   const calls: string[] = [];
   const [updated, setUpdated] = createSignal(false);

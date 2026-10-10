@@ -26,16 +26,28 @@ function Key(props: { value: string }) {
       {(key) => (
         <span
           class="kbd__symbol"
-          style="position:relative;display:inline-block;width:1em;height:1em"
+          style={{ position: "relative", display: "inline-block", width: "1em", height: "1em" }}
         >
-          <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap">
+          <span
+            style={{
+              position: "absolute",
+              width: "1px",
+              height: "1px",
+              overflow: "hidden",
+              "clip-path": "inset(50%)",
+              "white-space": "nowrap",
+            }}
+          >
             {props.value}
           </span>
           <span
             aria-hidden="true"
-            style="position:absolute;inset:0;display:flex;align-items:center"
+            style={{ position: "absolute", inset: 0, display: "flex", "align-items": "center" }}
           >
-            <KeyboardIcon symbol={key()} style="width:1em;height:1em;stroke-width:2.3" />
+            <KeyboardIcon
+              symbol={key()}
+              style={{ width: "1em", height: "1em", "stroke-width": "2.3" }}
+            />
           </span>
         </span>
       )}
@@ -51,8 +63,8 @@ export function Kbd(props: KbdOptions & { keys: string | number | readonly strin
       : props.keys;
   return (
     <kbd
-      class={`shortcut-kbd${props.className ? ` ${props.className}` : ""}`}
-      style={props.inline ? "font:inherit" : undefined}
+      class={["shortcut-kbd", props.className]}
+      style={props.inline ? { font: "inherit" } : undefined}
       slot={props.slot}
       aria-hidden={props.ariaHidden ? "true" : undefined}
       hidden={props.hidden}

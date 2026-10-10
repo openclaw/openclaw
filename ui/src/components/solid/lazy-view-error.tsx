@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -109,7 +109,7 @@ export function LazyViewError(props: {
   error: unknown;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
-  render?: () => JSX.Element;
+  render?: () => SolidJSX.Element;
   stale?: boolean;
   subtitle?: string;
 }) {
@@ -143,7 +143,7 @@ export function LazyViewError(props: {
 }
 
 export function PanelErrorState(props: {
-  actions?: JSX.Element;
+  actions?: SolidJSX.Element;
   className?: string;
   detail?: string;
   inline?: boolean;
@@ -154,7 +154,11 @@ export function PanelErrorState(props: {
 }) {
   return (
     <div
-      class={`lazy-view-error${props.inline ? " lazy-view-error--inline" : ""}${props.stale ? " lazy-view-error--stale" : ""}${props.className ? ` ${props.className}` : ""}`}
+      class={[
+        "lazy-view-error",
+        props.className,
+        { "lazy-view-error--inline": props.inline, "lazy-view-error--stale": props.stale },
+      ]}
       role={props.role ?? "alert"}
     >
       <div class="lazy-view-error__icon" aria-hidden="true">

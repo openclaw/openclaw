@@ -15,7 +15,7 @@ export function PanelRefreshStatus(props: {
     <>
       {!props.status.awaitingGateway && (error() || props.status.stale) ? (
         <div
-          class={`callout ${error() ? "danger" : "warn"}${props.className ? ` ${props.className}` : ""}`}
+          class={["callout", error() ? "danger" : "warn", props.className]}
           role={error() ? "alert" : "status"}
         >
           {error() ? <span>{error()}</span> : undefined}

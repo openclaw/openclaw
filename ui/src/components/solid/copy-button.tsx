@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { For } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { handleCopyButton } from "../copy-button-state.ts";
@@ -16,7 +16,7 @@ declare module "@solidjs/web" {
 
 export type CopyButtonProps = { text: string; idleLabel?: string; bare?: boolean };
 
-export function CopyButton(props: CopyButtonProps): JSX.Element {
+export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
   const label = () => props.idleLabel ?? t("chat.actions.copyAsMarkdown");
   return (
     <For each={[props.text]}>

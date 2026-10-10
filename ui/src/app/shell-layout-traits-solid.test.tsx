@@ -11,6 +11,17 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+it("renders standalone settings without a shell layout owner", () => {
+  const view = render(() => (
+    <SettingsWorkspace>
+      <SettingsPage>
+        <SettingsPageHeader title="Standalone settings" />
+      </SettingsPage>
+    </SettingsWorkspace>
+  ));
+  expect(view.getByRole("heading", { name: "Standalone settings" })).toBeTruthy();
+});
+
 it("publishes settings layout before descendants render and measure updates", () => {
   const content = document.createElement("main");
   content.className = "content";

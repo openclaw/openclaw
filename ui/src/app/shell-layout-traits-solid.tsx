@@ -3,9 +3,9 @@ import { createContext, createRenderEffect, onCleanup, untrack, useContext } fro
 import { ShellLayoutOwner, type ShellLayoutTraits } from "./shell-layout-owner.ts";
 
 /** The host is the connected route mount, not its still-detached rendered children. */
-export const ShellLayoutProvider = createContext<
-  { owner: ShellLayoutOwner; host: Element } | undefined
->(undefined);
+export const ShellLayoutProvider = createContext<{ owner: ShellLayoutOwner; host: Element } | null>(
+  null,
+);
 
 export function ShellLayoutBoundary(props: { traits: ShellLayoutTraits; children: JSX.Element }) {
   const scope = useContext(ShellLayoutProvider);

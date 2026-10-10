@@ -4,7 +4,7 @@ export type PanelIconButtonProps = {
   label: string;
   icon: JSX.Element;
   onClick: () => void;
-  className: string;
+  class: string;
   title?: string;
   disabled?: boolean;
   busy?: boolean;
@@ -14,7 +14,7 @@ export type PanelIconButtonProps = {
 export function PanelIconButton(props: PanelIconButtonProps) {
   return (
     <button
-      class={props.className}
+      class={props.class}
       type="button"
       data-new-tab-action={props.newTab ? "" : undefined}
       title={props.title ?? props.label}

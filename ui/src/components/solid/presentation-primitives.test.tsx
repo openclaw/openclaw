@@ -169,7 +169,7 @@ describe("Solid presentation primitives", () => {
         label="Open file"
         icon={<svg aria-hidden="true" />}
         onClick={busy() ? original : click}
-        className="panel-action"
+        class="panel-action"
         disabled={busy()}
         busy={busy()}
         newTab

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
-import "../../styles/panel-loading-skeleton.css";
+import { createMemo, createRenderEffect, For } from "solid-js";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
 export type PanelLoadingSkeletonVariant =
   | "board"
@@ -21,21 +22,12 @@ export type PanelLoadingSkeletonProps = {
   overlay?: boolean;
 };
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-panel-loading-skeleton": HTMLAttributes<HTMLElement> & {
-        compact?: string;
-        overlay?: string;
-      };
-    }
-  }
-}
+export type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
 
 type LineWidth = "short" | "medium" | "long";
 
 function Line(props: { width?: LineWidth }) {
-  return <div class={`skeleton line ${props.width ?? "long"}`} />;
+  return <div class={["skeleton line", props.width ?? "long"]} />;
 }
 
 function Rows() {
@@ -72,8 +64,9 @@ function Widget(props: { columns: number; rows: number; lines: LineWidth[] }) {
 }
 
 export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
+  const variant = createMemo(() => props.variant ?? "files");
   const content = (): JSX.Element => {
-    switch (props.variant ?? "files") {
+    switch (variant()) {
       case "board":
         return (
           <>
@@ -208,17 +201,31 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
   return <>{content()}</>;
 }
 
-export function PanelLoadingSkeleton(props: PanelLoadingSkeletonProps) {
-  return (
-    <openclaw-panel-loading-skeleton
-      data-panel-skeleton={props.variant ?? "files"}
-      compact={props.compact ? "" : undefined}
-      overlay={props.overlay ? "" : undefined}
-      role="status"
-      aria-busy="true"
-      aria-label={props.label}
-    >
-      <PanelLoadingSkeletonContent {...props} />
-    </openclaw-panel-loading-skeleton>
-  );
-}
+export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>(
+  "openclaw-panel-loading-skeleton",
+  (props, host) => {
+    host.setAttribute("role", "status");
+    host.setAttribute("aria-busy", "true");
+    createRenderEffect(
+      () => ({ variant: props.variant ?? "files", label: props.label }),
+      (value) => {
+        host.setAttribute("data-panel-skeleton", value.variant);
+        host.setAttribute("aria-label", value.label);
+      },
+    );
+    return (
+      <>
+        <style>{panelStyles}</style>
+        <PanelLoadingSkeletonContent {...props} />
+      </>
+    );
+  },
+  {
+    properties: {
+      variant: { default: "files", attribute: "data-panel-skeleton", reflect: true },
+      label: { default: "" },
+      compact: { default: false, type: Boolean, reflect: true },
+      overlay: { default: false, type: Boolean, reflect: true },
+    },
+  },
+);

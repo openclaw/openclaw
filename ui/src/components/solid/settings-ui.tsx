@@ -206,10 +206,15 @@ export function SettingsGroup(props: {
   );
 }
 
-function SettingsRowText(props: Pick<SettingsRowProps, "title" | "description" | "carapace">) {
+function SettingsRowText(
+  props: Pick<SettingsRowProps, "title" | "description" | "carapace"> & { id?: string },
+) {
   return (
     <div class={["settings-row__text", { "oc-settings-row-content": props.carapace }]}>
-      <span class={["settings-row__title", { "oc-settings-row-title": props.carapace }]}>
+      <span
+        id={props.id}
+        class={["settings-row__title", { "oc-settings-row-title": props.carapace }]}
+      >
         {props.title}
       </span>
       <Show when={props.description}>
@@ -265,7 +270,9 @@ export function SettingsNavRow(
   );
 }
 
-function ToggleControl(props: SettingsToggleControl & { label: JSX.Element }) {
+function ToggleControl(
+  props: SettingsToggleControl & { label?: JSX.Element; labelledBy?: string },
+) {
   const labelId = nextSettingsRadioName();
   return (
     <span class="settings-toggle">
@@ -275,15 +282,17 @@ function ToggleControl(props: SettingsToggleControl & { label: JSX.Element }) {
         role="switch"
         prop:checked={props.checked}
         disabled={props.disabled}
-        aria-labelledby={labelId}
+        aria-labelledby={props.labelledBy ?? labelId}
         onClick={(event) => settingsSwitchClick(event, props)}
         onChange={(event) => settingsSwitchChange(event, props)}
         onKeyDown={(event) => settingsSwitchKeyDown(event, props)}
       />
       <span class="settings-toggle__control" aria-hidden="true" />
-      <span id={labelId} class="settings-control__sr-label">
-        {props.label}
-      </span>
+      <Show when={!props.labelledBy}>
+        <span id={labelId} class="settings-control__sr-label">
+          {props.label}
+        </span>
+      </Show>
     </span>
   );
 }
@@ -308,20 +317,22 @@ export function SettingsToggleRow(
     description?: JSX.Element;
   },
 ) {
+  const titleId = nextSettingsRadioName();
   return (
     <div
       class="settings-row settings-row--toggle"
       onClick={(event) => settingsToggleRowClick(event, props)}
     >
       {props.icon}
-      <SettingsRowText title={props.title} description={props.description} />
+      <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
         <ToggleControl
           checked={props.checked}
           disabled={props.disabled}
           onChange={(checked) => props.onChange(checked)}
           onAct={(checked) => props.onAct?.(checked)}
-          label={props.ariaLabel ?? props.title}
+          label={props.ariaLabel}
+          labelledBy={props.ariaLabel == null ? titleId : undefined}
         />
       </div>
     </div>

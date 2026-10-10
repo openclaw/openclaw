@@ -23,7 +23,9 @@ const suite = createControlUiE2eSuite({
 });
 
 async function captureGroup(page: Page, name: string) {
-  if (!capture) return;
+  if (!capture) {
+    return;
+  }
   const surface = page.locator(".presentation-fixture");
   // Keep the responsive width while fitting the complete, bounded gallery group.
   // The loading primitives cap their viewport-dependent minimum at 360px.
@@ -48,30 +50,46 @@ async function assertControlledInputs(page: Page) {
   await expect.poll(() => accepted.isChecked()).toBe(true);
   expect(await page.locator("#fixture-outcome").textContent()).toBe("toggle:true");
   const rejected = page.getByRole("switch", { name: "Rejected toggle", exact: true });
-  await rejected.click();
+  await page.locator(".settings-toggle").filter({ has: rejected }).click();
   expect(await rejected.isChecked()).toBe(false);
   expect(await page.locator("#fixture-outcome").textContent()).toBe("toggle:rejected");
   expect(
     await page.getByRole("switch", { name: "Disabled toggle", exact: true }).isDisabled(),
   ).toBe(true);
 
-  const quality = page.getByRole("radiogroup", { name: "Quality", exact: true });
-  await quality.getByRole("radio", { name: "Fast", exact: true }).click();
+  const quality = page
+    .locator(".settings-row")
+    .filter({
+      has: page.locator(".settings-row__title").filter({ hasText: /^Quality$/ }),
+    })
+    .locator(".settings-segmented");
+  expect(await page.getByRole("radiogroup", { name: "Quality", exact: true }).count()).toBe(1);
+  await quality.locator(".settings-segmented__btn").filter({ hasText: "Fast" }).click();
   await expect
     .poll(() => quality.getByRole("radio", { name: "Fast", exact: true }).isChecked())
     .toBe(true);
   expect(await quality.getByRole("radio", { name: "Unavailable", exact: true }).isDisabled()).toBe(
     true,
   );
-  const rejectedQuality = page.getByRole("radiogroup", { name: "Rejected quality", exact: true });
-  await rejectedQuality.getByRole("radio", { name: "Fast", exact: true }).click();
+  const rejectedQuality = page
+    .locator(".settings-row")
+    .filter({
+      has: page.locator(".settings-row__title").filter({ hasText: /^Rejected quality$/ }),
+    })
+    .locator(".settings-segmented");
+  await rejectedQuality.locator(".settings-segmented__btn").filter({ hasText: "Fast" }).click();
   expect(
     await rejectedQuality.getByRole("radio", { name: "Balanced", exact: true }).isChecked(),
   ).toBe(true);
   expect(await rejectedQuality.getByRole("radio", { name: "Fast", exact: true }).isChecked()).toBe(
     false,
   );
-  const disabledQuality = page.getByRole("radiogroup", { name: "Disabled quality", exact: true });
+  const disabledQuality = page
+    .locator(".settings-row")
+    .filter({
+      has: page.locator(".settings-row__title").filter({ hasText: /^Disabled quality$/ }),
+    })
+    .locator(".settings-segmented");
   expect(await disabledQuality.getByRole("radio", { name: "Fast", exact: true }).isDisabled()).toBe(
     true,
   );
@@ -118,6 +136,41 @@ async function assertFeedback(page: Page) {
   await expect.poll(() => failedCopy.getAttribute("data-copy-state")).toBe("error");
 }
 
+async function assertShadowParentStyles(page: Page, tag: string, selector: string) {
+  const styles = await page
+    .locator(tag)
+    .first()
+    .evaluate(async (host, childSelector) => {
+      const parent = host.parentNode!;
+      const next = host.nextSibling;
+      const read = () => {
+        const child = (host.shadowRoot ?? host).querySelector(childSelector)!;
+        const style = getComputedStyle(child);
+        return {
+          background: style.backgroundColor,
+          color: style.color,
+          fontSize: style.fontSize,
+          height: style.height,
+          radius: style.borderRadius,
+          overflow: style.overflow,
+        };
+      };
+      const before = read();
+      const container = document.createElement("div");
+      container.style.width = `${host.getBoundingClientRect().width}px`;
+      parent.insertBefore(container, host);
+      container.attachShadow({ mode: "open" }).append(host);
+      try {
+        await (host as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+        return { before, after: read() };
+      } finally {
+        parent.insertBefore(host, next);
+        container.remove();
+      }
+    }, selector);
+  expect(styles.after).toEqual(styles.before);
+}
+
 suite.define(() => {
   for (const renderer of ["Lit", "Solid"]) {
     for (const theme of ["light", "dark"] as const) {
@@ -149,6 +202,11 @@ suite.define(() => {
                 );
                 const surface = page.locator('.presentation-fixture[data-ready="true"]');
                 await surface.waitFor();
+                const brightness = await surface.evaluate((element) => {
+                  const channels = getComputedStyle(element).backgroundColor.match(/\d+/g)!;
+                  return channels.slice(0, 3).reduce((sum, value) => sum + Number(value), 0) / 3;
+                });
+                expect(theme === "light" ? brightness > 200 : brightness < 70).toBe(true);
                 expect(await surface.locator("h1").first().textContent()).toBe(group);
                 if (group === "settings") {
                   expect(
@@ -199,6 +257,17 @@ suite.define(() => {
                 } else if (group === "feedback") {
                   await assertFeedback(page);
                   await captureGroup(page, `${renderer}-${theme}-${viewport.name}-feedback-active`);
+                  await assertShadowParentStyles(
+                    page,
+                    "openclaw-panel-empty-state",
+                    ".empty-state__title",
+                  );
+                } else if (group === "skeleton-content") {
+                  await assertShadowParentStyles(
+                    page,
+                    "openclaw-panel-loading-skeleton",
+                    ".skeleton.line",
+                  );
                 }
               }
             },

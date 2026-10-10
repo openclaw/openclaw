@@ -3,13 +3,12 @@
 // card/pill markup. Styles live in ui/src/styles/settings.css and the shared
 // ui/src/styles/settings-controls.css; rules in ui/docs/design-system/settings-design.md.
 import { html, nothing, type TemplateResult } from "lit";
+import { Directive, directive } from "lit/directive.js";
 import { live } from "lit/directives/live.js";
 import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
-import "./tooltip.ts";
-import "../styles/settings-native-controls.css";
 import {
   nextSettingsRadioName,
   settingsRadioChange,
@@ -22,6 +21,8 @@ import {
   type SettingsSegmentedProps,
   type SettingsToggleControl,
 } from "./settings-controls.ts";
+import "./tooltip.ts";
+import "../styles/settings-native-controls.css";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
@@ -334,6 +335,47 @@ export function renderSettingsDefaultDescription(value: string, overridden: bool
   return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
+class SettingsRadioGroupDirective extends Directive {
+  // Renaming a checked radio can uncheck a sibling before Lit updates its value.
+  private readonly name = nextSettingsRadioName();
+
+  render<T extends string>(props: SettingsSegmentedProps<T, unknown>) {
+    return html`<div
+      class="settings-segmented ${props.className ?? ""}"
+      role="radiogroup"
+      aria-label=${props.ariaLabel ?? nothing}
+      aria-describedby=${props.descriptionId ?? nothing}
+      aria-orientation="horizontal"
+    >
+      ${props.options.map(
+        (option) => html`
+          <label
+            class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
+            title=${option.title ?? nothing}
+            data-test-id=${option.testId ?? nothing}
+          >
+            <input
+              class="settings-segmented__input"
+              type="radio"
+              name=${this.name}
+              value=${option.value}
+              .checked=${live(option.value === props.value)}
+              ?disabled=${props.disabled || option.disabled}
+              aria-label=${option.ariaLabel ?? nothing}
+              @click=${(event: MouseEvent) => settingsRadioClick(event, option.value, props)}
+              @change=${(event: Event) => settingsRadioChange(event, option.value, props)}
+              @keydown=${settingsRadioKeyDown}
+            />
+            ${option.label}
+          </label>
+        `,
+      )}
+    </div>`;
+  }
+}
+
+const settingsRadioGroup = directive(SettingsRadioGroupDirective);
+
 export function renderSettingsSegmented<T extends string>(
   props: SettingsSegmentedProps<T, unknown>,
 ): TemplateResult<1> {
@@ -370,38 +412,7 @@ export function renderSettingsSegmented<T extends string>(
       )}
     </div>`;
   }
-  const name = nextSettingsRadioName();
-  return html`<div
-    class="settings-segmented ${props.className ?? ""}"
-    role="radiogroup"
-    aria-label=${props.ariaLabel ?? nothing}
-    aria-describedby=${props.descriptionId ?? nothing}
-    aria-orientation="horizontal"
-  >
-    ${props.options.map(
-      (option) => html`
-        <label
-          class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
-          title=${option.title ?? nothing}
-          data-test-id=${option.testId ?? nothing}
-        >
-          <input
-            class="settings-segmented__input"
-            type="radio"
-            name=${name}
-            value=${option.value}
-            .checked=${live(option.value === props.value)}
-            ?disabled=${props.disabled || option.disabled}
-            aria-label=${option.ariaLabel ?? nothing}
-            @click=${(event: MouseEvent) => settingsRadioClick(event, option.value, props)}
-            @change=${(event: Event) => settingsRadioChange(event, option.value, props)}
-            @keydown=${settingsRadioKeyDown}
-          />
-          ${option.label}
-        </label>
-      `,
-    )}
-  </div>`;
+  return html`${settingsRadioGroup(props)}`;
 }
 
 export function renderSettingsStatus(props: {
