@@ -216,10 +216,6 @@ export abstract class InworldRealtimeVoiceProtocol {
       ...(cfg.steeringHandling ? { steering_handling: cfg.steeringHandling } : {}),
       ...(cfg.segmenterStrategy ? { segmenter_strategy: cfg.segmenterStrategy } : {}),
     };
-    const backchannel = {
-      ...section("backchannel"),
-      ...(cfg.backchannel === undefined ? {} : { enabled: cfg.backchannel }),
-    };
     const responsiveness = {
       ...section("responsiveness"),
       ...(cfg.responsiveness === undefined ? {} : { enabled: cfg.responsiveness }),
@@ -230,7 +226,6 @@ export abstract class InworldRealtimeVoiceProtocol {
       ...(Object.keys(stt).length > 0 ? { stt } : {}),
       ...(Object.keys(tts).length > 0 ? { tts } : {}),
       ...(Object.keys(memory).length > 0 ? { memory } : {}),
-      ...(Object.keys(backchannel).length > 0 ? { backchannel } : {}),
       ...(Object.keys(responsiveness).length > 0 ? { responsiveness } : {}),
       // Pinned last: the host owns response.create after tool outputs (OpenAI-compatible
       // flow), and no passthrough section can reach this key.

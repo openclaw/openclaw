@@ -99,7 +99,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
           deliveryMode: "creative",
           eagerness: "HIGH",
           turnDetection: "server_vad",
-          backchannel: true,
+          responsiveness: true,
         },
       },
     });
@@ -109,7 +109,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
     expect(config.deliveryMode).toBe("CREATIVE");
     expect(config.eagerness).toBe("high");
     expect(config.turnDetection).toBe("server_vad");
-    expect(config.backchannel).toBe(true);
+    expect(config.responsiveness).toBe(true);
     expect(
       normalizeInworldRealtimeProviderConfig({ speakingRate: 3 }).speakingRate,
     ).toBeUndefined();
@@ -125,7 +125,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
         memory: { enabled: true, turn_interval: 3 },
         stt: { voice_profile: true },
         tts: { timestamp_type: "WORD" },
-        backchannel: {},
+        responsiveness: {},
       },
     });
     expect(config.providerData).toEqual({
@@ -154,13 +154,12 @@ describe("buildInworldRealtimeVoiceProvider", () => {
       providerConfig: {
         apiKey: "inworld-test", // pragma: allowlist secret
         deliveryMode: "CREATIVE",
-        backchannel: false,
+        responsiveness: false,
         providerData: {
           memory: { enabled: true, turn_interval: 3, max_facts: 20 },
           stt: { voice_profile: true, min_end_of_turn_silence: 120 },
           tts: { delivery_mode: "STABLE", timestamp_type: "WORD" },
-          backchannel: { enabled: true, frequency: "low" },
-          responsiveness: { enabled: true },
+          responsiveness: { enabled: true, min_filler_gap_ms: 8000 },
         },
       },
     });
@@ -170,9 +169,8 @@ describe("buildInworldRealtimeVoiceProvider", () => {
       // Typed deliveryMode wins over the passthrough's delivery_mode; extra documented keys survive.
       tts: { timestamp_type: "WORD", delivery_mode: "CREATIVE" },
       memory: { enabled: true, turn_interval: 3, max_facts: 20 },
-      // Typed backchannel:false wins over the passthrough's enabled:true; frequency survives.
-      backchannel: { frequency: "low", enabled: false },
-      responsiveness: { enabled: true },
+      // Typed responsiveness:false wins over the passthrough's enabled:true; the gap survives.
+      responsiveness: { min_filler_gap_ms: 8000, enabled: false },
       auto_tool_response: false,
     });
   });
@@ -199,7 +197,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
         speakingRate: 1.3,
         deliveryMode: "CREATIVE",
         eagerness: "high",
-        backchannel: true,
+        responsiveness: true,
       },
     });
     const url = String(socket.args[0]);
@@ -234,7 +232,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
       providerData: {
         auto_tool_response: false,
         tts: { delivery_mode: "CREATIVE" },
-        backchannel: { enabled: true },
+        responsiveness: { enabled: true },
       },
       tools,
       tool_choice: "auto",
@@ -388,23 +386,34 @@ describe("buildInworldRealtimeVoiceProvider", () => {
     expect(sent(socket, "response.create")).toHaveLength(0);
   });
 
-  it("delivers back-channel interjections out of band without playback marks, even after a response ended", async () => {
+  it("does not expose back-channel: typed key and providerData section are rejected", () => {
+    expect(
+      () => normalizeInworldRealtimeProviderConfig({ apiKey: "k", backchannel: true }), // pragma: allowlist secret
+    ).toThrow(/backchannel is not supported yet/);
+    expect(() =>
+      normalizeInworldRealtimeProviderConfig({ providerData: { backchannel: { enabled: true } } }),
+    ).toThrow(/unsupported: backchannel/);
+  });
+
+  it("tolerates back-channel events without delivering audio, marks, state changes or truncation", async () => {
     const onAudio = vi.fn();
     const onMark = vi.fn();
     const onEvent = vi.fn();
-    const { bridge, socket } = await connect({ onAudio, onMark, onEvent });
-    socket.emitServer({ type: "response.created", response: { id: "r1" } });
-    audio(socket, "item-1");
-    responseDone(socket, "r1");
-    expect(onMark).toHaveBeenCalledTimes(1);
-    const chunk = Buffer.alloc(480, 7).toString("base64");
-    // The user is speaking again; the server interjects while no main response is active.
-    socket.emitServer({ type: "input_audio_buffer.speech_started" });
-    socket.emitServer({
-      type: "response.backchannel.audio.delta",
-      backchannel_id: "bc-1",
-      delta: chunk,
+    const playback: { itemId: string; audioEndMs: number }[] = [];
+    const { bridge, socket } = await connect({
+      onAudio: (_audio, metadata) => {
+        onAudio(metadata);
+        if (metadata?.itemId) {
+          playback.push({ itemId: metadata.itemId, audioEndMs: 10 });
+        }
+      },
+      onMark,
+      onEvent,
+      getPlaybackState: () => playback,
     });
+    socket.emitServer({ type: "response.created", response: { id: "r1" } });
+    responseDone(socket, "r1");
+    const chunk = Buffer.alloc(160, 7).toString("base64");
     socket.emitServer({
       type: "response.backchannel.audio.delta",
       backchannel_id: "bc-1",
@@ -416,34 +425,19 @@ describe("buildInworldRealtimeVoiceProvider", () => {
       phrase: "uh-huh",
     });
     socket.emitServer({ type: "response.backchannel.skipped", reason: "no_phrase" });
-    expect(onAudio).toHaveBeenCalledTimes(3);
-    expect(onAudio.mock.calls[1]).toEqual([Buffer.alloc(480, 7), { itemId: "backchannel:bc-1" }]);
-    expect(onAudio.mock.calls[2]?.[1]).toEqual({ itemId: "backchannel:bc-1" });
-    // No new marks: interjections must not gate the next response.create.
-    expect(onMark).toHaveBeenCalledTimes(1);
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onMark).not.toHaveBeenCalled();
+    expect(playback).toEqual([]);
+    socket.emitServer({ type: "input_audio_buffer.speech_started" });
+    expect(sent(socket, "conversation.item.truncate")).toEqual([]);
     bridge.sendUserMessage?.("go on");
     expect(sent(socket, "response.create")).toHaveLength(1);
     const types = onEvent.mock.calls.map((call) => (call[0] as { type: string }).type);
-    expect(types).toContain("response.backchannel.audio.done");
-    expect(types).toContain("response.backchannel.skipped");
+    expect(types).toContain("response.backchannel.audio.delta");
     const done = onEvent.mock.calls.find(
       (call) => (call[0] as { type: string }).type === "response.backchannel.audio.done",
     )?.[0] as { detail?: string };
     expect(done.detail).toContain("backchannelId=bc-1");
-    expect(done.detail).toContain('phrase="uh-huh"');
-  });
-
-  it("rejects malformed back-channel audio as a terminal error", async () => {
-    const onError = vi.fn();
-    const { socket } = await connect({ onError });
-    socket.emitServer({
-      type: "response.backchannel.audio.delta",
-      backchannel_id: "bc-2",
-      delta: "%%%",
-    });
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringMatching(/back-channel.*malformed/) }),
-    );
   });
 
   it("clears playback and cancels the response when the server reports user speech", async () => {

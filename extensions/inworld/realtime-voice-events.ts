@@ -9,7 +9,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  INWORLD_REALTIME_BACKCHANNEL_ITEM_PREFIX,
   readInworldRealtimeErrorDetail,
   type InworldRealtimeEvent,
 } from "./realtime-voice-config.js";
@@ -43,9 +42,8 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
     const responseId = event.response_id ?? event.response?.id;
     // A terminal retires all output from that response. Fence late deltas and
     // duplicate terminals before they reach the relay or mutate the next response.
-    // Back-channel interjections are out-of-band from the main response: they arrive
-    // while the user is still speaking and carry no response id, so the fence must not
-    // retire them with the previous response.
+    // Back-channel events are out-of-band from the main response and carry no response
+    // id; keep them out of the fence so they reach the tolerant diagnostics branch.
     const isBackchannelEvent = event.type.startsWith("response.backchannel.");
     if (
       event.type.startsWith("response.") &&
@@ -103,6 +101,13 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
     }
     switch (event.type) {
       case "session.created":
+      // The adapter never enables back-channel, so these should not arrive. If a
+      // deployment sends them anyway they are tolerated as diagnostics only: the host
+      // playback contract has no out-of-band channel (Talk output needs a live response
+      // owner; Voice Call truncates every snapshot item), so no audio is delivered.
+      case "response.backchannel.audio.delta":
+      case "response.backchannel.audio.done":
+      case "response.backchannel.skipped":
         return;
       case "conversation.created": {
         const conversationId = normalizeOptionalString(event.conversation?.id);
@@ -163,27 +168,6 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
             }
           });
         }
-        return;
-      }
-      case "response.backchannel.audio.delta": {
-        // Out-of-band interjection ("uh-huh") while the user is still speaking. It is
-        // delivered as its own playback bucket, never attributed to the assistant
-        // response item, and never creates a playback mark: marks gate the next
-        // response.create and an interjection must not hold that gate.
-        const audioDelta = event.delta ?? event.data;
-        if (!audioDelta) {
-          return;
-        }
-        const canonicalAudio = canonicalizeBase64(audioDelta);
-        if (!canonicalAudio) {
-          throw new InworldRealtimeMalformedAudioError(
-            "Inworld realtime voice back-channel returned malformed base64 audio data",
-          );
-        }
-        const backchannelId = normalizeOptionalString(event.backchannel_id) ?? "unknown";
-        this.config.onAudio(Buffer.from(canonicalAudio, "base64"), {
-          itemId: `${INWORLD_REALTIME_BACKCHANNEL_ITEM_PREFIX}${backchannelId}`,
-        });
         return;
       }
       case "input_audio_buffer.speech_started":
@@ -384,8 +368,6 @@ export abstract class InworldRealtimeVoiceEvents extends InworldRealtimeVoicePro
         return;
       case "error":
         this.handleErrorEvent(event.error);
-      // response.backchannel.audio.done / response.backchannel.skipped are diagnostics only;
-      // the bridge event above already carried their type and detail.
       default:
     }
   }

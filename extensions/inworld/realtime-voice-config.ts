@@ -25,12 +25,17 @@ export type InworldRealtimeSegmenterStrategy =
   | "fast_start"
   | "per_segment_context";
 
-/** Documented Inworld `providerData` sections operators may pass through (docs.inworld.ai/realtime/provider-data). */
+/**
+ * Documented Inworld `providerData` sections operators may pass through
+ * (docs.inworld.ai/realtime/provider-data). `backchannel` is deliberately absent: Inworld
+ * delivers interjections as out-of-band `response.backchannel.audio.delta` events, and the
+ * host playback contract (Talk relay output ownership, Voice Call truncation of every
+ * snapshot item) has no out-of-band channel yet, so the adapter never enables it.
+ */
 export const INWORLD_REALTIME_PROVIDER_DATA_SECTIONS = [
   "stt",
   "tts",
   "memory",
-  "backchannel",
   "responsiveness",
 ] as const;
 export type InworldRealtimeProviderDataSection =
@@ -88,9 +93,6 @@ export type InworldRealtimeEvent = {
   reason?: string;
 };
 
-/** Playback bucket prefix for Inworld back-channel interjections, per docs.inworld.ai/realtime/usage/back-channel. */
-export const INWORLD_REALTIME_BACKCHANNEL_ITEM_PREFIX = "backchannel:";
-
 export type InworldRealtimeSessionUpdate = {
   type: "session.update";
   session: {
@@ -135,7 +137,6 @@ export type InworldRealtimeSessionUpdate = {
         segmenter_strategy?: InworldRealtimeSegmenterStrategy;
       };
       memory?: Record<string, unknown>;
-      backchannel?: Record<string, unknown> & { enabled?: boolean };
       responsiveness?: Record<string, unknown> & { enabled?: boolean };
     };
     tools?: RealtimeVoiceBridgeCreateRequest["tools"];
@@ -240,6 +241,11 @@ function normalizeInworldRealtimeProviderData(
 
 export function normalizeInworldRealtimeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = readNestedInworldConfig(config);
+  if (raw.backchannel !== undefined) {
+    throw new Error(
+      "Inworld realtime voice backchannel is not supported yet: the host realtime playback contract has no out-of-band audio channel for interjections",
+    );
+  }
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw.apiKey,
@@ -281,7 +287,6 @@ export function normalizeInworldRealtimeProviderConfig(config: RealtimeVoiceProv
     vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
     silenceDurationMs: asInworldDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asInworldDurationMs(raw.prefixPaddingMs),
-    backchannel: parseBooleanValue(raw.backchannel),
     responsiveness: parseBooleanValue(raw.responsiveness),
     providerData: normalizeInworldRealtimeProviderData(raw.providerData),
     interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),

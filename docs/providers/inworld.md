@@ -102,6 +102,7 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
     - Transport: `gateway-relay` (iOS, Android, and Control UI relay paths)
     - Audio: PCM16 24 kHz or G.711 µ-law 8 kHz, no host transcoding
     - Barge-in: Inworld turn detection interrupts the response; OpenClaw clears queued playback and truncates unplayed history
+    - Not in this version: Inworld back-channel interjections (no out-of-band host playback channel yet)
 
     Configure Talk on the Gateway:
 
@@ -135,8 +136,8 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
     (`STABLE` / `BALANCED` / `CREATIVE`, honored by `inworld-tts-2`), `steeringHandling`,
     `segmenterStrategy`, `turnDetection` (`semantic_vad` default or `server_vad`), `eagerness`
     (`low` / `medium` / `high`), `vadThreshold`, `silenceDurationMs`, `prefixPaddingMs`,
-    `backchannel`, `responsiveness`, and `providerData`. Back-channel interjections (`response.backchannel.audio.delta`) are delivered to the host as their own playback bucket (`backchannel:<id>`) without playback marks, so they never gate the next response; responsiveness fillers arrive on the normal assistant audio stream. The last is a bounded passthrough for the
-    documented Inworld extensions (`stt`, `tts`, `memory`, `backchannel`, `responsiveness`
+    `responsiveness`, and `providerData`. Responsiveness fillers ("let me think") arrive on the normal assistant audio stream and are supported. Inworld back-channel interjections are not exposed in this version: Inworld delivers them as out-of-band audio while the user is still speaking, and OpenClaw's realtime playback contract has no out-of-band channel yet, so the adapter never enables them and rejects `backchannel` in config or `providerData`. The last is a bounded passthrough for the
+    documented Inworld extensions (`stt`, `tts`, `memory`, `responsiveness`
     sections only, 8 KiB max); typed keys win over it, and `auto_tool_response` is always
     pinned to `false` so the Gateway keeps control of `response.create` after tool results.
     Session resumption is not available on Inworld, so a
