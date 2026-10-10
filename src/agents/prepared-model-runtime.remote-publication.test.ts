@@ -390,6 +390,20 @@ it("bounds refresh with two agents while another discovery is held and adopts af
 it("keeps discovered rows published until the adopted catalog's discovery completes", async ({
   signal,
 }) => {
+  const native = vi.fn(async () => []);
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(),
+      loadModelCatalog: native,
+    },
+  });
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
   await setup();
   const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!;
   // Settle startup's full discovery so the refresh below runs with this test's worker.
@@ -411,6 +425,7 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
     (await listModels(false)).models.map((row: { id: string }) => row.id) as string[];
   await owner.loadFullModelCatalog!({ refresh: true });
   expect(await rows()).toContain("discovered-200");
+  const nativeAcquisitions = native.mock.calls.length;
   held = true;
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   try {
@@ -420,6 +435,7 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
     expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
     release.resolve();
     expect(await withinTest(adoption, signal)).toBe("published");
+    expect(native).toHaveBeenCalledTimes(nativeAcquisitions);
     const adopted = await rows();
     expect(adopted).toContain("discovered-300");
     expect(adopted).not.toContain("discovered-200");

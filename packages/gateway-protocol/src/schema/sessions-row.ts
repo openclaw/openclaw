@@ -10,6 +10,10 @@ import {
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
 import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import {
+  SessionCommunicationPolicySchema,
+  EffectiveSessionCommunicationPolicySchema,
+} from "./sessions-communication.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
@@ -212,6 +216,8 @@ export const SessionRowSchema = Type.Object(
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    communication: Type.Optional(SessionCommunicationPolicySchema),
+    effectiveCommunication: Type.Optional(EffectiveSessionCommunicationPolicySchema),
     /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
     sandboxMode: Type.Optional(Type.Literal("off")),
     /** Administrator consent to the exact external runtime's own permissions for this incarnation. */

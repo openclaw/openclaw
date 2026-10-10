@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import {
+  settleSqliteWorkerOperationContext,
+  type SqliteWorkerOperationContext,
+} from "../infra/sqlite-worker-operation-settlement.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
@@ -62,7 +66,7 @@ describe("plugin state committed facts", () => {
         const transport = admission.createSqliteWorkerOperationAdmission((_request, grant) =>
           grant(),
         );
-        const owner: admission.SqliteWorkerOperationContext = { port: transport.port };
+        const owner: SqliteWorkerOperationContext = { port: transport.port };
         const published = vi.fn();
         admission.observeSqliteWorkerCommittedFacts(transport, published);
         const postMessage = transport.port.postMessage.bind(transport.port);
@@ -100,7 +104,7 @@ describe("plugin state committed facts", () => {
           if (!changed) {
             expect(transport.committed).toBeUndefined();
           }
-          admission.settleSqliteWorkerOperationContext(owner, "completed");
+          settleSqliteWorkerOperationContext(owner, "completed");
           expect(transport.waitForSettlement(performance.now())).toMatchObject({
             kind: "completed",
             committed: { facts: { domain: "plugin-state", facts: expect.any(Map) } },

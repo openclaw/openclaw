@@ -58,7 +58,6 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
-  dataVersion(this: void): number;
   close(this: void): void;
 };
 
@@ -699,10 +698,6 @@ export function createWorkboardSqliteKernel(
     sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
-    // This connection-local primitive changes only after another connection commits.
-    dataVersion: () =>
-      // SAFETY: PRAGMA data_version always returns one row on an open connection.
-      requiredNumber(db.prepare("PRAGMA data_version").get() as Row, "data_version"),
     close,
   };
 }

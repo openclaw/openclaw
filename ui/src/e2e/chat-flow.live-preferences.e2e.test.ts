@@ -103,6 +103,8 @@ suite.define(() => {
       });
       await effort.click();
       const slider = main.locator("[data-chat-thinking-slider]");
+      // The mounted slider is enabled before the popup can receive keyboard focus.
+      await expect.poll(() => slider.isVisible()).toBe(true);
       await expect.poll(() => slider.isEnabled()).toBe(true);
       expect(await main.locator("[data-chat-speed-option=on]").isDisabled()).toBe(true);
       await slider.press("End");

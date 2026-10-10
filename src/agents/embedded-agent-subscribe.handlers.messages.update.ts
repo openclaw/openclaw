@@ -108,7 +108,7 @@ export function handleMessageUpdate(
     const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
       recordRawStream("assistant_text_stream", "commentary_update", "", commentaryText);
-      emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
+      emitAssistantCommentaryStreamData(ctx, msg);
     }
     return undefined;
   }

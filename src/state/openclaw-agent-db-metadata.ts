@@ -1,10 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import {
-  getSqliteReadScopeRevision,
-  type SqliteReadScopeRevision,
-} from "../infra/sqlite-schema-facts.js";
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
+import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { classifySqliteTableReadError, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
@@ -13,22 +15,67 @@ export type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
-const admittedMetadata = new WeakMap<
-  DatabaseSync,
-  { revision: SqliteReadScopeRevision; metadata: ExistingAgentSchemaMeta }
->();
+const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
+  // Fixed ownership is reusable until tracked DDL can remove or rebuild its storage.
+  name: "agent.schema-metadata",
+  schemaDependent: true,
+  read(value) {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("agentId" in value) ||
+      (value.agentId !== null && typeof value.agentId !== "string") ||
+      !("role" in value) ||
+      (value.role !== null && typeof value.role !== "string") ||
+      !("schemaVersion" in value) ||
+      (value.schemaVersion !== null && typeof value.schemaVersion !== "number")
+    ) {
+      return undefined;
+    }
+    return { agentId: value.agentId, role: value.role, schemaVersion: value.schemaVersion };
+  },
+};
+
+function schemaMetadataKey(
+  admissionId: string,
+): SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> {
+  return { name: `agent.schema-metadata:${admissionId}`, read: metadataKey.read };
+}
+
+/** The metadata writer publishes its committed format facts without a readback. */
+export function publishAgentSchemaMetadata(
+  db: DatabaseSync,
+  metadata: ExistingAgentSchemaMeta,
+): void {
+  publishSqliteDatabaseAdmission(db, metadataKey, metadata);
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
+  }
+}
 
 /** Read ownership metadata without loading runtime schema or migration owners. */
 export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
-  const revision = getSqliteReadScopeRevision(db);
-  const admitted = admittedMetadata.get(db);
-  if (revision && admitted?.revision === revision) {
-    return { ...admitted.metadata };
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  const historical =
+    schema && getSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId));
+  if (historical) {
+    return historical;
+  }
+  const admitted =
+    !schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
+      ? getSqliteDatabaseAdmission(db, metadataKey)
+      : undefined;
+  if (admitted) {
+    if (schema) {
+      publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), admitted);
+    }
+    return admitted;
   }
   if (!tableExists(db, "schema_meta")) {
     return null;
   }
-  // Schema admission runs in native readers before query-builder runtimes load.
+  // Unknown DDL can recreate the same table without its row; catalog text cannot carry this proof.
   let row;
   try {
     row = db
@@ -50,16 +97,12 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     role: typeof row.role === "string" ? row.role : null,
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
-  // Ownership is row data: schema facts alone cannot witness a foreign owner change.
-  if (revision && getSqliteReadScopeRevision(db) === revision) {
-    if (!admitted) {
-      // Weak reader references can keep closed keys alive through a long microtask drain.
-      const unregister = registerNodeSqliteDisposeCallback(db, () => {
-        admittedMetadata.delete(db);
-        unregister();
-      });
-    }
-    admittedMetadata.set(db, { revision, metadata: { ...metadata } });
+  if (
+    schema &&
+    getAdmittedSqliteSchemaFacts(db) === schema &&
+    getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
+  ) {
+    publishAgentSchemaMetadata(db, metadata);
   }
   return metadata;
 }
