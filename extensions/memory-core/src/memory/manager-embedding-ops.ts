@@ -299,65 +299,60 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       cacheCandidate: cacheCandidates?.[index],
     }));
     try {
-      return await this.withProviderUse(
-        provider,
-        async () =>
-          await runMemoryEmbeddingBatchRetryWithSplit({
-            items: requestItems,
-            run: async (batchItems) => {
-              const timeoutMs = this.resolveEmbeddingTimeout(
-                "batch",
-                provider,
-                generation?.runtime,
-              );
-              log.debug(`memory embeddings: ${label} start`, {
+      return await this.withProviderUse(provider, () =>
+        runMemoryEmbeddingBatchRetryWithSplit({
+          items: requestItems,
+          maxInputsPerRequest: provider.maxInputsPerRequest,
+          run: async (batchItems) => {
+            const timeoutMs = this.resolveEmbeddingTimeout("batch", provider, generation?.runtime);
+            log.debug(`memory embeddings: ${label} start`, {
+              provider: provider.id,
+              items: batchItems.length,
+              timeoutMs,
+            });
+            const result = await runEmbeddingOperationWithTimeout({
+              timeoutMs,
+              message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+              run: async (signal) =>
+                await provider.embedBatch(
+                  batchItems.map((item) =>
+                    formatEmbeddingModelInput(item.input, provider.model, "document"),
+                  ),
+                  { signal, inputType: "document" },
+                ),
+            });
+            if (!structured) {
+              log.debug("memory embeddings: batch completed", {
                 provider: provider.id,
                 items: batchItems.length,
-                timeoutMs,
               });
-              const result = await runEmbeddingOperationWithTimeout({
-                timeoutMs,
-                message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-                run: async (signal) =>
-                  await provider.embedBatch(
-                    batchItems.map((item) =>
-                      formatEmbeddingModelInput(item.input, provider.model, "document"),
-                    ),
-                    { signal, inputType: "document" },
-                  ),
-              });
-              if (!structured) {
-                log.debug("memory embeddings: batch completed", {
-                  provider: provider.id,
-                  items: batchItems.length,
-                });
-              }
-              return result;
-            },
-            onSuccess: async (batchItems, batchEmbeddings) => {
-              if (!generation) {
-                return;
-              }
-              const batchCandidates = batchItems.flatMap((item) =>
-                item.cacheCandidate ? [item.cacheCandidate] : [],
-              );
-              if (batchCandidates.length !== batchItems.length) {
-                return;
-              }
-              await this.persistGeneratedEmbeddings(batchCandidates, batchEmbeddings, generation);
-            },
-            waitForRetry: async (delayMs) => {
-              await this.waitForEmbeddingRetry(
-                delayMs,
-                structured ? "retrying structured batch" : "retrying",
-              );
-            },
-            onSplit: ({ itemCount, splitAt }) => {
-              log.warn(
-                `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${Math.ceil(itemCount / splitAt)} batches of at most ${splitAt}`,
-              );
-            },
-          }),
+            }
+            return result;
+          },
+          onSuccess: async (batchItems, batchEmbeddings) => {
+            if (!generation) {
+              return;
+            }
+            const batchCandidates = batchItems.flatMap((item) =>
+              item.cacheCandidate ? [item.cacheCandidate] : [],
+            );
+            if (batchCandidates.length !== batchItems.length) {
+              return;
+            }
+            await this.persistGeneratedEmbeddings(batchCandidates, batchEmbeddings, generation);
+          },
+          waitForRetry: async (delayMs) => {
+            await this.waitForEmbeddingRetry(
+              delayMs,
+              structured ? "retrying structured batch" : "retrying",
+            );
+          },
+          onSplit: ({ itemCount, splitAt }) => {
+            log.warn(
+              `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${Math.ceil(itemCount / splitAt)} batches of at most ${splitAt}`,
+            );
+          },
+        }),
       );
     } catch (err) {
       if (!structured) {
