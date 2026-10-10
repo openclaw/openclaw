@@ -22,9 +22,13 @@ import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import * as runtimeLoaders from "./runtime-loaders.js";
 
 vi.mock("../model-catalog.js", { spy: true });
-vi.mock("../model-catalog.runtime.js", () => ({
-  loadProviderScopedThinkingCatalog: vi.fn().mockResolvedValue([]),
-}));
+vi.mock("../model-catalog.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-catalog.runtime.js")>();
+  return {
+    ...actual,
+    loadProviderScopedThinkingCatalog: vi.fn().mockResolvedValue([]),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:subagent:configured-selection";
