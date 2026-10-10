@@ -18,15 +18,15 @@ export function observePublishedReservations(publishedDb: DatabaseSync, onReserv
         args[2].moduleUrl.href ===
           resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
       ) {
-        const execute = worker.execute.bind(worker);
-        vi.spyOn(worker, "execute").mockImplementation((...executeArgs) => {
-          const result = execute(...executeArgs);
-          onReserved();
-          return result;
-        });
         const run = worker.run.bind(worker);
         vi.spyOn(worker, "run").mockImplementation((...runArgs) => {
           const result = run(...runArgs);
+          onReserved();
+          return result;
+        });
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation((...executeArgs) => {
+          const result = execute(...executeArgs);
           onReserved();
           return result;
         });
