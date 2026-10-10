@@ -11,6 +11,7 @@ import {
   makeContext,
   mockCallArg,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import * as sessionCreateProject from "./session-create-project.js";
 
 const mocks = getAgentTestMocks();
@@ -34,7 +35,7 @@ describe("gateway agent worktree preparation", () => {
       mocks.resolveAgentExplicitRecipientSession.mockResolvedValue({ sessionKey });
       mocks.loadSessionEntry.mockImplementation(() => ({
         cfg: {},
-        storePath: "/tmp/sessions.json",
+        storePath: getAgentTestStorePath(),
         entry: store[sessionKey],
         canonicalKey: sessionKey,
       }));

@@ -88,15 +88,11 @@ import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
-const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
-const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
-const CODEX_ACCESS_TOKEN_ENV_VAR = "CODEX_ACCESS_TOKEN";
 const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
-  CODEX_API_KEY_ENV_VAR,
-  OPENAI_API_KEY_ENV_VAR,
-  CODEX_ACCESS_TOKEN_ENV_VAR,
+  ...CODEX_APP_SERVER_API_KEY_ENV_VARS,
+  "CODEX_ACCESS_TOKEN",
 ];
-const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
+const CODEX_APP_SERVER_HOME_ENV_VARS = new Set([CODEX_HOME_ENV_VAR, HOME_ENV_VAR]);
 const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
 const activeComputerUseArtifactReconciliations = new Map<
   string,
@@ -108,17 +104,16 @@ const scopedOAuthRefreshQueues = new WeakMap<
   Map<string, Promise<OAuthCredential>>
 >();
 
-export async function bridgeCodexAppServerStartOptions(params: {
-  startOptions: CodexAppServerStartOptions;
-  agentId?: string;
-  agentDir?: string;
-  authProfileId?: string | null;
-  authProfileStore?: AuthProfileStore;
-  preparedAuth?: CodexAppServerPreparedAuth;
-  authRequirement?: CodexAppServerAuthRequirement;
-  config?: AuthProfileOrderConfig;
-  pluginConfig?: unknown;
-}): Promise<CodexAppServerStartOptions> {
+export async function bridgeCodexAppServerStartOptions(
+  params: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> & {
+    startOptions: CodexAppServerStartOptions;
+    agentId?: string;
+    authProfileId?: string | null;
+    preparedAuth?: CodexAppServerPreparedAuth;
+    authRequirement?: CodexAppServerAuthRequirement;
+    pluginConfig?: unknown;
+  },
+): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
@@ -151,11 +146,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
   }
 
   const scopedStartOptions = await scopeStartOptions();
-  const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
-    store,
-    authProfileId,
-  });
-  return shouldClearInheritedOpenAiApiKey
+  return shouldClearOpenAiApiKeyForCodexAuthProfile({ store, authProfileId })
     ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
     : scopedStartOptions;
 }
@@ -423,9 +414,12 @@ async function withCodexHomeEnvironment(
       ...(nativeHome ? { [HOME_ENV_VAR]: nativeHome } : {}),
     },
   };
-  const clearEnv = withoutClearedCodexHomeEnv(startOptions.clearEnv);
-  if (clearEnv) {
-    nextStartOptions.clearEnv = clearEnv;
+  if (startOptions.clearEnv) {
+    const filtered = startOptions.clearEnv.filter(
+      (envVar) => !CODEX_APP_SERVER_HOME_ENV_VARS.has(envVar.trim().toUpperCase()),
+    );
+    nextStartOptions.clearEnv =
+      filtered.length === startOptions.clearEnv.length ? startOptions.clearEnv : filtered;
   } else {
     delete nextStartOptions.clearEnv;
   }
@@ -450,11 +444,10 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
   let owner = activeComputerUseArtifactReconciliations.get(key);
   if (!owner) {
     owner = { active: 0, tail: Promise.resolve() };
-    activeComputerUseArtifactReconciliations.set(key, owner);
   } else {
     activeComputerUseArtifactReconciliations.delete(key);
-    activeComputerUseArtifactReconciliations.set(key, owner);
   }
+  activeComputerUseArtifactReconciliations.set(key, owner);
   owner.active += 1;
   const epoch = params.desktopGeneration?.epoch;
   if (epoch !== undefined && (owner.latestEpoch === undefined || epoch > owner.latestEpoch)) {
@@ -466,23 +459,18 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
       throw new Error("Codex Computer Use artifact reconciliation was superseded.");
     }
   };
-  const operation = owner.tail
-    .catch(() => undefined)
-    .then(async () => {
-      assertCurrent();
-      const appliedCacheBinding = await reconcileCodexComputerUseStartArtifactsOnce({
-        ...params,
-        codexHome,
-        assertCurrent,
-        previousCacheBinding: owner.appliedCacheBinding,
-      });
-      assertCurrent();
-      owner.appliedCacheBinding = appliedCacheBinding;
+  const operation = owner.tail.then(async () => {
+    assertCurrent();
+    const appliedCacheBinding = await reconcileCodexComputerUseStartArtifactsOnce({
+      ...params,
+      codexHome,
+      assertCurrent,
+      previousCacheBinding: owner.appliedCacheBinding,
     });
-  const settled = operation.then(
-    () => undefined,
-    () => undefined,
-  );
+    assertCurrent();
+    owner.appliedCacheBinding = appliedCacheBinding;
+  });
+  const settled = operation.catch(() => undefined);
   owner.tail = settled;
   try {
     await operation;
@@ -654,15 +642,6 @@ class CodexComputerUseCandidateArtifactsUnavailableError extends Error {
   }
 }
 
-function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | undefined {
-  if (!clearEnv) {
-    return undefined;
-  }
-  const reserved = new Set(CODEX_APP_SERVER_HOME_ENV_VARS);
-  const filtered = clearEnv.filter((envVar) => !reserved.has(envVar.trim().toUpperCase()));
-  return filtered.length === clearEnv.length ? clearEnv : filtered;
-}
-
 export async function applyCodexAppServerAuthProfile(params: {
   client: CodexAppServerClient;
   agentDir?: string;
@@ -777,20 +756,17 @@ function createCodexAppServerAuthError(message: string): Error & { status: 401 }
   return Object.assign(new Error(message), { status: 401 as const });
 }
 
-export async function refreshCodexAppServerAuthTokens(params: {
-  agentDir: string;
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  authHandoff?: CodexAppServerAuthHandoff;
-  previousAccountId?: string | null;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexChatgptAuthTokensRefreshResponse> {
+export async function refreshCodexAppServerAuthTokens(
+  params: CodexAppServerAuthProfileLookup & {
+    agentDir: string;
+    authHandoff?: CodexAppServerAuthHandoff;
+    previousAccountId?: string | null;
+  },
+): Promise<CodexChatgptAuthTokensRefreshResponse> {
   const previousAccountId = params.previousAccountId?.trim();
   const handoffAccountId = params.authHandoff?.chatgptAccountId.trim();
   if (previousAccountId && handoffAccountId && previousAccountId !== handoffAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed before Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("before");
   }
   if (previousAccountId) {
     const store = resolveCodexAppServerAuthProfileStore(params);
@@ -803,9 +779,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
           : undefined))
       : undefined;
     if (selectedAccountId && selectedAccountId !== previousAccountId) {
-      throw new Error(
-        "ChatGPT workspace changed before Codex token refresh. Retry to start a client for the selected workspace.",
-      );
+      throw codexWorkspaceChangedError("before");
     }
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -821,9 +795,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
     (previousAccountId && loginParams.chatgptAccountId !== previousAccountId) ||
     (params.authHandoff && loginParams.chatgptAccountId !== params.authHandoff.chatgptAccountId)
   ) {
-    throw new Error(
-      "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("during");
   }
   return {
     accessToken: loginParams.accessToken,
@@ -832,15 +804,14 @@ export async function refreshCodexAppServerAuthTokens(params: {
   };
 }
 
-async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
-  agentDir: string;
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  authHandoff?: CodexAppServerAuthHandoff;
-  previousAccountId?: string | null;
-  forceOAuthRefresh?: boolean;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexLoginAccountParams | undefined> {
+async function resolveCodexAppServerAuthProfileLoginParamsInternal(
+  params: CodexAppServerAuthProfileLookup & {
+    agentDir: string;
+    authHandoff?: CodexAppServerAuthHandoff;
+    previousAccountId?: string | null;
+    forceOAuthRefresh?: boolean;
+  },
+): Promise<CodexLoginAccountParams | undefined> {
   const store = resolveCodexAppServerAuthProfileStore(params);
   const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
@@ -858,7 +829,9 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
     );
   }
   const preferStoreCredential = Boolean(params.authProfileStore?.profiles[profileId]);
-  let loginParams: CodexLoginAccountParams | undefined;
+  let loginCredential = credential;
+  let value: string | undefined;
+  let useApiKey = false;
   // Runtime honors the persisted type; credential-entry owners remediate legacy shapes.
   if (credential.type === "api_key" || credential.type === "token") {
     const resolved = await resolveApiKeyForProfile({
@@ -873,35 +846,25 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
       profileId,
       agentDir: params.agentDir,
     });
-    const value = resolved?.apiKey?.trim();
-    if (value) {
-      loginParams =
-        credential.type === "api_key"
-          ? { type: "apiKey", apiKey: value }
-          : buildChatgptAuthTokensParams(profileId, credential, value);
-    }
+    value = resolved?.apiKey?.trim();
+    useApiKey = credential.type === "api_key";
   } else {
-    const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(
-      profileId,
-      credential,
-      {
-        ...params,
-        store,
-        preferStoreCredential,
-        forceRefresh: params.forceOAuthRefresh === true,
-      },
-    );
-    const accessToken = resolvedCredential.access?.trim();
-    if (accessToken) {
-      loginParams = buildChatgptAuthTokensParams(profileId, resolvedCredential, accessToken);
-    }
+    loginCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
+      ...params,
+      store,
+      preferStoreCredential,
+      forceRefresh: params.forceOAuthRefresh === true,
+    });
+    value = loginCredential.access?.trim();
   }
-  if (!loginParams) {
+  if (!value) {
     throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" does not contain usable credentials. Repair or replace the selected OpenAI credential, then retry.`,
     );
   }
-  return loginParams;
+  return useApiKey
+    ? { type: "apiKey", apiKey: value }
+    : buildChatgptAuthTokensParams(profileId, loginCredential, value);
 }
 
 async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
@@ -948,17 +911,17 @@ async function resolveOAuthCredentialForCodexAppServer(
     agentDir: ownerAgentDir,
     profileId,
   });
+  const persistedProfile = params.store.runtimePersistedProfileIds?.includes(profileId);
   const useScopedCredential =
     params.preferStoreCredential &&
-    shouldUseScopedOAuthCredential({
-      store: params.store,
-      profileId,
-      persistedCredential,
-      suppliedCredential: credential,
-    });
+    (!persistedProfile ||
+      (persistedCredential?.type === "oauth" &&
+        isCodexAppServerAuthProvider(persistedCredential.provider) &&
+        !isDeepStrictEqual(persistedCredential, credential) &&
+        !hasMatchingOAuthIdentity(persistedCredential, credential)));
   if (
     params.preferStoreCredential &&
-    params.store.runtimePersistedProfileIds?.includes(profileId) &&
+    persistedProfile &&
     (persistedCredential?.type !== "oauth" ||
       !isCodexAppServerAuthProvider(persistedCredential.provider))
   ) {
@@ -1002,9 +965,7 @@ async function resolveOAuthCredentialForCodexAppServer(
   const callbackAccountId =
     params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim() ?? undefined;
   if (callbackAccountId && selectedAccountId && callbackAccountId !== selectedAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed before Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("before");
   }
   const expectedAccountId = callbackAccountId ?? selectedAccountId;
   if (useScopedCredential && overlaidOAuthCredential) {
@@ -1018,9 +979,6 @@ async function resolveOAuthCredentialForCodexAppServer(
     });
   }
   if (params.forceRefresh && !persistedOAuthCredential && overlaidOAuthCredential) {
-    if (reuseCompletedRotation) {
-      return overlaidOAuthCredential;
-    }
     const refreshedRuntimeCredential = await refreshOAuthCredentialForRuntime({
       credential: overlaidOAuthCredential,
       cfg: params.config,
@@ -1091,25 +1049,6 @@ function shouldReuseCompletedCodexOAuthRotation(params: {
   );
 }
 
-function shouldUseScopedOAuthCredential(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  persistedCredential: AuthProfileCredential | undefined;
-  suppliedCredential: OAuthCredential;
-}): boolean {
-  if (!params.store.runtimePersistedProfileIds?.includes(params.profileId)) {
-    return true;
-  }
-  const persisted = params.persistedCredential;
-  if (persisted?.type !== "oauth" || !isCodexAppServerAuthProvider(persisted.provider)) {
-    return false;
-  }
-  return (
-    !isDeepStrictEqual(persisted, params.suppliedCredential) &&
-    !hasMatchingOAuthIdentity(persisted, params.suppliedCredential)
-  );
-}
-
 function hasMatchingOAuthIdentity(persisted: OAuthCredential, supplied: OAuthCredential): boolean {
   // Claim-only workspaces must stay distinct even when their emails match,
   // or a scoped refresh can overwrite a replacement persisted account.
@@ -1176,6 +1115,12 @@ async function resolveScopedOAuthCredential(params: {
   }
 }
 
+function codexWorkspaceChangedError(phase: "before" | "during"): Error {
+  return new Error(
+    `ChatGPT workspace changed ${phase} Codex token refresh. Retry to start a client for the selected workspace.`,
+  );
+}
+
 function assertCodexOAuthRefreshWorkspace(
   profileId: string,
   credential: OAuthCredential,
@@ -1186,9 +1131,7 @@ function assertCodexOAuthRefreshWorkspace(
   }
   const loginParams = buildChatgptAuthTokensParams(profileId, credential, credential.access.trim());
   if (loginParams.chatgptAccountId !== expectedAccountId) {
-    throw new Error(
-      "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-    );
+    throw codexWorkspaceChangedError("during");
   }
 }
 
@@ -1252,11 +1195,7 @@ function resolveStableChatgptAccountId(credential: AuthProfileCredential): strin
 }
 
 function resolveExplicitChatgptAccountId(credential: AuthProfileCredential): string | undefined {
-  if ("accountId" in credential && typeof credential.accountId === "string") {
-    const accountId = credential.accountId.trim();
-    if (accountId) {
-      return accountId;
-    }
-  }
-  return undefined;
+  return "accountId" in credential && typeof credential.accountId === "string"
+    ? credential.accountId.trim() || undefined
+    : undefined;
 }

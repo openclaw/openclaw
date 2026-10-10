@@ -124,20 +124,20 @@ export function createHarness(
   const placements: WorkerDispatchPlacementStore = {
     ...placementStore,
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
-    beginPlacementMove: (params) => {
-      const begun = placementStore.beginPlacementMove(params);
+    beginPlacementMove: async (params, guard) => {
+      const begun = await placementStore.beginPlacementMove(params, guard);
       if (!begun.joined) {
         log.push("placement:draining");
       }
       return begun;
     },
-    completePlacementMoveSourceToLocal: (params) => {
+    completePlacementMoveSourceToLocal: (params, guard) => {
       log.push("placement:local");
-      return placementStore.completePlacementMoveSourceToLocal(params);
+      return placementStore.completePlacementMoveSourceToLocal(params, guard);
     },
-    completeAbandonedPlacementMoveSourceToLocal: (params) => {
+    completeAbandonedPlacementMoveSourceToLocal: (params, guard) => {
       log.push("placement:local");
-      return placementStore.completeAbandonedPlacementMoveSourceToLocal(params);
+      return placementStore.completeAbandonedPlacementMoveSourceToLocal(params, guard);
     },
     acceptWorkspaceResult: (...args) => placementStore.acceptWorkspaceResult(...args),
     completeWorkspaceResultAndReleaseTurn: (...args) =>

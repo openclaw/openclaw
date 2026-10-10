@@ -140,32 +140,35 @@ function recordAuthProfileMigrationImported(
   );
 }
 
-function retirePendingAuthProfileMigrationReceipt(
+function updateAuthProfileMigrationReceipt(
   receipt: AuthProfileMigrationSourceReceipt,
-  status: "retryable" | "superseded",
-  previousStatus: "imported" | "completed" = "imported",
+  status: "retryable" | "superseded" | "completed" | "archived-unparsed",
+  previousStatus?: "imported" | "completed",
   now = Date.now(),
 ): void {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<MigrationDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_runs")
-          .set({ status, finished_at: now })
-          .where("id", "=", receipt.runId)
-          .where("status", "=", previousStatus),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_sources")
-          .set({ status })
-          .where("source_key", "=", receipt.sourceKey)
-          .where("last_run_id", "=", receipt.runId)
-          .where("status", "=", previousStatus),
-      );
+      let run = kysely
+        .updateTable("migration_runs")
+        .set({ status, finished_at: now })
+        .where("id", "=", receipt.runId);
+      let source = kysely
+        .updateTable("migration_sources")
+        .set({
+          status,
+          ...(status === "completed" || status === "archived-unparsed"
+            ? { removed_source: 1 }
+            : {}),
+        })
+        .where("source_key", "=", receipt.sourceKey)
+        .where("last_run_id", "=", receipt.runId);
+      if (previousStatus) {
+        run = run.where("status", "=", previousStatus);
+        source = source.where("status", "=", previousStatus);
+      }
+      executeSqliteQuerySync(db, run);
+      executeSqliteQuerySync(db, source);
     },
     { env: receipt.env },
   );
@@ -184,34 +187,6 @@ function restoreAuthProfileMigrationArchiveNoClobber(
   }
   fs.unlinkSync(receipt.archivePath);
   return "restored";
-}
-
-function recordAuthProfileMigrationCompleted(
-  receipt: AuthProfileMigrationSourceReceipt,
-  now = Date.now(),
-  status: "completed" | "archived-unparsed" = "completed",
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<MigrationDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_runs")
-          .set({ status, finished_at: now })
-          .where("id", "=", receipt.runId),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_sources")
-          .set({ status, removed_source: 1 })
-          .where("source_key", "=", receipt.sourceKey)
-          .where("last_run_id", "=", receipt.runId),
-      );
-    },
-    { env: receipt.env },
-  );
 }
 
 export function archiveAuthProfileMigrationSource(
@@ -291,7 +266,7 @@ export function finalizeAuthProfileMigrationSource(
   recordAuthProfileMigrationImported(receipt);
   verifyAuthProfileMigrationTarget(receipt);
   archiveAuthProfileMigrationSource(receipt);
-  recordAuthProfileMigrationCompleted(receipt, Date.now(), status);
+  updateAuthProfileMigrationReceipt(receipt, status);
 }
 
 export function resumePendingAuthProfileMigrationArchives(
@@ -401,7 +376,7 @@ export function resumePendingAuthProfileMigrationArchives(
           // across a crash between restoring the source and updating SQLite.
           fs.linkSync(receipt.archivePath, receipt.sourcePath);
         }
-        retirePendingAuthProfileMigrationReceipt(receipt, "retryable", "completed");
+        updateAuthProfileMigrationReceipt(receipt, "retryable", "completed");
         changes.push("Reset an inconsistent completed auth migration receipt for retry.");
         continue;
       }
@@ -412,36 +387,33 @@ export function resumePendingAuthProfileMigrationArchives(
         }
         // A changed live source gets its own hash-owned run; a changed archive
         // cannot prove the original credentials and must never be restored.
-        retirePendingAuthProfileMigrationReceipt(receipt, "superseded");
+        updateAuthProfileMigrationReceipt(receipt, "superseded", "imported");
         changes.push("Retired an interrupted auth migration receipt for a changed source.");
         continue;
       }
       try {
         verifyAuthProfileMigrationTarget(receipt);
       } catch {
+        let status: "retryable" | "superseded" = "retryable";
         if (!sourceExists) {
           // Restore only hash-verified archive bytes, without replacing a
           // source recreated by a non-cooperating legacy writer or restore.
           const restored = restoreAuthProfileMigrationArchiveNoClobber(receipt);
           if (restored === "source-exists") {
             const currentBytes = fs.readFileSync(receipt.sourcePath);
-            const status =
-              sha256Hex(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
-            retirePendingAuthProfileMigrationReceipt(receipt, status);
-            changes.push(
-              status === "retryable"
-                ? "Reset an interrupted auth migration receipt for retry."
-                : "Retired an interrupted auth migration receipt for a changed source.",
-            );
-            continue;
+            status = sha256Hex(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
           }
         }
-        retirePendingAuthProfileMigrationReceipt(receipt, "retryable");
-        changes.push("Reset an interrupted auth migration receipt for retry.");
+        updateAuthProfileMigrationReceipt(receipt, status, "imported");
+        changes.push(
+          status === "retryable"
+            ? "Reset an interrupted auth migration receipt for retry."
+            : "Retired an interrupted auth migration receipt for a changed source.",
+        );
         continue;
       }
       archiveAuthProfileMigrationSource(receipt);
-      recordAuthProfileMigrationCompleted(receipt, Date.now(), receipt.completionStatus);
+      updateAuthProfileMigrationReceipt(receipt, receipt.completionStatus ?? "completed");
     } finally {
       release();
     }
@@ -473,7 +445,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
   ] = {
     recordAuthProfileMigrationImported,
-    recordAuthProfileMigrationCompleted,
     restoreAuthProfileMigrationArchiveNoClobber,
   };
 }

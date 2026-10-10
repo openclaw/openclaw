@@ -197,6 +197,20 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
+it.each([true, false, undefined])(
+  "publishes sidebarRoot %s including explicit clearing",
+  (sidebarRoot) => {
+    const snapshot = buildGatewaySessionSnapshot({
+      sessionRow: { key: "agent:main:dashboard:child", kind: "direct", updatedAt: 1, sidebarRoot },
+      includeSession: true,
+    });
+    expect(snapshot).toMatchObject({
+      sidebarRoot: sidebarRoot === true,
+      session: { sidebarRoot: sidebarRoot === true },
+    });
+  },
+);
+
 it.each(["user", null] as const)(
   "carries model override source %s into session change events",
   (source) => {

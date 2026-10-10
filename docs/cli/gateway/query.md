@@ -17,7 +17,15 @@ All query commands use WebSocket RPC.
 With token, password, or `none` authentication, ordinary RPC calls to the
 configured local loopback Gateway do not open the shared state database for device
 authentication. Explicit URL targets and paired remote connections retain their
-device authentication rules.
+device authentication rules. Existing identities are read through SQLite without
+copying the shared database or entering its writer lifecycle. These reads can
+create SQLite coordination files (WAL/SHM), but do not change stored identities,
+tokens, or schema.
+
+If device identity storage cannot be read, the call stops before connecting and
+reports recovery guidance. It does not silently connect without the selected
+device identity; check state-directory access and run `openclaw doctor --fix`
+before retrying.
 
 <Tabs>
   <Tab title="Output modes">
@@ -211,6 +219,11 @@ openclaw gateway status --require-rpc
 openclaw gateway status --port 19001
 ```
 
+From a source checkout, `pnpm openclaw gateway status` reuses current prepared
+runtime artifacts when their recorded input bytes still match, even if Git marks
+those inputs dirty. Changed inputs or missing outputs still require a refresh;
+status does not bypass the live Gateway's artifact-publication safeguards.
+
 <a id="param-url-1"></a>
 
 <ParamField path="--url <url>" type="string">
@@ -376,6 +389,10 @@ Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdent
 ### `gateway call <method>`
 
 Low-level RPC helper.
+
+This command loads only the configuration needed to select and authenticate the
+Gateway connection. It does not validate unrelated settings or preload plugin runtimes;
+use `openclaw config validate` to check the full configuration.
 
 Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
 without changing URL selection or authentication. The CLI compares the exact

@@ -1,34 +1,37 @@
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   isUpdateRecoveryPending,
+  decodeUpdateRecovery,
   UpdateRecoveryRequiredError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import { readRecoveries } from "./update-run-recovery-store.js";
+import { inspectRecoveryRows, readRecovery } from "./update-run-recovery-store.js";
 export type { UpdateRecoveryFence, UpdateRecoveryHandoff } from "./update-run-recovery-types.js";
 export { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
 export type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 export { inspectUpdateRecoveries } from "./update-run-recovery-store.js";
-/** Must run before general database open, admission writes, or runtime migration. */
-function loadUpdateRecoveries(options: OpenClawStateDatabaseOptions = {}): UpdateRecoveryRecord[] {
-  return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db }) => readRecoveries(db),
-      options,
-    ) ?? []
-  );
-}
 export function loadUpdateRecovery(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRecoveryRecord | undefined {
-  return loadUpdateRecoveries(options).find((record) => record.runId === runId);
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    ({ db }) => readRecovery(db, runId),
+    options,
+  );
 }
 /** Detection only. This delivery never claims, rewrites, or retires retained recovery. */
 export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOptions = {}): void {
-  const pending = loadUpdateRecoveries(options).find(isUpdateRecoveryPending);
+  // Candidate children can migrate the ledger after this updater admitted its original format.
+  const pending = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    ({ db }) => inspectRecoveryRows(db).find((entry) => isUpdateRecoveryPending(entry.record)),
+    options,
+    openDoctorStateSchemaReadAdmission,
+  );
   if (pending) {
-    throw new UpdateRecoveryRequiredError(pending);
+    // Historical completion does not grant current execution authority. An
+    // unfinished legacy operation still requires explicit compatible recovery.
+    throw new UpdateRecoveryRequiredError(decodeUpdateRecovery(pending.raw, pending.record.runId));
   }
 }

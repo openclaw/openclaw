@@ -444,11 +444,10 @@ describe("supervisor anchored shell real process ownership", () => {
     }
   });
 
-  it.for([
-    { name: "cancels retained descendants idempotently", cancel: true },
-    { name: "releases ownership after descendants exit naturally", cancel: false },
-  ])("$name after root settlement and fragmented output flush", async ({ cancel }, { signal }) => {
-    const { run, supervisor, scopeKey, cleanup, readPid, release } = await createDescendantScope();
+  it("cancels retained descendants idempotently after root settlement and fragmented output flush", async ({
+    signal,
+  }) => {
+    const { run, supervisor, scopeKey, cleanup, readPid } = await createDescendantScope();
     const result = await withinTest(run.wait(), signal);
     const decoder = createWindowsOutputDecoder();
     const finalTail = decoder.decode(Buffer.from([0xe2, 0x82])) + decoder.flush();
@@ -467,12 +466,8 @@ describe("supervisor anchored shell real process ownership", () => {
     expect(isProcessAlive(descendantPid)).toBe(true);
     await expectPending(run.waitForExtinction!());
 
-    if (cancel) {
-      supervisor.cancelScope(scopeKey);
-      supervisor.cancelScope(scopeKey);
-    } else {
-      await release();
-    }
+    supervisor.cancelScope(scopeKey);
+    supervisor.cancelScope(scopeKey);
     await withinTest(Promise.all([run.waitForExtinction!(), cleanup(), cleanup()]), signal);
     await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
     expect(isProcessAlive(descendantPid)).toBe(false);

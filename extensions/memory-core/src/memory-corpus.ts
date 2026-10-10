@@ -9,6 +9,7 @@ import {
   type MemoryCorpusSearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { createPausedDeadline } from "./memory/paused-deadline.js";
 import {
   createMemorySearchDeadlineError,
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
@@ -107,49 +108,22 @@ export async function runMemoryCorpusDeadline<T>(params: {
   );
   const expire = () => controller.abort(timeoutError);
   // Managed readiness has its own deadline; preserve the remaining search budget.
-  let remainingMs = DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
-  let segmentStartedAt = performance.now();
-  let paused = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const armTimer = () => {
-    segmentStartedAt = performance.now();
-    timer = setTimeout(() => {
-      timer = undefined;
-      expire();
-    }, remainingMs);
-    timer.unref?.();
-  };
+  const control = createMemorySearchDeadlineControl();
+  const deadline = createPausedDeadline({
+    kind: "corpus",
+    timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+    signal: controller.signal,
+    control,
+    expire,
+  });
   const checkDeadline = () => {
     // A synchronous database operation can finish before an overdue timer is serviced.
-    if (controller.signal.aborted || paused) {
-      return;
-    }
-    if (performance.now() - segmentStartedAt >= remainingMs) {
+    if (!controller.signal.aborted && deadline.isExpired()) {
       expire();
     }
   };
-  const control = createMemorySearchDeadlineControl();
-  const unsubscribe = control.subscribe((action) => {
-    if (controller.signal.aborted) {
-      return;
-    }
-    if (action === "pause") {
-      paused = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-      remainingMs = Math.max(0, remainingMs - (performance.now() - segmentStartedAt));
-      if (remainingMs === 0) {
-        expire();
-      }
-      return;
-    }
-    paused = false;
-    armTimer();
-  });
   memoryCorpusDeadlineChecks.set(controller.signal, checkDeadline);
-  armTimer();
+  deadline.start();
   const onParentAbort = () => controller.abort(resolveMemorySearchAbortError(params.parentSignal!));
   params.parentSignal?.addEventListener("abort", onParentAbort, { once: true });
   try {
@@ -164,10 +138,7 @@ export async function runMemoryCorpusDeadline<T>(params: {
     }
     return result;
   } finally {
-    unsubscribe();
-    if (timer) {
-      clearTimeout(timer);
-    }
+    deadline.close();
     memoryCorpusDeadlineChecks.delete(controller.signal);
     params.parentSignal?.removeEventListener("abort", onParentAbort);
   }

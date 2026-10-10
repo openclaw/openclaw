@@ -540,11 +540,19 @@ test("preserves complete base rows across time and caller presentation fixtures"
         expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
         expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
+        expect(row.sessionModelRevision).toEqual(expect.any(String));
+        expect(row.sidebarRoot).toBe(fixture.entry?.sidebarRoot === true);
         // Assert additive fields separately while preserving the frozen wire-byte coverage.
+        expect(row.communication).toBeUndefined();
+        expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,
           isDock: _isDock,
+          sessionModelRevision: _sessionModelRevision,
+          communication: _communication,
+          effectiveCommunication: _effectiveCommunication,
+          sidebarRoot: _sidebarRoot,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(previousWireFields);

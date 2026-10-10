@@ -14,7 +14,7 @@ import {
 import { digestClawValue as digest } from "./digest.js";
 import type { ClawCronJob, ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
-import { collectClawRollbackFailures } from "./update-rollback.js";
+import { rollbackClawUpdate } from "./update-rollback.js";
 
 export type ClawCronUpdateExecution = {
   appliedIds: string[];
@@ -105,12 +105,7 @@ export async function applyClawCronUpdate(
     }
     return result.id;
   };
-  const rollback = async () => {
-    const failures = await collectClawRollbackFailures(undo.toReversed());
-    if (failures.length > 0) {
-      throw new ClawCronUpdateError(failures.join("; "));
-    }
-  };
+  const rollback = () => rollbackClawUpdate(undo, ClawCronUpdateError);
 
   try {
     for (const action of actions) {

@@ -9,14 +9,9 @@ import { setupGatewaySessionsTestHarness } from "./test/server-sessions.test-hel
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-test.each([
-  { read: "by-id", overloaded: false },
-  { read: "count", overloaded: false },
-  { read: "by-id", overloaded: true },
-  { read: "count", overloaded: true },
-] as const)(
-  "delivers selected-session $read updates with overloaded=$overloaded",
-  async ({ read, overloaded }) => {
+test.each(["by-id", "count"] as const)(
+  "delivers selected-session %s updates after worker overload",
+  async (read) => {
     const { storePath } = await createSessionStoreDir();
     const target = {
       agentId: "main",
@@ -61,23 +56,21 @@ test.each([
         },
         ...(read === "by-id" ? { messageId: "msg-selected" } : {}),
       };
-      if (overloaded) {
-        const readFailure = vi
-          .spyOn(historyWorker, "readSessionHistoryPageInWorker")
-          .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
-        try {
-          const changed = waitForEvent("sessions.changed");
-          emitSessionTranscriptUpdate(update);
-          const invalidation = await changed;
-          expect(invalidation.payload).toMatchObject({
-            sessionKey: target.sessionKey,
-            phase: "message",
-          });
-          expect(invalidation.payload).not.toHaveProperty("message");
-          expect(invalidation.payload).not.toHaveProperty("messageSeq");
-        } finally {
-          readFailure.mockRestore();
-        }
+      const readFailure = vi
+        .spyOn(historyWorker, "readSessionHistoryPageInWorker")
+        .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
+      try {
+        const changed = waitForEvent("sessions.changed");
+        emitSessionTranscriptUpdate(update);
+        const invalidation = await changed;
+        expect(invalidation.payload).toMatchObject({
+          sessionKey: target.sessionKey,
+          phase: "message",
+        });
+        expect(invalidation.payload).not.toHaveProperty("message");
+        expect(invalidation.payload).not.toHaveProperty("messageSeq");
+      } finally {
+        readFailure.mockRestore();
       }
 
       const nextMessage = waitForEvent("session.message");

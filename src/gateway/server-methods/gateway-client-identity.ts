@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Projects prepared connection identity into user-turn attribution fields.
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -91,10 +90,9 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
       },
     };
   }
-  if (client?.authenticatedGitHubIdentitySync) {
-    return {};
-  }
-  return client?.authenticatedUserId ? { sender: { id: client.authenticatedUserId } } : {};
+  return !client?.authenticatedGitHubIdentitySync && client?.authenticatedUserId
+    ? { sender: { id: client.authenticatedUserId } }
+    : {};
 }
 
 /** Returns the same durable human profile identity used for session creation attribution. */

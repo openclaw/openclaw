@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { serialize } from "node:v8";
 import {
@@ -15,7 +16,10 @@ import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
 } from "./manager-publication-transfer.js";
-import { openExistingSqliteWorkerBackend } from "./manager-publication.worker.js";
+import {
+  bindSqliteWorkerBackend,
+  openExistingSqliteWorkerBackend,
+} from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import type {
   MemorySourceIndexReplacement,
@@ -49,21 +53,28 @@ function createOwner() {
   return owner;
 }
 
-function createBackend(owner: MemoryIndexDatabase) {
+function createBackend(
+  owner: MemoryIndexDatabase,
+  admit?: (stage: "transaction" | "commit") => void,
+) {
   const filename = owner.db.location()!;
-  const backend = openExistingSqliteWorkerBackend(
-    {
-      fileIdentity: readMemoryShadowIdentity(filename),
-      pragmas: {
-        busy_timeout: 5000,
-        synchronous: 2,
-        foreign_keys: 1,
-        journal_size_limit: 67108864,
-        checkpoint_fullfsync: 1,
-      },
+  const readPragma = (name: string) => {
+    const row = owner.db.prepare(`PRAGMA ${name}`).get();
+    return Number(row?.[name] ?? row?.timeout);
+  };
+  const input = {
+    fileIdentity: readMemoryShadowIdentity(filename),
+    pragmas: {
+      busy_timeout: readPragma("busy_timeout"),
+      synchronous: readPragma("synchronous"),
+      foreign_keys: readPragma("foreign_keys"),
+      journal_size_limit: readPragma("journal_size_limit"),
+      checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
     },
-    { databasePath: filename },
-  );
+  };
+  const backend = admit
+    ? bindSqliteWorkerBackend(input, { databasePath: filename, database: owner.db, admit })
+    : openExistingSqliteWorkerBackend(input, { databasePath: filename });
   backends.push(backend);
   return backend;
 }
@@ -103,6 +114,105 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["success", "begin", "write", "transaction", "commit"] as const)(
+    "restores publication timeout once through %s settlement",
+    (fault) => {
+      const owner = createOwner();
+      const db = owner.db;
+      db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
+        VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
+      const stages: string[] = [];
+      const backend = createBackend(owner, (stage) => {
+        stages.push(stage);
+        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+        if (fault === stage) {
+          throw new Error(`refused ${stage}`);
+        }
+      });
+      if (fault === "write") {
+        db.exec(`CREATE TRIGGER refuse_refresh BEFORE UPDATE ON memory_index_sources
+          BEGIN SELECT RAISE(ABORT, 'refused write'); END`);
+      }
+      const locker =
+        fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
+      locker?.exec("BEGIN IMMEDIATE");
+      const exec = vi.spyOn(db, "exec");
+      try {
+        const outcome = backend.execute({
+          type: "source.refresh",
+          input: { path: "sessions/current", hash: "new", mtime: 2, size: 2, expectedHash: "old" },
+        });
+        expect(outcome).toMatchObject(
+          fault === "success"
+            ? { ok: true, value: true }
+            : { ok: false, entered: fault !== "begin", committed: false },
+        );
+        expect(stages).toEqual(
+          fault === "begin"
+            ? []
+            : fault === "write" || fault === "transaction"
+              ? ["transaction"]
+              : ["transaction", "commit"],
+        );
+        expect(
+          exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
+        ).toHaveLength(1);
+        expect(db.isTransaction).toBe(false);
+        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+        expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
+          hash: fault === "success" ? "new" : "old",
+        });
+      } finally {
+        exec.mockRestore();
+        locker?.exec("ROLLBACK");
+        locker?.close();
+      }
+    },
+  );
+
+  it.each([1, 2])("retains publication restoration failures (%i attempts)", (failures) => {
+    const owner = createOwner();
+    const db = owner.db;
+    db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
+      VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
+    const admit = vi.fn();
+    const backend = createBackend(owner, admit);
+    const nativeExec = db.exec.bind(db);
+    let attempts = 0;
+    const failure = new Error("timeout restoration refused");
+    const exec = vi.spyOn(db, "exec").mockImplementation((sql) => {
+      if (sql === "PRAGMA busy_timeout = 5000" && ++attempts <= failures) {
+        throw failure;
+      }
+      return nativeExec(sql);
+    });
+    const refresh = () =>
+      backend.execute({
+        type: "source.refresh",
+        input: { path: "sessions/current", hash: "new", mtime: 2, size: 2, expectedHash: "old" },
+      });
+    try {
+      if (failures === 1) {
+        expect(refresh()).toMatchObject({
+          ok: false,
+          entered: true,
+          committed: false,
+          error: { message: failure.message },
+        });
+        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+      } else {
+        expect(refresh).toThrow(failure);
+      }
+      expect(attempts).toBe(2);
+      expect(admit).not.toHaveBeenCalled();
+      expect(db.isTransaction).toBe(false);
+      expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "old" });
+    } finally {
+      exec.mockRestore();
+      db.exec("PRAGMA busy_timeout = 5000");
+    }
+  });
 
   it("opens keyword publication when SQLite extension loading is unavailable", () => {
     const owner = createOwner();
@@ -359,6 +469,77 @@ describe("bounded memory publication transfer", () => {
         )
         .all(),
     ).toEqual([{ path: input.entry.path }]);
+  });
+
+  it("publishes a session delta that keeps retained rows and reports retained drift", async () => {
+    const owner = createOwner();
+    ensureMemorySessionTombstones(owner.db);
+    const [template] = replacement().chunks;
+    assert.ok(template);
+    const turn = (line: number) => ({
+      ...template,
+      startLine: line,
+      endLine: line,
+      text: `turn ${line} Violetmarker`,
+      hash: `turn-${line}`,
+    });
+    const session = (
+      hash: string,
+      chunks: ReturnType<typeof turn>[],
+      retained: ReturnType<typeof turn>[] = [],
+    ): MemorySourceIndexReplacement => ({
+      ...replacement(),
+      source: "sessions",
+      agentId: "main",
+      sessionId: "delta-session",
+      entry: { path: "sessions/main/delta.jsonl", hash, mtimeMs: 1, size: 1 },
+      embeddings: chunks.map(() => []),
+      chunks,
+      retained,
+    });
+    const rows = () =>
+      owner.db
+        .prepare(
+          "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+        )
+        .all();
+
+    await owner.replaceSource(
+      session("v1", [turn(1), turn(2)]),
+      () => undefined,
+      async () => true,
+    );
+    const [first] = rows();
+    const delta = session("v2", [turn(3)], [turn(1)]);
+    expect([...memoryPublicationBatches(delta)].flat().map((fragment) => fragment.row)).toEqual([
+      0, 1,
+    ]);
+    await expect(
+      owner.replaceSource(
+        delta,
+        () => undefined,
+        async () => true,
+      ),
+    ).resolves.toMatchObject({ retainedDrift: false });
+    expect(rows()).toEqual([
+      first,
+      expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
+    ]);
+    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual(
+      { count: 2 },
+    );
+
+    owner.db.prepare("DELETE FROM memory_index_chunks WHERE start_line = 1").run();
+    await expect(
+      owner.replaceSource(
+        session("v3", [turn(4)], [turn(1)]),
+        () => undefined,
+        async () => true,
+      ),
+    ).resolves.toMatchObject({ retainedDrift: true });
+    expect(owner.db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([
+      { hash: "v2" },
+    ]);
   });
 
   it("roundtrips an over-message cache vector while enforcing revision, tombstone, and capacity fences", async () => {

@@ -1,8 +1,9 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { searchKeyword } from "./manager-search.js";
+import { searchKeyword, searchKeywordWithFallback } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
+import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -331,17 +332,76 @@ describe("searchKeyword FTS MATCH fallback", () => {
   });
 });
 
-describe("searchKeyword ranked limits", () => {
+describe("searchKeyword boosted relevance", () => {
   it.each(["unicode61", "trigram"] as const)(
-    "stops examining scoped candidates after filling the %s result window",
+    "preserves %s relevance differences before dated-note decay",
     async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        const notes = [
+          "Quartz compass calibration: coefficient 17. Quartz compass calibration was completed, verified and approved. Record the quartz compass calibration coefficient 17 for future measurements.",
+          "We discussed quartz compass calibration in planning. The next meeting will schedule a demonstration; no coefficient or measurement was recorded.",
+          "The garden committee reviewed watering schedules, planted new herbs and replaced several flower pots. Volunteers will meet on Saturday to organize tools and prepare fresh soil for the spring beds.",
+          "Dinner planning covered a vegetable soup, fresh bread and a fruit dessert. We compared grocery prices and agreed to prepare the meal together after shopping on Friday afternoon.",
+          "The walking group selected a route through the forest and checked the weather forecast. Everyone will bring drinking water, comfortable boots and a jacket for the afternoon outing.",
+        ];
+        for (const [index, text] of notes.entries()) {
+          insertKeywordFixture(db, {
+            id: String(index),
+            path: `memory/2026-10-${index === 0 ? "05" : "06"}-note-${index}.md`,
+            text: `user: ${text}`,
+          });
+        }
+        const query = "quartz compass calibration";
+        const raw = await searchKeywordFixture(db, query, { ftsTokenizer });
+        const boosted = await searchKeywordFixture(db, query, {
+          ftsTokenizer,
+          boostFallbackRanking: true,
+        });
+        await expect(
+          searchKeywordFixture(db, `quartz quartz ${query}`, {
+            ftsTokenizer,
+            boostFallbackRanking: true,
+          }),
+        ).resolves.toEqual(boosted);
+        expect(boosted.map((row) => row.id)).toEqual(["0", "1"]);
+        expect(boosted.map((row) => row.textScore)).toEqual(raw.map((row) => row.textScore));
+        for (const row of boosted) {
+          expect(row.score).toBeGreaterThan(row.textScore);
+          expect(row.score).toBeLessThan(1);
+        }
+        expect(boosted[0]!.score).toBeGreaterThan(boosted[1]!.score);
+
+        const decayed = await applyTemporalDecayToHybridResults({
+          results: boosted,
+          temporalDecay: { enabled: true, halfLifeDays: 30 },
+          nowMs: Date.UTC(2026, 9, 6),
+        });
+        expect(decayed[0]!.score).toBeLessThan(boosted[0]!.score);
+        expect(decayed[0]!.score).toBeGreaterThan(decayed[1]!.score);
+      } finally {
+        db.close();
+      }
+    },
+  );
+});
+
+describe("searchKeyword ranked limits", () => {
+  it.each([
+    { ftsTokenizer: "unicode61", query: "common", matchAny: false },
+    { ftsTokenizer: "trigram", query: "common", matchAny: false },
+    { ftsTokenizer: "trigram", query: "common UK", matchAny: true },
+    { ftsTokenizer: "trigram", query: "missing UK", matchAny: true },
+  ] as const)(
+    "stops examining scoped candidates after filling the $ftsTokenizer result window for $query",
+    async ({ ftsTokenizer, query, matchAny }) => {
       const { db } = createMemorySearchDb({ ftsTokenizer });
       try {
         for (let index = 0; index < 64; index++) {
           insertKeywordFixture(db, {
             id: `chunk-${index}`,
             path: `memory/${index}.md`,
-            text: "common keyword",
+            text: "common keyword UK",
             source: index % 2 === 0 ? "memory" : "sessions",
           });
         }
@@ -350,8 +410,9 @@ describe("searchKeyword ranked limits", () => {
           examined++;
           return 1;
         });
-        const results = await searchKeywordFixture(db, "common", {
+        const results = await searchKeywordFixture(db, query, {
           ftsTokenizer,
+          matchAny,
           limit: 3,
           sourceFilter: {
             sql: " AND source IN (?) AND observe_keyword_candidate() = 1",
@@ -458,6 +519,127 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
       const results = await searchKeywordFixture(db, "Clyde");
 
       expect(results.map((row) => row.id)).toEqual(["live-clyde"]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("searchKeyword relaxed question ranking", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "keeps the answer inside a bounded %s candidate pool",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (let index = 0; index < 202; index += 1) {
+          insertKeywordFixture(db, {
+            id: `note-${index}`,
+            path: `memory/note-${index}.md`,
+            text:
+              index === 0
+                ? "user: Tag v0.78.42.0 is an annotated tag object 0b1698f pointing at the release commit."
+                : "user: annotated tag object hash created v0",
+          });
+        }
+        const query = "What is the annotated tag object hash created for v0.78.42.0?";
+        const options = { ftsTokenizer, limit: 200, matchAny: true };
+        const results = await searchKeywordFixture(db, query, options);
+        expect(results).toHaveLength(200);
+        expect(results[0]?.id).toBe("note-0");
+        expect(results[0]?.textScore).toBeGreaterThan(results[1]?.textScore ?? 0);
+        // Expansion lowercases terms; it must not add a second BM25 vote.
+        await expect(searchKeywordFixture(db, query.toUpperCase(), options)).resolves.toEqual(
+          results,
+        );
+      } finally {
+        db.close();
+      }
+    },
+  );
+});
+
+describe("searchKeyword zero-hit fallback", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "preserves AND precision and bounds %s retries",
+    async (ftsTokenizer) => {
+      const { db } = createMemorySearchDb({ ftsTokenizer });
+      try {
+        for (const row of [
+          { id: "full", path: "memory/full.md", text: "alpha beta" },
+          { id: "partial", path: "memory/partial.md", text: "alpha" },
+          { id: "path", path: "memory/exact.md", text: "unrelated" },
+          { id: "dotted", path: "memory/dotted.md", text: "i\u0307" },
+        ]) {
+          insertKeywordFixture(db, row);
+        }
+        const prepare = vi.spyOn(db, "prepare");
+        const search = (query: string) =>
+          searchKeywordWithFallback({
+            db,
+            body: {
+              query,
+              ftsTokenizer,
+              ftsTable: "memory_index_chunks_fts",
+              limit: 10,
+              snippetMaxChars: 200,
+              sourceFilter: { sql: "", params: [] },
+            },
+            path: {
+              query,
+              ftsTokenizer,
+              pathFtsTable: "memory_index_paths_fts",
+              limit: 10,
+              snippetMaxChars: 200,
+              sourceFilter: { sql: "", params: [] },
+            },
+          });
+        const bodyQueries = () =>
+          prepare.mock.calls.filter(([sql]) => /FROM memory_index_chunks_fts\b/.test(sql)).length;
+
+        expect((await search("alpha beta")).body.rows.map((row) => row.id)).toEqual(["full"]);
+        expect(bodyQueries()).toBe(1);
+        prepare.mockClear();
+        const exact = await search("exact.md");
+        expect(exact.body.rows).toEqual([]);
+        expect(exact.path.rows.map((row) => row.id)).toEqual(["path"]);
+        expect(bodyQueries()).toBe(1);
+        prepare.mockClear();
+        const relaxed = await search("alpha beta missing");
+        expect(relaxed.body.error).toBeUndefined();
+        expect(relaxed.body.rows.map((row) => row.id).toSorted()).toEqual(["full", "partial"]);
+        expect(bodyQueries()).toBe(2);
+        prepare.mockClear();
+        expect((await search("İ missing")).body.rows.map((row) => row.id)).toEqual(["dotted"]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it("combines canonical MATCH and short trigram OR terms without scoring substring-only hits", async () => {
+    const { db } = createMemorySearchDb({ ftsTokenizer: "trigram" });
+    try {
+      for (const row of [
+        { id: "long", path: "memory/long.md", text: "cafe\u0301" },
+        { id: "short", path: "memory/short.md", text: "uk plans" },
+        { id: "other", path: "memory/other.md", text: "unrelated" },
+      ]) {
+        insertKeywordFixture(db, row);
+      }
+      insertKeywordFixture(db, {
+        id: "hidden",
+        path: "sessions/hidden.md",
+        text: "café UK",
+        source: "sessions",
+      });
+      const results = await searchKeywordFixture(db, "café UK", {
+        ftsTokenizer: "trigram",
+        matchAny: true,
+        sourceFilter: { sql: " AND source = ?", params: ["memory"] },
+      });
+      expect(results.map((row) => row.id)).toEqual(["long", "short"]);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+      expect(results[1]?.textScore).toBe(0);
     } finally {
       db.close();
     }

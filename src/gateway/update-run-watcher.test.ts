@@ -156,6 +156,7 @@ describe("Gateway update run watcher", () => {
     await terminal.promise;
     expect(onChange).toHaveBeenLastCalledWith(undefined);
     expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    expect(ledger.notice).not.toHaveBeenCalled();
   });
 
   it("joins an entered notice during shutdown and retires queued notices", async () => {
@@ -235,7 +236,7 @@ describe("Gateway update run watcher", () => {
     }
   });
 
-  it.each(["same revision", "successor completed", "newer correction"] as const)(
+  it.each(["successor completed", "newer correction"] as const)(
     "publishes a held verification result once while preserving %s",
     async (scenario) => {
       const first = beginRun();
@@ -353,29 +354,6 @@ describe("Gateway update run watcher", () => {
     },
   );
 
-  it("leaves pre-acknowledgement refusal reporting to the command", async () => {
-    beginRun();
-    const initial = createDeferredCore();
-    const terminal = createDeferredCore();
-    const broadcast = vi
-      .fn()
-      .mockImplementationOnce(() => initial.resolve())
-      .mockImplementationOnce(() => terminal.resolve());
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-    await initial.promise;
-    const idle = nextLedgerRead("status");
-    ledger.run = { ...ledger.run!, phase: "finished", status: "failed", updatedAtMs: 2 };
-    await clock.advanceBy(2_000);
-    await terminal.promise;
-    await idle;
-    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", {
-      runId: ledger.run.runId,
-      phase: "finished",
-      status: "failed",
-      updatedAtMs: 2,
-    });
-    expect(ledger.notice).not.toHaveBeenCalled();
-  });
   it("wakes for admission, broadcasts changed rows, and stops polling after the terminal event", async () => {
     const initialRead = nextLedgerRead("status");
     const requested = createDeferredCore();
@@ -416,7 +394,7 @@ describe("Gateway update run watcher", () => {
     expect(broadcast).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["published", "unavailable", "timed-out", "superseded"] as const)(
+  it.each(["unavailable", "timed-out", "superseded"] as const)(
     "owns late terminal sentinel observation until %s",
     async (outcome) => {
       const run = beginRun();

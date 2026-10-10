@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
 
 export type GatewaySchedulerClock = {
   now: () => number;
@@ -111,6 +112,7 @@ export class GatewayScheduler {
     };
     const beginClose = () => {
       controller.abort();
+      materializeErrorStack(controller.signal.reason);
       for (const job of owner.jobs) {
         this.cancel(job);
       }
@@ -201,6 +203,7 @@ export class GatewayScheduler {
 
   beginClose(): void {
     this.controller.abort();
+    materializeErrorStack(this.controller.signal.reason);
     this.timerGeneration += 1;
     this.cancelTimer?.();
     this.cancelTimer = undefined;

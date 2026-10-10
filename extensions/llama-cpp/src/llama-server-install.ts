@@ -4,6 +4,7 @@ import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { sha256File as hashFile } from "@openclaw/fs-safe/durability";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
@@ -24,11 +25,10 @@ import {
 import { extractWindowsVcRuntime } from "./llama-server-vc-runtime.js";
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
-const VERSION_TIMEOUT_MS = 15_000;
-// Freshly extracted macOS binaries can spend tens of seconds in Gatekeeper
-// evaluation. Keep this wider budget at the pre-publication version check;
-// reused, post-publication, and CUDA probes retain the fast default.
-const FRESH_VERSION_TIMEOUT_MS = 120_000;
+const PROBE_TIMEOUT_MS = 15_000;
+// Version checks initialize backends and can trigger macOS security assessment.
+// Publication or a previous successful launch does not guarantee a warm runtime.
+const VERSION_TIMEOUT_MS = 120_000;
 
 export type LlamaDownloadProgress = (status: {
   downloadedSize: number;
@@ -118,12 +118,7 @@ function fileIdentity(stat: BigIntStats): string {
 function rememberVerifiedFile(filePath: string, stat: BigIntStats, sha256: string): void {
   verifiedFiles.delete(filePath);
   verifiedFiles.set(filePath, { identity: fileIdentity(stat), sha256 });
-  if (verifiedFiles.size > VERIFIED_FILE_LIMIT) {
-    const oldest = verifiedFiles.keys().next().value;
-    if (oldest !== undefined) {
-      verifiedFiles.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(verifiedFiles, VERIFIED_FILE_LIMIT);
 }
 
 export async function sha256File(filePath: string, signal?: AbortSignal): Promise<string> {
@@ -266,7 +261,7 @@ async function runServerCommand(
   command: string,
   args: string[],
   signal?: AbortSignal,
-  timeoutMs = VERSION_TIMEOUT_MS,
+  timeoutMs = PROBE_TIMEOUT_MS,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
@@ -301,13 +296,9 @@ function formatRuntimeDependencyError(error: unknown): Error {
   return new Error(`The verified llama-server build could not start: ${detail}`, { cause: error });
 }
 
-async function queryServerVersion(
-  command: string,
-  signal?: AbortSignal,
-  versionTimeoutMs = VERSION_TIMEOUT_MS,
-): Promise<string> {
+async function queryServerVersion(command: string, signal?: AbortSignal): Promise<string> {
   try {
-    return await runServerCommand(command, ["--version"], signal, versionTimeoutMs);
+    return await runServerCommand(command, ["--version"], signal, VERSION_TIMEOUT_MS);
   } catch (error) {
     signal?.throwIfAborted();
     throw formatRuntimeDependencyError(error);
@@ -347,9 +338,8 @@ async function validateInstalledServer(
   command: string,
   asset: LlamaServerAsset,
   signal?: AbortSignal,
-  versionTimeoutMs = VERSION_TIMEOUT_MS,
 ): Promise<void> {
-  validateServerVersionOutput(command, await queryServerVersion(command, signal, versionTimeoutMs));
+  validateServerVersionOutput(command, await queryServerVersion(command, signal));
   await validateCudaServer(command, asset, signal);
 }
 
@@ -477,11 +467,7 @@ async function installLlamaServer(
     if (windowsRuntimeDependencies.length > 0) {
       let version: string;
       try {
-        version = await queryServerVersion(
-          extractedCommand,
-          options.signal,
-          FRESH_VERSION_TIMEOUT_MS,
-        );
+        version = await queryServerVersion(extractedCommand, options.signal);
       } catch (startupError) {
         options.signal?.throwIfAborted();
         try {
@@ -499,11 +485,7 @@ async function installLlamaServer(
           throw formatVcRuntimeFallbackError(startupError, stagingError);
         }
         try {
-          version = await queryServerVersion(
-            extractedCommand,
-            options.signal,
-            FRESH_VERSION_TIMEOUT_MS,
-          );
+          version = await queryServerVersion(extractedCommand, options.signal);
         } catch (retryError) {
           options.signal?.throwIfAborted();
           throw formatVcRuntimeFallbackError(startupError, retryError);
@@ -512,12 +494,7 @@ async function installLlamaServer(
       validateServerVersionOutput(extractedCommand, version);
       await validateCudaServer(extractedCommand, asset, options.signal);
     } else {
-      await validateInstalledServer(
-        extractedCommand,
-        asset,
-        options.signal,
-        FRESH_VERSION_TIMEOUT_MS,
-      );
+      await validateInstalledServer(extractedCommand, asset, options.signal);
     }
     await fsp.mkdir(path.dirname(installDir), { recursive: true });
     options.signal?.throwIfAborted();

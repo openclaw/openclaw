@@ -343,6 +343,15 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     gatewayUrl: params.gatewayUrl,
     context: params.context,
   };
+  const pendingContext = <T extends { pendingContent: WrappedPendingContent }>({
+    pendingContent,
+    ...context
+  }: T) => ({
+    ...baseContext,
+    ...context,
+    view: pendingContent.view,
+    pendingPayload: pendingContent.payload,
+  });
   const finalize = async (
     request: ApprovalRequest,
     entries: WrappedPendingEntry[],
@@ -376,6 +385,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     }
     for (const wrapped of active) {
       try {
+        const entryContext = { ...baseContext, entry: wrapped.entry, phase: outcome.phase };
         if (wrapped.binding !== undefined) {
           await nativeRuntime.interactions?.unbindPending?.({
             ...baseContext,
@@ -389,27 +399,17 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         switch (result.kind) {
           case "update":
             await nativeRuntime.transport.updateEntry?.({
-              ...baseContext,
-              entry: wrapped.entry,
+              ...entryContext,
               request,
               approvalKind,
               payload: result.payload,
-              phase: outcome.phase,
             });
             break;
           case "delete":
-            await nativeRuntime.transport.deleteEntry?.({
-              ...baseContext,
-              entry: wrapped.entry,
-              phase: outcome.phase,
-            });
+            await nativeRuntime.transport.deleteEntry?.(entryContext);
             break;
           case "clear-actions":
-            await nativeRuntime.interactions?.clearPendingActions?.({
-              ...baseContext,
-              entry: wrapped.entry,
-              phase: outcome.phase,
-            });
+            await nativeRuntime.interactions?.clearPendingActions?.(entryContext);
             break;
           case "leave":
             break;
@@ -475,78 +475,32 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       },
     },
     transport: {
-      prepareTarget: async ({ plannedTarget, request, approvalKind, pendingContent }) => {
-        return await nativeRuntime.transport.prepareTarget({
-          ...baseContext,
-          plannedTarget,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-        });
-      },
-      deliverTarget: async ({
-        plannedTarget,
-        preparedTarget,
-        request,
-        approvalKind,
-        pendingContent,
-      }) => {
-        const entry = await nativeRuntime.transport.deliverPending({
-          ...baseContext,
-          plannedTarget,
-          preparedTarget,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-        });
+      prepareTarget: async (target) =>
+        await nativeRuntime.transport.prepareTarget(pendingContext(target)),
+      deliverTarget: async (target) => {
+        const { request, approvalKind, pendingContent } = target;
+        const entry = await nativeRuntime.transport.deliverPending(pendingContext(target));
         if (!entry) {
           return null;
         }
-        if (stopped) {
-          // onStopped fired between deliverPending and bindPending. The wrapped
-          // entry is not yet in activeEntries, so there is no map leak, but
-          // adapters that register side-effects inside deliverPending (e.g. the
-          // Matrix reaction target store) need explicit cleanup. unbindPending
-          // would violate its contract without a binding, so route cleanup
-          // through the optional cancelDelivered hook, which takes the entry.
-          await nativeRuntime.interactions?.cancelDelivered?.({
-            ...baseContext,
-            entry,
-            request,
-            approvalKind,
-          });
-          return null;
-        }
-        const binding = await nativeRuntime.interactions?.bindPending?.({
-          ...baseContext,
-          entry,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-        });
+        const entryContext = { ...baseContext, entry, request, approvalKind };
+        // Stop may race delivery or binding. Never bind after stop, and clean up
+        // unbound delivery effects through cancelDelivered rather than unbindPending.
+        const binding = stopped
+          ? undefined
+          : await nativeRuntime.interactions?.bindPending?.({
+              ...entryContext,
+              view: pendingContent.view,
+              pendingPayload: pendingContent.payload,
+            });
         if (stopped) {
           if (binding !== undefined && binding !== null) {
             await nativeRuntime.interactions?.unbindPending?.({
-              ...baseContext,
-              entry,
+              ...entryContext,
               binding,
-              request,
-              approvalKind,
             });
           } else {
-            // bindPending returned without a binding handle, but deliverPending
-            // may have left side-effects. Adapters that wire the same store
-            // from both deliverPending and bindPending (e.g. Matrix) drain it
-            // via the binding branch above; this branch covers the rest.
-            await nativeRuntime.interactions?.cancelDelivered?.({
-              ...baseContext,
-              entry,
-              request,
-              approvalKind,
-            });
+            await nativeRuntime.interactions?.cancelDelivered?.(entryContext);
           }
           return null;
         }
@@ -565,51 +519,16 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       },
     },
     lifecycle: {
-      onDeliveryError: ({ error, plannedTarget, request, approvalKind, pendingContent }) => {
-        nativeRuntime.observe?.onDeliveryError?.({
-          ...baseContext,
-          error,
-          plannedTarget,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-        });
+      onDeliveryError: (target) => {
+        nativeRuntime.observe?.onDeliveryError?.(pendingContext(target));
       },
-      onDuplicateSkipped: ({
-        plannedTarget,
-        preparedTarget,
-        request,
-        approvalKind,
-        pendingContent,
-      }) => {
-        nativeRuntime.observe?.onDuplicateSkipped?.({
-          ...baseContext,
-          plannedTarget,
-          preparedTarget,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-        });
+      onDuplicateSkipped: (target) => {
+        nativeRuntime.observe?.onDuplicateSkipped?.(pendingContext(target));
       },
-      onDelivered: ({
-        plannedTarget,
-        preparedTarget,
-        request,
-        approvalKind,
-        pendingContent,
-        entry,
-      }) => {
+      onDelivered: (target) => {
         nativeRuntime.observe?.onDelivered?.({
-          ...baseContext,
-          plannedTarget,
-          preparedTarget,
-          request,
-          approvalKind,
-          view: pendingContent.view,
-          pendingPayload: pendingContent.payload,
-          entry: entry.entry,
+          ...pendingContext(target),
+          entry: target.entry.entry,
         });
       },
       finalizeResolved: ({ request, resolved, entries }) =>

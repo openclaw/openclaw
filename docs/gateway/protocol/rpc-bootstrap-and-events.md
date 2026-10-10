@@ -223,10 +223,14 @@ or protocol-version change.
   in event rows. The Control UI applies these rows locally to existing roster
   members, so their values match the list. An explicit model, account, or runtime
   selection can also mark the event with `catalogChanged: true`.
-  Visible Control UI panes refresh commands and the direct model catalog together, coalescing
-  ordinary `patch` and `command-metadata` events while refreshing marked selections
-  immediately. Compact `chat.metadata` responses omit model/account data, so the
-  direct catalog refresh also reconciles selection changes without the hint.
+  Full rows can include `sessionModelRevision`, which changes with saved model,
+  account, runtime, and lifecycle inputs, independently of title and activity.
+  Visible Control UI panes retain matching model catalogs and refresh changed
+  selections immediately. Missing revisions and explicit `catalogChanged` hints
+  still invalidate the catalog. Session events retain the agent's command list;
+  `chat.metadata.changed` invalidates commands unless `commandsChanged: false`.
+  Usage-only and model-only publications leave commands available without another
+  metadata RPC.
   Top-level lifecycle and capacity fields
   remain event receipts, including explicit clearing values. When a nested row
   omits an optional field, honor its top-level clearing tombstone; nested values

@@ -1,7 +1,8 @@
 // Covers the SQLite WAL-reset corruption safety floor.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
+import type { setEnvironmentData } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -22,16 +23,19 @@ async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitte
     this: DatabaseSync,
     sql,
   ) {
-    if (sql === "SELECT sqlite_version() AS version") {
-      return {
-        get: () => ({ version }),
-      } as unknown as StatementSync;
-    }
     if (
-      extensionLoadingOmitted !== undefined &&
-      sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+      sql ===
+        "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted" ||
+      sql === "SELECT sqlite_version() AS version"
     ) {
-      return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
+      const statement = originalPrepare.call(this, sql);
+      const capabilities = statement.get();
+      vi.spyOn(statement, "get").mockReturnValue({
+        ...capabilities,
+        version,
+        ...(extensionLoadingOmitted === undefined ? {} : { omitted: extensionLoadingOmitted }),
+      });
+      return statement;
     }
     return originalPrepare.call(this, sql);
   });
@@ -74,22 +78,33 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
 
 describe("node SQLite locations", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  it("writes existing URI-escaped paths but never creates a missing database", () => {
-    const pathname = path.join(dirs.make("sqlite-existing-uri-"), "state ?#%.sqlite");
-    const uri = resolveExistingSqliteFileUri(pathname);
-    expect(() => openNodeSqliteDatabase(uri)).toThrow();
-    expect(fs.existsSync(pathname)).toBe(false);
-    const initial = openNodeSqliteDatabase(pathname);
-    initial.exec("CREATE TABLE retained(value TEXT) STRICT");
-    initial.close();
-    const existing = openNodeSqliteDatabase(uri);
-    try {
-      existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
-      expect(existing.prepare("SELECT value FROM retained").all()).toEqual([{ value: "written" }]);
-    } finally {
-      existing.close();
-    }
-  });
+  it.each(["absolute", "relative"])(
+    "writes existing %s URI-escaped paths without creating missing databases",
+    (kind) => {
+      const pathname = path.join(
+        dirs.make(".sqlite-existing-uri-", kind === "relative" ? process.cwd() : undefined),
+        "state ?#%.sqlite",
+      );
+      const uri =
+        kind === "relative"
+          ? `file:${path.relative(process.cwd(), pathname).split(path.sep).map(encodeURIComponent).join("/")}?mode=rw`
+          : resolveExistingSqliteFileUri(pathname);
+      expect(() => openNodeSqliteDatabase(uri)).toThrow();
+      expect(fs.existsSync(pathname)).toBe(false);
+      const initial = openNodeSqliteDatabase(uri.replace(/\?mode=rw$/u, ""));
+      initial.exec("CREATE TABLE retained(value TEXT) STRICT");
+      initial.close();
+      const existing = openNodeSqliteDatabase(uri);
+      try {
+        existing.prepare("INSERT INTO retained(value) VALUES(?)").run("written");
+        expect(existing.prepare("SELECT value FROM retained").all()).toEqual([
+          { value: "written" },
+        ]);
+      } finally {
+        existing.close();
+      }
+    },
+  );
   it("preserves Windows long paths in non-creating writable URIs", () => {
     const pathname = String.raw`C:\deep state\openclaw.sqlite`;
     expect(resolveExistingSqliteFileUri(pathname, "win32")).toBe(
@@ -113,9 +128,23 @@ describe("node SQLite locations", () => {
     expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
   });
 
-  it("opens special locations through the shared connection boundary", () => {
-    const database = openNodeSqliteDatabase(":memory:");
+  it.each([
+    ":memory:",
+    "file::memory:",
+    "file::memory:?cache=shared",
+    "file:checkonce-memory?mode=memory&cache=shared",
+  ])("opens in-memory location %s without creating a disk file", (location) => {
+    const open = fs.openSync;
+    vi.spyOn(fs, "openSync").mockImplementation((filename, flags, mode) => {
+      // Keep the regression from leaving a literal :memory: file in the checkout.
+      if (filename === ":memory:") {
+        throw new Error("In-memory SQLite attempted to create a disk file");
+      }
+      return open(filename, flags, mode);
+    });
+    const database = openNodeSqliteDatabase(location, { timeout: 5000 });
     try {
+      expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
       const identity = " a\0🦞 ";
       expect(database.prepare("SELECT CAST(? AS TEXT) AS identity").get(identity)).toEqual({
         identity,
@@ -182,28 +211,46 @@ describe("node SQLite locations", () => {
 });
 
 describe("node SQLite safety", () => {
+  let inheritedAdmission: Parameters<typeof setEnvironmentData>[1];
   beforeEach(() => {
+    const workerThreads = process.getBuiltinModule("node:worker_threads");
+    inheritedAdmission = workerThreads.getEnvironmentData("openclaw.sqliteNativeRuntimeAdmission");
+    // Observe the library independently of the test runner's earlier admission.
+    workerThreads.setEnvironmentData("openclaw.sqliteNativeRuntimeAdmission", undefined);
     vi.resetModules();
   });
 
   afterEach(() => {
+    process
+      .getBuiltinModule("node:worker_threads")
+      .setEnvironmentData("openclaw.sqliteNativeRuntimeAdmission", inheritedAdmission);
     vi.restoreAllMocks();
   });
 
   it.each([0, 1])(
     "detects the loaded library's extension capability (omitted=%s)",
     async (omitted) => {
-      const { supportsNodeSqliteExtensionLoading } = await loadNodeSqliteWithVersion(
-        "3.51.3",
-        omitted,
-      );
+      const { captureSqliteNativeRuntimeAdmission, supportsNodeSqliteExtensionLoading, prepare } =
+        await loadNodeSqliteWithVersion("3.51.3", omitted);
+      expect(captureSqliteNativeRuntimeAdmission()).toBeUndefined();
+      expect(prepare).not.toHaveBeenCalled();
       expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
+      expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
+        version: "3.51.3",
+        extensionLoadingSupported: omitted === 0,
+        iteratorBehavior: {
+          nextAfterDoneIsTerminal: expect.any(Boolean),
+          returnAfterDoneIsInert: expect.any(Boolean),
+        },
+      });
+      expect(prepare).toHaveBeenCalledOnce();
     },
   );
 
   it.each([
     { version: "3.51.3", jsonb: true },
     { version: "3.52.0", jsonb: true },
+    { version: "3.53.0", jsonb: true },
     { version: "4.0.0", jsonb: true },
     { version: "3.50.7", jsonb: true },
     { version: "3.44.6", jsonb: false },
@@ -215,6 +262,7 @@ describe("node SQLite safety", () => {
         await loadNodeSqliteWithVersion(version);
       expect(() => requireNodeSqlite()).not.toThrow();
       const queries = prepare.mock.calls.length;
+      expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(prepare.mock.calls).toHaveLength(queries);
@@ -248,6 +296,99 @@ describe("node SQLite safety", () => {
       });
     },
   );
+
+  it.each([
+    "unchanged",
+    "pid",
+    "executable",
+    "nodeVersion",
+    "bunVersion",
+    "library",
+    "format",
+    "malformed",
+  ] as const)(
+    "inherits admitted SQLite capabilities only for its original process and library (%s)",
+    async (changed) => {
+      const native = mockBunSqliteNativeBoundary({ isBun: false });
+      const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
+      parent.requireNodeSqlite();
+      const iteratorBehavior = parent.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior;
+      parent.prepare.mockRestore();
+      const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
+      const receipt = native.environment.get(receiptKey);
+      if (changed !== "unchanged") {
+        const value = receipt && typeof receipt === "object" ? receipt : {};
+        const runtime = "runtime" in value ? value.runtime : undefined;
+        native.environment.set(receiptKey, {
+          ...value,
+          ...(changed === "malformed"
+            ? { extensionLoadingSupported: "yes" }
+            : changed === "format"
+              ? { format: 2 }
+              : {
+                  runtime: {
+                    ...(runtime && typeof runtime === "object" ? runtime : {}),
+                    [changed]: {
+                      pid: process.pid + 1,
+                      executable: `${process.execPath}.other`,
+                      nodeVersion: "99.0.0",
+                      bunVersion: "1.0.0",
+                      library: {
+                        source: "discovered",
+                        path: "/other/sqlite.dylib",
+                        version: "3.53.4",
+                        extensionLoadingSupported: true,
+                      },
+                    }[changed],
+                  },
+                }),
+        });
+      }
+      const forwarded = native.environment.get(receiptKey);
+      native.environment.delete(receiptKey);
+      parent.installSqliteNativeRuntimeAdmission(forwarded);
+      expect(native.environment.get(receiptKey)).toEqual(
+        changed === "unchanged" ? receipt : undefined,
+      );
+      native.environment.set(receiptKey, forwarded);
+      native.mainThread = false;
+      vi.resetModules();
+      const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
+      expect(worker.supportsNodeSqliteJsonb()).toBe(changed !== "unchanged");
+      expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
+      if (changed === "unchanged") {
+        expect(worker.prepare).not.toHaveBeenCalled();
+        expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(
+          iteratorBehavior,
+        );
+      } else {
+        expect(worker.prepare).toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("applies the current WAL safety floor to inherited runtime admission", async () => {
+    const native = mockBunSqliteNativeBoundary({ isBun: false });
+    const parent = await loadNodeSqliteWithVersion("3.53.4", 0);
+    parent.requireNodeSqlite();
+    parent.prepare.mockRestore();
+    const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
+    const receipt = native.environment.get(receiptKey);
+    const unsafeAdmission = {
+      ...(receipt && typeof receipt === "object" ? receipt : {}),
+      version: "3.51.2",
+    };
+    native.environment.delete(receiptKey);
+    parent.installSqliteNativeRuntimeAdmission(unsafeAdmission);
+    expect(native.environment.has(receiptKey)).toBe(false);
+    native.environment.set(receiptKey, unsafeAdmission);
+    expect(parent.captureSqliteNativeRuntimeAdmission()).toBeUndefined();
+    native.mainThread = false;
+    vi.resetModules();
+    const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
+    expect(() => worker.requireNodeSqlite()).toThrow("SQLite 3.51.2, which is affected");
+    expect(worker.prepare).not.toHaveBeenCalled();
+  });
 });
 
 const homebrew = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";

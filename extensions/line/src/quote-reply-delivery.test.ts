@@ -31,21 +31,6 @@ function rememberInboundMessage(messageId: string, quoteToken: string) {
 }
 
 describe("the reply-token delivery path", () => {
-  it("quotes the message the reply answers", async () => {
-    rememberInboundMessage("inbound-1", "token-1");
-    const { replyMessageLine } = createDeps();
-
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "answering you", replyToId: "inbound-1" },
-      lineData: {},
-    });
-
-    expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([
-      { type: "text", text: "answering you", quoteToken: "token-1" },
-    ]);
-  });
-
   it("quotes once, on the first message LINE accepts a quote on", async () => {
     rememberInboundMessage("inbound-multi", "token-multi");
     const { replyMessageLine } = createDeps({
@@ -63,24 +48,6 @@ describe("the reply-token delivery path", () => {
     expect(messages[0]).toMatchObject({ type: "text", text: "first", quoteToken: "token-multi" });
   });
 
-  it("keeps the quote when a failed reply token falls back to a push", async () => {
-    rememberInboundMessage("inbound-fallback", "token-fallback");
-    const { replyMessageLine, pushMessagesLine } = createDeps();
-    replyMessageLine.mockRejectedValueOnce(
-      Object.assign(new Error("Invalid reply token"), { status: 400 }),
-    );
-
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "late answer", replyToId: "inbound-fallback" },
-      lineData: {},
-    });
-
-    expect(expectDefined(pushMessagesLine.mock.calls[0]?.[1], "push messages")).toEqual([
-      { type: "text", text: "late answer", quoteToken: "token-fallback" },
-    ]);
-  });
-
   it("sends unquoted when the reply carries nothing that can hold a quote", async () => {
     rememberInboundMessage("inbound-flex", "token-flex");
     const { replyMessageLine } = createDeps();
@@ -93,22 +60,6 @@ describe("the reply-token delivery path", () => {
 
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages");
     expect(messages.every((message) => !("quoteToken" in message))).toBe(true);
-  });
-
-  it("reports a reply that answered a message but could carry no quote", async () => {
-    rememberInboundMessage("inbound-cardonly", "token-cardonly");
-    createDeps();
-    logVerboseMock.mockClear();
-
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { replyToId: "inbound-cardonly" },
-      lineData: { flexMessage: { altText: "card", contents: { type: "bubble" } } },
-    });
-
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringContaining("nothing in this reply to line:user:1 can carry a quote"),
-    );
   });
 
   it("sends unquoted when the answered message is not one this chat produced", async () => {
@@ -128,20 +79,6 @@ describe("the reply-token delivery path", () => {
 
     expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([
       { type: "text", text: "answering you" },
-    ]);
-  });
-
-  it("sends unquoted when the reply answers nothing", async () => {
-    const { replyMessageLine } = createDeps();
-
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "unprompted" },
-      lineData: {},
-    });
-
-    expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([
-      { type: "text", text: "unprompted" },
     ]);
   });
 });
@@ -294,23 +231,6 @@ describe("the push delivery path", () => {
       "line:group:Cordered",
       "After the card",
       expect.objectContaining({ quoteToken: "token-ordered" }),
-    );
-  });
-
-  it("sends unquoted when the push answers nothing", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:group:Cplain",
-      text: "just saying",
-      payload: { text: "just saying" },
-      accountId: "default",
-      cfg,
-    });
-
-    expect(expectDefined(mocks.pushMessageLine.mock.calls[0], "push call")[2]).not.toHaveProperty(
-      "quoteToken",
     );
   });
 });

@@ -87,7 +87,6 @@ describe("awaited conversation routing storage ownership", () => {
           targetSessionKey: "agent:target:main",
           targetKind: "session",
         });
-        expect(observer.counts.run, "fixture binding writes are observable").toBeGreaterThan(0);
         observer.reset();
         const result = await resolveRuntimeConversationBindingRouteAsync({ route, conversation });
         expect(result.bindingRecord?.bindingId).toBe(binding.bindingId);

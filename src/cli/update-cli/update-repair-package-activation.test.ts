@@ -132,6 +132,25 @@ async function obsoleteRecovery(
   return packageActivationIdentity(f.packageRoot, true);
 }
 
+function readArchivedSettlement(anchor: string, operationId: string) {
+  const db = new DatabaseSync(
+    path.join(`${anchor}.superseded-${operationId}`, "control/operation.sqlite"),
+    { readOnly: true },
+  );
+  try {
+    const row = db
+      .prepare("SELECT phase, intent_json, descriptor_json FROM package_activation WHERE slot = 1")
+      .get()!;
+    return {
+      phase: row.phase,
+      intent: JSON.parse(String(row.intent_json)),
+      descriptor: JSON.parse(String(row.descriptor_json)),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 async function repair() {
   await updateRepairCommand({ json: true, yes: true });
 }
@@ -166,7 +185,9 @@ async function prepareNextPackage(
   });
 }
 
-async function interruptedPublication() {
+async function interruptedPublication(
+  phase: "prepared" | "publishing" | "publication-complete" = "publishing",
+) {
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
   fs.writeFileSync(
@@ -228,10 +249,21 @@ async function interruptedPublication() {
         },
       ],
     });
+    if (phase === "prepared") {
+      // An external install selected the candidate without advancing the journal.
+      fs.renameSync(f.packageRoot, path.join(preparation.anchor, "previous"));
+      fs.renameSync(path.join(preparation.anchor, "candidate"), f.packageRoot);
+      fs.unlinkSync(f.launcher);
+      fs.symlinkSync(
+        fs.readlinkSync(path.join(preparation.anchor, "launchers/openclaw")),
+        f.launcher,
+      );
+      return preparation;
+    }
     const rename = fsp.rename.bind(fsp);
     const interruption = vi.spyOn(fsp, "rename").mockImplementation(async (source, destination) => {
       await rename(source, destination);
-      if (destination === f.launcher) {
+      if (destination === f.launcher && phase === "publishing") {
         const file = path.join(f.packageRoot, "dist/index.js");
         const original = fs.readFileSync(file);
         fs.writeFileSync(`${file}.bak`, original);
@@ -241,14 +273,17 @@ async function interruptedPublication() {
       }
     });
     try {
-      await expect(
-        createPublicationOwner(
-          preparation.anchor,
-          preparation.journal,
-          fence.assertCurrent,
-          preparation.initial,
-        ).publish(false),
-      ).rejects.toThrow("external write during publication");
+      const publication = createPublicationOwner(
+        preparation.anchor,
+        preparation.journal,
+        fence.assertCurrent,
+        preparation.initial,
+      ).publish(false);
+      if (phase === "publishing") {
+        await expect(publication).rejects.toThrow("external write during publication");
+      } else {
+        await publication;
+      }
     } finally {
       interruption.mockRestore();
     }
@@ -256,34 +291,185 @@ async function interruptedPublication() {
   });
   mocks.root.mockResolvedValue(f.packageRoot);
   const record = prepared.journal.read();
-  expect(record.phase).toBe("publishing");
-  await expect(
-    runPackageActivationRecovery(prepared.anchor, "repair", record.descriptor.operationId),
-  ).rejects.toThrow("Package publication object changed");
-  await expect(
-    runPackageActivationRecovery(prepared.anchor, "retire", record.descriptor.operationId),
-  ).rejects.toThrow("Package evidence cannot be retired (publishing)");
+  expect(record.phase).toBe(phase);
+  if (phase === "publishing") {
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "repair", record.descriptor.operationId),
+    ).rejects.toThrow("Package publication object changed");
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "retire", record.descriptor.operationId),
+    ).rejects.toThrow("Package evidence cannot be retired (publishing)");
+  }
   expect(
     await readPackageActivationStatus(prepared.anchor, record.descriptor.operationId),
-  ).toMatchObject({ phase: "publishing" });
+  ).toMatchObject({ phase });
   return { ...f, ...prepared, record };
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
+  it.each(["prepared", "publication-complete"] as const)(
+    "settles a %s operation whose live package serves the candidate while preserving changed previous-package evidence",
+    async (phase) => {
+      const f = await interruptedPublication(phase);
+      const previousFile = path.join(f.anchor, "previous/dist/index.js");
+      const link = path.join(fixtureRoot, "retained-runtime-link");
+      fs.linkSync(previousFile, link);
+      fs.unlinkSync(link);
+      fs.appendFileSync(previousFile, "// preserved recovery evidence\n");
+      const previousIdentity = packageActivationIdentity(path.join(f.anchor, "previous"), true);
+      const previousBytes = fs.readFileSync(previousFile);
+      const liveBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
+      const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
+      const launcherIdentity = packageActivationIdentity(f.launcher, "launcher");
+
+      await repair();
+
+      const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
+      expect(readArchivedSettlement(f.anchor, f.record.descriptor.operationId)).toMatchObject({
+        phase: "superseded",
+        intent: { kind: "publication-settled-external-change", settled: true },
+        descriptor: f.record.descriptor,
+      });
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(getUpdateRun(f.record.descriptor.operationId)).toMatchObject({
+        status: "succeeded",
+        reason: "publication-settled-external-change",
+      });
+      expect(packageActivationIdentity(f.packageRoot, true)).toBe(
+        f.record.descriptor.candidate.identity,
+      );
+      expect(packageActivationIdentity(path.join(retained, "previous"), true)).toBe(
+        previousIdentity,
+      );
+      expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
+      expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
+      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(liveBytes);
+      expect(packageActivationIdentity(f.launcher, "launcher")).toBe(launcherIdentity);
+      await prepareNextPackage(f);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+      expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
+    },
+  );
+
+  it("removes settled control records from admission without deleting their evidence", async () => {
+    const f = await interruptedPublication();
+    const journalPath = resolvePackageActivationJournalPath(f.anchor);
+    const journalIdentity = packageActivationIdentity(journalPath, false);
+    await repair();
+    const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
+    expect(fs.existsSync(`${f.anchor}.control`)).toBe(false);
+    expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+    expect(packageActivationIdentity(path.join(retained, "control/operation.sqlite"), false)).toBe(
+      journalIdentity,
+    );
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    fs.appendFileSync(
+      path.join(retained, "control/recovery.mjs"),
+      "// historical evidence drift\n",
+    );
+    const db = new DatabaseSync(path.join(retained, "control/operation.sqlite"));
+    try {
+      db.prepare("UPDATE package_activation SET intent_json = ?").run(
+        JSON.stringify({ kind: "future-settlement", settled: true }),
+      );
+    } finally {
+      db.close();
+    }
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    await prepareNextPackage(f);
+    expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+  });
+
+  it.each(["collision", "unsupported sync", "live executor", "unknown intent"] as const)(
+    "preserves completed control evidence when archival is refused: %s",
+    async (failure) => {
+      const f = await preparedOwnershipMismatch();
+      await manualInstall(f);
+      vi.mocked(defaultRuntime.error).mockImplementationOnce(() => {
+        throw new Error("reporting interrupted");
+      });
+      await expect(repair()).rejects.toThrow("reporting interrupted");
+      const archive = path.join(f.retained, "control");
+      if (failure === "collision") {
+        fs.mkdirSync(archive, { mode: 0o700, recursive: true });
+      } else if (failure === "unsupported sync") {
+        const sync = directoryDurability.syncDirectorySync;
+        vi.spyOn(directoryDurability, "syncDirectorySync").mockImplementation((directory) =>
+          directory === f.retained ? { status: "unsupported", code: "EINVAL" } : sync(directory),
+        );
+      } else if (failure === "unknown intent") {
+        const db = new DatabaseSync(f.journal);
+        try {
+          db.prepare("UPDATE package_activation SET intent_json = ?").run(
+            JSON.stringify({ kind: "future-settlement", settled: true }),
+          );
+        } finally {
+          db.close();
+        }
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
+      }
+      const bytes = fs.readFileSync(f.journal);
+      const identity = packageActivationIdentity(f.journal, false);
+      if (failure === "live executor") {
+        await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+          await executor.enter(f.packageRoot);
+          await expect(repair()).rejects.toThrow(/executor.*owns|update.*owns/iu);
+        });
+      } else if (failure === "unknown intent") {
+        await expect(repair()).rejects.toThrow();
+      } else {
+        await repair();
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining("could not be fully archived"),
+        );
+      }
+      expect(fs.readFileSync(f.journal)).toEqual(bytes);
+      expect(packageActivationIdentity(f.journal, false)).toBe(identity);
+      expect(fs.readFileSync(f.helper)).toEqual(f.helperBytes);
+      expect(mocks.finalize).toHaveBeenCalledTimes(
+        failure === "collision" || failure === "unsupported sync" ? 1 : 0,
+      );
+    },
+  );
+
+  it("persists an observed control rename after losing its acknowledgement", async () => {
+    const f = await preparedOwnershipMismatch();
+    await manualInstall(f);
+    const rename = fs.renameSync.bind(fs);
+    vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+      rename(source, target);
+      if (source === `${f.anchor}.control`) {
+        throw new Error("rename acknowledgement lost");
+      }
+    });
+    const sync = vi.spyOn(directoryDurability, "syncDirectorySync");
+    await repair();
+    expect(readArchivedSettlement(f.anchor, f.operationId).intent).toMatchObject({ settled: true });
+    expect(sync).toHaveBeenCalledWith(f.retained);
+    expect(sync).toHaveBeenCalledWith(path.dirname(f.anchor));
+    expect(fs.existsSync(`${f.anchor}.control`)).toBe(false);
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    await repair();
+    await prepareNextPackage(f);
+    expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+  });
+
   it("settles the npm layout with dependency manifests and an external dist backup", async () => {
     const f = await interruptedPublication();
     fs.symlinkSync("missing-extra-target", path.join(f.packageRoot, "dist/extra-link"));
     const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
     await repair();
-    expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+    expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
     expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-    expect(f.journal.read()).toMatchObject({
+    expect(readArchivedSettlement(f.anchor, f.record.descriptor.operationId)).toMatchObject({
       phase: "superseded",
       intent: { kind: "publication-settled-external-change", settled: true },
       descriptor: f.record.descriptor,
     });
     const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
-    expect(fs.readFileSync(path.join(retained, "recovery.mjs"))).toEqual(helper);
+    expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
     expect(fs.readFileSync(path.join(retained, "previous/package.json"), "utf8")).toContain(
       "1.0.0",
     );
@@ -291,19 +477,15 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"), "utf8")).toBe("export {};\n");
     expect(fs.readlinkSync(f.launcher)).toBe("../lib/node_modules/openclaw/openclaw.mjs");
     expect(fs.readFileSync(f.launcher, "utf8")).toBe('import "./dist/index.js";\n');
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("publication-settled-external-change"),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/index.js.bak"));
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/extra-link"));
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Root package.json was field-verified, not content-verified."),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Entry targets outside dist were checked for resolution, not content.",
-      ),
-    );
+    for (const detail of [
+      "publication-settled-external-change",
+      "dist/index.js.bak",
+      "dist/extra-link",
+      "Root package.json was field-verified, not content-verified.",
+      "Entry targets outside dist were checked for resolution, not content.",
+    ]) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(detail));
+    }
     expect(getUpdateRun(f.record.descriptor.operationId)).toMatchObject({
       status: "succeeded",
       reason: "publication-settled-external-change",
@@ -312,35 +494,117 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
           step: "reconcile:settle",
           detail: expect.stringContaining("dist/index.js.bak"),
         }),
+        expect.objectContaining({
+          detail: expect.stringContaining(
+            "Root package.json was field-verified, not content-verified.",
+          ),
+        }),
       ]),
     });
-    expect(getUpdateRun(f.record.descriptor.operationId)?.steps).toContainEqual(
-      expect.objectContaining({
-        detail: expect.stringContaining(
-          "Root package.json was field-verified, not content-verified.",
-        ),
-      }),
-    );
     await prepareNextPackage(f);
-    expect(f.journal.read().phase).toBe("prepared");
-    expect(f.journal.read().descriptor.operationId).not.toBe(f.record.descriptor.operationId);
-    expect(fs.readFileSync(path.join(retained, "recovery.mjs"))).toEqual(helper);
+    expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+    expect(openPackageActivationJournal(f.anchor).read().descriptor.operationId).not.toBe(
+      f.record.descriptor.operationId,
+    );
+    expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it("keeps lease-identity settlement when the published candidate's lease database was replaced", async () => {
-    const f = await interruptedPublication();
-    const databasePath = f.record.descriptor.authority.databasePath;
-    fs.renameSync(databasePath, `${databasePath}.previous`);
-    fs.copyFileSync(`${databasePath}.previous`, databasePath);
-    fs.chmodSync(databasePath, 0o600);
-    await repair();
-    expect(f.journal.read().intent).toMatchObject({
-      kind: "recovery-lease-identity-changed",
-      settled: true,
+  it.each([
+    { phase: "publishing", lease: "replaced" },
+    { phase: "publication-complete", lease: "missing" },
+    { phase: "publication-complete", lease: "recreated parent" },
+    { phase: "publication-complete", lease: "replaced" },
+  ] as const)(
+    "verifies the $phase candidate under a $lease lease database",
+    async ({ phase, lease }) => {
+      const f = await interruptedPublication(phase);
+      const databasePath = f.record.descriptor.authority.databasePath;
+      if (lease === "recreated parent") {
+        fs.renameSync(path.dirname(databasePath), `${path.dirname(databasePath)}.previous`);
+        fs.mkdirSync(path.dirname(databasePath), { mode: 0o700 });
+      } else {
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        if (lease === "replaced") {
+          fs.copyFileSync(`${databasePath}.previous`, databasePath);
+          fs.chmodSync(databasePath, 0o600);
+        }
+      }
+      await repair();
+      expect(
+        readArchivedSettlement(f.anchor, f.record.descriptor.operationId).intent,
+      ).toMatchObject({
+        kind: "publication-settled-external-change",
+        settled: true,
+      });
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+      await prepareNextPackage(f);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+    },
+  );
+
+  it.each(["helper changed", "helper missing", "anchor replaced"] as const)(
+    "preserves historical evidence and admits the next update with %s",
+    async (changed) => {
+      const f = await interruptedPublication();
+      const helper = resolvePackageActivationHelper(f.anchor);
+      if (changed === "helper missing") {
+        fs.unlinkSync(helper);
+      } else if (changed === "helper changed") {
+        fs.writeFileSync(helper, "preserve modified helper");
+      } else {
+        fs.renameSync(f.anchor, `${f.anchor}.original`);
+        fs.mkdirSync(f.anchor);
+        fs.writeFileSync(path.join(f.anchor, "note"), "preserve replacement anchor");
+      }
+      await repair();
+      const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
+      if (changed === "helper changed") {
+        expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"), "utf8")).toBe(
+          "preserve modified helper",
+        );
+      } else if (changed === "anchor replaced") {
+        expect(fs.readFileSync(path.join(retained, "note"), "utf8")).toBe(
+          "preserve replacement anchor",
+        );
+        expect(fs.existsSync(`${f.anchor}.original/previous`)).toBe(true);
+      }
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      await prepareNextPackage(f);
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
+    },
+  );
+
+  it.each(["missing", "replaced"] as const)(
+    "refuses damaged live content despite a %s lease",
+    async (lease) => {
+      const f = await interruptedPublication();
+      const database = f.record.descriptor.authority.databasePath;
+      fs.renameSync(database, `${database}.previous`);
+      if (lease === "replaced") {
+        fs.copyFileSync(`${database}.previous`, database);
+        fs.chmodSync(database, 0o600);
+      }
+      fs.writeFileSync(path.join(f.packageRoot, "dist/index.js"), "// damaged live content\n");
+      const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+      await expect(repair()).rejects.toThrow(/dist\/index.js/u);
+      expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(supersessionReasons)("keeps unfinished rollback armed after %s", async (reason) => {
+    const f = await preparedOwnershipMismatch();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(f.packageRoot);
+      const journal = openPackageActivationJournal(f.anchor);
+      journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
     });
-    expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
-    await prepareNextPackage(f);
-    expect(f.journal.read().phase).toBe("prepared");
+    await obsoleteRecovery(f, reason);
+    const journal = fs.readFileSync(f.journal);
+    await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
+    expect(fs.readFileSync(f.journal)).toEqual(journal);
+    expect(fs.existsSync(f.retained)).toBe(false);
+    expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
   it.each(["dist/package.json", "dist/nested/package.json"])(
@@ -388,30 +652,30 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
 
   it.each([
     { boundary: "anchor", lease: "current" },
-    { boundary: "helper", lease: "current" },
+    { boundary: "control", lease: "current" },
     { boundary: "anchor", lease: "missing" },
-    { boundary: "helper", lease: "replaced" },
+    { boundary: "control", lease: "replaced" },
   ] as const)(
-    "resumes verified settlement after $boundary rename with lease $lease",
+    "keeps updates admitted after failed $boundary archival with lease $lease",
     async ({ boundary, lease }) => {
       const f = await interruptedPublication();
-      const rename = fsp.rename.bind(fsp);
-      const interruption = vi
-        .spyOn(fsp, "rename")
-        .mockImplementation(async (source, destination) => {
-          await rename(source, destination);
-          if (
-            source === (boundary === "anchor" ? f.anchor : resolvePackageActivationHelper(f.anchor))
-          ) {
-            throw new Error("settlement acknowledgement lost");
-          }
-        });
-      await expect(repair()).rejects.toThrow("settlement acknowledgement lost");
+      const rename = fs.renameSync.bind(fs);
+      const interruption = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (source === (boundary === "anchor" ? f.anchor : `${f.anchor}.control`)) {
+          throw new Error("evidence archive unavailable");
+        }
+        rename(source, destination);
+      });
+      await repair();
       interruption.mockRestore();
       expect(f.journal.read().intent).toMatchObject({
         kind: "publication-settled-external-change",
-        settled: false,
+        settled: true,
       });
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("evidence archive unavailable"),
+      );
       if (lease !== "current") {
         const databasePath = f.record.descriptor.authority.databasePath;
         fs.renameSync(databasePath, `${databasePath}.previous`);
@@ -421,23 +685,15 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         }
       }
       await repair();
-      expect(f.journal.read().intent).toMatchObject({
-        kind:
-          lease === "current"
-            ? "publication-settled-external-change"
-            : lease === "missing"
-              ? "recovery-lease-missing"
-              : "recovery-lease-identity-changed",
+      expect(
+        readArchivedSettlement(f.anchor, f.record.descriptor.operationId).intent,
+      ).toMatchObject({
+        kind: "publication-settled-external-change",
         settled: true,
       });
-      expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
-      if (lease === "current") {
-        expect(getUpdateRun(f.record.descriptor.operationId)?.steps).toContainEqual(
-          expect.objectContaining({ detail: expect.stringContaining("dist/index.js.bak") }),
-        );
-      }
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
       await prepareNextPackage(f);
-      expect(f.journal.read().phase).toBe("prepared");
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
     },
   );
 
@@ -463,12 +719,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const receipt = getUpdateRun(f.record.descriptor.operationId);
       expect(receipt).toMatchObject({
         status: "succeeded",
-        reason:
-          lease === "current"
-            ? "publication-settled-external-change"
-            : lease === "missing"
-              ? "recovery-lease-missing"
-              : "recovery-lease-identity-changed",
+        reason: "publication-settled-external-change",
       });
       await repair();
       expect(getUpdateRun(f.record.descriptor.operationId)).toEqual(receipt);
@@ -476,19 +727,24 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         expect.objectContaining({ detail: expect.stringContaining("dist/index.js.bak") }),
       );
       await prepareNextPackage(f);
-      expect(f.journal.read().phase).toBe("prepared");
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
     },
   );
 
-  it.each([
-    "content mismatch",
-    "inventoried symlink",
-    "unsupported launcher synchronization",
-    "live executor",
-    "helper changed",
-    "wrong version",
-  ] as const)("preserves a publishing operation with %s", async (failure) => {
-    const f = await interruptedPublication();
+  it.each(
+    (["prepared", "publishing", "publication-complete"] as const).flatMap((phase) =>
+      (
+        [
+          "content mismatch",
+          "inventoried symlink",
+          "unsupported launcher synchronization",
+          "live executor",
+          "wrong version",
+        ] as const
+      ).map((failure) => ({ phase, failure })),
+    ),
+  )("preserves a $phase operation with $failure", async ({ phase, failure }) => {
+    const f = await interruptedPublication(phase);
     if (failure === "content mismatch") {
       fs.writeFileSync(path.join(f.packageRoot, "dist/index.js"), "// still patched\n");
     }
@@ -503,9 +759,6 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
           ? { status: "unsupported", code: "EINVAL" }
           : sync(...args),
       );
-    }
-    if (failure === "helper changed") {
-      fs.appendFileSync(resolvePackageActivationHelper(f.anchor), "// changed\n");
     }
     if (failure === "wrong version") {
       fs.writeFileSync(
@@ -528,9 +781,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
             ? /symlink path component not allowed/u
             : failure === "unsupported launcher synchronization"
               ? /crash-durable directory synchronization/u
-              : failure === "helper changed"
-                ? /helper/iu
-                : /version/iu,
+              : /version/iu,
       );
     }
     expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
@@ -570,6 +821,45 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     },
   );
 
+  it.each(
+    supersessionReasons.flatMap((reason) =>
+      (["helper changed", "helper missing", "anchor replaced", "archive collision"] as const).map(
+        (drift) => ({ reason, drift }),
+      ),
+    ),
+  )(
+    "closes obsolete $reason despite $drift without deleting evidence",
+    async ({ reason, drift }) => {
+      const f = await preparedOwnershipMismatch();
+      const replacementIdentity = await obsoleteRecovery(f, reason);
+      if (drift === "helper changed") {
+        fs.writeFileSync(f.helper, "changed obsolete helper");
+      } else if (drift === "helper missing") {
+        fs.unlinkSync(f.helper);
+      } else if (drift === "anchor replaced") {
+        fs.renameSync(f.anchor, `${f.anchor}.external-copy`);
+        fs.mkdirSync(f.anchor, { mode: 0o700 });
+        fs.writeFileSync(path.join(f.anchor, "evidence"), "preserve replacement");
+      } else {
+        fs.mkdirSync(f.retained, { mode: 0o700 });
+        fs.writeFileSync(path.join(f.retained, "evidence"), "preserve collision");
+      }
+      await repair();
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(packageActivationIdentity(f.packageRoot, true)).toBe(replacementIdentity);
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+      if (drift === "helper changed") {
+        expect(fs.readFileSync(path.join(f.retained, "control/recovery.mjs"), "utf8")).toBe(
+          "changed obsolete helper",
+        );
+      } else if (drift === "anchor replaced" || drift === "archive collision") {
+        expect(fs.readFileSync(path.join(f.retained, "evidence"), "utf8")).toBe(
+          drift === "anchor replaced" ? "preserve replacement" : "preserve collision",
+        );
+      }
+    },
+  );
+
   it.each(supersessionReasons)(
     "%s preserves evidence and admits the next package preparation",
     async (reason) => {
@@ -580,20 +870,20 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
 
       await repair();
 
-      expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
+      expect(readArchivedSettlement(f.anchor, f.operationId)).toMatchObject({
         phase: "superseded",
         intent: { kind: reason, replacementIdentity, settled: true },
         descriptor: f.descriptor,
       });
-      expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+      expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
       expect(fs.existsSync(f.anchor)).toBe(false);
       expect(fs.existsSync(f.helper)).toBe(false);
       expect(packageActivationIdentity(f.retained, true)).toBe(f.descriptor.anchorIdentity);
-      expect(packageActivationIdentity(path.join(f.retained, "recovery.mjs"), false)).toBe(
+      expect(packageActivationIdentity(path.join(f.retained, "control/recovery.mjs"), false)).toBe(
         f.descriptor.helperIdentity,
       );
-      expect(fs.readFileSync(path.join(f.retained, "recovery.mjs"))).toEqual(f.helperBytes);
+      expect(fs.readFileSync(path.join(f.retained, "control/recovery.mjs"))).toEqual(f.helperBytes);
       expect(packageActivationIdentity(path.join(f.retained, "candidate"), true)).toBe(
         f.descriptor.candidate.identity,
       );
@@ -611,13 +901,17 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const next = openPackageActivationJournal(f.anchor).read();
       expect(next.phase).toBe("prepared");
       expect(next.descriptor.operationId).not.toBe(f.operationId);
-      expect(fs.readFileSync(path.join(f.retained, "recovery.mjs"))).toEqual(f.helperBytes);
+      expect(fs.readFileSync(path.join(f.retained, "control/recovery.mjs"))).toEqual(f.helperBytes);
     },
   );
 
-  it.each(["previous", "candidate"] as const)(
-    "preserves original recovery when the recorded %s package is still installed",
-    async (selected) => {
+  it.each([
+    { selected: "previous", lease: "current" },
+    { selected: "candidate", lease: "current" },
+    { selected: "candidate", lease: "missing" },
+  ] as const)(
+    "preserves original recovery for an unverified $selected package with $lease lease",
+    async ({ selected, lease }) => {
       const f = await preparedOwnershipMismatch();
       if (selected === "candidate") {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.previous`);
@@ -626,9 +920,14 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         fs.unlinkSync(f.launcher);
         fs.symlinkSync("../lib/node_modules/foreign/openclaw.mjs", f.launcher);
       }
+      if (lease === "missing") {
+        fs.unlinkSync(f.descriptor.authority.databasePath);
+      }
       const journal = fs.readFileSync(f.journal);
 
-      await expect(repair()).rejects.toThrow(/publication|recovery/iu);
+      await expect(repair()).rejects.toThrow(
+        selected === "candidate" ? /ENOENT.*dist\//u : /launcher/iu,
+      );
 
       expect(fs.readFileSync(f.journal)).toEqual(journal);
       expect(fs.readFileSync(f.helper)).toEqual(f.helperBytes);
@@ -641,57 +940,42 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     (["superseded-by-manual-install", "recovery-lease-missing"] as const).flatMap((reason) =>
       (["anchor", "helper"] as const).map((boundary) => ({ reason, boundary })),
     ),
-  )(
-    "resumes $reason after losing the $boundary rename acknowledgement",
-    async ({ reason, boundary }) => {
-      const f = await preparedOwnershipMismatch();
-      await obsoleteRecovery(f, reason);
-      const rename = fsp.rename.bind(fsp);
-      const interruption = vi
-        .spyOn(fsp, "rename")
-        .mockImplementation(async (source, destination) => {
-          await rename(source, destination);
-          if (source === (boundary === "anchor" ? f.anchor : f.helper)) {
-            throw new Error("archive acknowledgement interrupted");
-          }
-        });
-      await expect(repair()).rejects.toThrow("archive acknowledgement interrupted");
-      interruption.mockRestore();
-      expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
-        phase: "superseded",
-        intent: { kind: reason, settled: false },
-      });
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
-
-      if (reason === "recovery-lease-missing") {
-        // Model inode reuse deterministically, including on filesystems that
-        // happen to allocate a different inode for the recreated lease store.
-        const { descriptor } = openPackageActivationJournal(f.anchor).read();
-        descriptor.authority.databaseIdentity = packageActivationIdentity(
-          descriptor.authority.databasePath,
-          false,
-        );
-        const db = new DatabaseSync(f.journal);
-        try {
-          db.prepare("UPDATE package_activation SET descriptor_json = ?").run(
-            JSON.stringify(descriptor),
-          );
-        } finally {
-          db.close();
-        }
-      }
-
-      await repair();
-
-      expect(openPackageActivationJournal(f.anchor).read().intent).toMatchObject({
+  )("resumes legacy $reason after the $boundary transfer", async ({ reason, boundary }) => {
+    const f = await preparedOwnershipMismatch();
+    const replacementIdentity = await obsoleteRecovery(f, reason);
+    // Released owners wrote settled:false before moving anchor and helper
+    // separately. Resume that persisted contract without replaying old checks.
+    const journal = openPackageActivationJournal(f.anchor);
+    journal.transition(
+      journal.read(),
+      "superseded",
+      {
         kind: reason,
-        settled: true,
-      });
-      expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-      expect(fs.readFileSync(path.join(f.retained, "recovery.mjs"))).toEqual(f.helperBytes);
-    },
-  );
+        replacementIdentity,
+        settled: false,
+      },
+      () => {},
+    );
+    fs.renameSync(f.anchor, f.retained);
+    if (boundary === "helper") {
+      fs.renameSync(f.helper, path.join(f.retained, "recovery.mjs"));
+    }
+    fs.renameSync(f.packageRoot, `${f.packageRoot}.changed-after-settlement`);
+    await writePackageRoot(f.packageRoot, "4.0.0");
+    await repair();
+    expect(readArchivedSettlement(f.anchor, f.operationId).intent).toMatchObject({
+      kind: reason,
+      replacementIdentity,
+      settled: true,
+    });
+    expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    expect(
+      fs.readFileSync(
+        path.join(f.retained, boundary === "helper" ? "recovery.mjs" : "control/recovery.mjs"),
+      ),
+    ).toEqual(f.helperBytes);
+  });
 
   it("does not treat a dangling lease database symlink as a missing database", async () => {
     const f = await preparedOwnershipMismatch();
@@ -733,12 +1017,16 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
   it("retains the original replacement fact when the live installation changes during archival", async () => {
     const f = await preparedOwnershipMismatch();
     const replacementIdentity = await manualInstall(f);
-    const rename = fsp.rename.bind(fsp);
-    const replacement = vi.spyOn(fsp, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
+    const rename = fs.renameSync.bind(fs);
+    const replacement = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      rename(source, destination);
       if (source === f.anchor) {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.replaced-again`);
-        await writePackageRoot(f.packageRoot, "4.0.0");
+        fs.cpSync(`${f.packageRoot}.replaced-again`, f.packageRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(f.packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "4.0.0" }),
+        );
       }
     });
 
@@ -747,16 +1035,16 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
 
     expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
       phase: "superseded",
-      intent: { kind: "superseded-by-manual-install", replacementIdentity },
+      intent: { kind: "superseded-by-manual-install", replacementIdentity, settled: true },
     });
     expect(packageActivationIdentity(f.packageRoot, true)).not.toBe(replacementIdentity);
     expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain("4.0.0");
-    expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     expect(mocks.finalize).not.toHaveBeenCalled();
 
     await repair();
 
-    expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
+    expect(readArchivedSettlement(f.anchor, f.operationId)).toMatchObject({
       phase: "superseded",
       intent: { kind: "superseded-by-manual-install", replacementIdentity, settled: true },
     });

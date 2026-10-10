@@ -6,9 +6,13 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  composeSessionTranscriptWriteAssertion,
+  hasPromptImageInput,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -315,10 +319,12 @@ export function activateCodexAttemptTurn(
       state.activeLocalProjections -= 1;
     }
   };
+  const isSteeringAvailable = () =>
+    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (!isSteeringAvailable()) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -411,11 +417,10 @@ export function activateCodexAttemptTurn(
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
         await codexTranscriptMirrorRuntime.mirror({
-          // Transcript SDK commit callback must remain synchronous.
-          assertCurrent: () => {
-            connection.assertLegacyCurrent();
-            assertSteeringActive();
-          },
+          assertCurrent: composeSessionTranscriptWriteAssertion([
+            connection.assertLegacyCurrent,
+            createNativeSessionBindingAuthority([], assertSteeringActive).assertLegacyCurrent,
+          ]),
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
           sessionId: params.sessionId,
@@ -508,10 +513,7 @@ export function activateCodexAttemptTurn(
   };
   const messageInjection = {
     version: 2 as const,
-    isAvailable: () =>
-      !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      !runAbortController.signal.aborted,
+    isAvailable: isSteeringAvailable,
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -630,9 +632,7 @@ export function activateCodexAttemptTurn(
             resourceState.turnRoute === route &&
             route?.signal.aborted === false &&
             turnRuntime.turnIdRef.current === activeTurnId &&
-            !state.completed &&
-            !state.terminalTurnNotificationQueued &&
-            !runAbortController.signal.aborted,
+            isSteeringAvailable(),
         );
       }
       params.replyOperation?.attachBackend(handle);

@@ -167,17 +167,17 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func supports(_ command: String) async -> Bool {
-        await withCheckedContinuation { continuation in
-            self.queue.async {
-                continuation.resume(returning: self.manifest?.commands.contains(command) == true)
-            }
-        }
+        await self.onQueue { self.manifest?.commands.contains(command) == true }
     }
 
     func isWorkerHostingEnabled() async -> Bool {
+        await self.onQueue { self.workerHostingEnabled }
+    }
+
+    private func onQueue<T: Sendable>(_ operation: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { continuation in
             self.queue.async {
-                continuation.resume(returning: self.workerHostingEnabled)
+                continuation.resume(returning: operation())
             }
         }
     }
@@ -269,17 +269,14 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     private func handleInvokeControl(_ control: PendingInvokeControl, invokeId: String) async {
-        await withCheckedContinuation { continuation in
-            self.queue.async {
-                if self.pendingInvokes[invokeId] != nil {
-                    try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
-                    if case .cancel = control {
-                        self.finishCancelledInvokeLocked(invokeId: invokeId)
-                    }
-                } else if self.process?.isRunning == true, self.manifest != nil {
-                    self.bufferInvokeControlLocked(control, invokeId: invokeId)
+        await self.onQueue {
+            if self.pendingInvokes[invokeId] != nil {
+                try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                if case .cancel = control {
+                    self.finishCancelledInvokeLocked(invokeId: invokeId)
                 }
-                continuation.resume()
+            } else if self.process?.isRunning == true, self.manifest != nil {
+                self.bufferInvokeControlLocked(control, invokeId: invokeId)
             }
         }
     }
@@ -335,45 +332,25 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
-        await withCheckedContinuation { continuation in
-            self.queue.async {
-                guard authorityGeneration >= self.routeAuthorityGeneration else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                self.routeAuthorityGeneration = authorityGeneration
-                self.runnerInventoryRefreshTask?.cancel()
-                self.runnerInventoryRefreshTask = nil
-                self.route = route
-                self.gatewayGeneration &+= 1
-                try? self.enqueueWriteLocked([
-                    "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": NSNull(),
-                ])
-                let pending = self.pendingInvokes
-                self.pendingInvokes.removeAll()
-                self.pendingInvokeControls.removeAll()
-                self.pendingInvokeControlOrder.removeAll()
-                for (id, waiter) in pending {
-                    waiter.continuation.resume(returning: Self.unavailableResponse(
-                        id,
-                        "UNAVAILABLE: Gateway route changed"))
-                }
-                self.eventDeliveryTask?.cancel()
-                self.eventDeliveryTask = nil
-                continuation.resume(returning: true)
-            }
+        await self.onQueue {
+            guard authorityGeneration >= self.routeAuthorityGeneration else { return false }
+            self.routeAuthorityGeneration = authorityGeneration
+            SimpleTaskSupport.stop(task: &self.runnerInventoryRefreshTask)
+            self.route = route
+            self.gatewayGeneration &+= 1
+            try? self.enqueueWriteLocked([
+                "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": NSNull(),
+            ])
+            self.failPendingInvokesLocked("UNAVAILABLE: Gateway route changed")
+            SimpleTaskSupport.stop(task: &self.eventDeliveryTask)
+            return true
         }
     }
 
     func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async {
-        let context: (UUID, UInt64)? = await withCheckedContinuation { continuation in
-            self.queue.async {
-                guard self.route == route, let processGeneration = self.processGeneration else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: (processGeneration, self.gatewayGeneration))
-            }
+        let context: (UUID, UInt64)? = await self.onQueue {
+            guard self.route == route, let processGeneration = self.processGeneration else { return nil }
+            return (processGeneration, self.gatewayGeneration)
         }
         guard let (processGeneration, previousGatewayGeneration) = context else { return }
         // Buffer approvals before publishing the connection: a same-socket approval
@@ -386,33 +363,30 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             subscription.cancel()
             return
         }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            self.queue.async {
-                defer { continuation.resume() }
-                guard self.route == route,
-                      self.processGeneration == processGeneration,
-                      self.gatewayGeneration == previousGatewayGeneration,
-                      let connection = try? JSONSerialization.jsonObject(with: data)
-                else {
-                    subscription.cancel()
-                    return
-                }
-                self.gatewayGeneration &+= 1
-                try? self.enqueueWriteLocked([
-                    "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": connection,
-                ])
-                let gatewayGeneration = self.gatewayGeneration
-                let session = self.session
-                self.runnerInventoryRefreshTask?.cancel()
-                self.runnerInventoryRefreshTask = Task { [weak self] in
-                    defer { subscription.cancel() }
-                    for await _ in subscription.events {
-                        guard !Task.isCancelled, await session.currentRoute() == route else { break }
-                        await self?.refreshRunnerInventory(
-                            ifCurrentRoute: route,
-                            processGeneration: processGeneration,
-                            gatewayGeneration: gatewayGeneration)
-                    }
+        await self.onQueue { [self] in
+            guard self.route == route,
+                  self.processGeneration == processGeneration,
+                  self.gatewayGeneration == previousGatewayGeneration,
+                  let connection = try? JSONSerialization.jsonObject(with: data)
+            else {
+                subscription.cancel()
+                return
+            }
+            self.gatewayGeneration &+= 1
+            try? self.enqueueWriteLocked([
+                "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": connection,
+            ])
+            let gatewayGeneration = self.gatewayGeneration
+            let session = self.session
+            self.runnerInventoryRefreshTask?.cancel()
+            self.runnerInventoryRefreshTask = Task { [weak self] in
+                defer { subscription.cancel() }
+                for await _ in subscription.events {
+                    guard !Task.isCancelled, await session.currentRoute() == route else { break }
+                    await self?.refreshRunnerInventory(
+                        ifCurrentRoute: route,
+                        processGeneration: processGeneration,
+                        gatewayGeneration: gatewayGeneration)
                 }
             }
         }
@@ -423,26 +397,19 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         processGeneration: UUID,
         gatewayGeneration: UInt64) async
     {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            self.queue.async {
-                defer { continuation.resume() }
-                guard self.route == route,
-                      self.processGeneration == processGeneration,
-                      self.gatewayGeneration == gatewayGeneration
-                else { return }
-                try? self.enqueueWriteLocked([
-                    "type": "runner-inventory-refresh", "generation": gatewayGeneration,
-                ])
-            }
+        await self.onQueue {
+            guard self.route == route,
+                  self.processGeneration == processGeneration,
+                  self.gatewayGeneration == gatewayGeneration
+            else { return }
+            try? self.enqueueWriteLocked([
+                "type": "runner-inventory-refresh", "generation": gatewayGeneration,
+            ])
         }
     }
 
     func stop() async {
-        let cleanup: Task<Void, Never>? = await withCheckedContinuation { continuation in
-            self.queue.async {
-                continuation.resume(returning: self.stopLocked(reason: "worker stopped"))
-            }
-        }
+        let cleanup = await self.onQueue { self.stopLocked(reason: "worker stopped") }
         await cleanup?.value
     }
 
@@ -667,11 +634,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             guard let id = message["id"] as? String,
                   let method = message["method"] as? String
             else { return }
-            guard let route = self.route else {
-                self.writeGatewayUnavailableLocked(id: id)
-                return
-            }
-            guard let paramsData = Self.jsonData(message["params"] ?? [:]),
+            let params = message["params"] ?? [:]
+            guard let route = self.route,
+                  JSONSerialization.isValidJSONObject(params),
+                  let paramsData = try? JSONSerialization.data(withJSONObject: params),
                   let processGeneration = self.processGeneration
             else {
                 self.writeGatewayUnavailableLocked(id: id)
@@ -793,8 +759,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private func finishStartLocked(_ result: Result<MacNodeHostManifest, Error>) {
         self.startTimer?.cancel()
         self.startTimer = nil
-        self.eventDeliveryTask?.cancel()
-        self.eventDeliveryTask = nil
+        SimpleTaskSupport.stop(task: &self.eventDeliveryTask)
         guard let continuation = self.startContinuation else { return }
         self.startContinuation = nil
         continuation.resume(with: result)
@@ -818,8 +783,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.stdoutBuffer.removeAll(keepingCapacity: false)
         self.manifest = nil
         self.updateWorkerHostingLocked(false)
-        self.runnerInventoryRefreshTask?.cancel()
-        self.runnerInventoryRefreshTask = nil
+        SimpleTaskSupport.stop(task: &self.runnerInventoryRefreshTask)
         self.route = nil
         if !preserveStart {
             self.finishStartLocked(.failure(WorkerError.unavailable(reason: reason, diagnostic: diagnostic)))
@@ -827,15 +791,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let readers = self.readers
         self.readers.removeAll()
-        let pending = self.pendingInvokes
-        self.pendingInvokes.removeAll()
-        self.pendingInvokeControls.removeAll()
-        self.pendingInvokeControlOrder.removeAll()
-        for (id, invocation) in pending {
-            invocation.continuation.resume(returning: Self.unavailableResponse(
-                id,
-                "UNAVAILABLE: node-host worker stopped"))
-        }
+        self.failPendingInvokesLocked("UNAVAILABLE: node-host worker stopped")
         // Startup-time exits count too: without this, a worker that dies before
         // its ready manifest never consumes retry budget and the coordinator
         // respawns a broken CLI forever instead of latching retry exhaustion.
@@ -853,19 +809,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             for reader in readers {
                 await reader.finish()
             }
-            await withCheckedContinuation { continuation in
-                guard let self else {
-                    continuation.resume()
-                    return
-                }
-                self.queue.async {
-                    try? self.stdinPipe?.fileHandleForWriting.close()
-                    self.process = nil
-                    self.processCleanupTask = nil
-                    self.stdinPipe = nil
-                    self.processGeneration = nil
-                    continuation.resume()
-                }
+            guard let self else { return }
+            await self.onQueue {
+                try? self.stdinPipe?.fileHandleForWriting.close()
+                self.process = nil
+                self.processCleanupTask = nil
+                self.stdinPipe = nil
+                self.processGeneration = nil
             }
         }
         self.processCleanupTask = cleanupTask
@@ -891,8 +841,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             error: OpenClawNodeError(code: .unavailable, message: message))
     }
 
-    private static func jsonData(_ object: Any) -> Data? {
-        guard JSONSerialization.isValidJSONObject(object) else { return nil }
-        return try? JSONSerialization.data(withJSONObject: object)
+    private func failPendingInvokesLocked(_ message: String) {
+        let pending = self.pendingInvokes
+        self.pendingInvokes.removeAll()
+        self.pendingInvokeControls.removeAll()
+        self.pendingInvokeControlOrder.removeAll()
+        for (id, invocation) in pending {
+            invocation.continuation.resume(returning: Self.unavailableResponse(id, message))
+        }
     }
 }

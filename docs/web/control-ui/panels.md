@@ -75,6 +75,8 @@ The terminal is an unconfined host shell and inherits the Gateway process enviro
 
 Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
 
+Selecting terminal text copies it automatically. A brief **Copied to clipboard** notice confirms a successful copy without taking keyboard focus. If clipboard access fails, no success notice appears.
+
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
 The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
@@ -124,6 +126,23 @@ All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.
 
 The main terminal page at `/terminal` is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
+
+### Terminal fonts
+
+The terminal bundles **JetBrains Mono** with **Symbols Nerd Font Mono** for
+Powerline separators and standard Nerd Font icons. No font installation or
+third-party font service is required for the default.
+
+In **Settings → Appearance → Typography → Terminal font**, enter a local
+monospace family name such as `FiraCode Nerd Font Mono` or choose **Use default**. Clear the field to
+reset it. The font must be installed on the computer running your browser,
+not the remote Gateway or shell host. The setting stays in this browser for
+this Gateway; missing fonts fall back to the bundled default. Changes apply
+to open terminals without restarting their shells, including the full-page
+and focused terminal views.
+
+Programming ligatures (such as a joined arrow for `=>`) are not currently
+supported by the terminal renderer, even with a ligature-capable font.
 
 ## Browser panel
 

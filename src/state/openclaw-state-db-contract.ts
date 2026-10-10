@@ -28,6 +28,7 @@ export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
   "user_profile_identities",
+  "user_background_images",
   "local_workspace_projections",
   "update_runs",
   "session_repository_workspaces",
@@ -92,10 +93,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
-  "skill_workshop_proposal_events",
-  "skill_workshop_collection_reviews",
-  "skill_workshop_proposal_rollbacks",
-  "skill_workshop_proposals",
+  "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
@@ -105,7 +103,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
-  "idx_skill_workshop_collection_reviews_owner_time",
+  "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -154,8 +152,6 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "creator-namespace-v14": "historical cron creators → unknown source attribution",
   "conversation-binding-targets-v15":
     "conversation bindings → exact target keys without agent/session projections",
-  "skill-workshop-directory-ownership-v16":
-    "Skill Workshop ownership → per-agent directory containment",
   "prepared-worker-ownership-v17":
     "prepared workers → one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":

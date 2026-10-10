@@ -74,7 +74,7 @@ function joinPayload(url: string, options: JoinOptions): Record<string, unknown>
     ...(options.transport ? { transport: parseMeetingCliTransport(options.transport) } : {}),
     ...(options.mode ? { mode: parseMeetingCliMode(options.mode) } : {}),
     ...(options.message ? { message: options.message } : {}),
-    ...(options.timeoutMs ? { timeoutMs: parseTimeout(options.timeoutMs) } : {}),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: parseTimeout(options.timeoutMs) }),
   };
 }
 

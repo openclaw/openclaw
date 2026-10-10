@@ -1,4 +1,3 @@
-// Telegram Mini App owner checks.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import { mergeTelegramAccountConfig } from "../accounts.js";

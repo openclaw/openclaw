@@ -119,7 +119,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   aria-expanded=${String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
                   @click=${(event: MouseEvent) => {
                     if (event.currentTarget instanceof HTMLElement) {
-                      host.sidebarMenus.togglePeopleFilterMenu(event.currentTarget);
+                      host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
                     }
                   }}
                 >
@@ -181,33 +181,21 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     ${
                       workload && (workload.open > 0 || workload.running > 0)
                         ? html`<span class="sidebar-online__counts" aria-hidden="true">
-                            ${
-                              workload.running > 0
+                            ${(["running", "open"] as const).map((kind) =>
+                              workload[kind] > 0
                                 ? html`<span
-                                    class="sidebar-online__running"
-                                    data-session-count="running"
-                                    title=${t("presence.sessions.runningCount", { count: String(workload.running) })}
-                                    ><span class="session-run-spinner"></span
+                                    class=${`sidebar-online__${kind}`}
+                                    data-session-count=${kind}
+                                    title=${t(`presence.sessions.${kind}Count`, { count: String(workload[kind]) })}
+                                    ><span
+                                      class=${kind === "running" ? "session-run-spinner" : "sidebar-online__open-icon"}
+                                      >${kind === "running" ? nothing : icons.messageCircle}</span
                                     ><span class="sidebar-online__count"
-                                      >${workload.running}</span
+                                      >${workload[kind]}</span
                                     ></span
                                   >`
-                                : nothing
-                            }
-                            ${
-                              workload.open > 0
-                                ? html`<span
-                                    class="sidebar-online__open"
-                                    data-session-count="open"
-                                    title=${t("presence.sessions.openCount", { count: String(workload.open) })}
-                                    ><span class="sidebar-online__open-icon"
-                                      >${icons.messageCircle}</span
-                                    ><span class="sidebar-online__count"
-                                      >${workload.open}</span
-                                    ></span
-                                  >`
-                                : nothing
-                            }
+                                : nothing,
+                            )}
                           </span>`
                         : nothing
                     }

@@ -59,6 +59,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
     ? normalizeStringEntries(rawQuery.split("/", 2))
     : [rawQuery, null];
 
+  const normalizedChannelQuery = normalizeLowercaseStringOrEmpty(channelQuery);
   const teams = await listTeamsByName(token, teamQuery);
   const results: ChannelDirectoryEntry[] = [];
 
@@ -87,11 +88,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
       if (!name) {
         continue;
       }
-      if (
-        !normalizeLowercaseStringOrEmpty(name).includes(
-          normalizeLowercaseStringOrEmpty(channelQuery),
-        )
-      ) {
+      if (!normalizeLowercaseStringOrEmpty(name).includes(normalizedChannelQuery)) {
         continue;
       }
       results.push({

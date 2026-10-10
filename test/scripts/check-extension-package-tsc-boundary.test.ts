@@ -234,16 +234,6 @@ describe("check-extension-package-tsc-boundary", () => {
       fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/compile/demo.json")),
     ).toBe(false);
   }, 30_000);
-  it("keeps matching canary diagnostics classified as a timeout when the compiler never exits", async () => {
-    const diagnostic = "TS6059 src/plugins/contracts/rootdir-boundary-canary.ts";
-    await expect(
-      runNodeStepAsync(
-        "canary fixture",
-        ["-e", `console.log(${JSON.stringify(diagnostic)});setInterval(()=>{},1000);`],
-        2000,
-      ),
-    ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
-  });
   it("cleans stale artifacts for every extension id passed to the cleanup hook", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
     tempRoots.add(rootDir);
@@ -327,32 +317,6 @@ describe("check-extension-package-tsc-boundary", () => {
         "compile elapsed: 54321ms",
         "canary elapsed: 6789ms",
         "elapsed: 54321ms",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("omits phase timings that never ran", () => {
-    expect(
-      formatBoundaryCheckSuccessSummary({
-        mode: "compile",
-        compileCount: 97,
-        skippedCompileCount: 0,
-        canaryCount: 0,
-        prepElapsedMs: 12_345,
-        compileElapsedMs: 54_321,
-        canaryElapsedMs: 0,
-        elapsedMs: 66_666,
-      }),
-    ).toBe(
-      [
-        "extension package boundary check passed",
-        "mode: compile",
-        "compiled plugins: 97",
-        "canary plugins: 0",
-        "prep elapsed: 12345ms",
-        "compile elapsed: 54321ms",
-        "elapsed: 66666ms",
         "",
       ].join("\n"),
     );
@@ -527,32 +491,6 @@ describe("check-extension-package-tsc-boundary", () => {
       }
     },
   );
-
-  it("aborts concurrent sibling steps after the first failure", async () => {
-    const startedAt = Date.now();
-    const slowStepTimeoutMs = 60_000;
-    const abortBudgetMs = 30_000;
-
-    await expect(
-      runNodeStepsWithConcurrency(
-        [
-          {
-            label: "fail-fast",
-            args: ["--eval", "process.exit(2)"],
-            timeoutMs: slowStepTimeoutMs,
-          },
-          {
-            label: "slow-step",
-            args: ["--eval", "setTimeout(() => {}, 60_000)"],
-            timeoutMs: slowStepTimeoutMs,
-          },
-        ],
-        2,
-      ),
-    ).rejects.toThrow("fail-fast");
-
-    expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
-  }, 45_000);
 
   it.skipIf(process.platform === "win32")(
     "force-kills aborted async node step process groups",

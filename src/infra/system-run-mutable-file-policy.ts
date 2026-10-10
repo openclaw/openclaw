@@ -49,23 +49,20 @@ export function hasMutableSymlinkPathComponentSync(targetPath: string): boolean 
   return false;
 }
 
-export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
-  if (
+function isMutableShellPathSync(targetPath: string): boolean {
+  return (
     isMutableByCurrentProcessSync(targetPath) ||
     isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
     hasMutableSymlinkPathComponentSync(targetPath)
-  ) {
+  );
+}
+
+export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
+  if (isMutableShellPathSync(targetPath)) {
     return true;
   }
   const realPath = safeRealpathSync(targetPath);
-  if (!realPath) {
-    return true;
-  }
-  return (
-    isMutableByCurrentProcessSync(realPath) ||
-    isMutableByCurrentProcessSync(path.dirname(realPath)) ||
-    hasMutableSymlinkPathComponentSync(realPath)
-  );
+  return !realPath || isMutableShellPathSync(realPath);
 }
 
 export function looksLikePathToken(token: string): boolean {

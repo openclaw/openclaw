@@ -59,7 +59,17 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
-Live text uses append deltas after an initial recipient snapshot. An outer event
+Live text uses append deltas after an initial recipient snapshot. The
+`chat.history` field `inFlightRun.text` restores only the current run's unpersisted
+assistant tail. Silent-reply suppression uses the full available source; the tail keeps existing directive and media normalization without being classified as a silent reply again. If the cap evicts source context, retained tail text stays visible conservatively. Cumulative snapshots or replacements that restore text evicted by the live buffer cap may redisplay committed text when ownership is unknown, preserving unsaved output.
+When durable history or a keyed
+commentary item takes ownership of live text, the Gateway sends an existing
+`replace: true` frame before subsequent append deltas. Terminal result snapshots
+retain their complete result in `message.content`. A buffer-backed terminal can
+also supply the existing `message.openclawDisplayContent` projection: the same
+unpersisted tail finalized for display, including an explicitly empty tail and
+any Canvas blocks. The Control UI applies that projection before storing its
+live view; delivery consumers retain the complete content. An outer event
 sequence gap means a client may have lost part of that baseline: retire the
 connection and reconnect before applying more deltas. If the frame revealing the
 gap is a `chat` final, aborted, or error event, deliver its authoritative terminal
@@ -69,6 +79,26 @@ Renew session subscriptions
 after reconnect; the Gateway sends a complete snapshot with the next text frame
 for each observed run. Run-local payload sequences can skip numbers because text
 is paced and coalesced; they are not the outer connection sequence.
+
+Canonical `agent` events with `stream: "item"` and `data.kind: "preamble"`
+include optional `preamble` metadata. When the item replaces a live preview,
+`preamble.retainedText` supplies the producer's remaining answer projection,
+including an empty string when no answer prefix remains. An empty `preamble`
+object means this event carries no new retirement projection. Earlier preview
+credit can still cover later item IDs and completion echoes. Append-only clients
+can preserve a preview they already delivered, carry its credit across those
+identities, and rebase their final-answer state. Chat and raw assistant
+frames are paced independently; their arrival order and payload sequence numbers
+are not a reclassification identity. Older clients can ignore this additive
+metadata. ACP commentary reconciliation requires an updated Gateway and bridge.
+
+Retirement uses assistant occurrence identity, never text-prefix matching.
+Producers correlate live occurrences with committed transcript idempotency keys
+or the host's exact source receipts. Native harnesses that persist part of a
+still-streaming item retain its text-merge `itemId` and separately identify each
+captured interval with `occurrenceId`. Unidentified text remains in the
+live tail until it gains an identity-bearing commit or the run terminates;
+equal durable text alone cannot hide it.
 
 Clients that share one connection among several views must keep reconstruction
 with their local stream owner. A new local listener may join after the wire

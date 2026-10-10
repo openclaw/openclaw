@@ -296,8 +296,23 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
 export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
+export function isUnsupportedReasoningEffortParameterError(raw: string): boolean {
+  if (/supported values(?: are)?:/i.test(raw)) {
+    return false;
+  }
+  return (
+    /\b(?:unknown|unrecognized|unsupported|unexpected)\s+(?:field|parameter|(?:keyword\s+)?argument)\s*:?\s*["'`\\]*reasoning_effort(?![\w./-])/i.test(
+      raw,
+    ) ||
+    /(?<![\w./-])reasoning_effort["'`\\]*\s+(?:parameter\s+)?(?:is\s+)?(?:not supported|unsupported)\b/i.test(
+      raw,
+    )
+  );
+}
 export function isSessionTranscriptValidationErrorMessage(raw: string): boolean {
-  return /\binvalid session transcript entry\b/i.test(raw);
+  return /\b(?:invalid session transcript entry|persisted legacy session transcripts require doctor\/import migration)\b/i.test(
+    raw,
+  );
 }
 export function isRateLimitErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);

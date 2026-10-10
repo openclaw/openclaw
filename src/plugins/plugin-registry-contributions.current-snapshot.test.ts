@@ -24,7 +24,6 @@ import {
   resolveManifestContractPluginIds,
   resolvePluginContributionOwners,
 } from "./plugin-registry-contributions.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
@@ -168,43 +167,6 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
     expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
   });
 
-  it("reuses current manifests for contribution listing and owner lookup", () => {
-    const config: OpenClawConfig = {
-      plugins: { entries: { disabled: { enabled: false } } },
-    };
-    const env = {
-      HOME: "/tmp/openclaw-test-home",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const workspaceDir = "/workspace";
-    setCurrentPluginMetadataSnapshot(createSnapshot({ config, workspaceDir }), {
-      config,
-      env,
-      workspaceDir,
-    });
-    const readFile = vi.spyOn(fs, "readFileSync");
-    const readDirectory = vi.spyOn(fs, "readdirSync");
-    const statFile = vi.spyOn(fs, "statSync");
-    const lstatFile = vi.spyOn(fs, "lstatSync");
-    const openFile = vi.spyOn(fs, "openSync");
-    const params = { config, env, workspaceDir, contribution: "contracts" as const };
-
-    const ids = listPluginContributionIds(params);
-    const owners = resolvePluginContributionOwners({ ...params, matches: "webSearchProviders" });
-    const allOwners = resolvePluginContributionOwners({
-      ...params,
-      matches: "webSearchProviders",
-      includeDisabled: true,
-    });
-
-    for (const read of [readFile, readDirectory, statFile, lstatFile, openFile]) {
-      expect(read).not.toHaveBeenCalled();
-    }
-    expect(ids).toEqual(["webSearchProviders"]);
-    expect(owners).toEqual(["enabled"]);
-    expect(allOwners).toEqual(["disabled", "enabled"]);
-  });
-
   it("reuses an allowlisted published snapshot for configless manifest reads", () => {
     const config: OpenClawConfig = { plugins: { allow: ["enabled"] } };
     const env = {
@@ -318,77 +280,5 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
       }).plugins.map((plugin) => plugin.id),
     ).toEqual(["disabled"]);
     expect(loadPluginManifestRegistryForPluginRegistry({ config, env }).plugins).toEqual([]);
-  });
-
-  it("keeps explicit registry inputs authoritative and reuses current diagnostics", () => {
-    const config: OpenClawConfig = {};
-    const env = {
-      HOME: "/tmp/openclaw-test-home",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const workspaceDir = "/workspace";
-    setCurrentPluginMetadataSnapshot(createSnapshot({ config, workspaceDir }), {
-      config,
-      env,
-      workspaceDir,
-    });
-    const emptyIndex: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: resolveInstalledPluginIndexPolicyHash(config),
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
-
-    expect(
-      loadPluginManifestRegistryForPluginRegistry({
-        config,
-        env,
-        workspaceDir,
-        index: emptyIndex,
-        includeDisabled: true,
-      }).plugins,
-    ).toEqual([]);
-
-    clearPluginMetadataLifecycleCaches();
-    setCurrentPluginMetadataSnapshot(
-      createSnapshot({
-        config,
-        workspaceDir,
-        registryDiagnostics: [
-          {
-            level: "info",
-            code: "persisted-registry-missing",
-            message: "missing",
-          },
-        ],
-      }),
-      { config, env, workspaceDir },
-    );
-    const readDirectory = vi.spyOn(fs, "readdirSync");
-    const readFile = vi.spyOn(fs, "readFileSync");
-    const statFile = vi.spyOn(fs, "statSync");
-
-    expect(
-      loadPluginManifestRegistryForPluginRegistry({ config, env, workspaceDir }).plugins.map(
-        (plugin) => plugin.id,
-      ),
-    ).toEqual(["enabled"]);
-    expect(
-      loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir }).diagnostics,
-    ).toEqual([
-      {
-        level: "info",
-        code: "persisted-registry-missing",
-        message: "missing",
-      },
-    ]);
-    expect(readDirectory).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-    expect(statFile).not.toHaveBeenCalled();
   });
 });

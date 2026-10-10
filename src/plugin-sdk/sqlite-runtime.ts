@@ -13,6 +13,7 @@ export {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+export { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 export {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,
@@ -29,6 +30,12 @@ export {
 export { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 export { withFreshOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 export { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
+export { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
+export {
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../state/openclaw-agent-execution.js";
+export type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
 export { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 export { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";

@@ -14,7 +14,7 @@ import { spawnBrokerContextEntrypoints } from "./context-runtime.test-support.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () => {
   it.each(["exit", "timeout"] as const)(

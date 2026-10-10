@@ -14,6 +14,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "content-version"
+  | "file-generation"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -35,6 +36,7 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
+  | { ok: true; generation: string }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
@@ -52,6 +54,7 @@ export type SqliteAuthProfileReadOptions = {
   mode: "auth-profile-rows";
   source: "canonical" | "snapshot";
   expectedIdentity: string;
+  artifactPreserving?: true;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   stagingRoot?: never;
@@ -122,6 +125,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       "contentVersion" in value &&
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
+    (value.ok === true && "generation" in value && typeof value.generation === "string") ||
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
@@ -164,7 +168,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "consolidated" | "content-version",
+  mode: "sync" | "async" | "consolidated" | "content-version" | "file-generation",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -227,6 +231,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;
+  }
+  if (mode === "file-generation" && "generation" in result) {
+    return result.generation;
   }
   if (mode === "reclaim" && "warnings" in result) {
     return result.warnings;

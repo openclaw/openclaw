@@ -385,7 +385,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const { deliverTarget, replyTarget, replyReference, autoThreadContext } = replyPlan;
+  const { deliverTarget, replyTarget, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext
@@ -621,41 +621,35 @@ export async function buildDiscordMessageProcessContext(params: {
   return {
     ctxPayload,
     persistedSessionKey,
-    turn: {
-      storePath,
-      record: {
-        updateLastRoute: {
-          sessionKey: persistedSessionKey,
-          channel: "discord",
-          to: lastRouteTo,
-          accountId: route.accountId,
-          mainDmOwnerPin:
-            isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: author.id,
-                  onSkip: ({
-                    ownerRecipient,
-                    senderRecipient,
-                  }: {
-                    ownerRecipient: string;
-                    senderRecipient: string;
-                  }) => {
-                    logVerbose(
-                      `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        },
-        onRecordError: (err: unknown) => {
-          logVerbose(`discord: failed updating session meta: ${String(err)}`);
-        },
+    record: {
+      updateLastRoute: {
+        sessionKey: persistedSessionKey,
+        channel: "discord",
+        to: lastRouteTo,
+        accountId: route.accountId,
+        mainDmOwnerPin:
+          isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: author.id,
+                onSkip: ({
+                  ownerRecipient,
+                  senderRecipient,
+                }: {
+                  ownerRecipient: string;
+                  senderRecipient: string;
+                }) => {
+                  logVerbose(
+                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
+      },
+      onRecordError: (err: unknown) => {
+        logVerbose(`discord: failed updating session meta: ${String(err)}`);
       },
     },
     replyPlan,
-    deliverTarget,
-    replyTarget,
-    replyReference,
   };
 }

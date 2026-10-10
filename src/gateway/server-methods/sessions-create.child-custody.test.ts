@@ -35,7 +35,7 @@ import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js"
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
-import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
@@ -81,7 +81,9 @@ async function createHostedChildFixture(
   const childKey = "agent:main:dashboard:accepted-child";
   const childKeys = [childKey];
   const existingOwnerId = "existing-child-owner";
-  const releaseProfileCatalog = mergedParentCreator ? retainUserProfileCatalog() : undefined;
+  const releaseProfileCatalog = mergedParentCreator
+    ? (await prepareUserProfileCatalog()).release
+    : undefined;
   const profile = ensureProfileForEmail(
     mergedParentCreator ? "child-owner-current@example.test" : "child-owner@example.test",
   );

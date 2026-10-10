@@ -4290,9 +4290,7 @@ describe("prepareCliRunContext", () => {
 
       expect(getLiveSessionGeneration).toHaveBeenCalledWith({
         backendId: "claude-cli",
-        agentAccountId: undefined,
         agentId: "main",
-        authProfileId: "history-test:account",
         sessionId: "session-test",
         sessionKey: "agent:main:main",
       });

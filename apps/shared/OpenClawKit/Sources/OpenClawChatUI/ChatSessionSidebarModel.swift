@@ -247,25 +247,23 @@ public enum ChatSessionSidebarModel {
                 row.childSessions = nil // Group projected roots without rebuilding their child links.
                 return row
             }
-            return self.groupedSections(
+            #else
+            let groupRows = visible
+            #endif
+            let sections = self.groupedSections(
                 groupRows,
                 groups: groups,
                 options: viewOptions,
                 peopleAvailable: owners.map { $0.count >= 2 } ?? true,
                 selfOwnerID: selfOwnerID,
                 sectionOrder: sectionOrder,
-                identity: identity).map {
+                identity: identity)
+            #if os(macOS)
+            return sections.map {
                 Section(id: $0.id, title: $0.title, nodes: $0.nodes.compactMap { byKey[identity($0.session)] })
             }
             #else
-            return self.groupedSections(
-                visible,
-                groups: groups,
-                options: viewOptions,
-                peopleAvailable: owners.map { $0.count >= 2 } ?? true,
-                selfOwnerID: selfOwnerID,
-                sectionOrder: sectionOrder,
-                identity: identity)
+            return sections
             #endif
         }
         // Pin state owns first placement. Group sections then preserve the

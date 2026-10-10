@@ -55,7 +55,7 @@ it.each(["owner", "tile"] as const)(
         container,
       );
     onTestFinished(() => {
-      attachmentDraft.reset({ release: true });
+      attachmentDraft.reset();
       textareaController.disconnect();
       render(nothing, container);
     });
