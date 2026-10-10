@@ -582,7 +582,14 @@ describe("session placement startup", () => {
   it("does not redispatch a terminal placement during recovery", async () => {
     const request = vi
       .fn()
-      .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
+      .mockResolvedValueOnce({
+        session: {
+          placement: {
+            state: "failed",
+            recoveryError: "Provider could not allocate the requested environment",
+          },
+        },
+      })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         placement: { state: "active", environmentId: "environment-2" },
@@ -599,7 +606,10 @@ describe("session placement startup", () => {
         },
         () => true,
       ),
-    ).resolves.toEqual({ status: "dispatch-rejected", error: "session placement became failed" });
+    ).resolves.toEqual({
+      status: "dispatch-rejected",
+      error: "Provider could not allocate the requested environment",
+    });
     expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
   });

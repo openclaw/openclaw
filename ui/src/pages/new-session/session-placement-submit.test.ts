@@ -620,7 +620,12 @@ describe("session placement draft advancement", () => {
       }),
     );
     const request = vi.fn().mockResolvedValueOnce({
-      session: { placement: { state: "failed" } },
+      session: {
+        placement: {
+          state: "failed",
+          recoveryError: "Provider could not allocate the requested environment",
+        },
+      },
     });
     const clearRecovery = vi.fn();
 
@@ -646,7 +651,7 @@ describe("session placement draft advancement", () => {
       recovery: {
         reason: "not-sent",
         message: "not sent yet",
-        error: "session placement became failed",
+        error: "Provider could not allocate the requested environment",
       },
     });
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
