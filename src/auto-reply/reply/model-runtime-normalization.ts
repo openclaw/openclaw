@@ -103,6 +103,8 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
+  /** Idle model-only host changes need no thinking policy refresh. */
+  thinkingPolicyRequired?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -201,7 +203,12 @@ export async function prepareModelSelectionRuntime(params: {
           modelBaseUrl: selected?.baseUrl,
           sessionEntry: runtimeEntry,
         });
-  if (params.cfg.plugins?.enabled === false) {
+  const needsThinkingObservation =
+    params.thinkingPolicyRequired !== false ||
+    agentRuntime !== "openclaw" ||
+    !selected ||
+    (selected.nativeRuntime !== undefined && selected.nativeRuntime !== "openclaw");
+  if (params.cfg.plugins?.enabled === false || !needsThinkingObservation) {
     return {
       status: "ready",
       runtime,

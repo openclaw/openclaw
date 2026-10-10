@@ -808,7 +808,9 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       }),
     );
 
-    expect(loadModelCatalogMock).toHaveBeenCalledTimes(2);
+    // Admission, selection hydration, and the executor's per-candidate capability proof.
+    // The admitted owner lacks this runtime-only row, so the executor observes it again.
+    expect(loadModelCatalogMock).toHaveBeenCalledTimes(3);
     const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("ollama");
     expect(embeddedCall.model).toBe("minimax-m3:cloud");
