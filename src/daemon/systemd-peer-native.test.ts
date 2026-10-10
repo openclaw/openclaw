@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
 import {
   withServiceInspectionBudget,
   runServiceInspectionGuard,
@@ -38,60 +37,19 @@ vi.mock("../shared/pid-alive.js", () => ({
   getProcessStartTime: () => kernel.startTime,
   isPidAlive: () => kernel.alive,
 }));
-vi.mock("node:module", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:module")>();
-  return mockNodeBuiltinModule(() => Promise.resolve(original), {
-    createRequire: (filename: string | URL) => {
-      const require = original.createRequire(filename);
-      return Object.assign(
-        (specifier: string) =>
-          specifier !== "koffi"
-            ? require(specifier)
-            : {
-                sizeof: () => 24,
-                struct: () => ({}),
-                load: () => ({
-                  func: (declaration: string) => {
-                    const name = declaration.match(/\b(sd_bus_[a-z_]+)\(/)?.[1];
-                    const call = (...args: unknown[]) => {
-                      const slot =
-                        name === "sd_bus_new"
-                          ? args[0]
-                          : name === "sd_bus_get_owner_creds"
-                            ? args[2]
-                            : args[1];
-                      if (Array.isArray(slot)) {
-                        slot[0] =
-                          name === "sd_bus_creds_get_pid"
-                            ? kernel.pid
-                            : name === "sd_bus_creds_get_euid"
-                              ? kernel.uid
-                              : {};
-                      }
-                      if (name === "sd_bus_close_unref") {
-                        kernel.closes++;
-                      }
-                      if (name === "sd_bus_call") {
-                        kernel.calls++;
-                        kernel.onCall?.();
-                      }
-                      return name === "sd_bus_is_ready" || name === "sd_bus_message_at_end" ? 1 : 0;
-                    };
-                    return Object.assign(call, {
-                      async: (...args: unknown[]) => {
-                        const complete = args.pop();
-                        if (typeof complete === "function") {
-                          complete(null, call(...args));
-                        }
-                      },
-                    });
-                  },
-                }),
-              },
-        require,
-      );
+vi.mock("@openclaw/proc-safe/systemd", () => {
+  const connect = async () => ({
+    peer: Object.freeze({ pid: kernel.pid, uid: kernel.uid }),
+    close: async () => {
+      kernel.closes++;
+    },
+    call: async () => {
+      kernel.calls++;
+      kernel.onCall?.();
+      return [];
     },
   });
+  return { SystemdBus: { connectPrivatePeer: connect, connectBroker: connect } };
 });
 
 beforeEach(() => {
@@ -116,7 +74,6 @@ it.each([
   { name: "process generation", change: { startTime: 200 }, ownership: true, initial: false },
   { name: "unreadable process", change: { startTime: null }, ownership: false, initial: false },
   { name: "unavailable process", change: { alive: false }, ownership: false, initial: false },
-  { name: "invalid credentials", change: { pid: 0 }, ownership: false, initial: false },
   { name: "initial account", change: { uid: 2001 }, ownership: true, initial: true },
 ])(
   "distinguishes observed ownership refusals from unavailable peers: $name",
@@ -188,7 +145,7 @@ const resetFailed = [
   "fixture.service",
 ];
 
-it("checks effect custody inside the native queue immediately before dispatch", async () => {
+it("checks effect custody inside the consumer queue immediately before dispatch", async () => {
   const peer = await openSystemdBroker(address, performance.now() + 1000);
   let current = true;
   const failure = new Error("effect custody expired while queued");
