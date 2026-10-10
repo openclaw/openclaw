@@ -264,7 +264,6 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
   // An in-flight list may finish with its original registry after a hot reload.
   // Delivery still applies current caller visibility; the next request refreshes registrations.
   const progress = new SessionCatalogListLifetime(
-    () => true,
     [
       getGatewayRestartDrainSignal(),
       context.requestEntryLifetime?.signal,

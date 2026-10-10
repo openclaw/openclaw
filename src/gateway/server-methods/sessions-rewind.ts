@@ -444,12 +444,10 @@ async function mutatePreparedSessionAtMessage({
               commitGuard: assertMutationCurrent,
               context,
               forkHarness: upstreamForkHarness,
-              link: upstreamLink,
               requestedAgentId,
               sessionKey,
               source: current,
               targetKey,
-              upstreamContext,
             })
           : { assertCurrent: assertMutationCurrent, assertRollbackCurrent: assertMutationCurrent };
       if (upstreamForkHarness) {

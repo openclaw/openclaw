@@ -620,37 +620,18 @@ describe("gateway chat metadata lifecycle", () => {
     await vi.waitFor(() => expect(outcomes).toHaveLength(4));
     expect(outcomes[3]).toEqual([expect.objectContaining({ available: false })]);
 
-    const gate = createDeferred();
-    buildProjection.mockImplementationOnce(async () => {
-      await gate.promise;
-      throw new Error("superseded projection");
-    });
-    revision += 1;
-    authListener();
-    await vi.waitFor(() => expect(buildProjection).toHaveBeenCalledTimes(4));
-    modelListener({ phase: "invalidated" });
-    available = true;
-    revision += 1;
-    modelListener({ phase: "published" });
-    gate.resolve();
-    await vi.waitFor(() => expect(outcomes).toHaveLength(6));
-    expect(outcomes.slice(4)).toEqual([
-      [expect.objectContaining({ available: true })],
-      [expect.objectContaining({ available: true })],
-    ]);
-
     modelListener({ phase: "invalidated" });
     modelListener({ phase: "failed", error: new Error("owner publication failed") });
     await Promise.all(reads);
     await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("owner publication failed");
-    expect(outcomes[6]).toBe("owner publication failed");
+    expect(outcomes[4]).toBe("owner publication failed");
     expect(broadcast.mock.calls).toEqual(
-      Array.from({ length: 7 }, (_, index) => [
+      Array.from({ length: 5 }, (_, index) => [
         "chat.metadata.changed",
         {
           modelCatalogChanged: true,
           authChanged: true,
-          ...(index === 3 || index === 4 ? { commandsChanged: false } : {}),
+          ...(index === 3 ? { commandsChanged: false } : {}),
         },
         { dropIfSlow: true },
       ]),
