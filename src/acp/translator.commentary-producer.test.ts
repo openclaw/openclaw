@@ -16,14 +16,13 @@ it.each([false, true])(
   "delivers generic commentary once through Gateway and ACP (batchedPreview=%s)",
   async (batchedPreview) => {
     const sent = createDeferred<string>();
-    const acp = createSessionAgentHarness(
-      vi.fn(async (method, params) => {
-        if (method === "chat.send") {
-          sent.resolve(params.idempotencyKey);
-        }
-        return {};
-      }),
-    );
+    const request = vi.fn().mockImplementation(async (method, params) => {
+      if (method === "chat.send") {
+        sent.resolve(params.idempotencyKey);
+      }
+      return {};
+    });
+    const acp = createSessionAgentHarness(request);
     const prompt = promptAgent(acp.agent);
     const runId = await sent.promise;
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
