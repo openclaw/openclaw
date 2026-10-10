@@ -25,6 +25,7 @@ import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -69,7 +70,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
-    prepareSkillLibraryAuthoring,
+    skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
     externalAuthorityAdmission,
@@ -301,9 +302,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             }
           }
           phase?.mark("preparation");
-          await turn.prepareSessionCreation();
-          phase?.mark("authoring");
-          const skillLibraryAuthoring = await prepareSkillLibraryAuthoring();
+          const skillLibraryAuthoring = await prepareGatewaySkillLibraryTurn(
+            skillLibrary,
+            turn.prepareSessionCreation,
+            () => phase?.mark("authoring"),
+          );
           admission.assertWorkAdmissionCurrent();
           phase?.mark("preparation");
           const pluginBoundMedia = await pluginBoundMediaPromise;

@@ -26,7 +26,7 @@ import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
-  choiceMatchesCredential,
+  findSetupCredentialChoice,
   supportsSetupManualSecret,
   supportsSetupTextInference,
 } from "./setup-inference-auth-options.js";
@@ -244,7 +244,7 @@ async function stagePreparedCandidate(
         return ctx.beforePersistentEffect("credential");
       },
     });
-    ctx.credentialsSaved = true;
+    ctx.effects.credentialsSaved = true;
     profile = saved.profile;
     preparedConfig = saved.config;
   }
@@ -297,11 +297,7 @@ export async function stageSavedAuthCandidate(
     includeUntrustedWorkspacePlugins: false,
     includeWorkspacePlugins: false,
   });
-  const choice = saved?.authChoice
-    ? choices.find(
-        (entry) => entry.choiceId === saved.authChoice && entry.pluginId === saved.pluginId,
-      )
-    : choices.find((entry) => choiceMatchesCredential(entry, credential));
+  const choice = findSetupCredentialChoice(choices, credential);
   if (saved?.authChoice && !choice) {
     return {
       error: "The saved sign-in's provider is no longer available. Review installed providers.",
@@ -343,7 +339,7 @@ export async function stageSavedAuthCandidate(
         (providerConfig.headers ??= {})["api-key"] = key;
       }
     }
-    ctx.credentialsSaved = true;
+    ctx.effects.credentialsSaved = true;
     return await stagePreparedCandidate(ctx, {
       result: { profiles: [{ profileId, credential }], defaultModel: modelRef },
       config,

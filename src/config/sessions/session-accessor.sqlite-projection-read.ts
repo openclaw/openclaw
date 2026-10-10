@@ -13,7 +13,10 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptContextVersion,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
@@ -27,6 +30,7 @@ type ActiveTranscriptDatabase = Pick<
   | "session_transcript_cold_archives"
   | "transcript_rewrite_watermarks"
   | "session_transcript_index_state"
+  | "session_windows"
   | "transcript_event_identities"
   | "transcript_events"
 >;
@@ -36,6 +40,7 @@ type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "pa
 export type CurrentTranscriptProjection = {
   database: TranscriptReadDatabase;
   generation: string | undefined;
+  version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
   latestIndexedReset?: { active_position: number; event_type: "reset"; seq: number } | null;
   unindexedHistoryControls?: {
@@ -284,6 +289,7 @@ function buildProjectionSnapshotQuery(
   return db
     .selectFrom(target)
     .leftJoin("session_transcript_index_state as state", "state.session_id", "target.session_id")
+    .leftJoin("session_windows as window", "window.session_id", "target.session_id")
     .leftJoin(
       "transcript_rewrite_watermarks as watermark",
       "watermark.session_id",
@@ -309,6 +315,7 @@ function buildProjectionSnapshotQuery(
     )
     .select([
       "watermark.generation",
+      "window.transcript_updated_at",
       "state.active_event_count",
       "state.active_message_count",
       "state.indexed_seq",
@@ -381,6 +388,7 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
   return {
     cold: Boolean(row.is_cold),
     generation: row.generation ?? undefined,
+    updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
     latestIndexedReset:
       typeof row.reset_seq === "number" && typeof row.reset_active_position === "number"
@@ -441,6 +449,11 @@ export function readCurrentProjectionSnapshot<T>(
       value: read({
         database,
         generation: snapshot.generation,
+        version: {
+          generation: snapshot.generation ?? null,
+          rawSeq: snapshot.latestSeq,
+          updatedAt: snapshot.updatedAt,
+        },
         hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
         latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
         resolved,

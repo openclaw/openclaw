@@ -108,6 +108,18 @@ afterEach(async () => {
 
 describe("OpenAI embedding provider HTTP contract", () => {
   it.each([
+    { baseUrl: "https://api.openai.com/v1", cap: 2048 },
+    { baseUrl: "https://API.OPENAI.COM./v1", cap: 2048 },
+    { baseUrl: "http://127.0.0.1:11434/v1", cap: undefined },
+    { baseUrl: "https://api.openai.com.example.test/v1", cap: undefined },
+  ])("declares the input-array cap for $baseUrl as $cap", async ({ baseUrl, cap }) => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ remote: { baseUrl } }),
+    );
+    expect(provider.maxInputsPerRequest).toBe(cap);
+  });
+
+  it.each([
     { additional: "none", custom: false, binding: undefined },
     { additional: "codex", custom: false, binding: undefined },
     { additional: "token", custom: false, binding: undefined },

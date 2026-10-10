@@ -7,6 +7,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import { i18n, t } from "../i18n/index.ts";
+import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import {
@@ -26,6 +27,8 @@ import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progr
 import "./session-hovercard.css";
 import "./tooltip.ts";
 import "./viewer-facepile.ts";
+
+registerGitHubEnglish();
 
 // Preserve the pre-dropdown facepile footprint; further identities remain linked in the menu.
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
@@ -74,21 +77,26 @@ function renderDiffStats(item: { additions?: number; deletions?: number }) {
     return nothing;
   }
   return html`<span class="session-hovercard__diff">
-    ${
-      item.additions === undefined
+    ${(["additions", "deletions"] as const).map((kind) =>
+      item[kind] === undefined
         ? nothing
-        : html`<span class="session-hovercard__additions"
-            >+${item.additions.toLocaleString()}</span
-          >`
-    }
-    ${
-      item.deletions === undefined
-        ? nothing
-        : html`<span class="session-hovercard__deletions"
-            >−${item.deletions.toLocaleString()}</span
-          >`
-    }
+        : html`<span class="session-hovercard__${kind}"
+            >${kind === "additions" ? "+" : "−"}${item[kind].toLocaleString()}</span
+          >`,
+    )}
   </span>`;
+}
+
+function renderSection(
+  className: string,
+  content: TemplateResult | typeof nothing,
+  label: string | typeof nothing = nothing,
+) {
+  return content === nothing
+    ? nothing
+    : html`<section class="session-hovercard__section ${className}" aria-label=${label}>
+        ${content}
+      </section>`;
 }
 
 function sessionAgeBucket(diffMs: number): { value: number; unit: SessionAgeUnit } {
@@ -393,13 +401,12 @@ function renderAgentNotepad(card: ProgressCard | null | undefined) {
   if (!card?.markdown?.trim()) {
     return nothing;
   }
-  return html`<section
-    class="session-hovercard__section session-hovercard__notepad"
-    aria-label=${t("sessionHovercard.agentNotepad")}
-  >
-    <div class="session-hovercard__notepad-title">${t("sessionHovercard.agentNotepad")}</div>
-    ${renderProgressCardMarkdown(card.markdown, { promoteProgress: true })}
-  </section>`;
+  return renderSection(
+    "session-hovercard__notepad",
+    html`<div class="session-hovercard__notepad-title">${t("sessionHovercard.agentNotepad")}</div>
+      ${renderProgressCardMarkdown(card.markdown, { promoteProgress: true })}`,
+    t("sessionHovercard.agentNotepad"),
+  );
 }
 
 function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
@@ -512,68 +519,46 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     return nothing;
   }
   return html`<div class="session-hovercard">
-    ${
-      input.row
-        ? html`<section class="session-hovercard__section session-hovercard__section--header">
-            ${renderHeader(input)}
-          </section>`
-        : nothing
-    }
-    ${
-      hasContext
-        ? html`<section class="session-hovercard__section session-hovercard__section--metadata">
-            ${renderSessionHovercardContext(input, headsUp)}
-          </section>`
-        : nothing
-    }
-    ${
+    ${renderSection("session-hovercard__section--header", input.row ? renderHeader(input) : nothing)}
+    ${renderSection("session-hovercard__section--metadata", hasContext ? renderSessionHovercardContext(input, headsUp) : nothing)}
+    ${renderSection(
+      "session-hovercard__section--prs",
       hasPullRequestDetails
-        ? html`<section class="session-hovercard__section session-hovercard__section--prs">
-            ${renderPullRequestDetails(input.pullRequests)}
-            ${
-              input.pullRequests?.status !== "ready"
-                ? html`<div class="session-hovercard__more" role="status">
-                    ${t(
-                      input.pullRequests?.status === "rate-limited"
-                        ? "chat.pullRequests.rateLimited"
-                        : "chat.pullRequests.unavailable",
-                    )}
-                  </div>`
-                : nothing
-            }
-          </section>`
-        : nothing
-    }
-    ${
+        ? html`${renderPullRequestDetails(input.pullRequests)}
+          ${
+            input.pullRequests?.status !== "ready"
+              ? html`<div class="session-hovercard__more" role="status">
+                  ${t(input.pullRequests?.status === "rate-limited" ? "chat.pullRequests.rateLimited" : "chat.pullRequests.unavailable")}
+                </div>`
+              : nothing
+          }`
+        : nothing,
+    )}
+    ${renderSection(
+      "session-hovercard__section--optional",
       lastMessagePreview
-        ? html`<section class="session-hovercard__section session-hovercard__section--optional">
-            <div class="session-hovercard__excerpt">${lastMessagePreview}</div>
-          </section>`
-        : nothing
-    }
-    ${
+        ? html`<div class="session-hovercard__excerpt">${lastMessagePreview}</div>`
+        : nothing,
+    )}
+    ${renderSection(
+      "session-hovercard__error",
       input.row?.attention?.kind === "error"
-        ? html`<section class="session-hovercard__section session-hovercard__error">
-            <span class="session-hovercard__error-icon" aria-hidden="true"
+        ? html`<span class="session-hovercard__error-icon" aria-hidden="true"
               >${icons.alertTriangle}</span
             >
-            <span>${sessionAttentionSubtitle(input.row.attention)}</span>
-          </section>`
-        : nothing
-    }
+            <span>${sessionAttentionSubtitle(input.row.attention)}</span>`
+        : nothing,
+    )}
     ${renderAgentNotepad(input.progressCard)}
-    ${
+    ${renderSection(
+      "session-hovercard__section--attribution",
       channelAttribution !== nothing
-        ? html`<section
-            class="session-hovercard__section session-hovercard__section--attribution"
-            aria-label=${t("sessionHovercard.sessionParticipants")}
-          >
-            <div class="session-hovercard__attribution-label">
+        ? html`<div class="session-hovercard__attribution-label">
               ${t("sessionHovercard.sessionParticipants")}
             </div>
-            ${channelAttribution}
-          </section>`
-        : nothing
-    }
+            ${channelAttribution}`
+        : nothing,
+      t("sessionHovercard.sessionParticipants"),
+    )}
   </div>`;
 }

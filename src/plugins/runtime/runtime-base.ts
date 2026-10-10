@@ -24,6 +24,7 @@ export function createRuntimeBase(): Pick<
       resolveStateDir,
       openBlobStore: unavailable("openBlobStore"),
       openKeyedStore: unavailable("openKeyedStore"),
+      openKeyedStoreV2: unavailable("openKeyedStoreV2"),
       openSyncKeyedStore: unavailable("openSyncKeyedStore"),
       openChannelIngressQueue: unavailable("openChannelIngressQueue"),
       openChannelIngressDrain: unavailable("openChannelIngressDrain"),

@@ -119,7 +119,8 @@ and removal of Lit-specific guidance belong to the cutover.
 
 ## CSS / Template Linting
 
-- `pnpm lint:ui:styles` runs stylelint over `ui/src` stylesheets and Lit `css` templates (postcss-lit). `pnpm lint` includes it; error-class rules only, oxfmt owns formatting. Config: `config/stylelint.config.mjs`.
+- `pnpm lint` applies `eslint-plugin-solid`'s Solid 2 rules to `ui/**/*.tsx` through oxlint. Never destructure component props; use split effects, current Solid APIs, and `prop:` for explicit DOM properties. The private `tools/solid-lint` workspace isolates the plugin's TypeScript 5.9 tooling dependencies from the repository's TypeScript 7 checker. Its positive/negative corpus runs with `pnpm test test/scripts/oxlint-solid.test.ts --maxWorkers=1`.
+- `pnpm lint:ui:styles` runs stylelint over `ui/src` stylesheets and Lit `css` templates in TypeScript and TSX (postcss-lit). `pnpm lint` includes it; error-class rules only, oxfmt owns formatting. Config: `config/stylelint.config.mjs`.
 - Icons: shared 24x24 Lucide icons go through `strokeIcon()` in `ui/src/components/icons-tools.ts` so stroke presentation attributes stay inline and render inside shadow roots. Icon bodies are `svg\`\``fragments, never`html\`\`` (wrong namespace renders nothing).
 - `pnpm lint:ui:lit` is an opt-in lit-analyzer diagnostic for template bindings (slow, ~9 min; known baseline of pre-existing findings). It is not a CI gate.
 

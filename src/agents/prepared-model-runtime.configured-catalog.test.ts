@@ -12,11 +12,9 @@ import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
-import {
-  materializePreparedModelCatalog,
-  prepareModelCatalogPublication,
-} from "./prepared-model-runtime.full-catalog.js";
+import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -466,10 +464,10 @@ describe("synthetic configured context publication", () => {
         provider: "fixture",
         baseUrl: discovered.baseUrl,
         reasoning: false,
-        input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         maxTokens: 4096,
         ...selected,
+        input: ["text"],
       },
     }).contextTokenBudget;
   }
@@ -479,6 +477,54 @@ describe("synthetic configured context publication", () => {
   it("uses accepted account prompt limits instead of the superseded synthetic window", () => {
     expect(budget()).toBe(872_000);
   });
+  it.each([false, undefined])(
+    "preserves configured non-sizing metadata with reasoning override %s",
+    (configuredReasoning) => {
+      const accepted = { ...discovered, reasoning: true, input: ["text" as const] };
+      const catalog = materializePreparedModelCatalog(
+        { entries: [accepted], routeVariants: [accepted] },
+        [
+          {
+            provider: "fixture",
+            modelId: "new-model",
+            model: {
+              ...fallback,
+              baseUrl: discovered.baseUrl,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 4096,
+            },
+          },
+        ],
+        [
+          {
+            ...fallback,
+            reasoning: false,
+            configuredReasoning,
+            input: ["text", "image"],
+            params: { temperature: 0.25 },
+            compat: { supportsDeveloperRole: false },
+          },
+        ],
+        new Set(["fixture"]),
+      );
+      const selected = catalog.staticEntries?.find((entry) => entry.id === "new-model");
+      expect(selected).toMatchObject({
+        contextWindow: 1_000_000,
+        contextTokens: 872_000,
+        reasoning: configuredReasoning === false ? false : true,
+        input: ["text", "image"],
+        params: { temperature: 0.25 },
+        compat: { supportsDeveloperRole: false },
+      });
+      expect(selected?.contextWindowSource).toBeUndefined();
+      expect(selected?.configuredReasoning).toBe(configuredReasoning);
+      expect(budget([accepted], { ...fallback, configuredReasoning, reasoning: false })).toBe(
+        872_000,
+      );
+    },
+  );
   it.each([
     ["matching physical route", discovered, false],
     ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],

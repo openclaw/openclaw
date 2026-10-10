@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -121,59 +121,33 @@ describe("Realtime call creation", () => {
       expectedMessage: "OpenAI Realtime call creation failed (429)",
     },
   ])("bounds and cancels an oversized streaming $name error response", async (testCase) => {
-    const detailPrefix = "provider diagnostic: ";
-    let resolveResponseClosed: (() => void) | undefined;
-    const responseClosed = new Promise<void>((resolve) => {
-      resolveResponseClosed = resolve;
+    const chunkCount = 32;
+    const streamed = createStreamingResponse({
+      status: 429,
+      chunkCount,
+      chunkSize: 1,
+      text: `provider diagnostic: ${"x".repeat(1024)}`,
+      headers: { "Content-Type": "text/plain" },
     });
-    const server = createServer((_request, response) => {
-      response.once("close", () => resolveResponseClosed?.());
-      response.writeHead(429, { "Content-Type": "text/plain" });
-      response.write(detailPrefix + "x".repeat(32 * 1024));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test HTTP server did not bind a TCP port");
-    }
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(streamed.response);
 
-    const controller = new AbortController();
-    const abortTimer = setTimeout(() => controller.abort(), 2_000);
-    const fetchImpl = ((_url: string | URL | Request, init?: RequestInit) =>
-      fetch(`http://127.0.0.1:${address.port}/realtime-call`, {
-        ...init,
-        signal: controller.signal,
-      })) as typeof fetch;
-
-    try {
-      const promise = createOpenAIQuicksilverCall(
-        {
-          auth: { type: "api-key", token: "platform-key" },
-          requestIds: createRequestIds(`streaming-error-${testCase.name}`),
-          sdp: "v=offer\r\n",
-          session: buildOpenAIQuicksilverSession({ model: testCase.model }),
-          signal: controller.signal,
-          fetchImpl,
-        },
-        openAIRealtimeHost,
-      );
-      await expect(promise).rejects.toMatchObject({
-        name: "OpenAIQuicksilverCallError",
-        status: 429,
-        message: testCase.expectedMessage,
-      });
-      await responseClosed;
-      expect(controller.signal.aborted).toBe(false);
-    } finally {
-      clearTimeout(abortTimer);
-      controller.abort();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    const promise = createOpenAIQuicksilverCall(
+      {
+        auth: { type: "api-key", token: "platform-key" },
+        requestIds: createRequestIds(`streaming-error-${testCase.name}`),
+        sdp: "v=offer\r\n",
+        session: buildOpenAIQuicksilverSession({ model: testCase.model }),
+        fetchImpl,
+      },
+      openAIRealtimeHost,
+    );
+    await expect(promise).rejects.toMatchObject({
+      name: "OpenAIQuicksilverCallError",
+      status: 429,
+      message: testCase.expectedMessage,
+    });
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(streamed.getReadCount()).toBeLessThan(chunkCount);
   });
 
   it.each([

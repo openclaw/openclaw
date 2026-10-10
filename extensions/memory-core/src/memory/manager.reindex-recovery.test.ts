@@ -215,6 +215,7 @@ describe("memory manager reindex recovery", () => {
       { source: "sessions", text: "User: published session" },
     ]);
 
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
     await memoryManager.sync();
     expect(rows.all()).toEqual([
       { source: "memory", text: "replacement memory" },

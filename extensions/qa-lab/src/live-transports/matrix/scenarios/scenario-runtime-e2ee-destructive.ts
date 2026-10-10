@@ -485,6 +485,29 @@ export async function runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(
   );
 }
 
+async function deleteMatrixQaOwnerRoomKeyBackup(
+  context: MatrixQaScenarioContext,
+  setup: MatrixQaDestructiveSetup,
+  preflightLabel: string,
+) {
+  const before = await setup.owner.restoreRoomKeyBackup({ recoveryKey: setup.encodedRecoveryKey });
+  if (!before.success || !before.backupVersion) {
+    throw new Error(`${preflightLabel}: ${before.error ?? "unknown"}`);
+  }
+  const deleteStatus = await deleteMatrixQaServerRoomKeyBackup({
+    accessToken: setup.ownerAccessToken,
+    baseUrl: context.baseUrl,
+    version: before.backupVersion,
+  });
+  const afterDelete = await setup.owner.restoreRoomKeyBackup({
+    recoveryKey: setup.encodedRecoveryKey,
+  });
+  if (afterDelete.success) {
+    throw new Error("restore unexpectedly succeeded after server room-key backup deletion");
+  }
+  return { before, deleteStatus, afterDelete };
+}
+
 export async function runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
@@ -493,23 +516,11 @@ export async function runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario
     "matrix-e2ee-server-backup-deleted-local-state-intact",
   );
   try {
-    const before = await setup.owner.restoreRoomKeyBackup({
-      recoveryKey: setup.encodedRecoveryKey,
-    });
-    if (!before.success || !before.backupVersion) {
-      throw new Error(`Matrix backup preflight restore failed: ${before.error ?? "unknown"}`);
-    }
-    const deleteStatus = await deleteMatrixQaServerRoomKeyBackup({
-      accessToken: setup.ownerAccessToken,
-      baseUrl: context.baseUrl,
-      version: before.backupVersion,
-    });
-    const after = await setup.owner.restoreRoomKeyBackup({
-      recoveryKey: setup.encodedRecoveryKey,
-    });
-    if (after.success) {
-      throw new Error("restore unexpectedly succeeded after server room-key backup deletion");
-    }
+    const { before, deleteStatus, afterDelete } = await deleteMatrixQaOwnerRoomKeyBackup(
+      context,
+      setup,
+      "Matrix backup preflight restore failed",
+    );
     const localEventId = await setup.owner.sendTextMessage({
       body: `E2EE local crypto still sends after backup deletion ${randomUUID().slice(0, 8)}`,
       roomId: setup.roomId,
@@ -519,14 +530,14 @@ export async function runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario
         backupDeletedHttpStatus: deleteStatus,
         deletedBackupVersion: before.backupVersion,
         localEventId,
-        restoreErrorAfterDelete: after.error,
+        restoreErrorAfterDelete: afterDelete.error,
         seededEventId: setup.seededEventId,
       },
       details: [
         "server room-key backup was deleted while local crypto state stayed intact",
         `deleted backup version: ${before.backupVersion}`,
         `delete HTTP status: ${deleteStatus}`,
-        `restore after delete error: ${after.error}`,
+        `restore after delete error: ${afterDelete.error}`,
         `local encrypted send after delete: ${localEventId}`,
       ].join("\n"),
     };
@@ -573,25 +584,11 @@ export async function runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresSce
         deviceName: "OpenClaw Matrix QA Backup Reupload Restore",
         label: "server-backup-deleted-local-reupload-restores",
       });
-      const before = await setup.owner.restoreRoomKeyBackup({
-        recoveryKey: setup.encodedRecoveryKey,
-      });
-      if (!before.success || !before.backupVersion) {
-        throw new Error(
-          `Matrix backup reupload preflight restore failed: ${before.error ?? "unknown"}`,
-        );
-      }
-      const deleteStatus = await deleteMatrixQaServerRoomKeyBackup({
-        accessToken: setup.ownerAccessToken,
-        baseUrl: context.baseUrl,
-        version: before.backupVersion,
-      });
-      const afterDelete = await setup.owner.restoreRoomKeyBackup({
-        recoveryKey: setup.encodedRecoveryKey,
-      });
-      if (afterDelete.success) {
-        throw new Error("restore unexpectedly succeeded after server room-key backup deletion");
-      }
+      const { before, deleteStatus, afterDelete } = await deleteMatrixQaOwnerRoomKeyBackup(
+        context,
+        setup,
+        "Matrix backup reupload preflight restore failed",
+      );
       const reset = await setup.owner.resetRoomKeyBackup();
       if (!reset.success || !reset.createdVersion) {
         throw new Error(

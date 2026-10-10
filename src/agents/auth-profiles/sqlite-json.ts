@@ -6,7 +6,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
-import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -50,14 +53,24 @@ function inspectAuthProfileTableType(type: unknown): PersistedAuthProfileStoreIn
   return type === "table" ? null : { status: "unreadable" };
 }
 
+function authProfileSchemaObjectType(schema: SqliteSchemaFacts, name: string): string | undefined {
+  if (schema.tables.has(name)) {
+    return "table";
+  }
+  return schema.views.has(name) || schema.indexes.has(name) || schema.triggers.has(name)
+    ? "other"
+    : undefined;
+}
+
 function inspectAuthProfileTable(
   db: DatabaseSync,
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
   const tableName = authProfileTableName(target, databaseKind);
-  if (getSqliteReadScopeRevision(db)?.schema.tables.has(tableName)) {
-    return null;
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return inspectAuthProfileTableType(authProfileSchemaObjectType(schema, tableName));
   }
   const schemaObject = executeWithCachedStatement(
     db,
@@ -172,12 +185,12 @@ export function readAuthProfileRows(
   const stateTable = authProfileTableName("state", databaseKind);
   let schemaObjects: Array<Record<string, unknown>>;
   try {
-    const admittedTables = getSqliteReadScopeRevision(database)?.schema.tables;
-    if (admittedTables?.has(storeTable) && admittedTables.has(stateTable)) {
-      schemaObjects = [
-        { name: storeTable, type: "table" },
-        { name: stateTable, type: "table" },
-      ];
+    const schema = getAdmittedSqliteSchemaFacts(database);
+    if (schema) {
+      schemaObjects = [storeTable, stateTable].map((name) => ({
+        name,
+        type: authProfileSchemaObjectType(schema, name),
+      }));
     } else {
       // Legacy and authorizer-controlled readers still classify both tables natively.
       schemaObjects = executeWithCachedStatement(

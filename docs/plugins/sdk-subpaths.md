@@ -292,7 +292,7 @@ runtime splinters have been removed; bundled-only helpers are private-local.
     | `plugin-sdk/provider-usage` | Private-local after July 2026; Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
     | `plugin-sdk/provider-stream` | Private-local after July 2026; `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Google/Kilocode/MiniMax/Moonshot/OpenAI/OpenRouter/Z.AI wrapper helpers |
     | `plugin-sdk/provider-stream-shared` | Private-local after July 2026; Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, `normalizeOpenAICompatibleReasoningPayload`, `setQwenChatTemplateThinking`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
-    | `plugin-sdk/provider-transport-runtime` | Private-local after July 2026; Native provider transport helpers such as guarded fetch, tool-result text extraction, transport message transforms, and writable transport event streams |
+    | `plugin-sdk/provider-transport-runtime` | Private-local after July 2026; Native provider transport helpers such as guarded fetch, tool-result text extraction, transport message transforms, writable transport event streams, and `splitSystemPromptRelocatableBoundary` for guarded Runtime-fact relocation |
     | `plugin-sdk/provider-onboard` | Private-local after July 2026; Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Private-local after July 2026; Process-local singleton and map helpers |
     | `plugin-sdk/group-activation` | Private-local after July 2026; Narrow group activation mode and command parsing helpers |
@@ -407,6 +407,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-harness-session-runtime` | Private-local JavaScript-only host runtime for official harness plugins; binding leases, generation admission, initialization rollback, and transactional deletion; not a third-party plugin API |
     | `plugin-sdk/agent-harness-attempt-runtime` | Private-local JavaScript-only host runtime for official harness plugins; execution/settlement deadlines, cancellation, and lifecycle/event publication; not a third-party plugin API |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
+    | `plugin-sdk/codex-client-version-runtime` | Private-local bundled facade; `resolveCodexClientVersion` returns the version of the Codex binary that managed Codex turns run in this process, or `undefined` when the Codex plugin is inactive; not for third-party plugins |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/native-hook-relay-runtime` | Private-local bundled runtime helper for retained native direct-child hook policy; not for third-party plugins |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for transcript-mirror writes and owner-bound context reads, including the inactive incognito actor adapter; not for third-party plugins |
@@ -619,6 +620,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
 
     | Subpath | Owner and purpose |
     | --- | --- |
+    | `plugin-sdk/codex-client-version-runtime` | Private-local bundled Codex plugin facade that the OpenAI plugin uses to report the running Codex binary's version in ChatGPT model discovery (default-only package export) |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (default-only package export) |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for transcript-mirror writes and owner-bound context reads, including the inactive incognito actor adapter (default-only package export) |
     | `plugin-sdk/ssrf-runtime-internal` | Private-local host helper for configured loopback requests owned by bundled Ollama/browser and the exact official `@openclaw/llama-cpp-provider` package (default-only package export) |
