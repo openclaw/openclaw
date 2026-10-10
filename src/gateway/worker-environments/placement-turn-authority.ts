@@ -1,11 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
@@ -18,6 +15,10 @@ import {
   affectsPlacementObservation,
   applyPlacementReadPublication,
   hasPendingPublication,
+  prepareCachedPlacementPreservationRead,
+  preparePlacementRead,
+  readCachedPlacementProjection,
+  retainProjection,
   retainSessionPlacementRead,
 } from "./placement-read-authority.js";
 import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
@@ -317,34 +318,15 @@ export async function preparePlacementAuthorityRead<T>(
   sessionId: string | undefined,
   read: () => Promise<T>,
 ) {
-  return await preparePlacementRead(pathname, sessionId, read, (value, { authority }) => ({
-    value,
-    ...authority,
-  }));
-}
-
-function retainProjection(
-  owner: PlacementAuthorityOwner,
-  sessionId: string,
-  projection: WorkerSessionPlacementReadResult,
-) {
-  owner.projections.delete(sessionId);
-  const placement = projection.projection.placements.get(sessionId);
-  // Environment lifecycle has its own owner. Keep its changing facts on direct reads.
-  if (
-    (placement && placement.state !== "local") ||
-    projection.projection.environments.size ||
-    projection.projection.moves.size ||
-    projection.projection.pendingResults.size ||
-    projection.projection.workspaceRecoveryPendingSessionIds.size
-  ) {
-    return;
-  }
-  owner.projections.set(sessionId, structuredClone(projection));
-  // Cold sessions can always rehydrate; residency is independent of durable ownership.
-  if (owner.projections.size > 256) {
-    owner.projections.delete(owner.projections.keys().next().value!);
-  }
+  return await preparePlacementRead(
+    capturePlacementObservation(pathname, sessionId),
+    sessionId,
+    read,
+    (value, { authority }) => ({
+      value,
+      ...authority,
+    }),
+  );
 }
 
 /** The authority owner retains exact reads until one of its writers publishes a change. */
@@ -353,83 +335,18 @@ export async function readPlacementProjection(
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementReadResult>,
 ): Promise<WorkerSessionPlacementReadResult> {
-  const { owner, observation, authority, assertUsable } = capturePlacementObservation(
-    pathname,
+  return readCachedPlacementProjection(
+    capturePlacementObservation(pathname, sessionId),
     sessionId,
+    read,
   );
-  try {
-    const signal = getAsyncWorkSignal();
-    signal?.throwIfAborted();
-    assertUsable();
-    // Snapshot reads must not wait for a delayed receipt from an earlier write.
-    const value = hasPendingPublication(owner, sessionId)
-      ? await read()
-      : (owner.projections.get(sessionId) ?? (await read()));
-    signal?.throwIfAborted();
-    assertUsable();
-    if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
-      retainProjection(owner, sessionId, value);
-    }
-    return structuredClone(value);
-  } finally {
-    authority.release();
-  }
 }
 
 export async function preparePlacementPreservationRead(
   pathname: string,
   read: () => Promise<WorkerSessionPlacementRecord[]>,
 ) {
-  return await preparePlacementRead(
-    pathname,
-    undefined,
-    async (owner) => {
-      return owner.preservation ?? (await read());
-    },
-    (value, { owner, authority }) => {
-      owner.preservation = freezeJsonSnapshot(value);
-      return { placements: structuredClone(value), ...authority };
-    },
-  );
-}
-
-async function preparePlacementRead<T, Result>(
-  pathname: string,
-  sessionId: string | undefined,
-  read: (owner: PlacementAuthorityOwner) => Promise<T>,
-  consume: (value: T, captured: ReturnType<typeof capturePlacementObservation>) => Result,
-): Promise<Result> {
-  const captured = capturePlacementObservation(pathname, sessionId);
-  const { authority, observation, owner, assertUsable } = captured;
-  const signal = getAsyncWorkSignal();
-  const assertReading = () => {
-    signal?.throwIfAborted();
-    assertUsable();
-  };
-  try {
-    for (;;) {
-      assertReading();
-      while (hasPendingPublication(owner, sessionId)) {
-        const settled = createDeferredCore();
-        const unsubscribe = registerListener(owner.settlementListeners, settled.resolve);
-        try {
-          await racePromiseWithAbortSignal(settled.promise, signal);
-        } finally {
-          unsubscribe();
-        }
-        assertReading();
-      }
-      observation.revoked = false;
-      const value = await read(owner);
-      assertReading();
-      if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
-        return consume(value, captured);
-      }
-    }
-  } catch (error) {
-    authority.release();
-    throw error;
-  }
+  return await prepareCachedPlacementPreservationRead(capturePlacementObservation(pathname), read);
 }
 
 /** Retain writer postimages, rather than invalidating a destination on ordinary turn claims. */
@@ -438,9 +355,14 @@ export async function prepareSessionPlacementRead(
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementRecord | undefined>,
 ) {
-  return await preparePlacementRead(pathname, sessionId, read, (placement, captured) => {
-    return retainSessionPlacementRead(sessionId, placement, captured);
-  });
+  return await preparePlacementRead(
+    capturePlacementObservation(pathname, sessionId),
+    sessionId,
+    read,
+    (placement, captured) => {
+      return retainSessionPlacementRead(sessionId, placement, captured);
+    },
+  );
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
