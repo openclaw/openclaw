@@ -14,7 +14,10 @@ import type {
 import type { IncognitoContextReadResult } from "../../config/sessions/session-incognito-history-contract.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { retainSessionTranscriptContextGeneration } from "../../config/sessions/session-transcript-authority.js";
-import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
+import {
+  readSessionTranscriptModelContextAsync,
+  type PreparedSessionTranscriptModelContext,
+} from "../../config/sessions/session-transcript-context-read.js";
 import {
   prepareIncognitoSessionTranscriptHydration,
   prepareSessionTranscriptHydration,
@@ -178,6 +181,7 @@ export async function readSessionManagerModelContextAsync<T>(
     signal?: AbortSignal;
     through?: TranscriptEntryAnchor;
     limits?: SessionModelContextLimits;
+    prepared?: PreparedSessionTranscriptModelContext;
   },
   consume: (context: ReturnType<typeof readSessionTranscriptModelContext>) => T,
   manager?: object,
@@ -219,6 +223,7 @@ export async function readSessionManagerModelContextAsync<T>(
       limits,
       undefined,
       true,
+      options.prepared,
     ),
   );
   options.signal?.throwIfAborted();

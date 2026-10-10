@@ -21,9 +21,8 @@ type WorkboardSqliteStoreOperations = {
 };
 
 export type WorkboardSqliteOperations = {
-  "connection.open": { input: undefined; output: { connection: number; dataVersion: number } };
+  "connection.open": { input: undefined; output: { connection: number } };
   "connection.close": { input: { connection: number }; output: void };
-  dataVersion: { input: { connection: number }; output: number };
 } & WorkboardSqliteStoreOperations;
 export type WorkboardSqliteWorkerOperations = {
   [K in keyof WorkboardSqliteOperations]: {

@@ -1,12 +1,8 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createEffect, createMemo, Show } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
-import {
-  debugOverlayTemplate,
-  renderPendingDebugOverlay,
-  type DebugOverlayFrameHost,
-} from "../pages/debug/debug-overlay-frame.ts";
+import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
 import {
   renderCommandPaletteLoading,
   type CommandPaletteLoadingState,
@@ -20,6 +16,7 @@ import {
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
 } from "./lazy-custom-element.ts";
+import type { LazyRenderer } from "./lazy-renderer.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
 import { normalizeChatSendShortcut } from "./settings.ts";
 
@@ -32,6 +29,7 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-command-palette": ShellElementAttributes;
+      "openclaw-debug-overlay": ShellElementAttributes;
       "openclaw-keyboard-shortcuts-dialog": ShellElementAttributes;
     }
   }
@@ -40,6 +38,9 @@ declare module "@solidjs/web" {
 export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSessionHost {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteLoading: CommandPaletteLoadingState;
+  readonly debugOverlayFrame: LazyRenderer<
+    typeof import("../pages/debug/debug-overlay-frame.ts").renderPendingDebugOverlay
+  >;
   closePendingPalette(): void;
   readonly lazyCustomElements: LazyCustomElementRequestController;
   handleCommandPaletteSlashCommand(command: string): void;
@@ -62,10 +63,27 @@ export function ShellLazyOverlays(props: {
       paletteLoading: props.host.commandPaletteLoading.active,
       paletteDefined: isOptionalElementDefined(props.host.commandPaletteElement),
       debugDefined: isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT),
+      debugRenderer: props.host.debugOverlayFrame.renderer,
+      debugFrameFailed: props.host.debugOverlayFrame.failed,
       shortcutsDefined: isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT),
       sendShortcut: normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut),
     };
   });
+  createEffect(
+    () => {
+      const current = state();
+      return (
+        current.lazy?.element === DEBUG_OVERLAY_ELEMENT &&
+        !current.debugRenderer &&
+        !current.debugFrameFailed
+      );
+    },
+    (shouldLoad) => {
+      if (shouldLoad) {
+        props.host.debugOverlayFrame.load();
+      }
+    },
+  );
   const onClose = () => props.host.closePendingPalette();
   return (
     <>
@@ -78,7 +96,10 @@ export function ShellLazyOverlays(props: {
                 current.lazy.element === props.host.commandPaletteElement))
             ? renderCommandPaletteLoading(props.host.commandPaletteLoading, onClose)
             : current.lazy?.element === DEBUG_OVERLAY_ELEMENT
-              ? renderPendingDebugOverlay(props.host, current.lazy)
+              ? (current.debugRenderer?.(props.host, current.lazy) ??
+                (current.debugFrameFailed
+                  ? renderLazyElementModal(props.host.lazyCustomElements)
+                  : undefined))
               : renderLazyElementModal(props.host.lazyCustomElements);
         }}
       />
@@ -96,7 +117,7 @@ export function ShellLazyOverlays(props: {
         />
       </Show>
       <Show when={state().debugDefined}>
-        <LitRouteHost renderValue={() => debugOverlayTemplate} />
+        <openclaw-debug-overlay />
       </Show>
       <Show when={!props.nativeEmbed && state().shortcutsDefined}>
         <openclaw-keyboard-shortcuts-dialog

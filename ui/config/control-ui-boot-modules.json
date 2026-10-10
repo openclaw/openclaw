@@ -2144,7 +2144,6 @@
   "ui/src/pages/new-session/discovery.ts",
   "ui/src/pages/new-session/draft-body.ts",
   "ui/src/pages/new-session/draft-cloud-machine-state.ts",
-  "ui/src/pages/new-session/draft-composer.ts",
   "ui/src/pages/new-session/draft-controller.ts",
   "ui/src/pages/new-session/draft-create-params.ts",
   "ui/src/pages/new-session/draft-gateway-state.ts",

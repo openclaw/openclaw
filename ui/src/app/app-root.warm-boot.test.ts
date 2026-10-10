@@ -14,10 +14,7 @@ import { applicationContext } from "./context.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 vi.mock("./app-host.tsx", () => ({
-  OpenClawShell: () =>
-    Object.assign(document.createElement("openclaw-app-shell"), {
-      settleReadiness: async () => ({ kind: "shell", navigationVisible: false }),
-    }),
+  OpenClawShell: () => document.createElement("openclaw-app-shell"),
 }));
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
@@ -64,6 +61,7 @@ function createWarmSurface(warm = true, startup?: Promise<void>) {
   }
   runtime = bootstrapApplication();
   const start = vi.spyOn(runtime, "start").mockReturnValue(startup ?? Promise.resolve());
+  const rosterSubscriptions = vi.spyOn(runtime.context.sessions, "subscribe");
   const snapshot = runtime.context.gateway.snapshot;
   snapshot.phase = startup ? "stopped" : "connecting";
   snapshot.lastError = null;
@@ -82,7 +80,7 @@ function createWarmSurface(warm = true, startup?: Promise<void>) {
     flush();
   };
   flush();
-  return { snapshot, container: host, draw, start };
+  return { snapshot, container: host, draw, start, rosterSubscriptions };
 }
 
 type LoginGateElement = HTMLElement & {
@@ -234,6 +232,34 @@ describe("warm boot app root", () => {
     container.append(descendant);
     descendant.dispatchEvent(new ContextEvent(applicationContext, descendant, received, true));
     expect(received).not.toHaveBeenCalled();
+  });
+
+  it("loads readiness only on its first read and catches up without remounting login", async () => {
+    const { snapshot, container, draw, start, rosterSubscriptions } = createWarmSurface(false);
+    snapshot.phase = "offline";
+    snapshot.lastError = "Connect to continue";
+    draw();
+    const gate = loginGate(container);
+    expect(rosterSubscriptions).not.toHaveBeenCalled();
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get).toBeTypeOf(
+      "function",
+    );
+    expect(container.hasAttribute("data-openclaw-ready")).toBe(false);
+
+    expect(window.openclawControlUi).toBeUndefined();
+    await vi.dynamicImportSettled();
+    flush();
+    const hook = window.openclawControlUi;
+    expect(hook?.snapshot()).toMatchObject({ booted: true, ready: true, gatewayPhase: "offline" });
+    expect(rosterSubscriptions).toHaveBeenCalledOnce();
+    expect(window.openclawControlUi).toBe(hook);
+    expect(loginGate(container)).toBe(gate);
+    expect(start).toHaveBeenCalledOnce();
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get).toBeUndefined();
+
+    dispose?.();
+    dispose = undefined;
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();
   });
 
   it("releases the keyboard viewport when the mounted application is disposed", () => {

@@ -70,10 +70,11 @@ Historical metadata remains private to its snapshot unless the owner positively
 matches it to the current committed admission. Rollback restores both staged
 publication and connection-local version facts.
 
-A fresh `PRAGMA data_version` check still observes foreign commits on the next
-unpinned read, even within the same event-loop turn. It invalidates cached row
-facts without rereading `schema_version`, `user_version`, or the catalog. SQLite
-read snapshots retain their view until they end; the next read then observes
+The Gateway owns runtime database state. Committed in-process write receipts
+invalidate cached rows across handles and workers without querying `data_version`,
+`schema_version`, `user_version`, or the catalog. Other processes must route writes
+through the Gateway or hold exclusive offline ownership. SQLite read snapshots
+retain their view until they end; statements outside an open snapshot see current
 committed rows. Initial admission still refuses unsupported versions. Doctor,
 explicit verification, migration, and snapshot consistency checks retain their
 own contracts. This changes no stored schema, migration, durability, or update
@@ -481,8 +482,11 @@ completed rebuild. This requires no new table,
 configuration option, or environment override.
 
 Current content is ready for readers even while its version is unpublished.
-Ordinary CLI commands can run alongside the Gateway throughout this window;
-publication alone does not trigger schema repair or require stopping the Gateway.
+Read-only CLI operations and Gateway-routed mutations can run alongside the
+Gateway throughout this window. Independent SQLite writers require exclusive
+ownership while the Gateway is stopped; the older update driver retains the
+explicit handoff contract below. Publication alone does not trigger schema repair
+or require stopping the Gateway.
 
 A subsequent update can run during this window. Its migration verification and
 rollback checks compare applied content versions from private database snapshots.

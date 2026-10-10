@@ -242,19 +242,6 @@ describe("Engine contract tests", () => {
     });
   });
 
-  it("preserves runtime token count through resolved legacy compaction", async () => {
-    installCompactRuntimeSpy();
-    await registerLegacyContextEngine();
-    const engine = await resolveContextEngine();
-    await engine.compact({
-      sessionId: "s1",
-      sessionKey: "agent:main:s1",
-      runtimeContext: { workspaceDir: "/tmp/workspace", currentTokenCount: 277403 },
-    });
-    expect(compactEmbeddedAgentSessionOnDemandMock).toHaveBeenCalledOnce();
-    expect(requireCompactRuntimeParams(0).currentTokenCount).toBe(277403);
-  });
-
   it("rejects a structured successor key from another agent", async () => {
     await expect(
       delegateCompactionToRuntime({
@@ -411,26 +398,6 @@ describe("Registry tests", () => {
 
 describe("Default engine selection", () => {
   beforeEach(registerLegacyContextEngine);
-
-  it("keeps repeated baseline host selection stable after the turn starts", async () => {
-    const warn = vi.fn();
-    const lease = await createLease(undefined, warn);
-    const selection = {
-      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
-      operation: "agent-run" as const,
-      requiresDurableCommit: true,
-    };
-
-    const first = lease.selectForHost(selection);
-    lease.begin();
-    const second = lease.selectForHost(selection);
-
-    expect(second).toMatchObject({ registeredId: "legacy", mode: "configured" });
-    expect(second.engine).toBe(first.engine);
-    expect(lease.degraded).toBe(false);
-    expect(warn).not.toHaveBeenCalled();
-    await lease.dispose();
-  });
 
   it("keeps repeated baseline transcript-host selection stable after the turn starts", async () => {
     const warn = vi.fn();

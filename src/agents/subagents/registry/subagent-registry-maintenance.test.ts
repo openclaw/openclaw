@@ -1,8 +1,12 @@
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
 import { openNodeSqliteDatabase } from "../../../infra/node-sqlite.js";
+import type { AdmissionOperations } from "../../../infra/sqlite-database-admission.worker.test-support.js";
+import { SqliteWorkerBroker } from "../../../infra/sqlite-worker-broker.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -69,7 +73,7 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
-  it("refreshes each candidate subset after a foreign writer adds protection", async () => {
+  it("refreshes each candidate subset after a sibling writer adds protection", async () => {
     const first = createRun({
       runId: "first",
       childSessionKey: "agent:main:subagent:first",
@@ -217,6 +221,44 @@ describe("subagent maintenance protection", () => {
       write.run(text, run.runId);
       clearSubagentRunsReadCacheForTest();
       expect(await protectedKeys(), name).toEqual(protectedRun ? [run.childSessionKey] : []);
+    }
+  });
+
+  it("refreshes prune protection after a writer-worker commit without freshness probes", async () => {
+    const run = createRun({ cleanupCompletedAt: 3, delivery: { status: "delivered" } });
+    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    const database = openOpenClawStateDatabase();
+    const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
+    const broker = new SqliteWorkerBroker();
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(prepared.refreshCandidates([run.childSessionKey]).providerKeys).toEqual([]);
+      const store = await broker.open<AdmissionOperations>({
+        moduleUrl: new URL(
+          "../../../infra/sqlite-database-admission.worker.test-support.ts",
+          import.meta.url,
+        ),
+        databasePath: database.path,
+        input: undefined,
+      });
+      await broker.runOperation(store!, (scope) =>
+        scope.execute({
+          type: "writeRows",
+          input: {
+            sql: `UPDATE subagent_runs
+          SET payload_json = json_set(json_remove(payload_json, '$.cleanupCompletedAt', '$.execution.endedAt'), '$.execution.status', 'running')
+          WHERE run_id = 'run'`,
+          },
+        }),
+      );
+      expect(prepared.refreshCandidates([run.childSessionKey]).providerKeys).toEqual([
+        run.childSessionKey,
+      ]);
+      expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
+    } finally {
+      observation.restore();
+      prepared.dispose();
+      await broker.close();
     }
   });
 

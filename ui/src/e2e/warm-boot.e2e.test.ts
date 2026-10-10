@@ -2,6 +2,8 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -115,6 +117,7 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
+          assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
           authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",
@@ -222,6 +225,37 @@ suite.define(() => {
           ]),
         );
 
+        let bootstrapRequests = 0;
+        if (profile === "trusted-proxy") {
+          const documentPath = new URL(page.url()).pathname;
+          await page.route(
+            (url) => url.pathname === documentPath,
+            async (route) => {
+              const response = await route.fetch();
+              const config = {
+                basePath: "",
+                assistantAgentId: "main",
+                assistantName: "Observatory",
+                assistantAvatar: "🔭",
+                terminalEnabled: false,
+                pluginAssetsRequireAuth: true,
+                pluginFrameGrants: [],
+              };
+              await route.fulfill({
+                response,
+                body: (await response.text()).replace(
+                  "<html",
+                  `<html ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(config))}"`,
+                ),
+              });
+            },
+          );
+          page.on("request", (request) => {
+            if (new URL(request.url()).pathname.endsWith("/control-ui-config.json")) {
+              bootstrapRequests++;
+            }
+          });
+        }
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
         await sidebar.locator(".nav-item--home").waitFor();
@@ -229,6 +263,13 @@ suite.define(() => {
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
+        if (profile === "trusted-proxy") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
+          });
+          expect(bootstrapRequests).toBe(0);
+          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+        }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
         }

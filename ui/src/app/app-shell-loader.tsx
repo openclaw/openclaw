@@ -21,7 +21,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
       <Loading fallback={props.fallback}>
         <LazyShell
           runtime={props.runtime}
-          readiness={props.readiness}
+          getReadiness={props.getReadiness}
           onboarding={props.onboarding}
         />
       </Loading>

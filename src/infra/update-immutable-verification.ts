@@ -158,7 +158,7 @@ export async function waitForImmutableGateway(params: {
           config: context.config,
           port,
           attempts: 1,
-          deadlineAt: Date.now() + deadline.remainingMs(),
+          deadlineAt: deadline.deadlineMs,
           probeTimeoutMs: deadline.remainingMs(),
           delayMs: 0,
           signal: deadline.signal,

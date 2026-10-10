@@ -9,12 +9,12 @@ import {
   runWithSessionPendingInputWorkerCustody,
   type SessionPendingInputWorkerReceipt,
 } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
-import { validatePreparedAssistantAppendSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
@@ -290,6 +290,8 @@ export function bindSqliteWorkerBackend(
                   projectionNeedsReconcile = true;
                 },
               },
+              undefined,
+              database,
             );
             admit("commit");
             return { ok: true, value: { snapshot, projectionNeedsReconcile } };
@@ -324,17 +326,6 @@ export function bindSqliteWorkerBackend(
         persistedMessage: event.message,
         physicalPayload: prepareTranscriptPayloadForReuse(context.database, eventJson, event),
       };
-      if (message.validateTurn) {
-        const mutationAt = validatePreparedAssistantAppendSync(
-          scope,
-          event.parentId,
-          command.input.view?.admission?.entryId,
-        );
-        if (mutationAt === undefined) {
-          throw new SqliteTranscriptMutationConflictError(scope.sessionId);
-        }
-        command.input.options.expectedMutationAt = mutationAt;
-      }
     }
     const messageControl =
       command.type === "session.metadata.append" ? command.input.message : undefined;
@@ -374,12 +365,26 @@ export function bindSqliteWorkerBackend(
               throw new Error("Session metadata append requires a serialized event");
             }
             const { message } = command.input;
+            if (
+              event.type === "message" &&
+              message?.validateTurn &&
+              !canRebasePreparedAssistantInTransaction(
+                database,
+                resolved.sessionId,
+                event.parentId,
+                command.input.view?.admission?.entryId,
+              )
+            ) {
+              throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+            }
             const snapshot =
               event.type === "message" && message
                 ? appendTranscriptMessageSnapshotSync(
                     scope,
                     {
                       ...command.input.options,
+                      // Rebase validation and append now share this write reservation.
+                      ...(message.validateTurn ? { expectedMutationAt: undefined } : {}),
                       message: event.message,
                       eventId: event.id,
                       parentId: event.parentId,
@@ -390,12 +395,21 @@ export function bindSqliteWorkerBackend(
                     },
                     prepared,
                     projection,
+                    undefined,
+                    database,
                   )
-                : appendTranscriptEventSnapshotSync(scope, event, command.input.options, {
-                    ...projection,
-                    eventJson:
-                      typeof command.input.event === "string" ? command.input.event : undefined,
-                  });
+                : appendTranscriptEventSnapshotSync(
+                    scope,
+                    event,
+                    command.input.options,
+                    {
+                      ...projection,
+                      eventJson:
+                        typeof command.input.event === "string" ? command.input.event : undefined,
+                    },
+                    undefined,
+                    database,
+                  );
             admit("commit");
             return { ok: true, value: { snapshot, projectionNeedsReconcile } };
           },

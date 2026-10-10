@@ -1,6 +1,6 @@
 import { ContextProvider } from "@lit/context";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { html, nothing, type LitElement } from "lit";
+import { html, nothing } from "lit";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
@@ -46,13 +46,4 @@ export function renderLegacyFocusEscape(label: string, close: () => void) {
   return isNativeWebChromeHost()
     ? nothing
     : html`<button class="btn btn--ghost" type="button" @click=${close}>${label}</button>`;
-}
-
-/** Await only the terminal island, never parked retained page updates. */
-export async function settleLegacyTerminalActivation(host: HTMLElement): Promise<boolean> {
-  const terminal = host.querySelector<LitElement & { available?: boolean }>(
-    "openclaw-terminal-panel",
-  );
-  await terminal?.updateComplete;
-  return terminal?.available === true;
 }

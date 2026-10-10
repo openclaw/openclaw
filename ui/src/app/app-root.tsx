@@ -8,8 +8,10 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  getOwner,
   onCleanup,
   onSettled,
+  runWithOwner,
   untrack,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -32,18 +34,10 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "./app-shell-locale-recovery.ts";
 import { loadFocusDashboard, type FocusDashboardRouteState } from "./app-root-focus.ts";
-import {
-  connectLegacyApplicationContext,
-  renderLegacyFocusEscape,
-  settleLegacyTerminalActivation,
-} from "./app-root-lit.ts";
+import { connectLegacyApplicationContext, renderLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import {
-  ControlUiReadiness,
-  type ControlUiReadinessShell,
-  type ControlUiCommittedPresentation,
-} from "./control-ui-readiness.ts";
+import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_DOCUMENT_ELEMENT,
@@ -77,7 +71,9 @@ export function OpenClawApp(props: {
   const runtime = untrack(() => props.runtime);
   const host = untrack(() => props.host);
   const context = runtime.context;
-  const readiness = new ControlUiReadiness(host);
+  const rootOwner = getOwner();
+  let readiness: ControlUiReadiness | undefined;
+  let readinessLoad: Promise<void> | undefined;
   const translations = projectI18n(i18n);
   const t = translations.t;
   const gateway = projectGateway(context.gateway);
@@ -207,49 +203,50 @@ export function OpenClawApp(props: {
     },
   );
 
-  async function settleReadiness(): Promise<ControlUiCommittedPresentation> {
-    await Promise.resolve();
-    let presentation: ControlUiCommittedPresentation;
-    if (runtime.documentMode || runtime.focusLocation) {
-      presentation = { kind: "standalone", navigationVisible: false };
-    } else if (host.querySelector("openclaw-login-gate")) {
-      presentation = { kind: "login", navigationVisible: false };
-    } else {
-      const shell = host.querySelector<ControlUiReadinessShell>("openclaw-app-shell");
-      presentation = shell
-        ? await shell.settleReadiness()
-        : { kind: "loading", navigationVisible: false };
+  const loadReadiness = () => {
+    if (active && !readiness && !readinessLoad) {
+      readinessLoad = import("./control-ui-readiness-solid.ts")
+        .then(({ createSolidControlUiReadiness }) => {
+          if (active) {
+            readiness = runWithOwner(rootOwner, () =>
+              createSolidControlUiReadiness(host, runtime, trackRoot),
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            readinessLoad = undefined;
+            console.error("[openclaw] automation readiness could not load", error);
+          }
+        });
     }
-    return {
-      ...presentation,
-      terminalActivationReady: await settleLegacyTerminalActivation(host),
-    };
+    return readiness?.hook;
+  };
+  const window = host.ownerDocument.defaultView;
+  if (window) {
+    Object.defineProperty(window, "openclawControlUi", {
+      configurable: true,
+      get: loadReadiness,
+    });
   }
-  readiness.connect(runtime, settleReadiness);
-  createEffect(
-    () => {
-      gateway.revision();
-      router.revision();
-      selection.revision();
-      lazyRevision();
-      startupPending();
-      loginGatePinned();
-      loginGatewayUrl();
-      loginToken();
-      loginPassword();
-      loginShowGatewaySecret();
-      pendingGatewayUrl();
-      focusDashboardRoute();
-      if (focusTarget?.kind === "terminal") {
-        config.revision();
-        theme.preferences.revision();
-        theme.appliedPalette.revision();
-      }
-      readiness.invalidateRoot();
-      return {};
-    },
-    () => readiness.commitRoot(),
-  );
+  // The lazy observer reads these current facts only after automation requests it.
+  function trackRoot(): void {
+    gateway.revision();
+    router.revision();
+    selection.revision();
+    lazyRevision();
+    startupPending();
+    loginGatePinned();
+    loginGatewayUrl();
+    loginToken();
+    loginPassword();
+    loginShowGatewaySecret();
+    pendingGatewayUrl();
+    focusDashboardRoute();
+    config.revision();
+    theme.preferences.revision();
+    theme.appliedPalette.revision();
+  }
 
   onSettled(() => {
     if (focusTarget) {
@@ -290,7 +287,13 @@ export function OpenClawApp(props: {
   });
   onCleanup(() => {
     active = false;
-    readiness.disconnect();
+    readiness?.disconnect();
+    if (
+      window &&
+      Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === loadReadiness
+    ) {
+      delete window.openclawControlUi;
+    }
     gateway.dispose();
     config.dispose();
     selection.dispose();
@@ -632,7 +635,7 @@ export function OpenClawApp(props: {
         >
           <ShellLoader
             runtime={runtime}
-            readiness={readiness}
+            getReadiness={() => readiness}
             onboarding={onboarding}
             fallback={<Splash />}
           />

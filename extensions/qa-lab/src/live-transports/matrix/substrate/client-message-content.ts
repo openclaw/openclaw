@@ -112,14 +112,10 @@ function resolveMatrixQaMediaMsgtype(params: {
   contentType?: string;
   kind?: "audio" | "file" | "image" | "video";
 }): MatrixQaMediaMessageType {
-  if (params.kind === "audio" || params.contentType?.startsWith("audio/")) {
-    return "m.audio";
-  }
-  if (params.kind === "video" || params.contentType?.startsWith("video/")) {
-    return "m.video";
-  }
-  if (params.kind === "image" || params.contentType?.startsWith("image/")) {
-    return "m.image";
+  for (const kind of ["audio", "video", "image"] as const) {
+    if (params.kind === kind || params.contentType?.startsWith(`${kind}/`)) {
+      return `m.${kind}`;
+    }
   }
   return "m.file";
 }

@@ -59,11 +59,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.tsx
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
-import type {
-  ControlUiReadiness,
-  ControlUiCommittedPresentation,
-  ControlUiReadinessOutlet,
-} from "./control-ui-readiness.ts";
+import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -164,6 +160,11 @@ export class ShellOwner
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
   readonly settingsSidebar = new LazyRenderer(this, () =>
     import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
+  );
+  readonly debugOverlayFrame = new LazyRenderer(this, () =>
+    import("../pages/debug/debug-overlay-frame.ts").then(
+      (module) => module.renderPendingDebugOverlay,
+    ),
   );
   private readonly sidebarUpdateCardImport = createIdleImport(
     () => import("../components/sidebar-update-card.ts"),
@@ -603,31 +604,6 @@ export class ShellOwner
     }
   }
 
-  async settleReadiness(): Promise<ControlUiCommittedPresentation> {
-    await this.updateComplete;
-    if (!this.querySelector(".shell")) {
-      return { kind: "loading", navigationVisible: false };
-    }
-    // The optional sidebar is not a Lit element until its registration has loaded.
-    const sidebar = this.navigationSidebar;
-    const navigationVisible = sidebar.isConnected && sidebar.navigationVisible !== false;
-    if (navigationVisible) {
-      if (!customElements.get(APP_SIDEBAR_ELEMENT.tagName)) {
-        return { kind: "loading", navigationVisible: true };
-      }
-      await sidebar.updateComplete;
-    }
-    const outlet = this.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
-    if (!outlet || !(await outlet.settlePresentation())) {
-      return { kind: "loading", navigationVisible };
-    }
-
-    await this.querySelector<HTMLElement & { updateComplete?: Promise<boolean> }>(
-      "openclaw-chat-page",
-    )?.updateComplete;
-    return { kind: "shell", navigationVisible, sessionKey: this.activeSessionKey };
-  }
-
   afterCommit(): void {
     this.commitPresentation();
     this.syncDocumentTitle();
@@ -708,7 +684,7 @@ export class ShellOwner
 
 export type OpenClawShellProps = {
   runtime: ApplicationRuntime;
-  readiness?: ControlUiReadiness;
+  getReadiness?: () => ControlUiReadiness | undefined;
   onboarding?: boolean;
 };
 
@@ -723,7 +699,7 @@ declare module "@solidjs/web" {
 export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   const element = document.createElement("openclaw-app-shell");
   const owner = untrack(
-    () => new ShellOwner(element, props.runtime, props.readiness, props.onboarding),
+    () => new ShellOwner(element, props.runtime, props.getReadiness?.(), props.onboarding),
   );
   createEffect(
     () => props.runtime,
@@ -743,9 +719,19 @@ export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   return (
     <openclaw-app-shell
       ref={(host) => {
-        // The stable host carries the readiness contract; children remain Solid-owned.
         owner.element = host;
-        Object.assign(host, { settleReadiness: () => owner.settleReadiness() });
+        // The optional observer reads committed owner facts without rendering the shell again.
+        Object.defineProperties(host, {
+          readiness: {
+            get: () => owner.readiness,
+            set: (value: ControlUiReadiness | undefined) => {
+              owner.readiness = value;
+            },
+          },
+          updateComplete: { get: () => owner.updateComplete },
+          navigationSidebar: { get: () => owner.navigationSidebar },
+          activeSessionKey: { get: () => owner.activeSessionKey },
+        });
       }}
     >
       {view}

@@ -1,12 +1,13 @@
 import { html, nothing } from "lit";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, titleForRoute, type SidebarZoneEntry } from "../app-navigation.ts";
-import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
+import { isRouteId, isSessionRouteId, pluginTabLocation } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -27,7 +28,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarNavLink } from "./app-sidebar-nav-menus.ts";
 import { renderSidebarSessionFilter } from "./app-sidebar-session-filter-summary.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -68,10 +69,24 @@ function readSidebarNativeGateway(): NativeGateway | null {
 function renderSidebarAgentCard(host: AppSidebarRenderHost) {
   const {
     activeId: cardAgentId,
-    agent: cardAgent,
+    agent: rosterAgent,
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  const gateway = host.sessionDataContext?.gateway;
+  const bootstrapIdentity =
+    gateway && hasSameOriginGatewayTransport(gateway.connection.gatewayUrl)
+      ? host.sessionDataContext?.config.current.assistantIdentity
+      : undefined;
+  const cardAgent =
+    rosterAgent ??
+    (bootstrapIdentity?.agentId === cardAgentId
+      ? {
+          id: cardAgentId,
+          name: bootstrapIdentity.name,
+          identity: { avatar: bootstrapIdentity.avatar ?? undefined },
+        }
+      : undefined);
   if (!cardAgent) {
     return renderSidebarWorkspaceHeader(host);
   }
@@ -80,12 +95,12 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
   const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
-  const gateway = host.sessionDataContext?.gateway;
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
       gateway.connection.token.trim() ||
-      gateway.connection.password.trim()),
+      gateway.connection.password.trim() ||
+      bootstrapIdentity?.agentId === cardAgentId),
   );
   return html`
     <openclaw-sidebar-agent-card
@@ -509,12 +524,15 @@ function renderAppSidebarPluginTab(host: AppSidebarRenderHost, tab: GatewayContr
     ? tab.placement.slice("route:".length)
     : "";
   const routeId = isRouteId(routePlacement) ? routePlacement : null;
-  return routeId
-    ? host.sidebarMenus.renderRoute(routeId)
-    : renderSidebarPluginTab({
-        tab,
-        basePath: host.basePath,
-        active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
-        onNavigate: (location) => host.onNavigate?.("plugin", location),
-      });
+  if (routeId) {
+    return host.sidebarMenus.renderRoute(routeId);
+  }
+  const location = pluginTabLocation(tab, host.basePath);
+  return renderSidebarNavLink({
+    href: `${location.pathname}${location.search}`,
+    icon: Object.entries(icons).find(([name]) => name === tab.icon)?.[1] ?? icons.plug,
+    label: tab.label,
+    active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
+    onNavigate: () => host.onNavigate?.("plugin", location),
+  });
 }

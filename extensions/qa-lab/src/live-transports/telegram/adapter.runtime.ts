@@ -4,6 +4,7 @@ import {
   assertQaGatewayCredentialLeaseQuarantine,
   shouldRetainQaGatewayCredentialLease,
 } from "../../gateway-process-boundary.js";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -143,11 +144,7 @@ export async function createTelegramQaTransportAdapter(
     if (leaseReleased || !leasedRuntime) {
       return;
     }
-    try {
-      await leasedRuntime.heartbeat.stop();
-    } finally {
-      await leasedRuntime.credentialLease.release();
-    }
+    await releaseQaCredentialLease(leasedRuntime.credentialLease, leasedRuntime.heartbeat);
     leaseReleased = true;
   };
   let stateRoot: string | undefined;

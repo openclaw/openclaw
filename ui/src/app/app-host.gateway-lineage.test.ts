@@ -46,10 +46,7 @@ import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
 
 vi.mock("./app-host.tsx", () => ({
-  OpenClawShell: () =>
-    Object.assign(document.createElement("openclaw-app-shell"), {
-      settleReadiness: async () => ({ kind: "shell", navigationVisible: false }),
-    }),
+  OpenClawShell: () => document.createElement("openclaw-app-shell"),
 }));
 
 const mountedSurfaces: Array<() => void> = [];
