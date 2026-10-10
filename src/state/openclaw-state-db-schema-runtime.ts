@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
-import {
-  repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexes,
-} from "../infra/sqlite-index-schema.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-state-context.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
@@ -113,19 +110,16 @@ export function ensureOpenClawStateRuntimeSchema(
           (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertNoLegacyStateRuntimeRepair(db, pathname);
-          const indexes = verifyAndRepairCanonicalSqliteIndexes(
-            db,
-            pathname,
-            OPENCLAW_STATE_SCHEMA_SQL,
-            {
-              allowMissingColumns: true,
-              validateAfterRepair: () => {
-                // Index repair precedes additive-column convergence in this transaction.
-                assertCanonicalStateSchemaShape(db, pathname);
-                assertOpenClawStateDatabaseForMaintenance(db, { pathname });
-              },
+          assertStateDatabaseIntegrityOnce(db, pathname);
+          const indexes = repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            verifyPhysicalIntegrity: false,
+            allowMissingColumns: true,
+            validateAfterRepair: () => {
+              // Index repair precedes additive-column convergence in this transaction.
+              assertCanonicalStateSchemaShape(db, pathname);
+              assertOpenClawStateDatabaseForMaintenance(db, { pathname });
             },
-          );
+          });
           ensureAdditiveStateColumns(db, "runtime");
           assertCurrentStateRuntimeSchema(db, pathname);
           writeCurrentStateSchemaMetadata(db, now);

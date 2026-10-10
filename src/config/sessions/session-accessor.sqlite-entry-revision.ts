@@ -1,18 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  createSqliteQueryCache,
-  getNodeSqliteKysely,
-  prepareSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
 import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
-  getSqliteReadScopeRevision,
   installSqliteTempTrackingSchema,
-  type SqliteReadScopeRevision,
+  readSqliteRollbackRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
 export type SqliteSessionEntryRevision = {
@@ -20,41 +15,46 @@ export type SqliteSessionEntryRevision = {
   sessionNodesGeneration: number;
 };
 
-const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
-const sessionNodesGenerationFacts = new WeakMap<
-  DatabaseSync,
-  { revision: SqliteReadScopeRevision; generation: number }
->();
-
-type SessionEntryRevisionDatabase = {
-  openclaw_session_nodes_cache_generation: { id: number; generation: unknown };
+type SessionNodesGeneration = {
+  schemaVersion?: number;
+  generation: number;
+  rollbackRevision: number | undefined;
 };
-
-const generationQuery = createSqliteQueryCache((database) =>
-  prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
-    getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-      .withSchema("temp")
-      .selectFrom("openclaw_session_nodes_cache_generation")
-      .select("generation")
-      .where("id", "=", 1),
-  ),
+const sessionNodesGenerations = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionNodesGenerations"),
+  () => new WeakMap<DatabaseSync, SessionNodesGeneration>(),
 );
+const generationFunction = "openclaw_session_nodes_changed";
 
-function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
+function ensureSessionNodesGenerationTracker(database: DatabaseSync): SessionNodesGeneration {
   const schema = getAdmittedSqliteSchemaFacts(database);
   if (!schema) {
     throw new Error("SQLite session entry caching requires admitted schema facts");
   }
   const { schemaVersion } = schema;
-  const trackedSchemaVersion = sessionNodesGenerationTrackerSchemaVersions.get(database);
-  if (trackedSchemaVersion === schemaVersion) {
-    return;
+  let tracker = sessionNodesGenerations.get(database);
+  if (!tracker) {
+    const created: SessionNodesGeneration = {
+      generation: 0,
+      rollbackRevision: readSqliteRollbackRevision(database),
+    };
+    database.function(generationFunction, () => {
+      created.generation += 1;
+      return null;
+    });
+    sessionNodesGenerations.set(database, created);
+    tracker = created;
+  }
+  if (tracker.schemaVersion === schemaVersion) {
+    return tracker;
   }
   const hasParticipants = schema.tables.has("session_participants");
-  // A main-schema change advances the counter before reinstalling its raw-DML observers.
+  if (tracker.schemaVersion !== undefined) {
+    tracker.generation += 1;
+  }
   installSqliteTempTrackingSchema(database, {
     kind: "generation",
-    table: "openclaw_session_nodes_cache_generation",
+    functionName: generationFunction,
     triggers: ["session_nodes", "session_participants"].flatMap((table) =>
       (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => ({
         name: `openclaw_${table}_cache_generation_${operation.toLowerCase()}`,
@@ -63,37 +63,35 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
         enabled: table === "session_nodes" || hasParticipants,
       })),
     ),
-    advance: trackedSchemaVersion !== undefined,
   });
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
-    sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion);
+    tracker.schemaVersion = schemaVersion;
   } else {
+    const installed = tracker;
     stageSqliteTransactionState(database, {
-      stage: () => sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion),
-      rollback: () => sessionNodesGenerationTrackerSchemaVersions.delete(database),
+      stage: () => {
+        installed.schemaVersion = schemaVersion;
+      },
+      rollback: () => {
+        installed.schemaVersion = undefined;
+      },
       commit: () => {},
     });
   }
+  return tracker;
 }
 
 export function readSessionNodesGeneration(database: DatabaseSync): number {
-  ensureSessionNodesGenerationTracker(database);
-  const revision = getSqliteReadScopeRevision(database);
-  const retained = sessionNodesGenerationFacts.get(database);
-  if (revision && retained?.revision === revision) {
-    return retained.generation;
+  const tracker = ensureSessionNodesGenerationTracker(database);
+  const rollbackRevision = readSqliteRollbackRevision(database);
+  // JS callbacks are not rolled back by SQLite. Advance again so an abandoned
+  // snapshot can never reuse the token observed after its uncommitted writes.
+  if (rollbackRevision === undefined || rollbackRevision !== tracker.rollbackRevision) {
+    tracker.generation += 1;
+    tracker.rollbackRevision = rollbackRevision;
   }
-  const row = generationQuery(database)();
-  if (typeof row?.generation !== "number") {
-    throw new Error("SQLite session_nodes cache generation is unavailable");
-  }
-  if (revision && getSqliteReadScopeRevision(database) === revision) {
-    sessionNodesGenerationFacts.set(database, { revision, generation: row.generation });
-  } else {
-    sessionNodesGenerationFacts.delete(database);
-  }
-  return row.generation;
+  return tracker.generation;
 }
 
 export function readSessionEntryCacheValidityToken(

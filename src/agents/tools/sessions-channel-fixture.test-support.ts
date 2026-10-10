@@ -4,12 +4,14 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-export const resolveSessionConversationStub: NonNullable<
+const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
 > = ({ rawId }) => ({ id: rawId });
-export const resolveSessionTargetStub: NonNullable<
-  ChannelMessagingAdapter["resolveSessionTarget"]
-> = ({ kind, id, threadId }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
 export function createSessionsChannelTestRegistry(
   channels: readonly {

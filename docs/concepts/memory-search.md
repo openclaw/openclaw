@@ -167,6 +167,11 @@ broken configured provider visible. Set `provider: "none"` for deliberate
 FTS-only recall, or fix the provider/auth configuration to restore semantic
 ranking.
 
+If an explicit provider returns query embeddings with a different dimension
+count from the index, search reports the mismatch instead of comparing those
+vectors. Verify the provider's model, then rebuild with
+`openclaw memory index --force --agent <agent-id>`.
+
 ## Improving search quality
 
 Two deterministic ranking passes are enabled by default for hybrid search.

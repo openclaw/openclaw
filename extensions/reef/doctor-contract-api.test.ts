@@ -63,6 +63,7 @@ import {
   type ReefIdentityMigrationRecord,
   type ReefReviewRecord,
 } from "./src/state.js";
+import { expectReefStateOperationError } from "./src/state.test-support.js";
 import {
   REEF_TRUST_STORE_MAX_ENTRIES,
   REEF_TRUST_STORE_NAMESPACE,
@@ -317,8 +318,9 @@ describe("Reef doctor contract", () => {
     expect(missingSourceResult.warnings).toEqual([
       expect.stringContaining("migration is incomplete and keys.json is missing"),
     ]);
-    await expect(generateAndStoreKeys(createRuntime(env))).rejects.toThrow(
-      "migration is incomplete",
+    await expectReefStateOperationError(
+      generateAndStoreKeys(createRuntime(env)),
+      /migration is incomplete/,
     );
   });
 
@@ -347,8 +349,9 @@ describe("Reef doctor contract", () => {
       pending: true,
       identityBindingRequired: true,
     });
-    await expect(loadKeys(createRuntime(env))).rejects.toThrow(
-      "durable state migration is incomplete",
+    await expectReefStateOperationError(
+      loadKeys(createRuntime(env)),
+      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
     );
 
     const registrationResult = await migrationById(
@@ -360,8 +363,9 @@ describe("Reef doctor contract", () => {
       "Verified Reef identity keys and binding; cleared migration marker",
     );
     await expect(migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)).resolves.toBeUndefined();
-    await expect(loadKeys(createRuntime(env))).rejects.toThrow(
-      "durable state migration is incomplete",
+    await expectReefStateOperationError(
+      loadKeys(createRuntime(env)),
+      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
     );
     await migrationById("reef-runtime-files-to-plugin-state").migrateLegacyState(params);
     await expect(loadKeys(createRuntime(env))).resolves.toEqual(keys);
@@ -555,8 +559,9 @@ describe("Reef doctor contract", () => {
     await expect(migrationStore.lookup(REEF_AUDIT_MIGRATION_KEY)).resolves.toEqual({
       pending: true,
     });
-    expect(() => openStores(createRuntime(env), reefKeys())).toThrow(
-      "Reef durable state migration is incomplete",
+    await expectReefStateOperationError(
+      openStores(createRuntime(env), reefKeys()),
+      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
     );
 
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
@@ -569,7 +574,7 @@ describe("Reef doctor contract", () => {
     expect(repaired.warnings).toEqual([]);
     await expect(migrationStore.lookup(REEF_AUDIT_MIGRATION_KEY)).resolves.toBeUndefined();
     await migrationById("reef-runtime-files-to-plugin-state").migrateLegacyState(params);
-    expect(() => openStores(createRuntime(env), reefKeys())).not.toThrow();
+    await expect(openStores(createRuntime(env), reefKeys())).resolves.toBeDefined();
   });
 
   it("imports registration and durable runtime state before archiving files", async () => {
@@ -633,7 +638,10 @@ describe("Reef doctor contract", () => {
     const runtimeState = await migrationById(
       "reef-runtime-files-to-plugin-state",
     ).migrateLegacyState(params);
-    await expect(generateAndStoreKeys(createRuntime(env))).rejects.toThrow("has no canonical keys");
+    await expectReefStateOperationError(
+      generateAndStoreKeys(createRuntime(env)),
+      /has no canonical keys/,
+    );
 
     expect(registration.warnings).toEqual([]);
     expect(registration.changes).toHaveLength(4);
