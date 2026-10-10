@@ -24,6 +24,7 @@ it("embeds the endpoint payload only in admitted documents, with safe attributes
     imports: ["/control/__openclaw__/plugins/control-ui/review/one/chunk.js"],
   };
   vi.spyOn(pluginAssets, "listControlUiPluginCatalog").mockResolvedValue({
+    revision: "catalog-one",
     plugins: [plugin],
     diagnostics: [],
   });
