@@ -157,6 +157,8 @@ export function createFollowupRunner(
       });
       deliveryPending ||= delivery.kind === "pending";
     };
+    // Admitted turns must not reuse a controller sealed by the predecessor dispatch.
+    let activeTyping = defaults.typing;
     const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
       .map((correlation) => correlation.begin())
       .filter((end) => typeof end === "function");
@@ -251,12 +253,17 @@ export function createFollowupRunner(
           : undefined,
       );
       executionEntered = true;
+      // Admitted turns must not reuse a controller sealed by the predecessor dispatch.
+      const turnTyping = defaults.typing.createSuccessor?.() ?? defaults.typing;
+      activeTyping = turnTyping;
+      const turnDefaults =
+        turnTyping === defaults.typing ? defaults : { ...defaults, typing: turnTyping };
       // Nested backend preparation borrows this successor, never the waking predecessor.
       const execution = await runWithReplyOperationLifecycleAdmission(turn.operation, () =>
         runWithGoalReturn(() =>
           executeFollowupTurn({
             turn,
-            defaults,
+            defaults: turnDefaults,
             onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
             onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
           }),
@@ -513,8 +520,8 @@ export function createFollowupRunner(
         await admittedTurn?.releaseSourceAdmission?.();
       } finally {
         operation?.complete();
-        defaults.typing.markRunComplete();
-        defaults.typing.markDispatchIdle();
+        activeTyping.markRunComplete();
+        activeTyping.markDispatchIdle();
       }
     }
 
