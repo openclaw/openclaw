@@ -1,9 +1,10 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   executeWithCachedStatement,
   registerNodeSqliteDisposeCallback,
 } from "./kysely-sync-cache-state.js";
+import { observeSqliteNativeOperations, type NativeSqlite } from "./sqlite-native-observer.js";
 import {
   getSqlitePinnedReadSnapshot,
   readChangedSqliteSchemaMarkers,
@@ -11,14 +12,15 @@ import {
   runSqlitePinnedReadSnapshotSync,
   type SqliteSchemaMarkers,
 } from "./sqlite-pinned-read-snapshot.js";
-import { findSqlCharacter } from "./sqlite-schema-sql.js";
+import {
+  canPreserveTransactionSnapshot,
+  type SqliteTransactionControl,
+} from "./sqlite-schema-mutation.js";
 import {
   prepareSqliteTempTrackingSchema,
   type SqliteTempTrackingSchema,
 } from "./sqlite-temp-generation-schema.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
-
-type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync">;
 
 export type SqliteSchemaFacts = {
   readonly revision: number;
@@ -45,6 +47,7 @@ type SchemaOwner = {
   transactionOpen: boolean;
   readRevision?: SqliteReadScopeRevision;
   transactionalSchema: boolean;
+  transactionalTempSchema: boolean;
   transactionalFacts: boolean;
   snapshot?: object;
   authorizerActive: boolean;
@@ -133,7 +136,7 @@ export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   }
 }
 
-/** Local mutations revoke before execution; foreign observations carry their committed markers. */
+/** MAIN mutations revoke before execution; TEMP-only table changes expire local facts instead. */
 export function registerSqliteSchemaMutationListener(
   database: DatabaseSync,
   listener: SchemaMutationListener,
@@ -147,7 +150,7 @@ export function registerSqliteSchemaMutationListener(
   return () => listeners.delete(listener);
 }
 
-/** Only the fixed tracking shapes are non-revoking; ordinary TEMP DDL stays observed. */
+/** Fixed tracking shapes retain local facts; other TEMP DDL still expires its connection's facts. */
 export function installSqliteTempTrackingSchema(
   database: DatabaseSync,
   schema: SqliteTempTrackingSchema,
@@ -159,74 +162,6 @@ export function installSqliteTempTrackingSchema(
   owner.installTempTrackingSchema(schema);
 }
 
-// Conservative matching also covers multi-statement migration batches and catalog repairs.
-// False positives only revoke prepared facts; SQL is still executed by SQLite unchanged.
-function changesSchema(sql: string): boolean {
-  return /\b(?:CREATE|ALTER|DROP|REINDEX|VACUUM)\b|\bPRAGMA\b[\s\S]*\b(?:user_version|schema_version|writable_schema)\b[\s\S]*[=(]/i.test(
-    sql,
-  );
-}
-
-// A write to another table can change policy through a trigger.
-function changesData(sql: string): boolean {
-  return /\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql);
-}
-
-const transactionControlPrefix =
-  /^(?:\s|;|--[^\n]*(?:\n|$)|\/\*(?:[^*]|\*(?!\/))*\*\/)*(BEGIN|SAVEPOINT|COMMIT|END|RELEASE|ROLLBACK)\b/i;
-
-type SqliteTransactionControl = { kind: string; single: boolean };
-
-function batchTransactionControl(sql: string): SqliteTransactionControl | undefined {
-  let control: string | undefined;
-  let statements = 0;
-  let remaining = sql;
-  while (remaining) {
-    if (remaining.trim()) {
-      statements += 1;
-    }
-    const next = transactionControlPrefix.exec(remaining)?.[1]?.toUpperCase();
-    if (next === "ROLLBACK") {
-      control = next;
-    }
-    control ||= next;
-    // Exec accepts batches; quoted semicolons and comments do not start statements.
-    const end = remaining.includes(";") ? findSqlCharacter(remaining, ";") : -1;
-    if (end < 0) {
-      break;
-    }
-    remaining = remaining.slice(end + 1);
-  }
-  return control ? { kind: control, single: statements === 1 } : undefined;
-}
-
-function canPreserveTransactionSnapshot(
-  control: SqliteTransactionControl | undefined,
-  inTransaction: boolean,
-): boolean {
-  return Boolean(
-    inTransaction &&
-    control?.single &&
-    (control.kind === "SAVEPOINT" || control.kind === "RELEASE" || control.kind === "ROLLBACK"),
-  );
-}
-
-function callStatement<Result>(
-  method: {
-    (...parameters: SQLInputValue[]): Result;
-    (named: Record<string, SQLInputValue>, ...parameters: SQLInputValue[]): Result;
-  },
-  [first, ...remaining]: [(SQLInputValue | Record<string, SQLInputValue>)?, ...SQLInputValue[]],
-): Result {
-  if (first === undefined) {
-    return method();
-  }
-  if (typeof first === "object" && first !== null && !ArrayBuffer.isView(first)) {
-    return method(first, ...remaining);
-  }
-  return method(first, ...remaining);
-}
-
 function trackSchemaChanges(
   database: DatabaseSync,
   owner: SchemaOwner,
@@ -235,7 +170,7 @@ function trackSchemaChanges(
   const settle = (boundary = false) => {
     if (
       (boundary || !database.isTransaction) &&
-      (owner.transactionalSchema || owner.transactionalFacts)
+      (owner.transactionalSchema || owner.transactionalTempSchema || owner.transactionalFacts)
     ) {
       if (owner.transactionalSchema) {
         // A local first-use writer must publish to already-admitted sibling connections.
@@ -244,6 +179,7 @@ function trackSchemaChanges(
       invalidate(owner);
       // A batch may commit one transaction and leave another containing DDL open.
       owner.transactionalSchema &&= database.isTransaction;
+      owner.transactionalTempSchema &&= database.isTransaction;
       owner.transactionalFacts = false;
     }
   };
@@ -258,7 +194,7 @@ function trackSchemaChanges(
     owner.transactionOpen = inTransaction;
   };
   const beginMutation = (
-    schemaChange: boolean,
+    schemaChange: boolean | "temp",
     control: SqliteTransactionControl | undefined,
     dataChange: boolean,
   ) => {
@@ -271,12 +207,22 @@ function trackSchemaChanges(
     const wasTransaction = database.isTransaction;
     const expiresRead =
       Boolean(control) && !canPreserveTransactionSnapshot(control, wasTransaction);
-    const invalidates = schemaChange || (control?.kind === "ROLLBACK" && owner.transactionalSchema);
-    if (invalidates) {
-      invalidateSqliteSchemaFacts(database);
-    }
-    if (dataChange || control?.kind === "ROLLBACK") {
-      // Savepoint rollback can restore row values without another data mutation.
+    const invalidatesMain =
+      schemaChange === true || (control?.kind === "ROLLBACK" && owner.transactionalSchema);
+    const invalidatesTemp =
+      schemaChange === "temp" || (control?.kind === "ROLLBACK" && owner.transactionalTempSchema);
+    const invalidateMutation = () => {
+      if (invalidatesMain) {
+        invalidateSqliteSchemaFacts(database);
+      } else if (invalidatesTemp) {
+        // TEMP shadowing expires this connection's facts, not siblings' MAIN admission.
+        invalidate(owner);
+        owner.transactionalTempSchema ||= database.isTransaction;
+      }
+    };
+    invalidateMutation();
+    if (dataChange || schemaChange === "temp" || control?.kind === "ROLLBACK") {
+      // TEMP shadowing and savepoint rollback can change row reads without a data write.
       owner.mutationRevision += 1;
     }
     if (expiresRead) {
@@ -291,104 +237,37 @@ function trackSchemaChanges(
       if (changesReadScope) {
         owner.mutationDepth -= 1;
       }
-      // A failed batch can already have changed schema; rollback can reuse SQLite's cookie.
-      if (invalidates) {
-        invalidateSqliteSchemaFacts(database);
+      if (!database.isOpen) {
+        return;
       }
+      // A failed batch can already have changed schema; rollback can reuse SQLite's cookie.
+      invalidateMutation();
       settle(Boolean(control));
       // Batches can probe an intermediate snapshot; implicit rollback also ends admission.
       finishReadScope(wasTransaction, expiresRead, succeeded);
     };
   };
-  const execute = <T>(
-    operation: () => T,
-    schemaChange: boolean,
-    control: SqliteTransactionControl | undefined,
-    dataChange: boolean,
-  ): T => {
-    const finish = beginMutation(schemaChange, control, dataChange);
-    let succeeded = false;
-    try {
-      const result = operation();
-      succeeded = true;
-      return result;
-    } finally {
-      finish(succeeded);
-    }
-  };
+  const execute = observeSqliteNativeOperations(database, native, (mutation, phase) => ({
+    finish:
+      phase === "exec" || mutation.schemaChange || mutation.control || mutation.dataChange
+        ? beginMutation(mutation.schemaChange, mutation.control, mutation.dataChange)
+        : () => {},
+  }));
   owner.installTempTrackingSchema = (schema) => {
     const { sql, unexpected } = prepareSqliteTempTrackingSchema(database, schema);
     try {
       // No suppression scope: native callbacks still execute through the ordinary observer.
       // sqlite-allow-raw -- The schema owner generates only the declared connection-local tracking shapes.
-      execute(
-        () => native.DatabaseSync.prototype.exec.call(database, sql),
-        unexpected,
-        undefined,
-        true,
-      );
+      execute(() => native.DatabaseSync.prototype.exec.call(database, sql), {
+        schemaChange: unexpected,
+        dataChange: true,
+        control: undefined,
+      });
     } catch (error) {
       // A failed batch may have installed only part of the declared schema.
       invalidateSqliteSchemaFacts(database);
       throw error;
     }
-  };
-  // Keep native prototype instrumentation visible after a connection or statement is retained.
-  database.exec = (sql) =>
-    execute(
-      () => native.DatabaseSync.prototype.exec.call(database, sql),
-      changesSchema(sql),
-      batchTransactionControl(sql),
-      changesData(sql),
-    );
-  database.prepare = (...prepareArgs) => {
-    const [sql] = prepareArgs;
-    const statement = native.DatabaseSync.prototype.prepare.call(database, ...prepareArgs);
-    const schemaChange = changesSchema(sql);
-    const controlKind = transactionControlPrefix.exec(sql)?.[1]?.toUpperCase();
-    const control = controlKind ? { kind: controlKind, single: true } : undefined;
-    const dataChange = changesData(sql);
-    if (schemaChange || control || dataChange) {
-      const run = Object.hasOwn(statement, "run") ? statement.run.bind(statement) : undefined;
-      const get = Object.hasOwn(statement, "get") ? statement.get.bind(statement) : undefined;
-      const all = Object.hasOwn(statement, "all") ? statement.all.bind(statement) : undefined;
-      const iterate = Object.hasOwn(statement, "iterate")
-        ? statement.iterate.bind(statement)
-        : undefined;
-      const wrap =
-        <Result>(resolve: () => Parameters<typeof callStatement<Result>>[0]) =>
-        (...bindings: Parameters<typeof callStatement<Result>>[1]): Result =>
-          execute(() => callStatement(resolve(), bindings), schemaChange, control, dataChange);
-      statement.run = wrap(() => run ?? native.StatementSync.prototype.run.bind(statement));
-      statement.get = wrap(() => get ?? native.StatementSync.prototype.get.bind(statement));
-      statement.all = wrap(() => all ?? native.StatementSync.prototype.all.bind(statement));
-      statement.iterate = function* (...bindings) {
-        const finish = beginMutation(schemaChange, control, dataChange);
-        let succeeded = false;
-        try {
-          const rows = callStatement(
-            iterate ?? native.StatementSync.prototype.iterate.bind(statement),
-            bindings,
-          );
-          try {
-            yield* rows;
-            succeeded = true;
-          } catch (error) {
-            // Delegation does not close the native iterator when next() throws.
-            try {
-              rows.return?.();
-            } catch {
-              // Preserve the statement failure over a failed native reset.
-            }
-            throw error;
-          }
-        } finally {
-          finish(succeeded);
-        }
-        return undefined;
-      };
-    }
-    return statement;
   };
   if (typeof database.setAuthorizer === "function") {
     database.setAuthorizer = (callback) => {
@@ -587,6 +466,7 @@ export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite):
       mutationDepth: 0,
       transactionOpen: database.isTransaction,
       transactionalSchema: false,
+      transactionalTempSchema: false,
       transactionalFacts: false,
       authorizerActive: false,
     };
@@ -656,12 +536,16 @@ function observeSchemaLifetime(
     invalidate(owner);
     owner.scopeRevision = scope.revision;
   }
-  if ((owner.transactionalSchema || owner.transactionalFacts) && !database.isTransaction) {
+  if (
+    (owner.transactionalSchema || owner.transactionalTempSchema || owner.transactionalFacts) &&
+    !database.isTransaction
+  ) {
     if (owner.transactionalSchema) {
       publishSchemaChange(database, owner);
     }
     invalidate(owner);
     owner.transactionalSchema = false;
+    owner.transactionalTempSchema = false;
     owner.transactionalFacts = false;
   }
   return scopeChanged;

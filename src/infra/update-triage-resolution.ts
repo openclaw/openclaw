@@ -135,15 +135,15 @@ export async function validateTriageUpdateResolution(params: {
   const original =
     (params.implicit ? history.failure : undefined) ??
     (runId ? getUpdateRun(runId, options) : undefined);
-  const ownerChanged = () =>
+  const validateCurrentOwner = () =>
     findActiveUpdateRun(options) ||
-    readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId;
+    readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId
+      ? unresolved("The update owner changed during verification.")
+      : validateTriagePendingRecovery(installRoot, env);
   const validateDoctor = async () => {
     const doctor = await params.validateDoctor();
     signal.throwIfAborted();
-    return ownerChanged()
-      ? unresolved("The update owner changed during verification.")
-      : (validateTriagePendingRecovery(installRoot, env) ?? doctor);
+    return validateCurrentOwner() ?? doctor;
   };
   if (findActiveUpdateRun(options)) {
     return unresolved("An update is still running; wait for its owner to finish.");
@@ -291,11 +291,8 @@ export async function validateTriageUpdateResolution(params: {
     return unresolved("The installed version changed during verification.");
   }
   signal.throwIfAborted();
-  if (ownerChanged()) {
-    return unresolved("The update owner changed during verification.");
-  }
   return (
-    validateTriagePendingRecovery(installRoot, env) ?? {
+    validateCurrentOwner() ?? {
       ok: true,
       score: 0,
       summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,

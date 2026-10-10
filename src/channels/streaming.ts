@@ -34,6 +34,7 @@ import {
   isChannelProgressPriorityLine,
   type ChannelProgressDraftLine,
 } from "./progress-draft-lines.js";
+import { PROGRESS_TOOL_GLYPHS } from "./progress-tool-glyphs.js";
 import {
   getChannelStreamingConfigObject,
   type StreamingCompatEntry,
@@ -120,6 +121,8 @@ export type ChannelProgressLineOptions = {
   detailMode?: "explain" | "raw";
   /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
+  /** Prefix tool rows with their text glyph; channels opt in, default plain. */
+  toolIcons?: boolean;
 };
 
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
@@ -281,6 +284,10 @@ function buildNamedProgressLine(
     kind,
     text,
     label: display.label,
+    // Plan and approval rows keep their plain status shape.
+    ...(options?.toolIcons && kind !== "plan" && kind !== "approval"
+      ? { icon: PROGRESS_TOOL_GLYPHS[display.icon] }
+      : {}),
     ...(detail ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,

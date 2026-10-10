@@ -104,17 +104,15 @@ export function mergeSsrFPolicies(
     if (!policy) {
       continue;
     }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowIpv6UniqueLocalRange) {
-      merged.allowIpv6UniqueLocalRange = true;
+    for (const key of [
+      "allowPrivateNetwork",
+      "dangerouslyAllowPrivateNetwork",
+      "allowRfc2544BenchmarkRange",
+      "allowIpv6UniqueLocalRange",
+    ] as const) {
+      if (policy[key]) {
+        merged[key] = true;
+      }
     }
     for (const key of [
       "allowedHostnames",

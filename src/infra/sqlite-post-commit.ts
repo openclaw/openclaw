@@ -20,6 +20,17 @@ export type SqliteCommittedPublication = {
   notify: () => void;
 };
 
+function committedPublicationState(
+  publication: SqliteCommittedPublication,
+): PendingTransactionState {
+  return {
+    commit: publication.installFacts,
+    prepareObservers: publication.installProjection,
+    invalidate: publication.invalidate,
+    rollback: () => {},
+  };
+}
+
 /**
  * Installation is synchronous, including failure fencing. Observers cannot turn a
  * committed write into a failed transaction or prevent another owner's receipt.
@@ -93,12 +104,7 @@ export function publishSqliteCommittedState(
 ): void {
   const publications = "installFacts" in publication ? [publication] : publication;
   installCommittedState(
-    publications.map((entry) => ({
-      commit: entry.installFacts,
-      prepareObservers: entry.installProjection,
-      invalidate: entry.invalidate,
-      rollback: () => {},
-    })),
+    publications.map(committedPublicationState),
     publications.map((entry) => entry.notify),
   );
 }
@@ -111,10 +117,7 @@ export function stageSqliteCommittedPublication(
   if (
     !stageSqliteTransactionState(db, {
       stage: () => {},
-      commit: publication.installFacts,
-      prepareObservers: publication.installProjection,
-      invalidate: publication.invalidate,
-      rollback: () => {},
+      ...committedPublicationState(publication),
     })
   ) {
     return false;

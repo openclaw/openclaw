@@ -137,19 +137,14 @@ export function createChannelNativeApprovalRuntime<
       if (selection.kind === "selected") {
         return true;
       }
-      if (selection.kind === "selector-error") {
-        void routeReporter.reportSkipped({
-          approvalKind,
-          request,
-          reason: "ineligible",
-        });
-        throw selection.error;
-      }
       void routeReporter.reportSkipped({
         approvalKind,
         request,
-        reason: selection.kind,
+        reason: selection.kind === "selector-error" ? "ineligible" : selection.kind,
       });
+      if (selection.kind === "selector-error") {
+        throw selection.error;
+      }
       return false;
     },
     finalizeResolved: finalize((params) => adapter.finalizeResolved(params)),

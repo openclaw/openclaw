@@ -403,11 +403,20 @@ export type PluginRuntimeCore = {
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
+      /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
       /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
-      getSessionEntryAsync?: (
+      getSessionEntryAsync: (
         params: RuntimeSessionStoreReadParams,
       ) => Promise<RuntimeSessionEntry | undefined>;
+      /** Complete public entry for a visible current ID in the selected physical store. */
+      getSessionEntryByIdAsync: (
+        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & {
+          sessionId: string;
+          /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+          orderBy?: "updatedAt";
+        },
+      ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];

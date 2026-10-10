@@ -297,6 +297,16 @@ function resolveApprovalRouteNotice(params: {
   if (!target) {
     return null;
   }
+  const buildNotice = (buildText: () => string, allowActiveRuntimeFallback = false) => {
+    const requestGateway =
+      params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
+        ?.requestGateway ??
+      params.reports[0]?.requestGateway ??
+      (allowActiveRuntimeFallback
+        ? Array.from(params.state.activeRuntimes.values())[0]?.requestGateway
+        : undefined);
+    return requestGateway ? { requestGateway, target, text: buildText() } : null;
+  };
   const originAccountId = normalizeOptionalString(target.accountId);
   const deliveredAnyTarget = params.reports.some((report) => report.deliveredTargets.length > 0);
   const ambiguousOwner = params.reports.some((report) => report.skipReason === "ambiguous-owner");
@@ -308,25 +318,17 @@ function resolveApprovalRouteNotice(params: {
       requiresManualFallback ||
       params.missingSelectedRuntime)
   ) {
-    const requestGateway =
-      params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
-        ?.requestGateway ??
-      params.reports[0]?.requestGateway ??
-      Array.from(params.state.activeRuntimes.values())[0]?.requestGateway;
-    if (!requestGateway) {
-      return null;
-    }
-    return {
-      requestGateway,
-      target,
-      text: ambiguousOwner
-        ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
-        : resolveApprovalDeliveryFailedNoticeText({
-            approvalId: params.request.id,
-            approvalKind: params.approvalKind,
-            allowedDecisions: readAllowedDecisionStrings(params.request),
-          }),
-    };
+    return buildNotice(
+      () =>
+        ambiguousOwner
+          ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
+          : resolveApprovalDeliveryFailedNoticeText({
+              approvalId: params.request.id,
+              approvalKind: params.approvalKind,
+              allowedDecisions: readAllowedDecisionStrings(params.request),
+            }),
+      true,
+    );
   }
 
   // If any same-channel runtime already delivered into the origin chat, every
@@ -375,18 +377,7 @@ function resolveApprovalRouteNotice(params: {
     return null;
   }
 
-  const requestGateway =
-    params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
-      ?.requestGateway ?? params.reports[0]?.requestGateway;
-  if (!requestGateway) {
-    return null;
-  }
-
-  return {
-    requestGateway,
-    target,
-    text,
-  };
+  return buildNotice(() => text);
 }
 
 /** Returns whether a native approval runtime is active for the requested channel/account scope. */

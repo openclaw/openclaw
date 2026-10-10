@@ -77,16 +77,24 @@ import {
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
 type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
-type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> = {
+type DreamingSweepParams = {
+  // Workspace owner; runDreamNarrative writes a local fallback when no owner is available.
   agentId?: string;
   workspaceDir: string;
+  pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
-  config: TConfig;
   logger: Logger;
   subagent?: DreamNarrativeRequest["subagent"];
-  nowMs: number;
-  admissionPolicy?: SessionAdmissionPolicy;
+  narrativeTimeoutMs: number;
+  runInBackground?: DreamNarrativeRequest["runInBackground"];
+  nowMs?: number;
 };
+type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> =
+  DreamingSweepParams & {
+    config: TConfig;
+    nowMs: number;
+    admissionPolicy?: SessionAdmissionPolicy;
+  };
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
@@ -1275,26 +1283,9 @@ async function prepareRemDreaming(
   return undefined;
 }
 
-type DreamingSweepPhaseResult = {
-  degradedPhases: number;
-  pendingNarratives: number;
-};
-
-export async function runDreamingSweepPhases(params: {
-  /**
-   * Agent whose model and credentials own this workspace's narrative completions.
-   * Absent only when no roster or triggering agent can be attributed, which downgrades
-   * narratives to the local diary fallback without stopping the sweep.
-   */
-  agentId?: string;
-  workspaceDir: string;
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-  logger: Logger;
-  subagent?: DreamNarrativeRequest["subagent"];
-  runInBackground?: DreamNarrativeRequest["runInBackground"];
-  nowMs?: number;
-}): Promise<DreamingSweepPhaseResult> {
+export async function runDreamingSweepPhases(
+  params: DreamingSweepParams,
+): Promise<{ degradedPhases: number; pendingNarratives: number }> {
   // All phases in one sweep share the same observation and report timestamp.
   const sweepNowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
@@ -1320,6 +1311,7 @@ export async function runDreamingSweepPhases(params: {
       }
       const outcome = await runDreamNarrative({
         agentId: params.agentId,
+        timeoutMs: params.narrativeTimeoutMs,
         subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,
