@@ -115,6 +115,46 @@ describe("memory manager agent database lifecycle", () => {
     expect(result.error).toMatch(/foreign_key_check/);
   });
 
+  it("resumes vector writes after another manager publishes an empty rebuild", async () => {
+    const cfg = fixture.createConfig({ provider: "openai", vectorEnabled: true });
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    const memoryFile = path.join(fixture.paths.memory, "2026-01-12.md");
+    await manager.sync({ reason: "cli", force: true });
+    const db = managerDatabase(manager);
+    const vectorTexts = () =>
+      db
+        .prepare(
+          "SELECT c.text FROM memory_index_chunks c JOIN memory_index_chunks_vec v ON v.id = c.id ORDER BY c.text",
+        )
+        .all();
+
+    for (const text of ["Alpha first replacement.", "Beta second replacement."]) {
+      await fs.writeFile(memoryFile, text);
+      await manager.sync({ reason: "search-bootstrap" });
+      expect(vectorTexts()).toEqual([{ text }]);
+    }
+
+    const maintenance = await MemoryIndexManager.get({
+      cfg,
+      agentId: "main",
+      purpose: "maintenance",
+      maintenanceSource: manager,
+    });
+    if (!maintenance) {
+      throw new Error("maintenance manager missing");
+    }
+    fixture.trackManager(maintenance);
+    await fs.unlink(memoryFile);
+    await maintenance.sync({ reason: "cli", force: true });
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_index_chunks_vec'").get(),
+    ).toBeUndefined();
+
+    await fs.writeFile(memoryFile, "Alpha after empty rebuild.");
+    await manager.sync({ reason: "search-bootstrap" });
+    expect(vectorTexts()).toEqual([{ text: "Alpha after empty rebuild." }]);
+  });
+
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {
     const first = await fixture.getFreshManager(createConfig());
     const originalDb = managerDatabase(first);

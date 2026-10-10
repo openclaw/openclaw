@@ -416,6 +416,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
 
   protected resetVectorState(): void {
     this.database.vectorReady = null;
+    this.database.ensuredVectorDimensions = undefined;
     this.vector.available = null;
     this.vector.semanticAvailable = undefined;
     this.vector.loadError = undefined;
@@ -451,7 +452,12 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       log.warn(`sqlite-vec unavailable: ${message}`);
       return false;
     }
-    if (ready && typeof dimensions === "number" && dimensions > 0) {
+    if (
+      ready &&
+      typeof dimensions === "number" &&
+      dimensions > 0 &&
+      this.database.ensuredVectorDimensions !== dimensions
+    ) {
       const database = this.database;
       await database.updateIndexStructure(
         {
@@ -468,6 +474,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         },
         () => this.assertDatabaseMutationCurrent(database),
       );
+      database.ensuredVectorDimensions = dimensions;
       this.vector.dims = dimensions;
     }
     return ready;

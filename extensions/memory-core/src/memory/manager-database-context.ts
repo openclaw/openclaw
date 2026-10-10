@@ -242,6 +242,7 @@ export class MemoryIndexDatabase {
     loadError?: string;
   } = { enabled: false, available: false };
   vectorReady: Promise<boolean> | null = null;
+  ensuredVectorDimensions: number | undefined;
   lastMetaSerialized: string | null = null;
   vectorDegradedWriteWarningShown = false;
   closed = false;
