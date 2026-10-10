@@ -579,7 +579,8 @@ function executeMutation<T>(
       owner: RetainedWorkerTransactionAdmission;
     }> = [];
     let sequence = 0;
-    let needsRebuild = false;
+    // Writers publish through ordinary replies; refresh observed facts after the worker releases SQL.
+    let needsRebuild = true;
     owner.pending.add(nonce);
     const publish = (facts: CronReceiptAuthorityPublication) => {
       if (facts.nonce !== nonce || facts.sequence <= sequence) {
