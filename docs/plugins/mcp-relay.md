@@ -70,6 +70,69 @@ letter case do not matter. If a code expires, run `openclaw mcp-relay pair`
 again. Pairing requires a connected relay socket; check
 `openclaw mcp-relay status` if issuing a code fails.
 
+## Show the full Control UI in ChatGPT
+
+The relay's MCP App can frame your real Control UI in the ChatGPT sidebar.
+The Gateway must be reachable **over HTTPS from your machine**, using Tailscale
+Serve, Cloudflare Tunnel, or an existing reverse proxy. A private Tailnet URL
+works when that machine can reach it; the relay does not need access to it.
+Plain `http://127.0.0.1` is not supported by the ChatGPT embed host.
+
+Configure the trusted frame ancestors and advertise the Control UI URL:
+
+```json5
+{
+  gateway: {
+    publicOrigin: "https://gateway.example:8443",
+    controlUi: {
+      frameAncestors: ["codex-sandbox:", "https://*.web-sandbox.oaiusercontent.com"],
+    },
+  },
+  plugins: {
+    entries: {
+      "mcp-relay": {
+        enabled: true,
+        config: {
+          controlUiUrl: "https://gateway.example:8443/",
+        },
+      },
+    },
+  },
+}
+```
+
+Replace the example address with your Gateway's HTTPS address. `controlUiUrl`
+must be an absolute HTTPS URL without credentials, a query, or a fragment. A
+path is allowed: include your `gateway.controlUi.basePath` if configured. Use
+the Control UI root rather than a public chat link. Existing relay settings
+can stay in the same plugin config object.
+
+CSP checks the complete frame hierarchy. If ChatGPT web wraps the sandbox in
+`https://chatgpt.com`, also add `"https://chatgpt.com"` to `frameAncestors`;
+another outer origin needs its own explicit entry. The two values above allow
+the sandbox origins and suffice when the sandbox is the only ancestor.
+
+After the configuration applies, toggle the MCP server off and on in ChatGPT
+to refresh its app, then open the Control UI and sign in with your normal
+Gateway token or device pairing. The embedded browser can have a separate
+storage partition, so an existing standalone login may not carry over.
+`gateway.publicOrigin` supplies the default WebSocket allowed origin; if you
+already set `gateway.controlUi.allowedOrigins`, ensure it includes the Gateway
+HTTPS origin. ChatGPT's ancestor values belong only in `frameAncestors`.
+
+The plugin adds `controlUi: { url }` to the remote `status` result only when
+configured. The app loads that URL directly: the relay sees the advertised URL
+but never handles Control UI login or admin traffic. Ordinary MCP operations
+continue through the relay as described below.
+
+Framing relaxes clickjacking protection for the allowed ancestors. Cookie-based
+proxy login and some plugin UI surfaces can remain unavailable in a cross-site
+frame; use a top-level browser for those features. See
+[Embed the Control UI](/web/control-ui#embed-the-control-ui) for the trust
+tradeoff and authentication limits. Removing `controlUiUrl` stops advertising
+the embed; clearing `frameAncestors` restores the Gateway's framing denial.
+Existing installations remain unchanged until these settings are added.
+
 ## Available operations
 
 A paired client can inspect Gateway and agent status, list conversations with
