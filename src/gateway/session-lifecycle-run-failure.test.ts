@@ -39,6 +39,7 @@ import {
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
@@ -63,7 +64,7 @@ const event = {
 };
 
 async function seed(
-  assistantBranch?: "active" | "inactive" | "other-run" | "commentary" | "success",
+  assistantBranch?: "active" | "inactive" | "other-run" | "partial" | "commentary" | "success",
 ) {
   const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
   await upsertSessionEntryCore(target, {
@@ -116,7 +117,9 @@ async function seed(
                         : {}),
                     },
                   ]
-                : [],
+                : assistantBranch === "partial"
+                  ? [{ type: "text", text: "I updated the file." }]
+                  : [],
               stopReason: hasPriorOutput ? "stop" : "error",
               errorMessage: hasPriorOutput ? undefined : "Provider failed",
               __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
@@ -408,6 +411,213 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
+  it.each(["current-writer", "foreign-writer", "newer-lifecycle"] as const)(
+    "uses the %s identity when deadline admission predates session preparation",
+    async (owner) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await seed();
+        await patchSessionEntryCore(target, () => ({
+          lifecycleRunId: owner === "newer-lifecycle" ? "newer-run" : undefined,
+          activeWriterRunId: owner === "foreign-writer" ? "newer-run" : runId,
+          startedAt: 1_500,
+        }));
+        const before = loadSessionEntry(target);
+        const transcriptBefore = await loadTranscriptEvents(target);
+        await persistGatewaySessionLifecycleEvent({
+          ...target,
+          event: {
+            ...event,
+            data: {
+              phase: "end",
+              status: "cancelled",
+              aborted: true,
+              stopReason: "timeout",
+              startedAt: 1_000,
+              endedAt: 2_000,
+            },
+          },
+          timeoutPartialText: "Unfinished work from the current writer",
+        });
+        if (owner === "current-writer") {
+          expect(loadSessionEntry(target)).toMatchObject({ status: "timeout", lastRunId: runId });
+          expect(await reports()).toEqual([
+            expect.objectContaining({
+              content: expect.stringContaining("Unfinished work from the current writer"),
+              details: expect.objectContaining({ runId }),
+            }),
+          ]);
+        } else {
+          expect(loadSessionEntry(target)).toEqual(before);
+          expect(await loadTranscriptEvents(target)).toEqual(transcriptBefore);
+          expect(await reports()).toEqual([]);
+        }
+      });
+    },
+  );
+
+  it.each(["none", "persisted", "buffered"] as const)(
+    "retains one timeout outcome with %s output",
+    async (partial) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await seed(partial === "persisted" ? "partial" : undefined);
+        const timeoutPartialText =
+          partial === "buffered"
+            ? 'I updated "config.json".\nValidation is unfinished.'
+            : undefined;
+        const before = await loadTranscriptEvents(target);
+        const timeoutEvent = {
+          ...event,
+          data: {
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "timeout",
+            startedAt: 1_000,
+            endedAt: 2_000,
+          },
+        };
+        await Promise.all([
+          persistGatewaySessionLifecycleEvent({
+            ...target,
+            event: timeoutEvent,
+            timeoutPartialText,
+          }),
+          persistGatewaySessionLifecycleEvent({
+            ...target,
+            event: timeoutEvent,
+            timeoutPartialText,
+          }),
+        ]);
+        await persistGatewaySessionLifecycleEvent({
+          ...target,
+          event: {
+            ...timeoutEvent,
+            data: { ...timeoutEvent.data, phase: "error" },
+          },
+          timeoutPartialText,
+        });
+        expect(await reports()).toMatchObject([
+          {
+            type: "custom_message",
+            display: true,
+            content: timeoutPartialText
+              ? `This turn timed out and may have performed work before it stopped.\n\nUnfinished assistant output (recorded text, not a completion claim):\n${JSON.stringify(timeoutPartialText)}`
+              : "This turn timed out and may have performed work before it stopped.",
+            details: { runId },
+          },
+        ]);
+        const after = await loadTranscriptEvents(target);
+        expect(after.slice(0, before.length)).toEqual(before);
+        expect(after.slice(before.length)).toHaveLength(1);
+        await persistGatewaySessionLifecycleEvent({
+          ...target,
+          event: {
+            ...event,
+            runId: "next-run",
+            ts: 3_000,
+            data: { phase: "start", startedAt: 3_000 },
+          },
+        });
+        expect(await reports()).toHaveLength(1);
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "credential-shaped output",
+      partial: `Unfinished response: api_key=${"sk-" + "synthetic-timeout-credential-".repeat(3)}`,
+    },
+    {
+      name: "a credential crossing the retained-text boundary",
+      partial: `${"x".repeat(7_980)} api_key=${"sk-" + "synthetic-timeout-credential-".repeat(3)}\n${"tail".repeat(3_000)}`,
+    },
+    {
+      name: "UTF-16 output beyond the limit",
+      partial: `${"x".repeat(7_987)}🙂${"tail".repeat(3_000)}`,
+    },
+  ])("redacts and bounds $name before timeout storage and replay", async ({ partial }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed();
+      await persistGatewaySessionLifecycleEvent({
+        ...target,
+        event: {
+          ...event,
+          data: {
+            phase: "end",
+            aborted: true,
+            stopReason: "timeout",
+            startedAt: 1_000,
+            endedAt: 2_000,
+          },
+        },
+        timeoutPartialText: partial,
+      });
+      const [report] = await reports();
+      assert(isRecord(report) && typeof report.content === "string");
+      const prefix =
+        "This turn timed out and may have performed work before it stopped.\n\nUnfinished assistant output (recorded text, not a completion claim):\n";
+      expect(report.content.startsWith(prefix)).toBe(true);
+      const storedPartial: unknown = JSON.parse(report.content.slice(prefix.length));
+      assert(typeof storedPartial === "string");
+      expect(storedPartial.length).toBeLessThanOrEqual(8_000);
+      expect(storedPartial.isWellFormed()).toBe(true);
+      if (partial.length > 8_000) {
+        expect(storedPartial).toMatch(/\n\[truncated\]$/);
+      }
+      const transcript = JSON.stringify(await loadTranscriptEvents(target));
+      expect(transcript).not.toContain("synthetic-timeout-credential-");
+      const session = await SessionManager.openAsync(
+        await resolveSessionTranscriptRuntimeTarget(target),
+      );
+      const messages = session.buildSessionContext().messages;
+      expect(messages).toEqual(
+        expect.arrayContaining([expect.objectContaining({ content: report.content })]),
+      );
+      const replay = JSON.stringify(messages);
+      expect(replay).not.toContain("synthetic-timeout-credential-");
+      expect(replay).toContain("This turn timed out");
+    });
+  });
+
+  it("writes neither timeout notice nor buffered output after queued report authority expires", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed("partial");
+      const before = await loadTranscriptEvents(target);
+      const reportTarget = await resolveSessionTranscriptRuntimeTarget(target);
+      const started = createDeferred();
+      const release = createDeferred();
+      const blocker = patchSessionEntryCore(target, async () => {
+        started.resolve();
+        await release.promise;
+        return null;
+      });
+      await started.promise;
+      let authorized = true;
+      const assertCommitAllowed = () => {
+        if (!authorized) {
+          throw new Error("Timeout owner expired");
+        }
+      };
+      assertCommitAllowed();
+      const persistence = recordGatewaySessionRunFailure({
+        target: reportTarget,
+        runId,
+        error: "Run deadline exceeded",
+        status: "timeout",
+        timeoutPartialText: "Additional unfinished output",
+        assertCommitAllowed,
+      });
+      const rejected = expect(persistence).rejects.toThrow("Timeout owner expired");
+      authorized = false;
+      release.resolve();
+      await blocker;
+      await rejected;
+      expect(await reports()).toEqual([]);
+      expect(await loadTranscriptEvents(target)).toEqual(before);
+    });
+  });
+
   it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
     "checks assistant output on the %s branch for this run",
     async (branch) => {
@@ -452,7 +662,7 @@ describe("durable pre-reply run failure", () => {
           {
             type: "custom_message",
             customType: "run-failed-before-reply",
-            content: `Your request couldn't be completed: ${reason}`,
+            content: "This turn timed out and may have performed work before it stopped.",
             details: { runId, error: reason },
           },
         ]);
@@ -463,6 +673,8 @@ describe("durable pre-reply run failure", () => {
   it.each([
     { phase: "start" },
     { phase: "end" },
+    { phase: "end", status: "cancelled", aborted: true, stopReason: "rpc" },
+    { phase: "end", aborted: true, stopReason: "restart" },
     { phase: "error", aborted: true, stopReason: "aborted" },
     { phase: "aborted" },
     { phase: "completed" },
@@ -715,7 +927,7 @@ describe("CLI history through Gateway terminal persistence", () => {
         const context = await f.laterContext("account-a");
         expect(JSON.stringify(context.reseedMessages)).toContain("Prior account-owned request");
         expect(context.durableContext).toContain(
-          "Your request couldn't be completed: Run timed out",
+          "This turn timed out and may have performed work before it stopped.",
         );
         const transcript = await loadTranscriptEvents(f.cliTarget);
         expect(
@@ -743,7 +955,9 @@ describe("CLI history through Gateway terminal persistence", () => {
       expect(completed).toBe(false);
       release.resolve();
       await finish;
-      expect((await f.laterContext("account-a")).durableContext).toContain("Run timed out");
+      expect((await f.laterContext("account-a")).durableContext).toContain(
+        "This turn timed out and may have performed work before it stopped.",
+      );
     });
   });
 

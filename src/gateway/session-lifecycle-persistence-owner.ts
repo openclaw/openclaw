@@ -122,6 +122,7 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
     const persist = () =>
       enqueue({
         sessionKey: params.sessionKey,
+        timeoutPartialText: params.timeoutPartialText,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: {
           ...params.event,
