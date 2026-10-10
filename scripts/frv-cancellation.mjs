@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
 import {
+  composeReleaseAttemptJobs,
   releaseChildSpec,
   validateReleaseChildDispatchBinding,
   validateReleaseChildRunProvenance,
@@ -54,12 +55,20 @@ function assertParent(run, plan, repository) {
 
 function completedJob(jobs, name, attempt) {
   const matches = jobs.filter((job) => job.name === name && Number(job.run_attempt) === attempt);
-  if (matches.length !== 1 || matches[0].status !== "completed") {
+  const observed = matches.length
+    ? composeReleaseAttemptJobs([{ jobs: matches, runAttempt: attempt }], {
+        plannedRunAttempt: attempt,
+        effectiveRunAttempt: attempt,
+      }).jobs
+    : [];
+  if (observed.length !== 1 || observed[0].status !== "completed") {
     throw new Error(
       `${name} attempt ${attempt}: dispatch observation unavailable; repeat cancellation after it settles`,
     );
   }
-  return matches[0];
+  // The evidence owner rejects real ambiguity but drops runnerless rerun copies.
+  // Keep the original executed row for its authenticated log ID and upload steps.
+  return matches.find((job) => job.status === "completed" && job.conclusion !== "skipped");
 }
 
 /** Cancel only producer-authenticated descendants; a fresh observation makes repetition resumable. */

@@ -134,28 +134,50 @@ describe("FRV cancellation tree", () => {
     expect((await cancelReleaseTree("77", fixture.client)).complete).toBe(true);
     expect(fixture.sent).toHaveLength(3);
   });
-  it("includes Telegram descendants from earlier child attempts, not only the latest rerun", async () => {
+  it.each([false, true])(
+    "includes earlier Telegram descendants beside runnerless rerun copies (copies=%s)",
+    async (copies) => {
+      const fixture = cancellationFixture({ nested: true });
+      fixture.runs.get("303")!.run_attempt = 2;
+      fixture.runs.set("919", {
+        ...fixture.runs.get("909")!,
+        id: 919,
+        display_title: `OpenClaw Release Telegram QA release-checks-303-2-${"d".repeat(32)}`,
+      });
+      fixture.logs.set(
+        4,
+        `Dispatched trusted Telegram QA: https://github.com/${REPOSITORY}/actions/runs/919`,
+      );
+      fixture.client.getAttemptJobs = async (_runId, attempt) => {
+        const completed = {
+          id: attempt === 1 ? 3 : 4,
+          name: "Run QA Lab live Telegram lane",
+          run_attempt: attempt,
+          status: "completed",
+          runner_id: 42,
+          runner_name: "GitHub Actions 1",
+          steps: [{ name: "Dispatch", status: "completed", conclusion: "success" }],
+        };
+        const queued = { ...completed, id: 40, status: "queued", runner_id: 0, runner_name: "" };
+        return copies && attempt === 2 ? [queued, completed, queued] : [completed];
+      };
+      expect((await cancelReleaseTree("77", fixture.client)).complete).toBe(true);
+      expect(fixture.sent.map(([id]) => id)).toEqual(["909", "919", "303", "77"]);
+      expect((await cancelReleaseTree("77", fixture.client)).complete).toBe(true);
+      expect(fixture.sent).toHaveLength(4);
+    },
+  );
+  it("rejects an independently runner-assigned duplicate rather than borrowing its dispatch", async () => {
     const fixture = cancellationFixture({ nested: true });
-    fixture.runs.get("303")!.run_attempt = 2;
-    fixture.runs.set("919", {
-      ...fixture.runs.get("909")!,
-      id: 919,
-      display_title: `OpenClaw Release Telegram QA release-checks-303-2-${"d".repeat(32)}`,
-    });
-    fixture.logs.set(
-      4,
-      `Dispatched trusted Telegram QA: https://github.com/${REPOSITORY}/actions/runs/919`,
-    );
-    fixture.client.getAttemptJobs = async (_runId, attempt) => [
-      {
-        id: attempt === 1 ? 3 : 4,
-        name: "Run QA Lab live Telegram lane",
-        run_attempt: attempt,
-        status: "completed",
-      },
-    ];
-    expect((await cancelReleaseTree("77", fixture.client)).complete).toBe(true);
-    expect(fixture.sent.map(([id]) => id)).toEqual(["909", "919", "303", "77"]);
+    const read = fixture.client.getAttemptJobs;
+    fixture.client.getAttemptJobs = async (id, attempt) => {
+      const jobs = await read(id, attempt);
+      return jobs.flatMap((job) => [{ ...job, id: 40, status: "queued", runner_id: 42 }, job]);
+    };
+    const result = await cancelReleaseTree("77", fixture.client);
+    expect(result.complete).toBe(false);
+    expect(fixture.sent.some(([id]) => id === "909")).toBe(false);
+    expect(result.failures).not.toEqual([]);
   });
   it("reports delayed cancellations as active until explicit force settles them", async () => {
     const fixture = cancellationFixture({ delayed: true });
