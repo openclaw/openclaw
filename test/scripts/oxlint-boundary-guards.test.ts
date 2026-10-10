@@ -27,12 +27,12 @@ const cases = [
   },
   {
     rule: "openclaw-boundaries/no-raw-window-open-call",
-    violation: `${FIXTURES}/boundary-calls.test.tsx`,
+    violation: `${FIXTURES}/boundary-calls.test-harness.tsx`,
     violations: 0,
   },
   {
     rule: "openclaw-boundaries/no-register-http-handler-call",
-    violation: `${FIXTURES}/boundary-calls.test.tsx`,
+    violation: `${FIXTURES}/boundary-calls.test-harness.tsx`,
     violations: 0,
   },
   {
