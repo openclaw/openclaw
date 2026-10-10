@@ -6,6 +6,7 @@
  * / `--human` override.
  */
 
+import { isUtf8 } from "node:buffer";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
@@ -116,6 +117,13 @@ async function loadOcPathFile(
         `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
         kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
       );
+      process.exitCode = 2;
+      return null;
+    }
+    // Every verb parses this file as text and `set` re-emits it in full, so
+    // replacement decoding would rewrite untouched bytes as U+FFFD on write.
+    if (!isUtf8(bytes)) {
+      emitError(mode, `input is not valid UTF-8: ${absPath}`, "OC_PATH_INPUT_NOT_UTF8");
       process.exitCode = 2;
       return null;
     }
