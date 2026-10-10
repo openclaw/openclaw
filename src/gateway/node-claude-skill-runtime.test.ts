@@ -17,7 +17,7 @@ import { resolveNodeHostGatewayPlatformIdentity } from "../node-host/gateway-pla
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "../node-host/invoke-agent-cli-claude.js";
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -277,8 +277,8 @@ async function fixture(
   );
   let output = "";
   const execute = (stdin = "hello") =>
-    withPluginRuntimeGatewayRequestScope(
-      { context: gateway, client: owner.client, isWebchatConnect: () => true },
+    withPluginRuntimeGatewayContextResolver(
+      () => gateway,
       () =>
         executeNodeClaudeRun({
           context,

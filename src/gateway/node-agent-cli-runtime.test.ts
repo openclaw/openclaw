@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -8,14 +13,10 @@ const mocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
 }));
 
-vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
-  getPluginRuntimeGatewayRequestScope: () => ({
-    context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
-      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
-    },
-  }),
-}));
+const gateway = {
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+} as unknown as GatewayRequestContext;
 
 vi.mock("./node-command-policy.js", () => ({
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
@@ -24,7 +25,14 @@ vi.mock("./node-command-policy.js", () => ({
 
 import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 
-describe("invokeNodeClaudeCliRun", () => {
+describe.each(["request", "detached"] as const)("invokeNodeClaudeCliRun (%s)", (scope) => {
+  const run = <T>(fn: () => T): T =>
+    scope === "detached"
+      ? withPluginRuntimeGatewayContextResolver(() => gateway, fn)
+      : withPluginRuntimeGatewayRequestScope(
+          { context: gateway, isWebchatConnect: () => false },
+          fn,
+        );
   beforeEach(() => {
     mocks.get.mockReset();
     mocks.invoke.mockReset();
@@ -43,14 +51,16 @@ describe("invokeNodeClaudeCliRun", () => {
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: false, reason: "denyCommands" });
 
     await expect(
-      invokeNodeClaudeCliRun({
-        nodeId: "node-1",
-        argv: ["-p"],
-        stdin: "hello",
-        timeoutMs: 10_000,
-        idleTimeoutMs: 1_000,
-        onProgress: () => {},
-      }),
+      run(() =>
+        invokeNodeClaudeCliRun({
+          nodeId: "node-1",
+          argv: ["-p"],
+          stdin: "hello",
+          timeoutMs: 10_000,
+          idleTimeoutMs: 1_000,
+          onProgress: () => {},
+        }),
+      ),
     ).resolves.toEqual({
       ok: false,
       error: {
@@ -67,16 +77,18 @@ describe("invokeNodeClaudeCliRun", () => {
     mocks.invoke.mockResolvedValue({ ok: true });
 
     await expect(
-      invokeNodeClaudeCliRun({
-        nodeId: "node-1",
-        argv: ["-p"],
-        stdin: "hello",
-        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        timeoutMs: 10_000,
-        idleTimeoutMs: 1_000,
-        onProgress: () => {},
-      }),
+      run(() =>
+        invokeNodeClaudeCliRun({
+          nodeId: "node-1",
+          argv: ["-p"],
+          stdin: "hello",
+          env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+          timeoutMs: 10_000,
+          idleTimeoutMs: 1_000,
+          onProgress: () => {},
+        }),
+      ),
     ).resolves.toEqual({ ok: true });
     expect(mocks.resolveNodeCommandAllowlist).toHaveBeenCalledOnce();
     expect(mocks.invoke).toHaveBeenCalledOnce();
@@ -91,4 +103,29 @@ describe("invokeNodeClaudeCliRun", () => {
       }),
     );
   });
+});
+
+it("rejects a retired Gateway resolver before policy lookup or dispatch despite stale context", async () => {
+  mocks.get.mockClear();
+  mocks.invoke.mockClear();
+  mocks.resolveNodeCommandAllowlist.mockClear();
+  const result = await withPluginRuntimeGatewayRequestScope(
+    { context: gateway, resolveGatewayContext: () => undefined, isWebchatConnect: () => false },
+    () =>
+      invokeNodeClaudeCliRun({
+        nodeId: "node-1",
+        argv: ["-p"],
+        stdin: "hello",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 1_000,
+        onProgress: () => {},
+      }),
+  );
+  expect(result).toEqual({
+    ok: false,
+    error: { code: "UNAVAILABLE", message: "Gateway node runtime unavailable" },
+  });
+  expect(mocks.get).not.toHaveBeenCalled();
+  expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalled();
 });
