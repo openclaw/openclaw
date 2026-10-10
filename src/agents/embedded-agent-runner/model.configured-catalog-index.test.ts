@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   withOpenClawTestState,
@@ -291,29 +292,33 @@ describe("configured model discovery facts", () => {
               api: "openai-completions",
               baseUrl,
               models: [
-                { id: modelId, contextWindow: configuredContext, contextTokens: configuredContext },
+                {
+                  id: modelId,
+                  name: modelId,
+                  contextWindow: configuredContext,
+                  contextTokens: configuredContext,
+                },
               ],
             },
           },
         },
       };
       const stores = createEmptyAgentDiscoveryStores();
+      const catalogModel: ProviderRuntimeModel = {
+        ...makeProviderModelFixture({
+          provider,
+          id: modelId,
+          api: "openai-completions",
+          baseUrl,
+        }),
+        contextWindow: 32_768,
+        contextTokens: 32_768,
+        compat: { supportsTools },
+      };
       stores.modelRegistry.registerProvider(provider, {
         api: "openai-completions",
         baseUrl,
-        models: [
-          {
-            ...makeProviderModelFixture({
-              provider,
-              id: modelId,
-              api: "openai-completions",
-              baseUrl,
-            }),
-            contextWindow: 32_768,
-            contextTokens: 32_768,
-            compat: { supportsTools },
-          },
-        ],
+        models: [catalogModel],
       });
       await withPluginRuntimeGenerationScope({ metadataSnapshot: metadata() }, async () => {
         const result = await resolveModelAsync(provider, modelId, undefined, config, {
