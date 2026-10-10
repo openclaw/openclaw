@@ -1,7 +1,7 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
 /** @jsxImportSource @solidjs/web */
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, onCleanup } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import {
@@ -74,6 +74,66 @@ export function CardMoveControl(input: {
       ? state().statuses
       : [input.card.status, ...state().statuses],
   );
+  const StatusSelect = () => {
+    let select: HTMLSelectElement | undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+      if (
+        state().busyCardIds.has(input.card.id) ||
+        state().dispatching ||
+        !input.workboard.connected ||
+        !input.workboard.client
+      ) {
+        event.preventDefault();
+        return;
+      }
+      const offset = event.key === "ArrowRight" ? 1 : -1;
+      const status = statuses()[statuses().indexOf(input.card.status) + offset];
+      if (!status) {
+        return;
+      }
+      event.preventDefault();
+      void moveCardToStatus(input.workboard, input.card, status);
+    };
+    onCleanup(() => {
+      if (select) {
+        select.removeEventListener("keydown", handleKeyDown);
+      }
+    });
+    return (
+      <select
+        class="workboard-card__move-select"
+        aria-keyshortcuts="ArrowLeft ArrowRight"
+        aria-label={`${t("workboard.fieldStatus")}: ${input.card.title}`}
+        value={input.card.status}
+        disabled={input.busy || !input.workboard.connected || !input.workboard.client}
+        onChange={(event: Event) => {
+          const target = event.currentTarget;
+          if (!(target instanceof HTMLSelectElement)) {
+            return;
+          }
+          const status = statuses().find((candidate) => candidate === target.value);
+          if (status) {
+            void moveCardToStatus(input.workboard, input.card, status);
+          }
+        }}
+        ref={(element: HTMLSelectElement) => {
+          select = element;
+          element.addEventListener("keydown", handleKeyDown);
+        }}
+      >
+        <For each={statuses()} keyed={(status) => status}>
+          {(status) => (
+            <option value={status()} selected={status() === input.card.status}>
+              {formatStatusLabel(status())}
+            </option>
+          )}
+        </For>
+      </select>
+    );
+  };
   return (
     <>
       {!isActiveWorkboardCard(input.card) || statuses().length < 2 ? null : (
@@ -81,54 +141,7 @@ export function CardMoveControl(input: {
           class={["workboard-card__move", input.options?.wide ? "workboard-card__move--wide" : ""]}
           title={t("workboard.fieldStatus")}
         >
-          <select
-            class="workboard-card__move-select"
-            aria-keyshortcuts="ArrowLeft ArrowRight"
-            aria-label={`${t("workboard.fieldStatus")}: ${input.card.title}`}
-            value={input.card.status}
-            disabled={input.busy || !input.workboard.connected || !input.workboard.client}
-            onChange={(event: Event) => {
-              const target = event.currentTarget;
-              if (!(target instanceof HTMLSelectElement)) {
-                return;
-              }
-              const status = statuses().find((candidate) => candidate === target.value);
-              if (status) {
-                void moveCardToStatus(input.workboard, input.card, status);
-              }
-            }}
-            ref={(element: HTMLSelectElement) => {
-              element.onkeydown = (event: KeyboardEvent) => {
-                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-                  return;
-                }
-                if (
-                  state().busyCardIds.has(input.card.id) ||
-                  state().dispatching ||
-                  !input.workboard.connected ||
-                  !input.workboard.client
-                ) {
-                  event.preventDefault();
-                  return;
-                }
-                const offset = event.key === "ArrowRight" ? 1 : -1;
-                const status = statuses()[statuses().indexOf(input.card.status) + offset];
-                if (!status) {
-                  return;
-                }
-                event.preventDefault();
-                void moveCardToStatus(input.workboard, input.card, status);
-              };
-            }}
-          >
-            <For each={statuses()} keyed={(status) => status}>
-              {(status) => (
-                <option value={status()} selected={status() === input.card.status}>
-                  {formatStatusLabel(status())}
-                </option>
-              )}
-            </For>
-          </select>
+          <StatusSelect />
           <span class="workboard-card__move-chevron" aria-hidden="true">
             {icons.chevronDown}
           </span>

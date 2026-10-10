@@ -1,5 +1,5 @@
-import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 /** @jsxImportSource @solidjs/web */
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMemo, For, Show } from "solid-js";
 import { Dialog, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";

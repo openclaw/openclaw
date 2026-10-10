@@ -183,7 +183,9 @@ suite.define(() => {
                 exact: true,
               });
               await actions.click();
-              await detailContent.getByRole("button", { name: "Edit card", exact: true }).waitFor();
+              const edit = detailContent.getByRole("button", { name: "Edit card", exact: true });
+              await edit.waitFor();
+              await edit.focus();
               await page.keyboard.press("Escape");
               expect(await details.isVisible()).toBe(true);
               await expect.poll(() => actions.getAttribute("aria-expanded")).toBe("false");
