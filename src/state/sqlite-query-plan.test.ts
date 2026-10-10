@@ -4,6 +4,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { deleteOrphanedTranscriptIndexRowsInTransaction } from "../config/sessions/session-transcript-index.js";
+import { loadCronRows } from "../cron/store/row-codec.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -66,6 +67,37 @@ afterEach(() => {
 });
 
 describe("sqlite hot query plans", () => {
+  it("loads a bounded cron job ID set through the job identity index", () => {
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const db = database.db;
+    const storeKey = "/state/cron/jobs.json";
+    const insert = db.prepare(
+      "INSERT INTO cron_jobs (store_key, job_id, name, enabled, payload_kind, job_json, state_json, sort_order, updated_at) VALUES (?, ?, 'proof', 0, 'command', '{}', '{}', ?, ?)",
+    );
+    db.exec("BEGIN");
+    for (let index = 2_047; index >= 0; index -= 1) {
+      insert.run(storeKey, `job-${index}`, index, index);
+    }
+    db.exec("COMMIT");
+
+    const jobIds = new Set(Array.from({ length: 64 }, (_, index) => `job-${index}`));
+    const prepared = vi.spyOn(db, "prepare");
+    const rows = loadCronRows(db, storeKey, jobIds);
+    const selectSql = prepared.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.includes("cron_rows") && sql.includes("json_each"));
+    prepared.mockRestore();
+    expect(rows.map((row) => row.job_id)).toEqual([...jobIds]);
+    if (!selectSql) {
+      throw new Error("Expected the bounded cron row selection");
+    }
+    expect(explainQueryPlan(db, selectSql, [storeKey, JSON.stringify([...jobIds])])).toContain(
+      "sqlite_autoindex_cron_jobs_1",
+    );
+  });
+
   it("bounds absent legacy watch detection and migration by the cursor index", () => {
     const { db } = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
