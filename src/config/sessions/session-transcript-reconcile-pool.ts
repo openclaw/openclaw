@@ -4,6 +4,7 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import type { Result } from "@openclaw/normalization-core/result";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -453,23 +454,27 @@ async function startReconcileWorkerTask(
         (input.mode === "disk" ? 2 * input.agentId.length : 0));
   let poolCompletion: Promise<void> | undefined;
   const execute = async (coordination?: SqliteMutationWorkerCoordination) => {
-    poolCompletion = pool.run(
-      {
-        input,
-        port: port2,
-        coordination,
-        sourceIdentity,
-      },
-      {
-        inputBytes,
-        transferList: (task) => [
-          task.port,
-          ...(task.coordination?.reconciliation
-            ? [task.coordination.reconciliation.admission]
-            : []),
-        ],
-        signal: controller.signal,
-      },
+    poolCompletion = runWithSqliteDatabaseAdmissionTurn(
+      input.mode === "disk" ? [input.path] : [],
+      () =>
+        pool.run(
+          {
+            input,
+            port: port2,
+            coordination,
+            sourceIdentity,
+          },
+          {
+            inputBytes,
+            transferList: (task) => [
+              task.port,
+              ...(task.coordination?.reconciliation
+                ? [task.coordination.reconciliation.admission]
+                : []),
+            ],
+            signal: controller.signal,
+          },
+        ),
     );
     try {
       await poolCompletion;

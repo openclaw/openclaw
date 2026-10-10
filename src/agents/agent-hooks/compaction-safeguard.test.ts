@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -18,7 +15,6 @@ import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { jsonResult } from "../tools/common.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
   consumeCompactionSafeguardCancellation,
@@ -122,7 +118,6 @@ const {
   auditSummaryQuality: auditSummaryQualityOwner,
   capCompactionSummary,
   budgetCompactionSummary,
-  readWorkspaceContextForSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
@@ -361,6 +356,7 @@ describe("compaction-safeguard runtime registry", () => {
     buildEmbeddedExtensionFactories({
       cfg,
       sessionManager,
+      workspaceDir: "/workspace",
       model: {
         contextWindow: 200_000,
       } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
@@ -1981,121 +1977,5 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(mockSummarizeCompactionHistory).not.toHaveBeenCalled();
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
-});
-
-async function expectWorkspaceSummaryEmptyForAgentsAlias(
-  createAlias: (outsidePath: string, agentsPath: string) => void,
-) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
-  try {
-    const outside = path.join(root, "outside-secret.txt");
-    fs.writeFileSync(outside, "secret");
-    createAlias(outside, path.join(root, "AGENTS.md"));
-    await expect(readWorkspaceContextForSummary(["Session Startup", "Red Lines"])).resolves.toBe(
-      "",
-    );
-  } finally {
-    cwdSpy.mockRestore();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-describe("readWorkspaceContextForSummary", () => {
-  async function withWorkspaceSummary(
-    content: string,
-    sectionNames: string[] | undefined,
-  ): Promise<string> {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
-    try {
-      fs.writeFileSync(path.join(root, "AGENTS.md"), content);
-      return await readWorkspaceContextForSummary(sectionNames);
-    } finally {
-      cwdSpy.mockRestore();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  }
-
-  const limitPrefix =
-    "## Session Startup\n\n" + "x".repeat(1_999 - "## Session Startup\n\n".length);
-  const boundedContent = `${limitPrefix}🚀tail\n`;
-  it.each([
-    {
-      name: "disabled sections",
-      content: "## Session Startup\n\nRead AGENTS.md\n",
-      sections: [],
-      expected: [],
-    },
-    {
-      name: "oversized file",
-      content: `## Session Startup\n\n${"x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}`,
-      sections: ["Session Startup"],
-      expected: [],
-    },
-    {
-      name: "file at the byte limit",
-      content:
-        boundedContent +
-        "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - Buffer.byteLength(boundedContent)),
-      sections: ["Session Startup"],
-      expected: ["<workspace-critical-rules>", `${limitPrefix}\n...[truncated]...`],
-    },
-    {
-      name: "legacy defaults",
-      content: "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
-      sections: ["Red Lines", "Session Startup"],
-      expected: ["Do startup things", "Be safe"],
-    },
-  ])("reads workspace context with $name", async ({ content, sections, expected }) => {
-    const result = await withWorkspaceSummary(content, sections);
-    if (expected.length === 0) {
-      expect(result).toBe("");
-    } else {
-      for (const text of expected) {
-        expect(result).toContain(text);
-      }
-    }
-  });
-
-  it("reads workspace context from the configured workspace instead of process cwd", async () => {
-    const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
-    try {
-      fs.writeFileSync(
-        path.join(processRoot, "AGENTS.md"),
-        "## Session Startup\n\nWrong cwd rules.\n",
-      );
-      fs.writeFileSync(
-        path.join(workspaceRoot, "AGENTS.md"),
-        "## Session Startup\n\nUse the run workspace rules.\n\n## Other\nIgnore me.\n",
-      );
-
-      const result = await readWorkspaceContextForSummary(["Session Startup"], workspaceRoot);
-
-      expect(result).toContain("Use the run workspace rules.");
-      expect(result).not.toContain("Wrong cwd rules.");
-      expect(result).not.toContain("Ignore me.");
-      expect(result).toContain("<workspace-critical-rules>");
-    } finally {
-      cwdSpy.mockRestore();
-      fs.rmSync(processRoot, { recursive: true, force: true });
-      fs.rmSync(workspaceRoot, { recursive: true, force: true });
-    }
-  });
-
-  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
-    "returns empty when AGENTS.md is a %s alias",
-    async (kind) => {
-      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
-        if (kind === "symlink") {
-          fs.symlinkSync(outside, agentsPath);
-        } else {
-          fs.linkSync(outside, agentsPath);
-        }
-      });
-    },
-  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

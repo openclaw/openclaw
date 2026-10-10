@@ -60,12 +60,20 @@ describe("registered Codex runtime choices", () => {
             preparedRuntimeAuthModes: { codex: { source: "native", mode } },
           });
 
-          expect(await owner.runtimeChoices(entry)).toEqual(["codex"]);
+          expect(owner.runtimeChoices(entry)).toEqual(["codex"]);
           expect(
-            await createModelCatalogDecisions({
+            createModelCatalogDecisions({
               ...params,
               preparedRuntimeAuthModes: {},
             }).runtimeChoices(entry),
+          ).toBeUndefined();
+          const observedEntry = { ...entry, nativeRuntime: "codex" };
+          expect(
+            createModelCatalogDecisions({
+              ...params,
+              snapshot: { entries: [observedEntry], routeVariants: [observedEntry] },
+              preparedRuntimeAuthModes: {},
+            }).runtimeChoices(observedEntry),
           ).toEqual([]);
         },
       );

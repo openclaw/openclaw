@@ -98,6 +98,9 @@ openclaw workboard move 7f4a2c10 --status done --json
 
 `move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token. Claim tokens remain scoped to agent-tool mutations, and JSON output redacts them.
 
+This command writes through the selected state owner, using Gateway RPC while
+the Gateway is running and exclusive offline ownership when it is stopped.
+
 ## `dispatch`
 
 ```bash
@@ -133,6 +136,10 @@ The CLI falls back to data-only dispatch against local Workboard state when both
 - The local Gateway is stopped and the CLI can acquire exclusive offline state ownership.
 
 Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. A live owner that cannot be reached, lacks the required method, or rejects the request never triggers local fallback. Auth, permission, validation, and explicit-target failures are reported directly. After an uncertain reply, inspect the board before retrying.
+
+Data-only dispatch requires the Gateway to be stopped. A connection error or
+missing RPC method alone does not establish that it stopped. A running Gateway
+does not poll for mutations made by another process.
 
 Text output reports worker starts:
 

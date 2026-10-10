@@ -127,6 +127,8 @@ export type SidebarRecentSession = {
   archived?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: GatewaySessionRow["sharingRole"];
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
@@ -324,6 +326,7 @@ export type SidebarSessionPatch = Pick<
   | "icon"
   | "color"
   | "category"
+  | "communication"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;

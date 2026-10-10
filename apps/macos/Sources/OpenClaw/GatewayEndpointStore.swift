@@ -812,26 +812,24 @@ extension GatewayEndpointStore {
             sshRouteIdentity = nil
         }
         let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: mode)
+        func credential(_ kind: Credential) -> String? {
+            if mode == .local {
+                return kind == .token ? localConfig?.token : localConfig?.password
+            }
+            guard mode != .unconfigured else { return nil }
+            return self.resolveGatewayCredential(
+                kind,
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                launchdSnapshot: launchdSnapshot)
+        }
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
             mode: mode,
-            token: mode == .local ? localConfig?.token : mode == .unconfigured
-                ? nil
-                : self.resolveGatewayCredential(
-                    .token,
-                    isRemote: isRemote,
-                    root: root,
-                    env: env,
-                    launchdSnapshot: launchdSnapshot),
-            password: mode == .local ? localConfig?.password : mode == .unconfigured
-                ? nil
-                : self.resolveGatewayCredential(
-                    .password,
-                    isRemote: isRemote,
-                    root: root,
-                    env: env,
-                    launchdSnapshot: launchdSnapshot),
+            token: credential(.token),
+            password: credential(.password),
             deviceAuthGatewayID: deviceAuthGatewayID,
             localPort: localPort,
             localHost: localConfig?.url.host ?? self.resolveLocalGatewayHost(
@@ -988,18 +986,16 @@ extension GatewayEndpointStore {
             bindMode: bind,
             customBindHost: customBindHost,
             tailscaleIP: tailscaleIP)
-        let token = self.resolveGatewayCredential(
-            .token,
-            isRemote: false,
-            root: root,
-            env: env,
-            launchdSnapshot: launchdSnapshot)
-        let password = self.resolveGatewayCredential(
-            .password,
-            isRemote: false,
-            root: root,
-            env: env,
-            launchdSnapshot: launchdSnapshot)
+        func credential(_ kind: Credential) -> String? {
+            self.resolveGatewayCredential(
+                kind,
+                isRemote: false,
+                root: root,
+                env: env,
+                launchdSnapshot: launchdSnapshot)
+        }
+        let token = credential(.token)
+        let password = credential(.password)
         return (
             url: URL(string: "\(scheme)://\(host):\(port)")!,
             token: token,

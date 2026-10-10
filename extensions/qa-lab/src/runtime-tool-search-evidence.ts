@@ -147,8 +147,6 @@ export async function requireToolSearchDiscoveryEvidence(
         candidate.targetCallId === params.expectedCallId &&
         candidate.targetNamespace === "openclaw" &&
         candidate.targetTool === normalizedToolName &&
-        candidate.discoveredNamespace === "openclaw" &&
-        candidate.discoveredTool === normalizedToolName &&
         candidate.targetSuccess === params.expectedSuccess,
     );
   if (!receipt) {

@@ -1,14 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { mock } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
+import type {
+  AdmissionTaskInput,
+  AdmissionTaskResult,
+} from "./sqlite-database-admission.task.test-support.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import type {
@@ -19,6 +26,7 @@ import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.tes
 import type { RetainedWorkerTask, WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 const pools: Array<{ close(): Promise<void> }> = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
@@ -332,6 +340,48 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
   expect(secondReply.label).toBe("second");
   expect(secondReply.threadId).toBe(firstReply.threadId);
   read(second.release({ retire: true }));
+});
+
+it("services a sibling pool's database facts while the host event loop is blocked", async () => {
+  const blockedPool = fixture();
+  const admissionPool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
+    {
+      workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    },
+    { retainedTransport: true },
+  );
+  pools.push(admissionPool);
+  await Promise.all([blockedPool.run({}, {}), admissionPool.run({}, {})]);
+  const location = path.join(tempDirs.make("cross-pool-admission-"), "shared.sqlite");
+  const database = new DatabaseSync(location);
+  database.exec("CREATE TABLE proof (value INTEGER)");
+  database.close();
+  const barrier = new Int32Array(new SharedArrayBuffer(8));
+  const blocked = blockedPool.startTask({ wait: barrier.buffer }, {});
+  const admission = admissionPool.startTask({ path: location }, {});
+  let promiseReaction = false;
+  void admission.result.then(
+    () => {
+      promiseReaction = true;
+    },
+    () => undefined,
+  );
+  try {
+    serviceUntil(
+      () => blocked.service(),
+      () => admission.read().status !== "pending",
+    );
+    expect(read(admission).sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
+    expect(promiseReaction).toBe(false);
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1);
+    read(admission.release());
+    read(blocked);
+    read(blocked.release());
+  }
 });
 
 function ordinaryFixture() {
