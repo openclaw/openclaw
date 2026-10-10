@@ -2221,6 +2221,7 @@
     "ui:boot-manifest:gen": "node --import ./scripts/tsx.mjs ui/scripts/control-ui-boot-manifest.mts",
     "ui:solid:inventory": "node --import ./scripts/tsx.mjs scripts/control-ui-solid-inventory.mts",
     "ui:build": "node scripts/ui.js build",
+    "ui:parity": "node --import ./scripts/tsx.mjs scripts/control-ui-parity/index.mts",
     "ui:check-performance": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts",
     "ui:check-performance:base": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance-base.mts",
     "ui:dev": "node scripts/ui.js dev",

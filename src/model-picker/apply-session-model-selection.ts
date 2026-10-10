@@ -38,7 +38,10 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
-import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
+import {
+  resolveWorkerPlacementSessionRuntimeCapabilities,
+  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync,
+} from "../gateway/worker-environments/placement-session-runtime.js";
 import { readSessionWorkerPlacementAsync } from "../gateway/worker-environments/session-placement-lifecycle.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
@@ -140,7 +143,10 @@ function resolveActivePlacementModelSelectionError(
     sessionKey: string;
     entry: SessionEntry;
   },
-  prepared?: { placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>> },
+  prepared?: {
+    placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>>;
+    runtime?: ReturnType<typeof resolveWorkerPlacementSessionRuntimeCapabilities>;
+  },
 ): string | undefined {
   const sessionId = params.entry.sessionId;
   if (!sessionId) {
@@ -153,12 +159,14 @@ function resolveActivePlacementModelSelectionError(
   if (!placement || placement.state === "local") {
     return undefined;
   }
-  const { executionMode } = resolveWorkerPlacementSessionRuntimeCapabilities({
-    cfg: params.cfg,
-    entry: params.entry,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const { executionMode } =
+    prepared?.runtime ??
+    resolveWorkerPlacementSessionRuntimeCapabilities({
+      cfg: params.cfg,
+      entry: params.entry,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
   if (executionMode === placement.executionMode) {
     return undefined;
   }
@@ -311,6 +319,19 @@ export async function applySessionModelSelectionInternal(
       };
     }
   }
+  const placement = await readSessionWorkerPlacementAsync({
+    context: resolveSessionWorkerPlacementContext(),
+    sessionId: nextEntry.sessionId,
+  });
+  const placementRuntime =
+    placement && placement.state !== "local"
+      ? await resolveWorkerPlacementSessionRuntimeCapabilitiesAsync({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          entry: nextEntry,
+        })
+      : undefined;
   const placementError = resolveActivePlacementModelSelectionError(
     {
       cfg: params.cfg,
@@ -319,10 +340,8 @@ export async function applySessionModelSelectionInternal(
       entry: nextEntry,
     },
     {
-      placement: await readSessionWorkerPlacementAsync({
-        context: resolveSessionWorkerPlacementContext(),
-        sessionId: nextEntry.sessionId,
-      }),
+      placement,
+      runtime: placementRuntime,
     },
   );
   if (placementError) {

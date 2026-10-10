@@ -7,10 +7,11 @@ import type {
   ContextEngineRegistration,
   ContextEngineRegistrationLifecycle,
 } from "../plugins/registry-contribution-types.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { contextEngineAbortSignal, isContextEngineAbortRejection } from "./context-engine-abort.js";
@@ -20,7 +21,6 @@ import {
   projectContextEngineHostParams,
 } from "./registry-contract.js";
 import {
-  clearContextEngineQuarantineForActivation,
   clearContextEngineRuntimeQuarantine,
   getContextEngineQuarantine,
   recordContextEngineQuarantine,
@@ -357,25 +357,30 @@ export function activateContextEngineRegistrations(
     assertCurrent: () => void;
     trackCleanup: (completion: Promise<void>) => void;
   },
-): void {
+): Promise<void> {
+  const authority = activation ? undefined : capturePluginLifecycleAuthority(pluginRegistry);
+  const cleanup: Promise<void>[] = [];
   for (const [id, registration] of pluginRegistry.contextEngines) {
     if (registration.lifecycle === "runtime") {
-      if (activation) {
-        activation.trackCleanup(
-          clearContextEngineRuntimeQuarantine(id, () => {
+      const completion = trackAsyncWork(() =>
+        clearContextEngineRuntimeQuarantine(id, () => {
+          if (activation) {
             activation.assertCurrent();
-            // An RPC can retain its predecessor registry while publishing this one.
-            if (pluginRegistry.contextEngines.get(id) !== registration) {
-              throw new Error("Context engine registration changed during activation cleanup");
-            }
-          }),
-        );
-      } else {
-        // The shipped provider-catalog SDK can activate while returning a synchronous array.
-        clearContextEngineQuarantineForActivation(id);
-      }
+          } else if (!authority?.()) {
+            throw new Error("Context engine activation was superseded");
+          }
+          // An RPC can retain its predecessor registry while publishing this one.
+          if (pluginRegistry.contextEngines.get(id) !== registration) {
+            throw new Error("Context engine registration changed during activation cleanup");
+          }
+        }),
+      );
+      cleanup.push(completion);
+      activation?.trackCleanup(completion);
     }
   }
+  // Legacy synchronous loaders publish immediately; their host work scope owns settlement.
+  return Promise.allSettled(cleanup).then(() => {});
 }
 
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */

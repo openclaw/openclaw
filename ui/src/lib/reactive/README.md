@@ -72,3 +72,31 @@ ownership of those capabilities.
 
 These foundations do not mount new product UI. The tests exercise real owner
 publication paths plus shared subscription, replacement, and disposal contracts.
+
+## Retained Solid panes
+
+`createParkedProjection(read, presented)` keeps the last presentation while a
+mounted pane is hidden. It stops reading its source and drops those reactive
+dependencies until reveal, then reads the current owner once. A first hidden
+mount reads once without subscribing so the retained DOM can be initialized.
+Return immutable presentation values from `read`: parking does not clone or
+freeze mutable domain objects. Project their displayed fields rather than
+holding a mutable object and reading its fields directly from JSX.
+
+Chat's `createSolidRenderLifecycle` in `pages/chat/solid-render-lifecycle.ts`
+uses this projection for its `snapshot` accessor. Create it in the pane's Solid
+owner, pass the pane's `presented` accessor (including document visibility when
+the pane owns that policy), and render from `snapshot()`. `read` may consume
+existing owner projections; imperative owners call `invalidate()` after their
+synchronous mutations. The existing frame-coalescing owner still controls
+stream invalidation cadence.
+
+`afterCommit` requests a new generation and runs in Solid's split-effect apply
+phase, after DOM bindings. Requests made from a callback wait for the following
+generation. `afterLayout` additionally waits for a browser animation frame;
+ResizeObserver, child custom elements, images, and overlay animations retain
+their own settlement contracts. Both methods own returned cleanup until the
+callback calls `complete`, is cancelled, the pane parks, or the owner disposes.
+Pending callbacks wait through parking; disposal cancels them. Lit callers keep
+using the renderer-neutral interface and the existing controller adapter until
+their port lands.

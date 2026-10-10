@@ -58,6 +58,12 @@ confirm application, the key remains saved and the response includes a restart
 warning. This preserves the configured reload policy, including disabled reloads.
 Removing a key still rejects a binding or credential that changed concurrently.
 
+Provider `apiKey` values that name an existing compatible API-key or token profile
+are profile bindings, not literal credentials. Model discovery resolves those
+bindings through the same profile classification used by chat requests, including
+provider and base-URL compatibility checks. Values that do not name a stored
+profile remain literal keys. Saving a key does not change the stored binding format.
+
 ## Setup replacements
 
 Setup replacement credentials are saved under separate profile IDs with an

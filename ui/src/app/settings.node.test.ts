@@ -12,11 +12,8 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
-import {
-  applyServerUiPrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
+import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { backgroundPreferenceStorageKey, saveBackgroundPreference } from "./settings-background.ts";
 import {
   loadGatewaySessionSelection,
@@ -337,34 +334,40 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings().navCollapsed).toBe(false);
   });
 
-  it("loads and upgrades settings written by 2026.7.1", () => {
-    const gatewayUrl = expectedGatewayUrl("");
-    const sessionsByGateway = {
-      [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
-    };
-    writeStored({
-      gatewayUrl,
-      theme: "claw",
-      themeMode: "dark",
-      navWidth: 300,
-      sessionsByGateway,
-      sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7],
-    });
-    const settings = loadSettings();
-    expect(settings).toMatchObject({
-      gatewayUrl,
-      sessionKey: "agent:main:work",
-      lastActiveSessionKey: "agent:main:work",
-      themeMode: "dark",
-      navWidth: 300,
-    });
-    expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
-    expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
-    saveSettings(settings);
-    expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
-    expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
-    expect(loadSettings()).toEqual(settings);
-  });
+  it.each(["direct save", "unrelated locale patch"])(
+    "loads and upgrades 2026.7.1 settings through %s",
+    (action) => {
+      const gatewayUrl = expectedGatewayUrl("");
+      const sessionsByGateway = {
+        [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
+      };
+      writeStored({
+        gatewayUrl,
+        theme: "claw",
+        themeMode: "dark",
+        navWidth: 300,
+        sessionsByGateway,
+        sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7],
+      });
+      if (action === "unrelated locale patch") {
+        patchSettings({ locale: "de" });
+      }
+      const settings = loadSettings();
+      expect(settings).toMatchObject({
+        gatewayUrl,
+        sessionKey: "agent:main:work",
+        lastActiveSessionKey: "agent:main:work",
+        themeMode: "dark",
+        navWidth: 300,
+      });
+      expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
+      expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
+      saveSettings(settings);
+      expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
+      expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
+      expect(loadSettings()).toEqual(settings);
+    },
+  );
 
   it("persists roster mode and defaults invalid stored modes to chip", () => {
     saveSettings({ ...loadSettings(), sidebarAgentsMode: "roster" });

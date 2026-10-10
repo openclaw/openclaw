@@ -25,6 +25,7 @@ import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
   MemoryPublicationConnection,
+  MemoryPublicationFragment,
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
@@ -93,20 +94,21 @@ function createPublicationBackend(
   admit: (stage: "transaction" | "commit") => void,
 ) {
   const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
+  // One source owns this staging buffer until settlement. Large sources cost
+  // additional worker memory, but never turn transfer fragments into SQLite I/O.
   let staged:
     | ({
         operation: string;
         rows: number;
         row: number;
         part: number;
+        fragments: MemoryPublicationFragment[];
       } & (
         | { kind: "source"; header: MemorySourceIndexHeader }
         | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
       ))
     | undefined;
   let loadedExtension: string | undefined;
-  let scratchCreated = false;
-  let insert: ReturnType<DatabaseSync["prepare"]> | undefined;
   try {
     assertPath();
     for (const [name, value] of Object.entries(input.pragmas)) {
@@ -118,33 +120,13 @@ function createPublicationBackend(
       }
     }
     // Borrowed connections retain the canonical executor's installed policy.
-    if (ownsConnection) {
-      db.exec("PRAGMA temp_store = FILE");
-    }
-    const prepareScratch = () => {
-      if (!scratchCreated) {
-        // Large input spills to SQLite instead of retaining a second complete source.
-        db.exec(
-          "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
-        );
-        scratchCreated = true;
-        insert = db.prepare(
-          "INSERT INTO temp.memory_publication_input (row, part, json) VALUES (?, ?, ?)",
-        );
-      }
-    };
     const discard = () => {
-      db.exec("DELETE FROM temp.memory_publication_input");
       staged = undefined;
     };
     const finish = <T>(outcome: MemoryPublicationResult<T>): MemoryPublicationResult<T> => {
       // Failed commands close through their host owner; cleanup must not hide the write outcome.
       if (outcome.ok) {
-        try {
-          discard();
-        } catch (error) {
-          return { ok: false, error: failure(error), entered: true, committed: true };
-        }
+        discard();
       }
       return outcome;
     };
@@ -243,11 +225,10 @@ function createPublicationBackend(
           if (staged) {
             throw new Error("Memory publication input already belongs to another operation");
           }
-          prepareScratch();
           staged =
             command.type === "stage.start"
-              ? { ...command.input, kind: "source", row: 0, part: 0 }
-              : { ...command.input, kind: "cache", row: 0, part: 0 };
+              ? { ...command.input, kind: "source", row: 0, part: 0, fragments: [] }
+              : { ...command.input, kind: "cache", row: 0, part: 0, fragments: [] };
           return undefined;
         }
         if (command.type === "stage.discard") {
@@ -257,7 +238,7 @@ function createPublicationBackend(
           return undefined;
         }
         if (command.type === "stage.append") {
-          if (!staged || !insert || staged.operation !== command.input.operation) {
+          if (!staged || staged.operation !== command.input.operation) {
             throw new Error("Memory publication input owner changed");
           }
           for (const fragment of command.input.fragments) {
@@ -268,7 +249,7 @@ function createPublicationBackend(
             ) {
               throw new Error("Memory publication input is incomplete or out of order");
             }
-            insert.run(fragment.row, fragment.part, fragment.json);
+            staged.fragments.push(fragment);
             if (fragment.last) {
               staged.row++;
               staged.part = 0;
@@ -314,7 +295,8 @@ function createPublicationBackend(
               throw new Error("Memory cache input was not sealed");
             }
             header = staged.header;
-            readEntries = () => readStagedRows<MemoryEmbeddingCacheEntry>(db);
+            const fragments = staged.fragments;
+            readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(fragments);
           }
           const outcome = write(() => {
             if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
@@ -367,16 +349,24 @@ function createPublicationBackend(
             new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
           );
         }
-        if (
-          !staged ||
-          staged.kind !== "source" ||
-          staged.operation !== command.input.operation ||
-          staged.row !== staged.rows ||
-          staged.part !== 0
-        ) {
-          throw new Error("Memory publication input was not sealed");
+        let header: MemorySourceIndexHeader;
+        let rows: Iterable<MemorySourceIndexRow>;
+        if (command.type === "source.replace.inline") {
+          header = command.input.header;
+          rows = readPublicationRows<MemorySourceIndexRow>(command.input.fragments);
+        } else {
+          if (
+            !staged ||
+            staged.kind !== "source" ||
+            staged.operation !== command.input.operation ||
+            staged.row !== staged.rows ||
+            staged.part !== 0
+          ) {
+            throw new Error("Memory publication input was not sealed");
+          }
+          header = staged.header;
+          rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
         }
-        const header = staged.header;
         const outcome = write(() => {
           if (
             header.source === "sessions" &&
@@ -390,21 +380,20 @@ function createPublicationBackend(
           const { retainedDrift } = new MemorySourceIndexKernel(
             db,
             command.input.state,
-          ).replaceRows(header, readStagedRows<MemorySourceIndexRow>(db));
+          ).replaceRows(header, rows);
           return {
             beforeRevision,
             databaseRevision: readMemoryDatabaseRevision(db),
             retainedDrift,
           };
         });
-        return finish(outcome);
+        return command.type === "source.replace.inline" ? outcome : finish(outcome);
       },
       close() {
         if (ownsConnection) {
           db.close();
-        } else if (scratchCreated) {
-          db.exec("DROP TABLE temp.memory_publication_input");
         }
+        discard();
       },
     } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
   } catch (error) {
@@ -415,22 +404,20 @@ function createPublicationBackend(
   }
 }
 
-function* readStagedRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
-  db: DatabaseSync,
+function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
+  fragments: Iterable<MemoryPublicationFragment>,
 ): Generator<Row> {
   // SAFETY: Only the paired source/cache producer writes these sealed records.
   const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
   let parts: string[] = [];
   let row = 0;
-  for (const fragment of db
-    .prepare("SELECT row, json FROM temp.memory_publication_input ORDER BY row, part")
-    .iterate()) {
+  for (const fragment of fragments) {
     if (fragment.row !== row) {
       yield parse(parts);
       parts = [];
-      row = Number(fragment.row);
+      row = fragment.row;
     }
-    parts.push(String(fragment.json));
+    parts.push(fragment.json);
   }
   if (parts.length) {
     yield parse(parts);

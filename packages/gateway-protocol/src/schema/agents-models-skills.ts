@@ -99,6 +99,7 @@ export const AgentsListResultSchema = closedObject({
 /** Creates a configured agent; the server supplies an omitted workspace. */
 export const AgentsCreateParamsSchema = closedObject({
   name: NonEmptyString,
+  expectedOwnerId: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
@@ -111,6 +112,7 @@ export const AgentsCreateResultSchema = closedObject({
   agentId: NonEmptyString,
   name: NonEmptyString,
   workspace: NonEmptyString,
+  agentDir: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
 });
 
