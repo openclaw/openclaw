@@ -11,6 +11,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     subagentControlScope: entry.subagentControlScope,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
+    delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy),
     inheritedToolAllow: Array.isArray(entry.inheritedToolAllow)
       ? [...entry.inheritedToolAllow]
       : entry.inheritedToolAllow,

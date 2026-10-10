@@ -3206,7 +3206,7 @@ jobs:
       - *linux_node_checkout_step
       - name: Initialize RunsOn
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'
-        uses: runs-on/action@dfae4d98c5537a0dc7bbb7e6b9211f30ba240f6d # v2
+        uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3 # v2.5.0
 
       - name: Record RunsOn allocation
         if: matrix.runner == 'runson-c8i-8xlarge' && runner.environment == 'self-hosted'

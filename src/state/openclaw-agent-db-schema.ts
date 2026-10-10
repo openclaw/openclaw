@@ -12,7 +12,7 @@ import {
 } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
-  sqliteProcessDeathIntegrityRefusal,
+  sqliteWalAdmissionRefusal,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
@@ -131,6 +131,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   reuseRuntimeIntegrity = false,
   processDeath = false,
   admittedSchema = false,
+  deferUnverifiedIntegrity = false,
 ): SqliteIntegrityOperation<boolean> {
   if (reuseRuntimeIntegrity && admittedSchema) {
     if (diagnostics) {
@@ -157,13 +158,18 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
     hasPendingCurrentVersionAgentDatabaseMigration(database);
   const startedAt = performance.now();
-  const processDeathRefusal = processDeath
+  const deferredReason = processDeath
+    ? "process-death"
+    : deferUnverifiedIntegrity && !verification && diagnostics?.integrityGateReason === "no-proof"
+      ? "no-proof"
+      : undefined;
+  const deferredRefusal = deferredReason
     ? migrationPending || hasPendingCurrentVersionMigration
       ? "schema-migration-pending"
-      : sqliteProcessDeathIntegrityRefusal(database, pathname)
+      : sqliteWalAdmissionRefusal(database, pathname)
     : undefined;
-  if (processDeath && diagnostics) {
-    diagnostics.because = processDeathRefusal;
+  if (deferredReason && diagnostics) {
+    diagnostics.because = deferredRefusal;
   }
   if (diagnostics?.integrityGateReason === "stale-lease-full" && diagnostics.because) {
     agentDbLog.info(
@@ -176,7 +182,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     );
   }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    const deferred = processDeath && !processDeathRefusal;
+    const deferred = deferredReason !== undefined && !deferredRefusal;
     const reuseIntegrity =
       deferred ||
       reuseRuntimeIntegrity ||
@@ -210,10 +216,13 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     }
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
     if (deferred && diagnostics) {
-      diagnostics.integrityGateReason = "process-death";
+      diagnostics.integrityGateReason = deferredReason;
       diagnostics.integrityGateMode = "deferred";
       diagnostics.integrityGateOutcome = "pending";
-      diagnostics.because = "same-boot-dead-owner-wal-recovered";
+      diagnostics.because =
+        deferredReason === "process-death"
+          ? "same-boot-dead-owner-wal-recovered"
+          : "native-wal-without-verification";
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
     }
   } else if (
