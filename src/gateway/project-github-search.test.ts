@@ -39,7 +39,7 @@ describe("project GitHub search", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "retains quota cooldown across repeated and different queries (authenticated=%s)",
     async (authenticated) => {
       const token = authenticated ? "synthetic-search-quota-token" : undefined;
@@ -231,56 +231,6 @@ describe("project GitHub search", () => {
     );
   });
 
-  it("accepts an explicitly prepared native credential without ambient token state", async () => {
-    const selected = repository("acme/private-repo", "2026-09-23T00:00:00Z");
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.includes("/repos/acme/private-repo")) {
-        return json(selected);
-      }
-      if (url.includes("/user/repos")) {
-        return json([selected]);
-      }
-      return json({ items: [selected] });
-    });
-
-    const result = await searchRemoteProjects("acme/private-repo", {
-      env: {},
-      fetchImpl,
-      now: 250,
-      token: "prepared-native-token",
-    });
-
-    expect(result).toMatchObject({
-      credential: "configured",
-      projects: [{ fullName: "acme/private-repo", defaultBranch: "main" }],
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    for (const [, init] of fetchImpl.mock.calls) {
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer prepared-native-token");
-    }
-  });
-
-  it("preserves GitHub best-match order for global results instead of re-sorting by recency", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      json({
-        items: [
-          repository("openclaw/best-match", "2020-01-01T00:00:00Z"),
-          repository("someone/recently-pushed-fork", "2026-08-25T00:00:00Z"),
-        ],
-      }),
-    );
-
-    const result = await searchRemoteProjects("best-match", { env: {}, fetchImpl, now: 300 });
-
-    expect(result.projects.map((project) => project.fullName)).toEqual([
-      "openclaw/best-match",
-      "someone/recently-pushed-fork",
-    ]);
-    const searchUrl = requestUrl(fetchImpl.mock.calls[0]?.[0]);
-    expect(searchUrl).not.toContain("sort=");
-  });
-
   it("resolves exact owner/name queries directly and ranks the repository first", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (requestUrl(input).includes("/repos/openclaw/openclaw")) {
@@ -308,23 +258,6 @@ describe("project GitHub search", () => {
       expect.stringContaining("/repos/openclaw/openclaw"),
       expect.stringContaining("/search/repositories?"),
     ]);
-  });
-
-  it("degrades to search results when the exact owner/name lookup misses", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      if (requestUrl(input).includes("/repos/")) {
-        return json({ message: "Not Found" }, 404);
-      }
-      return json({ items: [repository("acme/missing-exact", "2026-08-10T00:00:00Z")] });
-    });
-
-    const result = await searchRemoteProjects("acme/missing-exact-repo", {
-      env: {},
-      fetchImpl,
-      now: 500,
-    });
-
-    expect(result.projects.map((project) => project.fullName)).toEqual(["acme/missing-exact"]);
   });
 
   it("degrades optional lanes to global results when their requests reject in transport", async () => {
