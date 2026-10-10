@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, flush, onCleanup, Show, untrack } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -9,6 +9,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -28,11 +29,7 @@ export type SidebarAttentionProps = {
 
 const panelDismissals = new WeakMap<HTMLElement, () => boolean>();
 
-export function dismissSidebarAttentionPanel(host: HTMLElement): boolean {
-  return panelDismissals.get(host)?.() ?? false;
-}
-
-export function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLElement) {
+function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLElement) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const attention = projectSidebarAttention(context.sidebarAttention);
@@ -216,7 +213,7 @@ export function renderSidebarAttentionContent(props: SidebarAttentionProps, host
     const rowIndex = rowFocus ? focusOrder.indexOf(rowFocus) : 0;
     const generation = panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
-    await Promise.resolve();
+    flush();
     if (disposed || generation !== panelGeneration || target.isConnected) {
       return;
     }
@@ -236,8 +233,8 @@ export function renderSidebarAttentionContent(props: SidebarAttentionProps, host
   );
   createEffect(
     () => [panelOpen(), selectedTab(), attention.read()],
-    () => {
-      if (panelOpen()) {
+    ([isOpen]) => {
+      if (isOpen) {
         syncOverflowCue();
       }
     },
@@ -319,3 +316,15 @@ export function renderSidebarAttentionContent(props: SidebarAttentionProps, host
     </Show>
   );
 }
+
+export const SidebarAttention = defineSolidBridge<
+  SidebarAttentionProps,
+  { dismissPanel(): boolean }
+>("openclaw-sidebar-attention", renderSidebarAttentionContent, {
+  properties: {
+    activeRouteId: { default: undefined, attribute: false },
+    onNavigate: { default: undefined, attribute: false },
+    watchUpdateProgress: { default: undefined, attribute: false },
+  },
+  methods: { dismissPanel: (host) => panelDismissals.get(host)?.() ?? false },
+});

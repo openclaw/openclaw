@@ -27,9 +27,10 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
-import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
+import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
+import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 export type SessionCatalogGroupsParams = {
   catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
@@ -428,11 +429,12 @@ function renderCatalogGroup(
                   class={`sidebar-session-group-toggle__lead ${hasBrandIcon() ? "sidebar-session-group-toggle__lead--branded" : ""}`}
                   aria-hidden="true"
                 >
-                  {hasBrandIcon()
-                    ? renderProviderBrandIcon(readCatalog().id, {
-                        className: "sidebar-session-catalog-provider-icon",
-                      })
-                    : undefined}
+                  {hasBrandIcon() ? (
+                    <ProviderBrandIcon
+                      provider={readCatalog().id}
+                      class="sidebar-session-catalog-provider-icon"
+                    />
+                  ) : undefined}
                   <span class="sidebar-session-group-toggle__icon">
                     {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}
                   </span>

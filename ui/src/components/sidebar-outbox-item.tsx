@@ -1,17 +1,17 @@
 import { createMemo, untrack } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { clampText } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { findUiSessionRow, sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import "./tooltip.ts";
 import "../styles/sidebar-outbox-item.css";
 import { Icon } from "./solid/icon.tsx";
 
-registerSidebarAttentionEnglish();
+registerEnglishCatalog(registerSidebarAttentionEnglish);
 
 export function renderSidebarOutboxItem(params: {
   entry: Extract<SidebarInboxEntry, { type: "outbox" }>;

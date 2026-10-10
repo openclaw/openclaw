@@ -15,13 +15,12 @@ import {
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
 import { renderSessionOwnerAvatar as renderPickerOwnerAvatar } from "./session-owner-chip.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
-import { renderSettingsSegmented } from "./settings-ui.ts";
 import type { SidebarFilterMenuView, SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderPicker } from "./solid/select-picker.tsx";
 import { renderCompactSessionMenuFrame } from "./solid/session-menu-compact.tsx";
+import { SettingsSegmented, SettingsToggle } from "./solid/settings-ui.tsx";
 import {
   renderSidebarMenuRadioItem,
   renderSidebarOwnerFilter,
@@ -56,9 +55,7 @@ export function renderSidebarSessionGroupMenuForController(
     return undefined;
   }
   const trigger = controller.sessionGroupMenuTrigger;
-  const groupDefaultsStatus = createMemo(
-    () => host.sessionDataContext?.sessions.groupsStatus() ?? "idle",
-  );
+  const groupDefaultsStatus = () => host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
   const groupActionMethods = createMemo(
     () =>
       ({
@@ -287,19 +284,13 @@ export function renderSidebarSessionSortMenuForController(
     return undefined;
   }
   const sessionSources = createMemo(() => SETTINGS_ROUTE_TARGETS.sessionSources);
-  const rosterMode = createMemo(() => host.sidebarAgentsMode === "roster");
-  const grouping = createMemo(() => host.effectiveSessionsGrouping());
-  const owners = createMemo(() =>
-    host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : [],
-  );
-  const ownerFilterId = createMemo(() =>
-    host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
-  );
-  const involvingMe = createMemo(() => host.sessionInvolvingMeFilterActive);
-  const selfOwnerId = createMemo(
-    () => host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
-  );
-  const peopleSortAvailable = createMemo(() => host.sessionPeopleSortAvailable());
+  const rosterMode = () => host.sidebarAgentsMode === "roster";
+  const grouping = () => host.effectiveSessionsGrouping();
+  const owners = () => (host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : []);
+  const ownerFilterId = () => (host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null);
+  const involvingMe = () => host.sessionInvolvingMeFilterActive;
+  const selfOwnerId = () => host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null;
+  const peopleSortAvailable = () => host.sessionPeopleSortAvailable();
   // Reset covers the panel; the toolbar dot still counts only Owners and Status.
   const settingsChanged = createMemo(
     () =>
@@ -315,10 +306,9 @@ export function renderSidebarSessionSortMenuForController(
     () => owners().length > 0 || ownerFilterId() !== null || involvingMe(),
   );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
-  const sheet = createMemo(() => isMobileNavLayout());
-  const ownerValue = createMemo(() =>
-    involvingMe() ? "involving-me" : ownerFilterId() !== null ? `owner:${ownerFilterId()}` : "all",
-  );
+  const sheet = () => isMobileNavLayout();
+  const ownerValue = () =>
+    involvingMe() ? "involving-me" : ownerFilterId() !== null ? `owner:${ownerFilterId()}` : "all";
   const segmented = <T extends string>(
     id: string,
     label: () => string,
@@ -330,25 +320,17 @@ export function renderSidebarSessionSortMenuForController(
       <span aria-hidden="true" title={label()}>
         {label()}
       </span>
-      {renderSettingsSegmented({
-        get value() {
-          return value();
-        },
-        get options() {
-          return options().map((option) => ({
-            value: option.value,
-            label: option.label,
-            title: option.label,
-          }));
-        },
-        get ariaLabel() {
-          return label();
-        },
-        className: "sidebar-session-menu-segmented",
-        get onChange() {
-          return onChange;
-        },
-      })}
+      <SettingsSegmented
+        value={value()}
+        options={options().map((option) => ({
+          value: option.value,
+          label: option.label,
+          title: option.label,
+        }))}
+        ariaLabel={label()}
+        {...{ className: "sidebar-session-menu-segmented" }}
+        onChange={onChange}
+      />
     </div>
   );
   const switchItem = (
@@ -367,7 +349,7 @@ export function renderSidebarSessionSortMenuForController(
     >
       <span>{label()}</span>
       <span inert aria-hidden="true">
-        <wa-switch size="s" prop:checked={checked()} tabindex="-1" />
+        <SettingsToggle checked={checked()} ariaLabel={label()} onChange={() => undefined} />
       </span>
     </button>
   );
@@ -396,7 +378,7 @@ export function renderSidebarSessionSortMenuForController(
                         (event.currentTarget as HTMLElement)
                           .closest(".sidebar-session-filter-panel")
                           ?.querySelector<HTMLElement>(
-                            '#sidebar-sessions-status wa-radio[value="active"]',
+                            '#sidebar-sessions-status input[type="radio"][value="active"]',
                           )
                           ?.focus();
                         host.setSessionOwnerFilter(null);

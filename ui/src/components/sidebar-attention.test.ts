@@ -227,7 +227,7 @@ describe("sidebar attention refresh ownership", () => {
     panel!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    await waitForFast(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("dismisses for a plain outside frame without restoring trigger focus", async () => {
@@ -314,18 +314,25 @@ describe("sidebar attention refresh ownership", () => {
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 
-  it("keeps a reconnected attention panel closed until a new open", async () => {
+  it("retains an open panel during a move but resets it after a genuine disconnect", async () => {
     const { element, provider, trigger } = await mountAttention();
     trigger.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    const panel = element.querySelector(".sidebar-issues-panel");
 
     element.remove();
     provider.append(element);
     flush();
+    expect(element.querySelector(".sidebar-issues-panel")).toBe(panel);
 
+    element.remove();
+    await Promise.resolve();
+    provider.append(element);
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-button")).not.toBeNull());
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    trigger.click();
+    const reconnectedTrigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    expect(reconnectedTrigger.getAttribute("aria-expanded")).toBe("false");
+    reconnectedTrigger.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
   });
 
@@ -544,10 +551,12 @@ describe("sidebar attention refresh ownership", () => {
       flush();
 
       expect(overlays.snapshot.approvalQueue.map((approval) => approval.id)).toEqual(["remaining"]);
-      expect(document.activeElement).toBe(
-        reopen
-          ? tab
-          : element.querySelector('[data-approval-id="remaining"] [data-issue-row-focus]'),
+      await waitForFast(() =>
+        expect(document.activeElement).toBe(
+          reopen
+            ? tab
+            : element.querySelector('[data-approval-id="remaining"] [data-issue-row-focus]'),
+        ),
       );
     } finally {
       resolution.resolve({ ok: true });

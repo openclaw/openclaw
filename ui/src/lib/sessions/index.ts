@@ -96,7 +96,12 @@ export function createSessionCapability(
       roster.retireWarmLists();
       retirePresentation();
       if (next.resultCached) {
-        presentation = { result: next.result, agentId: next.agentId, resultCached: true };
+        presentation = {
+          result: next.result,
+          agentId: next.agentId,
+          resultCached: true,
+          profileId: presentationProfileId,
+        };
       }
       publish(next);
     },
@@ -153,6 +158,7 @@ export function createSessionCapability(
         result: next.result,
         agentId: next.agentId,
         resultCached: next.resultCached,
+        profileId: presentationProfileId,
       };
       if (!next.resultCached) {
         reconnectListRevision = null;

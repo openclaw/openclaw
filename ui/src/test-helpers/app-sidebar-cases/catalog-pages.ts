@@ -21,7 +21,7 @@ describe("AppSidebar session catalog pagination", () => {
     let provider: HTMLElement | undefined;
     try {
       // Shared UI workers retain real custom elements despite later module mocks.
-      await vi.importActual("../../components/sidebar-attention.ts");
+      await vi.importActual("../../components/sidebar-attention.tsx");
       const pendingPage = deferred<SessionsCatalogListResult>();
       const request = vi.fn().mockReturnValue(pendingPage.promise);
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);

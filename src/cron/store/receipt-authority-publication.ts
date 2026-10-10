@@ -1,11 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  readSqliteWorkerOperationAdmissionAttachment,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
+import { readSqliteWorkerOperationAdmissionAttachment } from "../../infra/sqlite-worker-operation-admission.js";
 import type {
   CronReceiptAuthorityAttachment,
   CronReceiptAuthorityPublication,
@@ -48,13 +44,4 @@ export function prepareCronReceiptAuthorityPublication(
     throw new Error("Cron receipt publication requires its transaction owner");
   }
   return { nonce: attachment.nonce, sequence, receipts };
-}
-
-/** Raw saves and mutable-load repairs publish through the same receipt producer. */
-export function retainCronReceiptAuthorityPublication(db: DatabaseSync): void {
-  const receiptAuthority = prepareCronReceiptAuthorityPublication(db);
-  if (receiptAuthority) {
-    deferSqliteWorkerCommitReceipt(db, { receiptAuthority });
-  }
-  requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
 }

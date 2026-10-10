@@ -1,6 +1,6 @@
-import { render } from "@solidjs/web";
-import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import "./web-awesome-select.ts";
 import "./web-awesome-tabs.ts";
@@ -107,7 +107,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
   it("keeps the account menu and shared controls on the selected palette", async () => {
     const host = document.createElement("div");
     document.body.append(host);
-    disposeControls = render(
+    disposeControls = mountSolid(
       () => (
         <>
           {renderSidebarIdentityMenu({
@@ -135,8 +135,8 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
           <wa-dropdown-item variant="danger">Delete</wa-dropdown-item>
         </>
       ),
-      host,
-    );
+      { container: host },
+    ).unmount;
     flush();
     const menu = host.querySelector("wa-dropdown")!;
     const help = host.querySelector<HTMLElement>(".sidebar-identity-menu__help")!;

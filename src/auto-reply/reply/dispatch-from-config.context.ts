@@ -138,7 +138,7 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
     : undefined;
 }
 
-export function resolveDispatchResetAdmission(params: {
+export async function resolveDispatchResetAdmission(params: {
   agentId: string;
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -146,11 +146,11 @@ export function resolveDispatchResetAdmission(params: {
   hasPluginOwnedBinding: boolean;
   sessionKey?: string;
   storePath?: string;
-}): {
+}): Promise<{
   allowRestartTombstoneParentFork: boolean;
   allowRestartTombstoneReset: boolean;
   resetTriggered: boolean;
-} {
+}> {
   const { ctx, entry } = params;
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
@@ -206,7 +206,7 @@ export function resolveDispatchResetAdmission(params: {
     const isGroup =
       (normalizedChatType != null && normalizedChatType !== "direct") ||
       Boolean(resolveGroupSessionKey(ctx));
-    const { resetCommand } = resolveAuthorizedSessionResetCommand({
+    const { resetCommand } = await resolveAuthorizedSessionResetCommand({
       agentId: params.agentId,
       cfg: params.cfg,
       commandAuthorized: ctx.CommandAuthorized,

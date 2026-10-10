@@ -1,8 +1,10 @@
+import { getObserver } from "@solidjs/signals";
 import { render, type JSX } from "@solidjs/web";
 import { createEffect, getOwner, onCleanup, onSettled, runWithOwner, Show } from "solid-js";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import type { AppSidebarProps } from "./app-sidebar-base.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
@@ -21,55 +23,37 @@ export function promoteSidebarCreatedSession(host: HTMLElement, sessionKey: stri
   sidebarOwners.get(host)?.promoteCreatedSession(sessionKey);
 }
 
-export function AppSidebarContent(props: AppSidebarProps, host: () => HTMLElement): JSX.Element {
-  const owner = new AppSidebarOwner(props, useApplication());
+function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Element {
+  host.style.display = "contents";
+  const owner = new AppSidebarOwner(props, useApplication(), host);
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => current.subscribe(notify),
     equality: "revision",
   });
-  const observe = <T extends object>(target: T): T =>
-    new Proxy(target, {
+  const observed = new WeakMap<object, object>();
+  const observe = <T extends object>(target: T): T => {
+    const proxy = new Proxy(target, {
       get(current, key, receiver) {
-        projection.revision();
-        return key === "host" ? hostView : Reflect.get(current, key, receiver);
+        if (getObserver()) {
+          projection.revision();
+        }
+        const value = Reflect.get(current, key, receiver);
+        return value && typeof value === "object" ? (observed.get(value) ?? value) : value;
       },
     });
-  const observedCatalogMenu = observe(owner.sidebarMenus.catalogMenu);
-  const observedMenus = new Proxy(owner.sidebarMenus, {
-    get(current, key, receiver) {
-      projection.revision();
-      if (key === "host") {
-        return hostView;
-      }
-      return key === "catalogMenu" ? observedCatalogMenu : Reflect.get(current, key, receiver);
-    },
-  });
-  const observedControllers = {
-    sidebarMenus: observedMenus,
-    sessionData: observe(owner.sessionData),
-    sessionOrganizer: observe(owner.sessionOrganizer),
-    people: observe(owner.people),
+    observed.set(target, proxy);
+    return proxy;
   };
-  const hostView: AppSidebarOwner = new Proxy(owner, {
-    get(current, key, receiver) {
-      projection.revision();
-      if (key === "sidebarMenus") {
-        return observedControllers.sidebarMenus;
-      }
-      if (key === "sessionData") {
-        return observedControllers.sessionData;
-      }
-      if (key === "sessionOrganizer") {
-        return observedControllers.sessionOrganizer;
-      }
-      if (key === "people") {
-        return observedControllers.people;
-      }
-      return Reflect.get(current, key, receiver);
-    },
-  });
-  const view = () => hostView;
+  const hostView = observe(owner);
+  [
+    owner.sidebarMenus,
+    owner.sidebarMenus.catalogMenu,
+    owner.sessionData,
+    owner.sessionOrganizer,
+    owner.people,
+    owner.navigationCatalog,
+  ].forEach(observe);
   const solidOwner = getOwner();
   const mountDefaultView = (target: HTMLElement) =>
     runWithOwner(solidOwner, () => render(() => hostView.renderSessionsBody(), target));
@@ -91,7 +75,7 @@ export function AppSidebarContent(props: AppSidebarProps, host: () => HTMLElemen
       />
     </Show>
   );
-  const content = hostView.renderSidebar(view, sessions);
+  const content = hostView.renderSidebar(sessions);
   createEffect(
     () => {
       projection.revision();
@@ -103,9 +87,9 @@ export function AppSidebarContent(props: AppSidebarProps, host: () => HTMLElemen
   );
   let attachedHost: HTMLElement | undefined;
   onSettled(() => {
-    attachedHost = host();
+    attachedHost = host;
     sidebarOwners.set(attachedHost, owner);
-    owner.attach(attachedHost);
+    owner.attach();
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
     });
@@ -120,17 +104,20 @@ export function AppSidebarContent(props: AppSidebarProps, host: () => HTMLElemen
   return content;
 }
 
-export function AppSidebar(props: AppSidebarProps): JSX.Element {
-  let host!: HTMLElement;
-  const content = AppSidebarContent(props, () => host);
-  return (
-    <openclaw-app-sidebar
-      ref={(element) => {
-        host = element;
-      }}
-      style={{ display: "contents" }}
-    >
-      {content}
-    </openclaw-app-sidebar>
-  );
-}
+export type AppSidebarMethods = {
+  dismissTransientMenus(): boolean;
+  promoteCreatedSession(sessionKey: string): void;
+};
+export type AppSidebarElement = SolidBridgeElement<AppSidebarProps, AppSidebarMethods>;
+
+export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
+  "openclaw-app-sidebar",
+  AppSidebarContent,
+  {
+    properties: appSidebarProperties,
+    methods: {
+      dismissTransientMenus: dismissSidebarTransientMenus,
+      promoteCreatedSession: promoteSidebarCreatedSession,
+    },
+  },
+);

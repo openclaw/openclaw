@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -274,7 +275,7 @@ function captureSessionChange(
     change.captured = query ? getSessionRowProjection(context)?.capture(query) : undefined;
   } catch (error) {
     change.captureFailed = true;
-    log.warn("Session change capture failed", { error });
+    log.warn("Session change capture failed", { error: formatErrorMessageWithCode(error) });
   }
   return change;
 }
@@ -309,7 +310,7 @@ async function publishSessionChange(context: SessionChangeContext, change: Sessi
     if (publicationStarted) {
       throw error;
     }
-    log.warn("Session change preparation failed", { error });
+    log.warn("Session change preparation failed", { error: formatErrorMessageWithCode(error) });
     broadcast(false);
   }
 }
@@ -352,7 +353,7 @@ function startPendingSessionChange(pending: PendingSessionChange, leading?: Sess
       }
     })
     .catch((error: unknown) => {
-      log.warn("Session change publication failed", { error });
+      log.warn("Session change publication failed", { error: formatErrorMessageWithCode(error) });
     })
     .then(() => {
       pending.work = undefined;
@@ -496,7 +497,7 @@ export function emitSessionsChanged(
   try {
     registerPendingLifetime(owner);
   } catch (error) {
-    log.warn("Session change was not admitted", { error });
+    log.warn("Session change was not admitted", { error: formatErrorMessageWithCode(error) });
     return;
   }
   const next: PendingSessionChange = {

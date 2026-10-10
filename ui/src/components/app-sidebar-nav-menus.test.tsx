@@ -1,13 +1,12 @@
-import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { expect, it, vi } from "vitest";
+import { mountSolid as render } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import {
   renderSidebarCustomizeMenu,
   renderSidebarDropdown,
   renderSidebarNavLink,
 } from "./app-sidebar-nav-menus.tsx";
-
-afterEach(cleanup);
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
   const navigate = vi.fn();

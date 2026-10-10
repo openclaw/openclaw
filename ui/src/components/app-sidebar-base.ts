@@ -17,72 +17,176 @@ import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-hand
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export type AppSidebarProps = {
-  basePath?: string;
-  activeRouteId?: NavigationRouteId | undefined;
-  router?: Pick<ApplicationRouter, "getState" | "subscribeSelector"> | undefined;
-  activePluginTabId?: string;
-  enabledRouteIds?: readonly NavigationRouteId[] | undefined;
-  connected?: boolean;
-  connectionStatus?: GatewayStatus | null;
-  lastError?: string | null;
-  storedOutboxes?: SidebarOutboxSummary | undefined;
-  terminalAvailable?: boolean;
-  catalogOpenTarget?: CatalogOpenTarget;
-  canPairDevice?: boolean;
-  preferencesBrowserOnly?: boolean;
-  sessionKey?: string;
-  sidebarEntries?: readonly string[];
-  navigationVisible?: boolean;
-  sidebarAgentsMode?: "chip" | "roster";
-  sidebarLiveActivity?: boolean;
-  pinnedAgentIds?: readonly string[];
-  themeMode?: ThemeMode;
-  gatewayVersion?: string | null;
-  devGitBranch?: string | null;
-  watchUpdateProgress?: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
-  onOpenPalette?: (() => void) | undefined;
-  onRetryConnect?: (() => void) | undefined;
-  onToggleSidebar?: (() => void) | undefined;
-  onOpenNewSession?: ((agentId: string, target?: NewSessionTarget) => void) | undefined;
-  onUpdateSidebarEntries?: ((entries: string[]) => void) | undefined;
-  onPairMobile?: (() => void) | undefined;
-  onNavigate?:
+  basePath: string;
+  activeRouteId: NavigationRouteId | undefined;
+  router: Pick<ApplicationRouter, "getState" | "subscribeSelector"> | undefined;
+  activePluginTabId: string;
+  enabledRouteIds: readonly NavigationRouteId[] | undefined;
+  connected: boolean;
+  connectionStatus: GatewayStatus | null;
+  lastError: string | null;
+  storedOutboxes: SidebarOutboxSummary | undefined;
+  terminalAvailable: boolean;
+  catalogOpenTarget: CatalogOpenTarget;
+  canPairDevice: boolean;
+  preferencesBrowserOnly: boolean;
+  sessionKey: string;
+  sidebarEntries: readonly string[];
+  navigationVisible: boolean;
+  navigationScope: "mine" | "all";
+  navigationCollapsed: boolean;
+  onUpdateNavigationScope: ((scope: "mine" | "all") => void) | undefined;
+  sidebarAgentsMode: "chip" | "roster";
+  sidebarLiveActivity: boolean;
+  pinnedAgentIds: readonly string[];
+  themeMode: ThemeMode;
+  gatewayVersion: string | null;
+  devGitBranch: string | null;
+  watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
+  onOpenPalette: (() => void) | undefined;
+  onRetryConnect: (() => void) | undefined;
+  onToggleSidebar: (() => void) | undefined;
+  onOpenNewSession: ((agentId: string, target?: NewSessionTarget) => void) | undefined;
+  onUpdateSidebarEntries: ((entries: string[]) => void) | undefined;
+  onPairMobile: (() => void) | undefined;
+  onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute?: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
+  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
+};
+
+export const appSidebarProperties = {
+  basePath: { default: "", attribute: false },
+  activeRouteId: { default: undefined, attribute: false },
+  router: { default: undefined, attribute: false },
+  activePluginTabId: { default: "", attribute: false },
+  enabledRouteIds: { default: undefined, attribute: false },
+  connected: { default: false, attribute: false },
+  connectionStatus: { default: null, attribute: false },
+  lastError: { default: null, attribute: false },
+  storedOutboxes: { default: undefined, attribute: false },
+  terminalAvailable: { default: false, attribute: false },
+  catalogOpenTarget: { default: "viewer", attribute: false },
+  canPairDevice: { default: false, attribute: false },
+  preferencesBrowserOnly: { default: false, attribute: false },
+  sessionKey: { default: "", attribute: false },
+  sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
+  navigationVisible: { default: true, attribute: false },
+  navigationScope: { default: "all", attribute: false },
+  navigationCollapsed: { default: false, type: Boolean },
+  onUpdateNavigationScope: { default: undefined, attribute: false },
+  sidebarAgentsMode: { default: "chip", attribute: false },
+  sidebarLiveActivity: { default: true, attribute: false },
+  pinnedAgentIds: { default: [], attribute: false },
+  themeMode: { default: "system", attribute: false },
+  gatewayVersion: { default: null, attribute: false },
+  devGitBranch: { default: null, attribute: false },
+  watchUpdateProgress: { default: undefined, attribute: false },
+  onOpenPalette: { default: undefined, attribute: false },
+  onRetryConnect: { default: undefined, attribute: false },
+  onToggleSidebar: { default: undefined, attribute: false },
+  onOpenNewSession: { default: undefined, attribute: false },
+  onUpdateSidebarEntries: { default: undefined, attribute: false },
+  onPairMobile: { default: undefined, attribute: false },
+  onNavigate: { default: undefined, attribute: false },
+  onPreloadRoute: { default: undefined, attribute: false },
+} satisfies {
+  [Key in keyof AppSidebarProps]: {
+    default: AppSidebarProps[Key];
+    attribute?: false;
+    type?: BooleanConstructor;
+  };
 };
 
 /** Synchronous sidebar state and controller lifecycle; Solid owns its DOM. */
 export abstract class AppSidebarBase {
+  declare basePath: AppSidebarProps["basePath"];
+  declare activeRouteId: AppSidebarProps["activeRouteId"];
+  declare router: AppSidebarProps["router"];
+  declare activePluginTabId: AppSidebarProps["activePluginTabId"];
+  declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
+  declare connected: AppSidebarProps["connected"];
+  declare connectionStatus: AppSidebarProps["connectionStatus"];
+  declare lastError: AppSidebarProps["lastError"];
+  declare storedOutboxes: AppSidebarProps["storedOutboxes"];
+  declare terminalAvailable: AppSidebarProps["terminalAvailable"];
+  declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];
+  declare canPairDevice: AppSidebarProps["canPairDevice"];
+  declare preferencesBrowserOnly: AppSidebarProps["preferencesBrowserOnly"];
+  declare sessionKey: AppSidebarProps["sessionKey"];
+  declare sidebarEntries: AppSidebarProps["sidebarEntries"];
+  declare navigationVisible: AppSidebarProps["navigationVisible"];
+  declare navigationScope: AppSidebarProps["navigationScope"];
+  declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
+  declare onUpdateNavigationScope: AppSidebarProps["onUpdateNavigationScope"];
+  declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
+  declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
+  declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];
+  declare themeMode: AppSidebarProps["themeMode"];
+  declare gatewayVersion: AppSidebarProps["gatewayVersion"];
+  declare devGitBranch: AppSidebarProps["devGitBranch"];
+  declare watchUpdateProgress: AppSidebarProps["watchUpdateProgress"];
+  declare onOpenPalette: AppSidebarProps["onOpenPalette"];
+  declare onRetryConnect: AppSidebarProps["onRetryConnect"];
+  declare onToggleSidebar: AppSidebarProps["onToggleSidebar"];
+  declare onOpenNewSession: AppSidebarProps["onOpenNewSession"];
+  declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
+  declare onPairMobile: AppSidebarProps["onPairMobile"];
+  declare onNavigate: AppSidebarProps["onNavigate"];
+  declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
+  declare readonly ownerDocument: HTMLElement["ownerDocument"];
+  declare readonly classList: HTMLElement["classList"];
+  declare readonly querySelector: HTMLElement["querySelector"];
+  declare readonly querySelectorAll: HTMLElement["querySelectorAll"];
+  declare readonly addEventListener: HTMLElement["addEventListener"];
+  declare readonly removeEventListener: HTMLElement["removeEventListener"];
+  declare readonly contains: HTMLElement["contains"];
+  declare readonly matches: HTMLElement["matches"];
+
   private readonly controllers = new Set<ReactiveController>();
   private readonly listeners = new Set<() => void>();
-  private element: HTMLElement | undefined;
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  private contextualValue: ContextualSidebar | undefined;
+  contextualSidebar: ContextualSidebar | undefined;
+  navigationView: "pages" | "sessions" | "online" = "sessions";
+  personalNavigationEpoch = 0;
 
   constructor(
-    protected readonly props: AppSidebarProps,
+    props: AppSidebarProps,
     protected readonly context: ApplicationContext,
-  ) {}
-
-  get contextualSidebar() {
-    return this.contextualValue;
-  }
-  set contextualSidebar(value: ContextualSidebar | undefined) {
-    if (this.contextualValue === value) {
-      return;
+    readonly hostElement: HTMLElement,
+  ) {
+    for (const key of Object.keys(appSidebarProperties)) {
+      Object.defineProperty(this, key, {
+        get: () => Reflect.get(props, key),
+        set: (value: unknown) => {
+          Reflect.set(hostElement, key, value);
+        },
+      });
     }
-    this.contextualValue = value;
-    this.requestUpdate();
+    for (const key of [
+      "ownerDocument",
+      "classList",
+      "querySelector",
+      "querySelectorAll",
+      "addEventListener",
+      "removeEventListener",
+      "contains",
+      "matches",
+    ] as const) {
+      const value = hostElement[key];
+      Object.defineProperty(this, key, {
+        value: typeof value === "function" ? value.bind(hostElement) : value,
+      });
+    }
   }
 
-  attach(element: HTMLElement): void {
-    this.element = element;
+  attach(): void {
     this.attached = true;
     for (const controller of this.controllers) {
       controller.hostConnected?.();
@@ -90,7 +194,6 @@ export abstract class AppSidebarBase {
     this.connectedCallback();
     this.requestUpdate();
   }
-
   detach(): void {
     this.attached = false;
     this.disconnectedCallback();
@@ -99,9 +202,10 @@ export abstract class AppSidebarBase {
     }
     this.finishUpdate?.(false);
     this.finishUpdate = undefined;
-    this.element = undefined;
   }
-
+  get isConnected(): boolean {
+    return this.attached;
+  }
   addController(controller: ReactiveController): void {
     this.controllers.add(controller);
     if (this.attached) {
@@ -154,131 +258,26 @@ export abstract class AppSidebarBase {
   protected willUpdate(): void {}
   protected updated(): void {}
 
-  get hostElement(): HTMLElement {
-    return this.element!;
+  abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
+
+  get effectiveNavigationScope(): "mine" | "all" {
+    const snapshot = this.context?.gateway.snapshot;
+    // The Gateway retains resolved profileless identity only within the same connection scope.
+    // Pending and retired identities stay private, including while reconnecting.
+    return snapshot?.selfUser === null ? "all" : this.navigationScope;
   }
-  get isConnected(): boolean {
-    return this.attached;
+
+  setNavigationScope(scope: "mine" | "all"): void {
+    this.navigationScope = scope;
+    this.sessionOwnerFilter.markUserIntent();
+    this.onUpdateNavigationScope?.(scope);
   }
-  get ownerDocument(): Document {
-    return this.hostElement.ownerDocument;
-  }
-  get classList(): DOMTokenList {
-    return this.hostElement.classList;
-  }
-  querySelector<E extends Element = Element>(selector: string): E | null {
-    return this.element?.querySelector<E>(selector) ?? null;
-  }
-  querySelectorAll<E extends Element = Element>(selector: string): NodeListOf<E> {
-    return this.hostElement.querySelectorAll<E>(selector);
-  }
-  readonly addEventListener: HTMLElement["addEventListener"] = (type, listener, options) =>
-    this.hostElement.addEventListener(type, listener, options);
-  readonly removeEventListener: HTMLElement["removeEventListener"] = (type, listener, options) =>
-    this.hostElement.removeEventListener(type, listener, options);
-  contains(node: Node | null): boolean {
-    return this.element?.contains(node) ?? false;
-  }
-  matches(selector: string): boolean {
-    return this.element?.matches(selector) ?? false;
-  }
-  get basePath(): string {
-    return this.props.basePath ?? "";
-  }
-  get activeRouteId(): NavigationRouteId | undefined {
-    return this.props.activeRouteId ?? undefined;
-  }
-  get router(): Pick<ApplicationRouter, "getState" | "subscribeSelector"> | undefined {
-    return this.props.router ?? undefined;
-  }
-  get activePluginTabId(): string {
-    return this.props.activePluginTabId ?? "";
-  }
-  get enabledRouteIds(): readonly NavigationRouteId[] | undefined {
-    return this.props.enabledRouteIds ?? undefined;
-  }
-  get connected(): boolean {
-    return this.props.connected ?? false;
-  }
-  get connectionStatus(): GatewayStatus | null {
-    return this.props.connectionStatus ?? null;
-  }
-  get lastError(): string | null {
-    return this.props.lastError ?? null;
-  }
-  get storedOutboxes(): SidebarOutboxSummary | undefined {
-    return this.props.storedOutboxes ?? undefined;
-  }
-  get terminalAvailable(): boolean {
-    return this.props.terminalAvailable ?? false;
-  }
-  get catalogOpenTarget(): CatalogOpenTarget {
-    return this.props.catalogOpenTarget ?? "viewer";
-  }
-  get canPairDevice(): boolean {
-    return this.props.canPairDevice ?? false;
-  }
-  get preferencesBrowserOnly(): boolean {
-    return this.props.preferencesBrowserOnly ?? false;
-  }
-  get sessionKey(): string {
-    return this.props.sessionKey ?? "";
-  }
-  get sidebarEntries(): readonly string[] {
-    return this.props.sidebarEntries ?? DEFAULT_SIDEBAR_ENTRIES;
-  }
-  get navigationVisible(): boolean {
-    return this.props.navigationVisible ?? true;
-  }
-  get sidebarAgentsMode(): "chip" | "roster" {
-    return this.props.sidebarAgentsMode ?? "chip";
-  }
-  get sidebarLiveActivity(): boolean {
-    return this.props.sidebarLiveActivity ?? true;
-  }
-  get pinnedAgentIds(): readonly string[] {
-    return this.props.pinnedAgentIds ?? [];
-  }
-  get themeMode(): ThemeMode {
-    return this.props.themeMode ?? "system";
-  }
-  get gatewayVersion(): string | null {
-    return this.props.gatewayVersion ?? null;
-  }
-  get devGitBranch(): string | null {
-    return this.props.devGitBranch ?? null;
-  }
-  get watchUpdateProgress():
-    | ((listener: (progress: UpdateProgress) => void) => () => void)
-    | undefined {
-    return this.props.watchUpdateProgress ?? undefined;
-  }
-  get onOpenPalette(): (() => void) | undefined {
-    return this.props.onOpenPalette ?? undefined;
-  }
-  get onRetryConnect(): (() => void) | undefined {
-    return this.props.onRetryConnect ?? undefined;
-  }
-  get onToggleSidebar(): (() => void) | undefined {
-    return this.props.onToggleSidebar ?? undefined;
-  }
-  get onOpenNewSession(): ((agentId: string, target?: NewSessionTarget) => void) | undefined {
-    return this.props.onOpenNewSession ?? undefined;
-  }
-  get onUpdateSidebarEntries(): ((entries: string[]) => void) | undefined {
-    return this.props.onUpdateSidebarEntries ?? undefined;
-  }
-  get onPairMobile(): (() => void) | undefined {
-    return this.props.onPairMobile ?? undefined;
-  }
-  get onNavigate():
-    | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
-    | undefined {
-    return this.props.onNavigate ?? undefined;
-  }
-  get onPreloadRoute(): ((routeId: NavigationRouteId) => Promise<void>) | undefined {
-    return this.props.onPreloadRoute ?? undefined;
-  }
+
+  setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
+    this.navigationScope = "all";
+    this.onUpdateNavigationScope?.("all");
+    this.sessionOwnerFilter.set(ownerId, involvingMe);
+  };
 
   pluginNavigation() {
     return this.context?.plugins?.registrations("navigation") ?? [];

@@ -267,7 +267,7 @@ export const MACOS_TITLEBAR_ELEMENT = {
 export const SIDEBAR_ATTENTION_ELEMENT = {
   tagName: "openclaw-sidebar-attention",
   label: t("attention.issues"),
-  loadModule: () => import("../components/sidebar-attention.ts"),
+  loadModule: () => import("../components/sidebar-attention.tsx"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {

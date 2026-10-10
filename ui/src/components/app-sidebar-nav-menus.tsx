@@ -18,7 +18,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { icons, type IconName } from "./icons.ts";
+import { iconData, type IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderMenuTrigger } from "./solid/menu-trigger.tsx";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -243,17 +243,15 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams): 
       icon: navigationIconForRoute(routeId),
       label: titleForRoute(routeId),
     })),
-    ...params.pluginNavigation
-      .filter((entry) => entry.value.defaultVisible === false)
-      .map((entry) => ({
-        value: `plugin:${entry.key}`,
-        entry: `plugin:${entry.key}`,
-        icon:
-          entry.value.icon && Object.hasOwn(icons, entry.value.icon)
-            ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registered icon names.
-            : ("plug" as const),
-        label: entry.value.label,
-      })),
+    ...params.pluginNavigation.map((entry) => ({
+      value: `plugin:${entry.key}`,
+      entry: `plugin:${entry.key}`,
+      icon:
+        entry.value.icon && Object.hasOwn(iconData, entry.value.icon)
+          ? (entry.value.icon as IconName)
+          : ("plug" as const),
+      label: entry.value.label,
+    })),
   ]);
   return renderSidebarDropdown({
     ...params,
@@ -327,7 +325,7 @@ export function renderSidebarPluginNavigationMenu(params: {
         <For each={params.item.actions ?? []}>
           {(action) => {
             const icon =
-              action.icon && Object.hasOwn(icons, action.icon) ? (
+              action.icon && Object.hasOwn(iconData, action.icon) ? (
                 <Icon name={action.icon as IconName} />
               ) : // SAFETY: only own keys of the shared icon registry are admitted.
               undefined;

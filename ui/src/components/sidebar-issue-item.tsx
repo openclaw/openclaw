@@ -2,26 +2,37 @@ import { For, Show, createMemo } from "solid-js";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
+import {
+  compactApprovalCommand,
+  summarizeApprovalScopeLabel,
+} from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
-import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import {
+  approvalRemainingLabel,
+  approvalDecisionLabel,
+  approvalTitle,
+  resolveApprovalDecisions,
+  type SidebarApprovalRowProps,
+} from "./exec-approval-card.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
+import { SidebarUpdateCard } from "./sidebar-update-card.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderSidebarApprovalRow } from "./solid/sidebar-approval-row.tsx";
 import { askBrandLabel } from "./theme-brand-label.ts";
-import "./sidebar-update-card.tsx";
 import "./viewer-facepile.ts";
 
-registerSidebarAttentionEnglish();
+registerEnglishCatalog(registerSidebarAttentionEnglish);
 
 type SidebarIssueItemHandlers = {
   basePath: string;
@@ -171,28 +182,28 @@ export function renderSidebarUpdateSurface(params: {
   const snapshot = () => params.context.overlays.snapshot;
   const gateway = () => params.context.gateway.snapshot;
   return (
-    <openclaw-sidebar-update-card
+    <SidebarUpdateCard
       class="sidebar-issues-panel__update"
       data-attention-kind="updateAvailable"
-      prop:compact={true}
-      prop:updateAvailable={snapshot().updateAvailable}
-      prop:updateSchedule={snapshot().updateSchedule}
-      prop:heldUpdateCampaignId={snapshot().heldUpdateCampaignId}
-      prop:updateBusy={snapshot().updateRunning || snapshot().updateReconciliationPending}
-      prop:updateRun={snapshot().updateRun}
-      prop:updateRunAcknowledged={snapshot().updateRunAcknowledged}
-      prop:connected={gateway().phase === "connected"}
-      prop:onAcknowledge={() => params.context.overlays.acknowledgeUpdateRun()}
-      prop:onCheckStatus={() => params.context.overlays.refreshUpdateStatus()}
-      prop:statusBanner={snapshot().updateStatusBanner}
-      prop:watchUpdateProgress={params.watchUpdateProgress}
-      prop:canUpdate={canCallGatewayMethod(gateway(), "update.run", "operator.admin")}
-      prop:canHoldUpdate={canCallGatewayMethod(gateway(), "update.hold", "operator.admin")}
-      prop:onUpdate={() => void params.context.overlays.runUpdate()}
-      prop:refreshRequired={false}
-      prop:onHoldUpdate={() => params.context.overlays.holdUpdate()}
-      prop:onReviewUpdate={params.onNavigate}
-      prop:onDismiss={params.onDismiss}
+      compact={true}
+      updateAvailable={snapshot().updateAvailable}
+      updateSchedule={snapshot().updateSchedule}
+      heldUpdateCampaignId={snapshot().heldUpdateCampaignId}
+      updateBusy={snapshot().updateRunning || snapshot().updateReconciliationPending}
+      updateRun={snapshot().updateRun}
+      updateRunAcknowledged={snapshot().updateRunAcknowledged}
+      connected={gateway().phase === "connected"}
+      onAcknowledge={() => params.context.overlays.acknowledgeUpdateRun()}
+      onCheckStatus={() => params.context.overlays.refreshUpdateStatus()}
+      statusBanner={snapshot().updateStatusBanner}
+      watchUpdateProgress={params.watchUpdateProgress}
+      canUpdate={canCallGatewayMethod(gateway(), "update.run", "operator.admin")}
+      canHoldUpdate={canCallGatewayMethod(gateway(), "update.hold", "operator.admin")}
+      onUpdate={() => void params.context.overlays.runUpdate()}
+      refreshRequired={false}
+      onHoldUpdate={() => params.context.overlays.holdUpdate()}
+      onReviewUpdate={params.onNavigate}
+      onDismiss={params.onDismiss}
     />
   );
 }
@@ -460,4 +471,113 @@ export function renderSidebarIssueItem(
   handlers: SidebarIssueItemHandlers,
 ) {
   return <SidebarIssueItem item={item} handlers={handlers} />;
+}
+
+function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
+  const expired = () => props.approval.expiresAtMs <= Date.now();
+  const command = createMemo(() => compactApprovalCommand(props.approval.request.command));
+  const sessionTitle = createMemo(() => {
+    const sessionKey = props.approval.request.sessionKey?.trim();
+    return (
+      props.sessionTitle ??
+      (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(props.approval))
+    );
+  });
+  const expiryLabel = () => approvalRemainingLabel(props.approval.expiresAtMs, Date.now());
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
+  return (
+    <article
+      class="sidebar-approval-row sidebar-issues-panel__details--warning"
+      data-attention-kind="pendingApproval"
+      data-approval-id={props.approval.id}
+    >
+      <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true">
+        <Icon name="shieldQuestion" />
+      </span>
+      <div class="sidebar-approval-row__content">
+        <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+          <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
+            {sessionTitle()}
+          </span>
+          <openclaw-approval-countdown
+            class={[
+              "sidebar-approval-row__timer",
+              {
+                "sidebar-approval-row__timer--urgent":
+                  expired() || props.approval.expiresAtMs - Date.now() < 2 * 60_000,
+              },
+            ]}
+            role="timer"
+            aria-label={expiryLabel()}
+            title={expiryLabel()}
+            prop:expiresAtMs={props.approval.expiresAtMs}
+            prop:compact={true}
+          />
+        </div>
+        <div class="sidebar-approval-row__command mono" title={props.approval.request.command}>
+          <span aria-hidden="true">$ </span>
+          {command()}
+        </div>
+        {props.approval.request.scope ? (
+          <div class="exec-approval-scope">
+            {summarizeApprovalScopeLabel(props.approval.request.scope)}
+          </div>
+        ) : null}
+        <div
+          class="sidebar-approval-row__actions"
+          role="group"
+          aria-label={t("approvalPage.actionsLabel")}
+        >
+          <For each={resolveApprovalDecisions(props.approval)}>
+            {(decision) => {
+              const label = () => approvalDecisionLabel(decision, props.approval);
+              return (
+                <button
+                  type="button"
+                  class={[
+                    "btn btn--xs sidebar-approval-row__action",
+                    `sidebar-approval-row__action--${decision}`,
+                    { "btn--ghost": decision === "deny" },
+                  ]}
+                  aria-label={t("execApproval.decisionRequest", {
+                    decision: label(),
+                    command: command(),
+                  })}
+                  disabled={props.busy || !props.canGrant || expired()}
+                  onClick={(event: Event) => props.onDecision(event, props.approval.id, decision)}
+                >
+                  {label()}
+                </button>
+              );
+            }}
+          </For>
+          {props.openSessionHref && props.onOpenSession ? (
+            <a
+              class="sidebar-approval-row__open-session"
+              href={props.openSessionHref}
+              aria-label={t("sessionsView.openSession")}
+              title={t("sessionsView.openSession")}
+              onClick={(event) => props.onOpenSession?.(event)}
+            >
+              <Icon name="arrowUpRight" />
+            </a>
+          ) : null}
+        </div>
+        {!props.canGrant ? (
+          <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
+            {reviewOnlyMessage()}
+          </div>
+        ) : null}
+        {props.error && !grantError() ? (
+          <div
+            class="sidebar-approval-row__message sidebar-approval-row__message--error"
+            role="alert"
+          >
+            {props.error}
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
 }

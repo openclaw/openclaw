@@ -198,7 +198,9 @@ describe("AppSidebar child-session load errors", () => {
       harness.publishList({ result: sessionResult([parentSession(parentKey, childKey)]) });
 
       await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
-      expect(sidebar.querySelectorAll(".nav-item--home")).toHaveLength(1);
+      expect(
+        sidebar.querySelectorAll(".sidebar-rail__bottom .sidebar-footer-bar__home"),
+      ).toHaveLength(1);
       expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
       await waitForFast(() => {
         const alert = sidebar.querySelector(`[data-child-session-error="${parentKey}"]`);

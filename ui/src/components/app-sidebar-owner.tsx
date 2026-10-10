@@ -1,13 +1,12 @@
 import { dynamic, type JSX } from "@solidjs/web";
 import { html } from "lit";
-import { createEffect, createMemo, For, Show, untrack } from "solid-js";
+import { createEffect, createMemo, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
   WorktreesBranchesResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -29,14 +28,10 @@ import "./tooltip.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
-import {
-  renderAppSidebarBrand,
-  renderAppSidebarFooterBar,
-  renderAppSidebarHomeRow,
-  renderAppSidebarPagesHead,
-  renderAppSidebarZoneEntry,
-} from "./app-sidebar-render.tsx";
+import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.tsx";
+import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
 import "../styles/app-sidebar.css";
+import "../styles/sidebar-rail.css";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.tsx";
@@ -70,7 +65,7 @@ import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderPanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
+import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
@@ -85,39 +80,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.teamOnlineExpandedValue = value;
     this.requestUpdate();
   }
-  private sidebarNarrationLinesValue: ReadonlyMap<string, string> = new Map();
-  override get sidebarNarrationLines(): ReadonlyMap<string, string> {
-    return this.sidebarNarrationLinesValue;
-  }
-  override set sidebarNarrationLines(value: ReadonlyMap<string, string>) {
-    if (Object.is(this.sidebarNarrationLinesValue, value)) {
-      return;
-    }
-    this.sidebarNarrationLinesValue = value;
-    this.requestUpdate();
-  }
-  private sidebarToolsValue: ReadonlyMap<string, SidebarToolActivity> = new Map();
-  override get sidebarTools(): ReadonlyMap<string, SidebarToolActivity> {
-    return this.sidebarToolsValue;
-  }
-  override set sidebarTools(value: ReadonlyMap<string, SidebarToolActivity>) {
-    if (Object.is(this.sidebarToolsValue, value)) {
-      return;
-    }
-    this.sidebarToolsValue = value;
-    this.requestUpdate();
-  }
-  private sidebarObserverDigestsValue: ReadonlyMap<string, SessionObserverDigest> = new Map();
-  override get sidebarObserverDigests(): ReadonlyMap<string, SessionObserverDigest> {
-    return this.sidebarObserverDigestsValue;
-  }
-  override set sidebarObserverDigests(value: ReadonlyMap<string, SessionObserverDigest>) {
-    if (Object.is(this.sidebarObserverDigestsValue, value)) {
-      return;
-    }
-    this.sidebarObserverDigestsValue = value;
-    this.requestUpdate();
-  }
+  override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  override sidebarTools: ReadonlyMap<string, SidebarToolActivity> = new Map();
+  override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -203,17 +168,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
     this.requestUpdate();
   };
-  private communityInvitePresentationValue: "unavailable" | "pending" | "shown" = "unavailable";
-  private get communityInvitePresentation(): "unavailable" | "pending" | "shown" {
-    return this.communityInvitePresentationValue;
-  }
-  private set communityInvitePresentation(value: "unavailable" | "pending" | "shown") {
-    if (Object.is(this.communityInvitePresentationValue, value)) {
-      return;
-    }
-    this.communityInvitePresentationValue = value;
-    this.requestUpdate();
-  }
+  private communityInvitePresentation: "unavailable" | "pending" | "shown" = "unavailable";
   private readonly communityInviteStorageChanged = (event: StorageEvent) => {
     if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
       this.syncCommunityInviteState();
@@ -240,17 +195,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       this.requestUpdate();
     },
   );
-  private catalogProjectGroupingValue: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
-  get catalogProjectGrouping(): CatalogProjectGrouping {
-    return this.catalogProjectGroupingValue;
-  }
-  set catalogProjectGrouping(value: CatalogProjectGrouping) {
-    if (Object.is(this.catalogProjectGroupingValue, value)) {
-      return;
-    }
-    this.catalogProjectGroupingValue = value;
-    this.requestUpdate();
-  }
+  catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   override dismissTransientMenus(): boolean {
     const hadPersonCard = this.people.dismiss();
@@ -352,12 +297,15 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       this.narration = new module.SidebarSessionNarrationController(
         (lines) => {
           this.sidebarNarrationLines = lines;
+          this.requestUpdate();
         },
         (digests) => {
           this.sidebarObserverDigests = digests;
+          this.requestUpdate();
         },
         (tools) => {
           this.sidebarTools = tools;
+          this.requestUpdate();
         },
       );
       this.narration.sync(this.narrationSyncInput());
@@ -405,18 +353,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   private readonly dismissCommunityInvite = () => {
     const result = persistCommunityInviteDismissal();
     this.syncCommunityInviteState();
+    this.requestUpdate();
     if (!result.ok) {
       showToast({ message: t("communityInvite.dismissFailed") });
     }
   };
 
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionOrganizer.patchSession(
-      session,
-      { pinned: !session.pinned },
-      {
-        sessionScope: true,
-      },
+    this.sessionOrganizer.setPersonalSessionPin(
+      session.key,
+      !this.sessionOrganizer.isPersonalSessionPin(session.key),
     );
   }
 
@@ -476,6 +422,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
+    this.requestUpdate();
   }
 
   hideSessionCatalog(catalogId: string): void {
@@ -638,24 +585,20 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
-  renderSidebar(view: () => AppSidebarOwner, sessions: JSX.Element): JSX.Element {
-    const zone = () => view().reconciledSidebarZone();
-    const entries = () =>
-      zone().entries.filter(
-        (entry) => entry.type !== "route" || this.sidebarMenus.isRouteEnabled(entry.route),
-      );
-    const showHome = () => view().sidebarAgentsMode !== "roster";
+  renderSidebar(sessions: JSX.Element): JSX.Element {
     const NewSessionMenu = dynamic(() => this.rosterRenderer?.SidebarNewSessionMenu);
     const brand = renderAppSidebarBrand(
       this,
       <NewSessionMenu host={this} active={this.navigationVisible} />,
     );
-    const footer = renderAppSidebarFooterBar(this);
+    const rail = renderSidebarRail(this);
+    const pages = renderSidebarPages(this);
+    const scope = renderSidebarScope(this);
     const online = renderAppSidebarOnline(this);
     const menus = this.sidebarMenus.render();
     return (
       <aside
-        class="sidebar"
+        class="sidebar sidebar--rail"
         onPointerLeave={this.handleSidebarInteractionEnd}
         onFocusOut={this.handleSidebarInteractionEnd}
         onContextMenu={(event) => {
@@ -664,79 +607,69 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           }
         }}
       >
+        {rail}
         <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
           {brand}
           <div class="sidebar-shell__content">
             <div
-              class={`sidebar-shell__body sidebar-shell__body--scroll-${view().sessionData.sessionsScrollState}`}
+              class={`sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}`}
               onScroll={(event) => this.sidebarContext.handleScroll(event)}
             >
-              <nav
-                class="sidebar-nav"
-                onContextMenu={this.sidebarMenus.openCustomizeMenuFromContext}
-              >
-                <div
-                  class="nav-section__items"
-                  onDragOver={(event) => this.sessionOrganizer.handleSidebarZoneDragOver(event)}
-                  onDragLeave={(event) => this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-                  onDrop={(event) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
-                >
-                  <Show when={showHome() || entries().length === 0}>
-                    {renderAppSidebarPagesHead(view(), renderAppSidebarHomeRow(view()))}
-                  </Show>
-                  <openclaw-mcp-app-catalog surface="sidebar" />
-                  <For each={entries()} keyed={serializeSidebarEntry}>
-                    {(entry, index) =>
-                      renderAppSidebarZoneEntry(
-                        this,
-                        untrack(entry),
-                        () => zone().sessionRows,
-                        () => zone().pluginTabs,
-                        () => !showHome() && index() === 0,
-                      )
+              <Show
+                when={this.navigationView === "pages"}
+                fallback={
+                  <Show
+                    when={this.navigationView === "online"}
+                    fallback={
+                      <>
+                        {scope}
+                        <div
+                          class="sidebar-session-content"
+                          hidden={Boolean(this.contextualSidebar)}
+                        >
+                          {sessions}
+                        </div>
+                        {this.contextualSidebar?.render(
+                          this.contextualSidebar.data,
+                          this.contextualSidebar.loaderPending,
+                          true,
+                        )}
+                      </>
                     }
-                  </For>
-                </div>
-              </nav>
-              <div class="sidebar-session-content" hidden={Boolean(view().contextualSidebar)}>
-                {online}
-                {sessions}
-              </div>
-              {view().contextualSidebar?.render(
-                view().contextualSidebar?.data,
-                view().contextualSidebar?.loaderPending ?? false,
-                true,
-              )}
+                  >
+                    {online}
+                  </Show>
+                }
+              >
+                {pages}
+              </Show>
             </div>
-            <Show when={!view().contextualSidebar && view().sessionsStatusFilter !== "archived"}>
-              {renderPanelRefreshStatus({
-                get status() {
-                  return view().sessionData.sessionCatalogRefreshStatus;
-                },
-                className: "sidebar-session-error sidebar-session-catalog-error",
-              })}
+            <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
+              <PanelRefreshStatus
+                status={this.sessionData.sessionCatalogRefreshStatus}
+                {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
+              />
             </Show>
           </div>
           <div class="sidebar-shell__invite">
-            <Show when={view().communityInvitePresentation === "shown"}>
+            <Show when={this.communityInvitePresentation === "shown"}>
               <SidebarCommunityInvite
                 onDismiss={this.dismissCommunityInvite}
-                mode={view().context.theme.resolvedMode}
+                mode={this.context.theme.resolvedMode}
               />
             </Show>
           </div>
           <div class="sidebar-shell__footer">
-            <Show when={view().devGitBranch}>
-              <openclaw-tooltip prop:content={view().devGitBranch}>
+            <Show when={this.devGitBranch}>
+              <openclaw-tooltip prop:content={this.devGitBranch}>
                 <div class="sidebar-footer-branch">
                   <span class="sidebar-footer-branch__icon" aria-hidden="true">
                     <Icon name="gitBranch" />
                   </span>
-                  <span class="sidebar-footer-branch__name">{view().devGitBranch}</span>
+                  <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
                 </div>
               </openclaw-tooltip>
             </Show>
-            {footer}
           </div>
         </div>
         {menus}

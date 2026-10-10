@@ -91,6 +91,7 @@ export interface SessionListHost {
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
+    | "isPersonalSessionPin"
     | "reorderSidebarSection"
   >;
   readonly sidebarMenus: Pick<
@@ -180,16 +181,8 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     display = createMemo(() => params.display),
     listItem = createMemo(() => params.listItem ?? true),
     icon = createMemo(() => params.icon);
-  const pinAccess = createMemo(() =>
-    host().readSessionMutationAccess({
-      method: "sessions.patch",
-      params: {
-        key: session().key,
-        pinned: !session().pinned,
-      },
-      sessionScope: true,
-      session: session(),
-    }),
+  const personallyPinned = createMemo(() =>
+    host().sessionOrganizer.isPersonalSessionPin(session().key),
   );
   const archiveAccess = createMemo(() =>
     host().readSessionMutationAccess({
@@ -264,8 +257,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       },
     );
   const pinLabel = createMemo(() => {
-    const sessionValue = session();
-    return t(sessionValue.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
+    return t(personallyPinned() ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   });
   const archiveLabel = createMemo(() => {
     const sessionValue = session();
@@ -300,7 +292,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       sessionValue.archived ? "sidebar-session--archived" : "",
       sessionValue.visuallyActive ? "sidebar-recent-session--active" : "",
       hostValue.selectedSessionKeys.has(sessionValue.key) ? "sidebar-recent-session--selected" : "",
-      sessionValue.pinned ? "session-row-host--pinned" : "",
+      personallyPinned() ? "session-row-host--pinned" : "",
       runningValue ? "session-row-host--running" : "",
       sessionValue.visibility === "draft" ? "session-row-host--draft" : "",
       sessionValue.visibility === "draft"
@@ -465,12 +457,8 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               class="session-action session-action--pin"
               data-sidebar-session-pin="true"
               type="button"
-              title={(() => {
-                const access = pinAccess();
-                return access.allowed ? pinLabel() : access.reason;
-              })()}
+              title={pinLabel()}
               aria-label={pinLabel()}
-              disabled={!pinAccess().allowed}
               onClick={() => host().toggleSessionPin(session())}
             >
               <Icon name="pin" />

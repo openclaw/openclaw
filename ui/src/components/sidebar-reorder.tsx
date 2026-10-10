@@ -6,6 +6,7 @@ type ReorderPosition = "before" | "after";
 export function renderSidebarReorderMenu(params: {
   label: string;
   kind: "entry" | "section";
+  onRemove?: () => void;
   onMove: (target: string, position: ReorderPosition) => void | Promise<void>;
 }) {
   const attribute = params.kind === "entry" ? "data-sidebar-entry" : "data-session-section";
@@ -22,14 +23,12 @@ export function renderSidebarReorderMenu(params: {
       ? null
       : (siblings[index + (position === "before" ? -1 : 1)]?.getAttribute(attribute) ?? null);
   };
-  const label = t("chat.sidebar.reorderItem", {
-    item: params.label,
-  });
+  const label = () => t("chat.sidebar.reorderItem", { item: params.label });
   return (
     <wa-dropdown
       class="sidebar-reorder-menu"
       placement="bottom-end"
-      aria-label={label}
+      aria-label={label()}
       onWa-show={(event: Event) => {
         const menu = event.currentTarget;
         if (!(menu instanceof HTMLElement)) {
@@ -49,6 +48,10 @@ export function renderSidebarReorderMenu(params: {
         }>,
       ) => {
         const position = event.detail.item.value;
+        if (position === "remove") {
+          params.onRemove?.();
+          return;
+        }
         if (position !== "before" && position !== "after") {
           return;
         }
@@ -73,8 +76,8 @@ export function renderSidebarReorderMenu(params: {
         slot="trigger"
         type="button"
         class="sidebar-reorder-trigger"
-        aria-label={label}
-        title={label}
+        aria-label={label()}
+        title={label()}
       >
         <Icon name="gripVertical" />
       </button>
@@ -90,6 +93,14 @@ export function renderSidebarReorderMenu(params: {
         </span>
         {t("chat.sidebar.moveDown")}
       </wa-dropdown-item>
+      {params.onRemove && (
+        <wa-dropdown-item value="remove">
+          <span slot="icon" aria-hidden="true">
+            <Icon name="pin" />
+          </span>
+          {t("nav.unpin")}
+        </wa-dropdown-item>
+      )}
     </wa-dropdown>
   );
 }

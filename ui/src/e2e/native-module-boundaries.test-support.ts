@@ -77,7 +77,7 @@ export function defineNativeModuleBoundaryTests(
         beforeNavigate: async (targetPage) => {
           held = await holdModuleResponse(
             targetPage,
-            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.ts"),
+            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.tsx"),
           );
         },
       });

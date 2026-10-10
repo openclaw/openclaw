@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { t } from "../i18n/index.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./relative-time.ts";
 

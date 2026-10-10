@@ -1,8 +1,9 @@
-import { createMemo, createSignal, merge, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { t } from "../i18n/index.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderAgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 
@@ -10,40 +11,27 @@ import { renderAgentIdentityAvatar } from "./solid/identity-avatar.tsx";
     agent menu (switcher + utilities) — the conversation itself lives on the
     Home page row, so this row carries profile semantics only. */
 export type SidebarAgentCardProps = {
-  agentId?: string;
-  agentName?: string;
-  avatarUrl?: string | null;
-  avatarAuthReady?: boolean;
-  avatarText?: string | null;
-  environment?: ControlUiEnvironment | null;
-  menuOpen?: boolean;
-  menuUnread?: boolean;
-  switcherAvailable?: boolean;
+  agentId: string;
+  agentName: string;
+  avatarUrl: string | null;
+  avatarAuthReady: boolean;
+  avatarText: string | null;
+  environment: ControlUiEnvironment | null;
+  menuOpen: boolean;
+  menuUnread: boolean;
+  switcherAvailable: boolean;
   onToggleMenu?: (trigger: HTMLElement) => void;
   onMenuPointerMove?: (trigger: HTMLElement, event: PointerEvent) => void;
   onMenuPointerLeave?: () => void;
 };
 
-export function SidebarAgentCard(input: SidebarAgentCardProps) {
-  const props = merge(
-    {
-      agentId: "",
-      agentName: "",
-      avatarUrl: null,
-      avatarAuthReady: false,
-      avatarText: null,
-      environment: null,
-      menuOpen: false,
-      menuUnread: false,
-      switcherAvailable: false,
-    },
-    input,
-  );
+function SidebarAgentCardContent(props: SidebarAgentCardProps, host: HTMLElement) {
+  host.style.display = "contents";
   const [revision, setRevision] = createSignal(0);
   const avatarLoader = new IdentityAvatarController({
     addController() {},
     removeController() {},
-    requestUpdate: () => setRevision((value) => value + 1),
+    requestUpdate: () => queueMicrotask(() => setRevision((value) => value + 1)),
     updateComplete: Promise.resolve(true),
   });
   avatarLoader.hostConnected();
@@ -133,3 +121,24 @@ export function SidebarAgentCard(input: SidebarAgentCardProps) {
     </div>
   );
 }
+
+export const SidebarAgentCard = defineSolidBridge<SidebarAgentCardProps>(
+  "openclaw-sidebar-agent-card",
+  SidebarAgentCardContent,
+  {
+    properties: {
+      agentId: { default: "", attribute: false },
+      agentName: { default: "", attribute: false },
+      avatarUrl: { default: null, attribute: false },
+      avatarAuthReady: { default: false, attribute: false },
+      avatarText: { default: null, attribute: false },
+      environment: { default: null, attribute: false },
+      menuOpen: { default: false, attribute: false },
+      menuUnread: { default: false, attribute: false },
+      switcherAvailable: { default: false, attribute: false },
+      onToggleMenu: { default: undefined, attribute: false },
+      onMenuPointerMove: { default: undefined, attribute: false },
+      onMenuPointerLeave: { default: undefined, attribute: false },
+    },
+  },
+);

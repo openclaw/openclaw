@@ -21,6 +21,7 @@ import {
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
+import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -298,7 +299,7 @@ export function buildReconciledSidebarZone(input: {
   pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
 }) {
   const navigation = input.pluginNavigation;
-  const occupiedPlacements = new Set(input.sidebarEntries);
+  const occupiedPlacements = new Set(SIDEBAR_NAV_ROUTES.map((route) => `route:${route}`));
   const pluginTabs = new Map(
     sidebarPluginTabs(input.pluginTabs)
       .filter(
@@ -310,30 +311,17 @@ export function buildReconciledSidebarZone(input: {
       )
       .map((tab) => [pluginTabKey(tab), tab]),
   );
-  const defaultPluginNavigationKeys = new Set([
-    ...pluginTabs.keys(),
-    ...navigation
-      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
-      .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
-      .map((entry) => entry.key),
-  ]);
-  const pinnedRows = input.rows.filter((row) => row.pinned);
-  // Only loaded rows count as authoritative unpinned state; entries for
-  // other agents' sessions must survive canonical writes untouched.
-  const knownUnpinnedKeys = new Set(input.rows.filter((row) => !row.pinned).map((row) => row.key));
+  const availableRows = input.rows;
   const reconciled = reconcileSidebarZone(
     input.sidebarEntries,
-    pinnedRows,
+    availableRows,
     SIDEBAR_NAV_ROUTES,
-    knownUnpinnedKeys,
     new Set([...pluginTabs.keys(), ...navigation.map((entry) => entry.key)]),
-    defaultPluginNavigationKeys,
   );
   return {
     ...reconciled,
-    sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+    sessionRows: new Map(availableRows.map((row) => [row.key, row])),
     pluginTabs,
-    defaultPluginNavigationKeys,
   };
 }
 
@@ -516,4 +504,80 @@ export function findProjectedSidebarSession(input: {
     }
   }
   return undefined;
+}
+
+/** Live canonical requests outlive a paginated row, but never supply its old private metadata. */
+export function projectSidebarVisibleMainSession(
+  host: {
+    mainSessionRow(agentId: string): GatewaySessionRow | null;
+    projectHomeSession(
+      row: GatewaySessionRow,
+      agentId: string,
+    ): SidebarRecentSession & { metadataVisible: boolean };
+    selectedAgentMainSessionKey(agentId: string): string;
+    readonly effectiveNavigationScope: "mine" | "all";
+    readonly sessionOwnerFilterActive: boolean;
+    readonly sessionInvolvingMeFilterActive: boolean;
+    readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+    readonly sessionDataContext: Pick<ApplicationContext, "sessions"> | undefined;
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    resolveSessionAttention(
+      row: Pick<GatewaySessionRow, "key" | "agentId">,
+    ): SidebarRecentSession["attention"];
+  },
+  agentId: string,
+): SidebarRecentSession | null {
+  const row = host.mainSessionRow(agentId);
+  if (row) {
+    const home = host.projectHomeSession(row, agentId);
+    return home.metadataVisible ? home : null;
+  }
+  const key = host.selectedAgentMainSessionKey(agentId);
+  if (
+    host.effectiveNavigationScope === "mine" ||
+    host.sessionOwnerFilterActive ||
+    host.sessionInvolvingMeFilterActive ||
+    (host.sessionsStatusFilter !== "active" && host.sessionsStatusFilter !== "all") ||
+    host.sessionDataContext?.sessions.deletionState(key, agentId)
+  ) {
+    return null;
+  }
+  const attention = host.resolveSessionAttention({ key, agentId });
+  if (attention.kind !== "question" && attention.kind !== "approval") {
+    return null;
+  }
+  return {
+    ...host
+      .getSessionNavigationState()
+      .toSidebarSession({ key, agentId, kind: "direct", updatedAt: 0 }),
+    label: "",
+    renameValue: "",
+    attention,
+    ownAttention: attention,
+    pullRequest: undefined,
+    agentStatusNote: undefined,
+    workSession: false,
+    outboxAttentionCount: 0,
+    hasComposerDraft: false,
+  };
+}
+
+export function navigationScopesEquivalent(
+  snapshot: SessionListSnapshot | undefined,
+  viewerId: string,
+): boolean {
+  const result = snapshot?.result;
+  const counts = result?.ownerSessionCounts;
+  const ownCount = counts?.find((entry) => entry.profileId === viewerId)?.open ?? 0;
+  return Boolean(
+    snapshot &&
+    !snapshot.loading &&
+    !snapshot.startupPending &&
+    snapshot.readSucceeded !== false &&
+    !snapshot.error &&
+    counts &&
+    result?.totalCount !== undefined &&
+    result.totalCount === ownCount &&
+    counts.every((entry) => entry.profileId === viewerId),
+  );
 }

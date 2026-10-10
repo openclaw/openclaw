@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -242,22 +244,22 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         ).join("")}
       </nav>
       <main class="content">
-        <openclaw-sidebar-attention class="sidebar-attention--floating">
-          <button class="sidebar-issues-button"></button>
-        </openclaw-sidebar-attention>
+        <openclaw-sidebar-attention class="sidebar-attention--floating"></openclaw-sidebar-attention>
       </main>
     `;
-      document.body.append(shell);
+      const provider = createApplicationContextProvider(panelParams([]).context);
+      provider.append(shell);
+      document.body.append(provider);
 
       const attention = shell.querySelector<HTMLElement>("openclaw-sidebar-attention")!;
       const chrome = shell.querySelector<HTMLElement>(".shell-chrome-controls")!;
       const nativeChrome = shell.querySelector<HTMLElement>(".macos-titlebar-controls")!;
-      const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
-
       // The real shell mounts this row only in native web-chrome mode.
       nativeChrome.remove();
-      flush();
-      attention.append(inbox);
+      await waitForSolid(() =>
+        expect(attention.querySelector(".sidebar-issues-button")).not.toBeNull(),
+      );
+      const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
 
       expect(getComputedStyle(attention).position).toBe("fixed");
       expect(getComputedStyle(attention).display).toBe("flex");

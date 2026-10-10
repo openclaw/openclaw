@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, merge, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
@@ -12,67 +12,54 @@ import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
   isUpdateActionable,
+  getUpdateGitRevisions,
 } from "../app/update-schedule-projection.ts";
-import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import "../styles/sidebar-update-card.css";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import { SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
-import { renderUpdateGitRevisions } from "./solid/update-git-revisions.tsx";
+import "../styles/update-git-revisions.css";
 
-registerSidebarAttentionEnglish();
+registerEnglishCatalog(registerSidebarAttentionEnglish);
 
 export type SidebarUpdateCardProps = {
-  compact?: boolean;
-  updateAvailable?: UpdateAvailable | null;
-  updateSchedule?: UpdateScheduleState | null;
-  heldUpdateCampaignId?: string | null;
-  updateBusy?: boolean;
-  updateRun?: UpdateRunRecord | null;
-  updateRunAcknowledged?: boolean;
-  connected?: boolean;
+  compact: boolean;
+  updateAvailable: UpdateAvailable | null;
+  updateSchedule: UpdateScheduleState | null;
+  heldUpdateCampaignId: string | null;
+  updateBusy: boolean;
+  updateRun: UpdateRunRecord | null;
+  updateRunAcknowledged: boolean;
+  connected: boolean;
   onCheckStatus?: () => Promise<boolean>;
   onAcknowledge?: () => void;
-  statusBanner?: ApplicationStatusBanner | null;
+  statusBanner: ApplicationStatusBanner | null;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  canUpdate?: boolean;
-  canHoldUpdate?: boolean;
-  onUpdate?: () => void;
-  refreshRequired?: boolean;
-  onRefresh?: () => Promise<boolean>;
-  onHoldUpdate?: () => Promise<boolean>;
-  onReviewUpdate?: () => void;
+  canUpdate: boolean;
+  canHoldUpdate: boolean;
+  onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => Promise<boolean>;
+  onHoldUpdate: () => Promise<boolean>;
+  onReviewUpdate: () => void;
   onDismiss?: () => void;
 };
 
-export function SidebarUpdateCard(input: SidebarUpdateCardProps) {
-  const props = merge(
-    {
-      compact: false,
-      updateAvailable: null,
-      updateSchedule: null,
-      heldUpdateCampaignId: null,
-      updateBusy: false,
-      updateRun: null,
-      updateRunAcknowledged: false,
-      connected: true,
-      statusBanner: null,
-      canUpdate: false,
-      canHoldUpdate: false,
-      onUpdate: () => undefined,
-      refreshRequired: false,
-      onRefresh: async () => false,
-      onHoldUpdate: async () => false,
-      onReviewUpdate: () => undefined,
-    },
-    input,
-  );
+function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLElement) {
+  host.style.display = "contents";
   const [holdingCampaignId, setHoldingCampaignId] = createSignal<string | null>(null);
   const [nativeUpdateAvailable, setNativeUpdateAvailable] = createSignal(hasNativeUpdateBridge());
-  const [refreshInFlight, setRefreshInFlight] = createSignal(false);
-  const [refreshFailed, setRefreshFailed] = createSignal(false);
+  const [refreshState, setRefreshState] = createSignal(() => {
+    // Re-entering recovery starts with a fresh retry surface.
+    void props.refreshRequired;
+    return { inFlight: false, failed: false };
+  });
+  const refreshInFlight = () => refreshState().inFlight;
+  const refreshFailed = () => refreshState().failed;
   const [now, setNow] = createSignal(Date.now());
   let refreshAttempt = 0;
   let refreshPending = false;
@@ -87,8 +74,6 @@ export function SidebarUpdateCard(input: SidebarUpdateCardProps) {
       if (!required) {
         refreshAttempt++;
         refreshPending = false;
-        setRefreshInFlight(false);
-        setRefreshFailed(false);
       }
     },
   );
@@ -159,8 +144,7 @@ export function SidebarUpdateCard(input: SidebarUpdateCardProps) {
       return;
     }
     refreshPending = true;
-    setRefreshInFlight(true);
-    setRefreshFailed(false);
+    setRefreshState({ inFlight: true, failed: false });
     const attempt = ++refreshAttempt;
     let reloading = false;
     try {
@@ -173,8 +157,7 @@ export function SidebarUpdateCard(input: SidebarUpdateCardProps) {
     }
     if (!reloading) {
       refreshPending = false;
-      setRefreshInFlight(false);
-      setRefreshFailed(true);
+      setRefreshState({ inFlight: false, failed: true });
     }
   };
 
@@ -476,5 +459,62 @@ export function SidebarUpdateCard(input: SidebarUpdateCardProps) {
     <Show when={props.compact} fallback={<>{renderCard()}</>}>
       <CompactCard />
     </Show>
+  );
+}
+
+export const SidebarUpdateCard = defineSolidBridge<SidebarUpdateCardProps>(
+  "openclaw-sidebar-update-card",
+  SidebarUpdateCardContent,
+  {
+    properties: {
+      compact: { default: false, attribute: false },
+      updateAvailable: { default: null, attribute: false },
+      updateSchedule: { default: null, attribute: false },
+      heldUpdateCampaignId: { default: null, attribute: false },
+      updateBusy: { default: false, attribute: false },
+      updateRun: { default: null, attribute: false },
+      updateRunAcknowledged: { default: false, attribute: false },
+      connected: { default: true, attribute: false },
+      onCheckStatus: { default: undefined, attribute: false },
+      onAcknowledge: { default: undefined, attribute: false },
+      statusBanner: { default: null, attribute: false },
+      watchUpdateProgress: { default: undefined, attribute: false },
+      canUpdate: { default: false, attribute: false },
+      canHoldUpdate: { default: false, attribute: false },
+      onUpdate: { default: () => undefined, attribute: false },
+      refreshRequired: { default: false, attribute: false },
+      onRefresh: { default: async () => false, attribute: false },
+      onHoldUpdate: { default: async () => false, attribute: false },
+      onReviewUpdate: { default: () => undefined, attribute: false },
+      onDismiss: { default: undefined, attribute: false },
+    },
+  },
+);
+
+function renderUpdateGitRevisions(
+  schedule: UpdateScheduleState | null | undefined,
+  updateAvailable: UpdateAvailable | null | undefined,
+) {
+  const revisions = getUpdateGitRevisions(schedule, updateAvailable);
+  if (!revisions) {
+    return null;
+  }
+  return (
+    <div class="update-git-revisions">
+      <span class="update-git-revisions__range" dir="ltr">
+        {revisions.currentSha ? (
+          <>
+            <code title={revisions.currentSha}>{revisions.currentSha.slice(0, 8)}</code>
+            <span aria-hidden="true">→</span>
+          </>
+        ) : null}
+        <code title={revisions.targetSha}>{revisions.targetSha.slice(0, 8)}</code>
+      </span>
+      {revisions.compareUrl ? (
+        <a href={revisions.compareUrl} target="_blank" rel="noopener noreferrer">
+          {t("updates.target.viewChanges")} <span aria-hidden="true">↗</span>
+        </a>
+      ) : null}
+    </div>
   );
 }

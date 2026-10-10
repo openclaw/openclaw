@@ -145,8 +145,8 @@ describe("FaceTime pending dial reconciliation", () => {
   it("requires two matching absence snapshots after native identity changes", async () => {
     const state = await pendingDialState();
     mocks.helper.findOutgoingCall.mockResolvedValue(topologyResult([absentPeer(originalPeer)]));
-    const runtime = await createRuntime(state);
     const deleted = observeDeletion(state);
+    const runtime = await createRuntime(state);
     try {
       mocks.helperParams?.onConnect(originalPeer.bundleIdentifier);
       await vi.advanceTimersByTimeAsync(0);
@@ -218,8 +218,8 @@ describe("FaceTime pending dial reconciliation", () => {
       }
     }
     mocks.helper.cancelOutgoingCall.mockResolvedValue(cancellation);
-    const runtime = await createRuntime(state);
     const deleted = observeDeletion(state);
+    const runtime = await createRuntime(state);
     const cancellationPublished = deferred();
     const register = state.register.bind(state);
     vi.spyOn(state, "register").mockImplementation(async (...args) => {

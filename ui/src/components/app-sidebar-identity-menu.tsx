@@ -17,10 +17,10 @@ import {
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.tsx";
 import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
-import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import { renderMenuTrigger } from "./solid/menu-trigger.tsx";
-import "./sidebar-build-chip.tsx";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -95,12 +95,15 @@ function renderIdentityGateways(
                 {gateway().isPrimary ? (
                   <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
                 ) : undefined}
-                {!selected() && index() < 9
-                  ? renderKbd(["⌘", String(index() + 1)], {
+                {!selected() && index() < 9 ? (
+                  <Kbd
+                    {...{
                       className: "session-menu__shortcut",
                       ariaHidden: true,
-                    })
-                  : undefined}
+                    }}
+                    keys={["⌘", String(index() + 1)]}
+                  />
+                ) : undefined}
                 {selected() ? (
                   <span class="sidebar-gateway-check" aria-hidden="true">
                     {<Icon name="check" />}
@@ -126,20 +129,18 @@ function renderIdentityGateways(
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
   const position = params.position;
-  const profileName = createMemo(
-    () => params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner"),
-  );
+  const profileName = () =>
+    params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
     watchedSessions: [],
     ...params.profileViewer,
     name: profileName(),
   }));
-  const profileEmail = createMemo(() =>
+  const profileEmail = () =>
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
-      : null,
-  );
+      : null;
   return (
     <wa-dropdown
       class="sidebar-customize-menu sidebar-identity-menu"
@@ -238,11 +239,16 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
       {renderIdentityGateways(() => params.nativeGatewaySnapshot, params.onClose)}
       {renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         get details() {
-          return renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, {
-            slot: "details",
-            className: "session-menu__shortcut",
-            ariaHidden: true,
-          });
+          return (
+            <KeyboardShortcut
+              {...{
+                slot: "details",
+                className: "session-menu__shortcut",
+                ariaHidden: true,
+              }}
+              combo={KEYBOARD_SHORTCUT_COMBOS.appearanceSettings}
+            />
+          );
         },
       })}
       {renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins")}
@@ -259,11 +265,16 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
       {renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")}
       {renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
         get details() {
-          return renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, {
-            slot: "details",
-            className: "session-menu__shortcut",
-            ariaHidden: true,
-          });
+          return (
+            <KeyboardShortcut
+              {...{
+                slot: "details",
+                className: "session-menu__shortcut",
+                ariaHidden: true,
+              }}
+              combo={KEYBOARD_SHORTCUT_COMBOS.debugOverlay}
+            />
+          );
         },
       })}
 
@@ -282,12 +293,12 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
       ) : undefined}
       <div class="sidebar-customize-menu__separator" role="separator" />
       <div class="sidebar-identity-menu__footer">
-        <openclaw-sidebar-build-chip
-          prop:variant={"identity"}
-          prop:basePath={params.basePath}
-          prop:gatewayVersion={params.gatewayVersion}
-          prop:updateAttentionDismissed={params.updateAttentionDismissed}
-          prop:onNavigate={(routeId: "about") => {
+        <SidebarBuildChip
+          variant={"identity"}
+          basePath={params.basePath}
+          gatewayVersion={params.gatewayVersion}
+          updateAttentionDismissed={params.updateAttentionDismissed}
+          onNavigate={(routeId: "about") => {
             params.onClose();
             params.onNavigate(routeId);
           }}

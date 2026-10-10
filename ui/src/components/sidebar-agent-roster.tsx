@@ -10,8 +10,10 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectRosterActivity } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.tsx";
@@ -39,7 +41,16 @@ type RosterProps = { host: RosterHost; active?: boolean };
 
 function useRoster(props: RosterProps) {
   const application = useApplication();
-  const context = createMemo(() => props.host.sessionDataContext ?? application);
+  const currentHost = createMemo(() => props.host);
+  const hostProjection = createMemo(() =>
+    projectSource(currentHost(), {
+      read: (host) => host,
+      subscribe: (host, notify) => host.subscribe(notify),
+      equality: "revision",
+    }),
+  );
+  const host = () => hostProjection().read();
+  const context = createMemo(() => host().sessionDataContext ?? application);
   const store = createMemo(() => rosterActivityStore(context()));
   const projection = createMemo(() => projectRosterActivity(store()));
   const gateway = createMemo(() => projectGateway(context().gateway));
@@ -59,12 +70,14 @@ function useRoster(props: RosterProps) {
   });
   const cards = createMemo(() => {
     avatarRevision();
+    const currentCards = snapshot().cards;
+    const currentContext = context();
     return avatars.withActiveRoutes(() =>
-      snapshot().cards.map((card) =>
+      currentCards.map((card) =>
         Object.assign({}, card, {
           avatar: card.avatar ? avatars.resolve(card.avatar) : null,
           target: sessionNavigationTarget({
-            context: context(),
+            context: currentContext,
             face: "chat",
             sessionKey: card.mainKey,
             agentId: card.id,
@@ -73,10 +86,10 @@ function useRoster(props: RosterProps) {
       ),
     );
   });
-  return { context, store, snapshot, gateway, cards };
+  return { host, context, store, snapshot, gateway, cards };
 }
 
-export function SidebarAgentRoster(
+function SidebarAgentRosterContent(
   props: RosterProps & {
     sections?: SidebarVisibleSections["sections"];
     involvingMe?: boolean;
@@ -99,19 +112,22 @@ export function SidebarAgentRoster(
   );
   createEffect(roster.store, (store) => () => store.setInvolvingMe(false));
   createEffect(
-    () => ({ snapshot: roster.snapshot(), collapsed: collapsed(), host: props.host }),
-    ({ snapshot, collapsed: collapsedIds, host }) => {
+    () => ({ snapshot: roster.snapshot(), collapsed: collapsed() }),
+    ({ snapshot, collapsed: collapsedIds }) => {
+      const host = props.host;
       host.rosterSessionSource = {
         result: snapshot.result,
         agentIds: snapshot.cards.map((card) => card.id),
         collapsedAgentIds: collapsedIds,
       };
+      host.requestUpdate();
     },
   );
   createEffect(
     () => props.host,
     (host) => () => {
       host.rosterSessionSource = null;
+      host.requestUpdate();
     },
   );
   const setCollapsedAgents = (next: ReadonlySet<string>) => {
@@ -133,9 +149,9 @@ export function SidebarAgentRoster(
   };
   const error = () => roster.snapshot().error ?? roster.snapshot().subscriptionError;
   return (
-    <openclaw-sidebar-agent-roster>
+    <>
       {renderSessionListFrame(
-        props.host,
+        roster.host(),
         <div class="sidebar-agent-roster">
           <Show when={error()}>
             <button
@@ -155,30 +171,30 @@ export function SidebarAgentRoster(
                 (props.sections ?? []).filter((section) =>
                   section.id.startsWith(`agent:${card().id}:`),
                 );
-              const mainKey = () => props.host.selectedAgentMainSessionKey(card().id);
-              const mainRow = () => props.host.mainSessionRow(card().id);
+              const mainKey = () => roster.host().selectedAgentMainSessionKey(card().id);
+              const mainRow = () => roster.host().mainSessionRow(card().id);
               const home = () => {
                 const row = mainRow();
-                return row ? props.host.projectHomeSession(row, card().id) : null;
+                return row ? roster.host().projectHomeSession(row, card().id) : null;
               };
               const homeLoadKeys = () =>
                 home()?.childLoadParentKeys?.length
                   ? home()!.childLoadParentKeys!
                   : [mainRow()?.key ?? mainKey()];
-              const main = () => props.host.visibleHomeSession(card().id);
+              const main = () => roster.host().visibleHomeSession(card().id);
               const isCollapsed = () => collapsed().has(card().id);
               const hasSessions = () =>
                 sections().some((section) => section.rows.length > 0) ||
                 home()?.loadingChildren ||
                 homeLoadKeys().some((key) =>
-                  props.host.sessionData.childSessionErrorsByParent.has(key),
+                  roster.host().sessionData.childSessionErrorsByParent.has(key),
                 ) ||
                 home()?.childLoadParentKeys?.some(
-                  (key) => !props.host.sessionData.loadedChildSessionKeys.has(key),
+                  (key) => !roster.host().sessionData.loadedChildSessionKeys.has(key),
                 );
               const active = () =>
-                isSessionRouteId(props.host.activeRouteId) &&
-                areUiSessionKeysEquivalent(props.host.getRouteSessionKey(), mainKey());
+                isSessionRouteId(roster.host().activeRouteId) &&
+                areUiSessionKeysEquivalent(roster.host().getRouteSessionKey(), mainKey());
               const summaryRows = () => [
                 ...(main() ? [main()!] : []),
                 ...(isCollapsed() ? sections().flatMap((section) => section.rows) : []),
@@ -192,7 +208,7 @@ export function SidebarAgentRoster(
                 summaryRows().reduce((count, row) => count + (row.workspaceConflictCount ?? 0), 0),
                 runVisibility,
               ];
-              const access = () => props.host.readNewSessionAccess();
+              const access = () => roster.host().readNewSessionAccess();
               return (
                 <section
                   class="sidebar-agent-roster__group"
@@ -226,7 +242,7 @@ export function SidebarAgentRoster(
                       onClick={(event: MouseEvent) => {
                         if (shouldHandleNavigationClick(event)) {
                           event.preventDefault();
-                          props.host.openMainSession(card().id);
+                          roster.host().openMainSession(card().id);
                         }
                       }}
                     >
@@ -240,7 +256,7 @@ export function SidebarAgentRoster(
                     <span class="sidebar-agent-roster__signals">
                       {main()
                         ? renderSidebarSessionIndicators(
-                            props.host,
+                            roster.host(),
                             main()!,
                             undefined,
                             undefined,
@@ -259,7 +275,7 @@ export function SidebarAgentRoster(
                     >
                       {renderNewSessionLink({
                         get basePath() {
-                          return props.host.basePath;
+                          return roster.host().basePath;
                         },
                         get agentId() {
                           return card().id;
@@ -271,22 +287,22 @@ export function SidebarAgentRoster(
                         get disabledReason() {
                           return access().allowed ? undefined : access().reason;
                         },
-                        onOpen: (id, target) => props.host.requestOpenNewSession(id, target),
+                        onOpen: (id, target) => roster.host().requestOpenNewSession(id, target),
                       })}
                       <wa-dropdown
                         class="sidebar-customize-menu sidebar-agent-roster__menu"
                         placement="bottom-end"
-                        onWa-show={() => props.host.dismissTransientMenus()}
+                        onWa-show={() => roster.host().dismissTransientMenus()}
                         onWa-select={(
                           event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
                         ) => {
                           switch (event.detail.item.value) {
                             case "main":
-                              props.host.openMainSession(card().id);
+                              roster.host().openMainSession(card().id);
                               break;
                             case "sessions":
                               roster.context().agentSelection.setScope(card().id);
-                              props.host.onNavigate?.("sessions");
+                              roster.host().onNavigate?.("sessions");
                               break;
                             case "collapse-others":
                               setCollapsedAgents(
@@ -335,13 +351,13 @@ export function SidebarAgentRoster(
                   </div>
                   <Show when={!isCollapsed()}>
                     <For each={homeLoadKeys()}>
-                      {(key) => renderChildSessionLoadError(props.host, key)}
+                      {(key) => renderChildSessionLoadError(roster.host(), key)}
                     </For>
                     <For each={sections()} keyed={(section) => section.id}>
                       {(section) =>
                         renderSessionSection({
                           get host() {
-                            return props.host;
+                            return roster.host();
                           },
                           get section() {
                             return section();
@@ -356,27 +372,27 @@ export function SidebarAgentRoster(
             }}
           </For>
           {renderPersonalSessionEmpty(
-            props.host,
+            roster.host(),
             props.empty ?? false,
             roster.gateway().read().snapshot.phase === "connected" &&
               roster.snapshot().result !== null &&
               !roster.snapshot().loading &&
               !error() &&
               !roster.snapshot().result!.hasMore &&
-              !props.host.sessionData.sessionMutationError,
+              !roster.host().sessionData.sessionMutationError,
           )}
         </div>,
       )}
-    </openclaw-sidebar-agent-roster>
+    </>
   );
 }
 
-export function SidebarNewSessionMenu(props: RosterProps) {
+function SidebarNewSessionMenuContent(props: RosterProps) {
   const roster = useRoster(props);
-  const access = () => props.host.readNewSessionAccess();
+  const access = () => roster.host().readNewSessionAccess();
   let dropdown!: HTMLElement & { open: boolean };
   return (
-    <openclaw-sidebar-new-session-menu>
+    <>
       <wa-dropdown
         ref={(element) => {
           dropdown = element;
@@ -384,7 +400,7 @@ export function SidebarNewSessionMenu(props: RosterProps) {
         class="sidebar-new-session-menu"
         placement="bottom-end"
         aria-label={t("agentChip.agents")}
-        onWa-show={() => props.host.dismissTransientMenus()}
+        onWa-show={() => roster.host().dismissTransientMenus()}
         onWa-select={(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
           const item = event.detail.item;
           event.preventDefault();
@@ -395,7 +411,7 @@ export function SidebarNewSessionMenu(props: RosterProps) {
           const id = item.value;
           if (access().allowed && id && roster.cards().some((card) => card.id === id)) {
             dropdown.open = false;
-            props.host.requestOpenNewSession(id);
+            roster.host().requestOpenNewSession(id);
           }
         }}
       >
@@ -423,7 +439,7 @@ export function SidebarNewSessionMenu(props: RosterProps) {
             >
               <a
                 class="sidebar-agent-roster__link"
-                href={`${pathForRoute("new-session", props.host.basePath)}${newSessionSearch(card().id)}`}
+                href={`${pathForRoute("new-session", roster.host().basePath)}${newSessionSearch(card().id)}`}
                 tabIndex={-1}
               >
                 <span class="sidebar-agent-roster__avatar" aria-hidden="true">
@@ -435,13 +451,57 @@ export function SidebarNewSessionMenu(props: RosterProps) {
           )}
         </For>
       </wa-dropdown>
-    </openclaw-sidebar-new-session-menu>
+    </>
   );
 }
 
-export function renderSidebarNewSessionMenu(host: RosterHost) {
-  return <SidebarNewSessionMenu host={host} active={host.navigationVisible} />;
-}
+type RosterBridgeProps = { host: RosterHost | null; active: boolean };
+type AgentRosterBridgeProps = RosterBridgeProps & {
+  sections: SidebarVisibleSections["sections"];
+  involvingMe: boolean;
+  empty: boolean;
+};
+
+export const SidebarAgentRoster = defineSolidBridge<AgentRosterBridgeProps>(
+  "openclaw-sidebar-agent-roster",
+  (props) => (
+    <Show when={props.host}>
+      {(host) => (
+        <SidebarAgentRosterContent
+          host={host()}
+          active={props.active}
+          sections={props.sections}
+          involvingMe={props.involvingMe}
+          empty={props.empty}
+        />
+      )}
+    </Show>
+  ),
+  {
+    properties: {
+      host: { default: null, attribute: false },
+      active: { default: true, type: Boolean },
+      sections: { default: [], attribute: false },
+      involvingMe: { default: false, attribute: false },
+      empty: { default: false, type: Boolean },
+    },
+  },
+);
+
+export const SidebarNewSessionMenu = defineSolidBridge<RosterBridgeProps>(
+  "openclaw-sidebar-new-session-menu",
+  (props) => (
+    <Show when={props.host}>
+      {(host) => <SidebarNewSessionMenuContent host={host()} active={props.active} />}
+    </Show>
+  ),
+  {
+    properties: {
+      host: { default: null, attribute: false },
+      active: { default: true, type: Boolean },
+    },
+  },
+);
 
 export function renderSidebarPinnedSession(host: RosterHost, session: () => SidebarRecentSession) {
   const agentId = createMemo(() => host.sessionNavigationAgentId(session()));
@@ -462,20 +522,4 @@ export function renderSidebarPinnedSession(host: RosterHost, session: () => Side
       return renderAgentIdentityAvatar(card() ?? { id: agentId() });
     },
   });
-}
-
-export function renderSidebarAgentRoster(
-  host: RosterHost,
-  sections: SidebarVisibleSections["sections"],
-  empty: boolean,
-) {
-  return (
-    <SidebarAgentRoster
-      host={host}
-      active={host.navigationVisible}
-      sections={sections}
-      empty={empty}
-      involvingMe={host.sessionInvolvingMeFilterActive}
-    />
-  );
 }

@@ -26,9 +26,12 @@ import {
   pluginSessionMenuActions,
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
-import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
-import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
-import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
+import {
+  renderSidebarCustomizeMenu as SidebarCustomizeMenu,
+  renderSidebarMoreMenu as SidebarMoreMenu,
+} from "./app-sidebar-nav-menus.tsx";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
@@ -68,34 +71,32 @@ export function renderSidebarCustomizeMenuForController(
         : [...canonical, entry],
     );
   };
-  return renderSidebarCustomizeMenu({
-    get position() {
-      return position;
-    },
-    get sidebarEntries() {
-      return host.sidebarEntries;
-    },
-    get preferencesBrowserOnly() {
-      return host.preferencesBrowserOnly;
-    },
-    isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    get pluginNavigation() {
-      return host.pluginNavigation();
-    },
-    ...controller.positionedMenuHandlers("customize"),
-    onToggleRoute: (routeId) =>
-      toggleEntry(serializeSidebarEntry({ type: "route", route: routeId })),
-    onTogglePlugin: (key) => toggleEntry(serializeSidebarEntry({ type: "plugin", key })),
-    onReset: () => {
-      // Canonical list, not the render list: unknown-state session slots
-      // (other agents, still-loading caches) must survive a route reset.
-      const sessions = host
-        .reconciledSidebarZone()
-        .sidebarEntries.filter((entry) => entry.startsWith("session:"));
-      host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
-      controller.closePositionedMenu("customize", { restoreFocus: true });
-    },
-  });
+  return (
+    <SidebarCustomizeMenu
+      {...{
+        position,
+        sidebarEntries: host.sidebarEntries,
+        preferencesBrowserOnly: host.preferencesBrowserOnly,
+        isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
+        pluginNavigation: host.pluginNavigation(),
+        ...controller.positionedMenuHandlers("customize"),
+        onToggleRoute: (routeId) =>
+          toggleEntry(serializeSidebarEntry({ type: "route", route: routeId })),
+        onTogglePlugin: (key) => toggleEntry(serializeSidebarEntry({ type: "plugin", key })),
+        onReset: () => {
+          // Canonical list, not the render list: unknown-state session slots
+          // (other agents, still-loading caches) must survive a route reset.
+          const sessions = host
+            .reconciledSidebarZone()
+            .sidebarEntries.filter(
+              (entry) => entry.startsWith("session:") || entry.startsWith("person:"),
+            );
+          host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
+          controller.closePositionedMenu("customize", { restoreFocus: true });
+        },
+      }}
+    />
+  );
 }
 
 export function renderSidebarAgentMenuForController(
@@ -108,84 +109,68 @@ export function renderSidebarAgentMenuForController(
   }
   const trigger = controller.agentMenuTrigger;
   const chipAgent = createMemo(() => host.activeChipAgent()),
-    activeId = createMemo(() => chipAgent().activeId),
-    agent = createMemo(() => chipAgent().agent),
-    agents = createMemo(() => chipAgent().agents, { equals: false }),
-    identity = createMemo(() => chipAgent().identity),
-    identities = createMemo(() => chipAgent().identities, { equals: false });
-  return renderSidebarAgentMenu({
-    get position() {
-      return position;
-    },
-    get basePath() {
-      return host.basePath;
-    },
-    get activeId() {
-      return agent() ? activeId() : "";
-    },
-    get activeName() {
-      return agent() ? normalizeAgentLabel(agent(), identity()) : "";
-    },
-    get agents() {
-      return agents();
-    },
-    get identities() {
-      return identities();
-    },
-    get pinnedAgentIds() {
-      return host.pinnedAgentIds;
-    },
-    onTogglePinnedAgent: async (agentId) => {
-      if (host.sessionDataContext) {
-        togglePinnedAgent(host.sessionDataContext.navigation, agentId);
-        await host.updateComplete;
-      }
-    },
-    get query() {
-      return controller.agentMenuQuery;
-    },
-    onQueryChange: (query) => controller.setAgentMenuQuery(query),
-    get rosterMode() {
-      return host.sidebarAgentsMode === "roster";
-    },
-    onToggleRoster: () => {
-      patchSettings({
-        sidebarAgentsMode: host.sidebarAgentsMode === "roster" ? "chip" : "roster",
-      });
-      void host.updateComplete.then(() => {
-        host
-          .querySelector<HTMLElement>(".sidebar-workspace-header__main, .sidebar-agent-card__main")
-          ?.focus();
-      });
-    },
-    get connected() {
-      return host.connected;
-    },
-    resolveAvatarUrl: (url) => controller.agentMenuAvatars.resolve(url),
-    avatarErrorHandler: (url) => controller.agentMenuAvatars.imageErrorHandler(url),
-    get openMode() {
-      return controller.agentMenuInteractionState === "open-hover" ? "hover" : "click";
-    },
-    agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
-    onPointerEnter: () => controller.handleAgentMenuPointerEnter(),
-    onPointerLeave: () => controller.handleAgentMenuPointerLeave(),
-    onAfterShow: () => controller.restoreFocusAfterAgentMenuHoverOpen(),
-    onSwitchAgent: (agentId) => {
-      if (host.sidebarAgentsMode === "roster") {
-        patchSettings({ sidebarAgentsMode: "chip" });
-      }
-      host.switchChipAgent(agentId);
-    },
-    onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.agentMenuPosition !== position) {
-        return;
-      }
-      controller.closeAgentMenu({ restoreFocus });
-    },
-    onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
-  });
+    activeId = () => chipAgent().activeId,
+    agent = () => chipAgent().agent,
+    agents = () => chipAgent().agents,
+    identity = () => chipAgent().identity,
+    identities = () => chipAgent().identities;
+  return (
+    <SidebarAgentMenu
+      {...{
+        position,
+        basePath: host.basePath,
+        activeId: agent() ? activeId() : "",
+        activeName: agent() ? normalizeAgentLabel(agent(), identity()) : "",
+        agents: agents(),
+        identities: identities(),
+        pinnedAgentIds: host.pinnedAgentIds,
+        onTogglePinnedAgent: async (agentId) => {
+          if (host.sessionDataContext) {
+            togglePinnedAgent(host.sessionDataContext.navigation, agentId);
+            await host.updateComplete;
+          }
+        },
+        query: controller.agentMenuQuery,
+        onQueryChange: (query) => controller.setAgentMenuQuery(query),
+        rosterMode: host.sidebarAgentsMode === "roster",
+        onToggleRoster: () => {
+          patchSettings({
+            sidebarAgentsMode: host.sidebarAgentsMode === "roster" ? "chip" : "roster",
+          });
+          void host.updateComplete.then(() => {
+            host
+              .querySelector<HTMLElement>(
+                ".sidebar-workspace-header__main, .sidebar-agent-card__main",
+              )
+              ?.focus();
+          });
+        },
+        connected: host.connected,
+        resolveAvatarUrl: (url) => controller.agentMenuAvatars.resolve(url),
+        avatarErrorHandler: (url) => controller.agentMenuAvatars.imageErrorHandler(url),
+        openMode: controller.agentMenuInteractionState === "open-hover" ? "hover" : "click",
+        agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
+        onPointerEnter: () => controller.handleAgentMenuPointerEnter(),
+        onPointerLeave: () => controller.handleAgentMenuPointerLeave(),
+        onAfterShow: () => controller.restoreFocusAfterAgentMenuHoverOpen(),
+        onSwitchAgent: (agentId) => {
+          if (host.sidebarAgentsMode === "roster") {
+            patchSettings({ sidebarAgentsMode: "chip" });
+          }
+          host.switchChipAgent(agentId);
+        },
+        onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
+        onTabAway: () => trigger?.focus(),
+        onClose: (restoreFocus) => {
+          if (controller.agentMenuPosition !== position) {
+            return;
+          }
+          controller.closeAgentMenu({ restoreFocus });
+        },
+        onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
+      }}
+    />
+  );
 }
 
 export function renderSidebarIdentityMenuForController(
@@ -196,15 +181,12 @@ export function renderSidebarIdentityMenuForController(
   if (!position) {
     return undefined;
   }
-  const selfUser = createMemo(
-    () =>
-      host.sessionDataContext
-        ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
-        : null,
-    { equals: false },
-  );
+  const selfUser = () =>
+    host.sessionDataContext
+      ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
+      : null;
   const context = () => host.sessionDataContext;
-  const overlaySnapshot = createMemo(() => context()?.overlays.snapshot, { equals: false });
+  const overlaySnapshot = () => context()?.overlays.snapshot;
   const updateAttentionDismissal = createMemo(() =>
     resolveUpdateAttentionDismissal({
       gatewayBootId: context()?.gateway.snapshot.hello?.server?.bootId,
@@ -231,44 +213,26 @@ export function renderSidebarIdentityMenuForController(
       ),
     ),
   );
-  return renderSidebarIdentityMenu({
-    get nativeGatewaySnapshot() {
-      return host.nativeGatewaySnapshot;
-    },
-    get position() {
-      return position;
-    },
-    get canPairDevice() {
-      return host.canPairDevice;
-    },
-    get basePath() {
-      return host.basePath;
-    },
-    get gatewayVersion() {
-      return host.gatewayVersion;
-    },
-    get updateAttentionDismissed() {
-      return updateAttentionDismissed();
-    },
-    get profileViewer() {
-      return selfUser() ? { ...selfUser(), watchedSessions: [] } : undefined;
-    },
-    get canRetryConnection() {
-      return canRetryGatewayStatus(host.connectionStatus);
-    },
-    get themeMode() {
-      return host.themeMode;
-    },
-    get triggerWidth() {
-      return position.width;
-    },
-    ...controller.positionedMenuHandlers("identity"),
-    onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
-    onPairMobile: () => host.onPairMobile?.(),
-    get onRetryConnect() {
-      return host.onRetryConnect;
-    },
-  });
+  return (
+    <SidebarIdentityMenu
+      {...{
+        nativeGatewaySnapshot: host.nativeGatewaySnapshot,
+        position,
+        canPairDevice: host.canPairDevice,
+        basePath: host.basePath,
+        gatewayVersion: host.gatewayVersion,
+        updateAttentionDismissed: updateAttentionDismissed(),
+        profileViewer: selfUser() ? { ...selfUser(), watchedSessions: [] } : undefined,
+        canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
+        themeMode: host.themeMode,
+        triggerWidth: position.width,
+        ...controller.positionedMenuHandlers("identity"),
+        onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
+        onPairMobile: () => host.onPairMobile?.(),
+        onRetryConnect: host.onRetryConnect,
+      }}
+    />
+  );
 }
 
 export function renderSidebarSessionMenuForController(
@@ -280,16 +244,14 @@ export function renderSidebarSessionMenuForController(
     return undefined;
   }
   const context = () => host.sessionDataContext;
-  const pluginActionSignal = createMemo(() => controller.pluginActionLifetime.signal);
-  const currentSession = createMemo(() => host.findSidebarMenuSessionByKey(menu.session.key), {
-    equals: false,
-  });
+  const pluginActionSignal = () => controller.pluginActionLifetime.signal;
+  const currentSession = () => host.findSidebarMenuSessionByKey(menu.session.key);
   // Read again at dispatch: session updates can arrive before the menu rerenders.
   const currentPluginSession = () =>
     host.sessionData.sessionsResult?.sessions.find(
       (row) => row.key === menu.session.key && row.sessionId === menu.session.sessionId,
     );
-  const pluginSession = createMemo(() => currentPluginSession(), { equals: false });
+  const pluginSession = () => currentPluginSession();
   // Appearance editing keeps this menu open. Refresh its row without adopting
   // a replacement session that happens to reuse the captured key.
   const session = createMemo(
@@ -329,7 +291,7 @@ export function renderSidebarSessionMenuForController(
       ? (rows()[0]?.category ?? null)
       : null,
   );
-  const cloudWorkerStopAction = createMemo(() => session().cloudWorkerStopAction);
+  const cloudWorkerStopAction = () => session().cloudWorkerStopAction;
   const cloudWorkerStopAllowed = createMemo(() => {
     const action = cloudWorkerStopAction();
     const currentContext = context();
@@ -341,9 +303,7 @@ export function renderSidebarSessionMenuForController(
       isGatewayMethodAdvertised(currentContext.gateway.snapshot, action.method) === true,
     );
   });
-  const selfUser = createMemo(() => context()?.gateway.snapshot.selfUser ?? null, {
-    equals: false,
-  });
+  const selfUser = () => context()?.gateway.snapshot.selfUser ?? null;
   const assignmentAccess = createMemo(() =>
     host.readSessionMutationAccess({
       method: "sessions.assignOwner",
@@ -373,7 +333,7 @@ export function renderSidebarSessionMenuForController(
             sessionId: session().sessionId ?? null,
             isChild: session().isChild,
             hasChildren: session().childSessionKeys.length > 0,
-            pinned: session().pinned,
+            pinned: host.sessionOrganizer.isPersonalSessionPin(session().key),
             pinnable: session().pinnable,
             unread: allUnread(),
             hiddenFromInvolvingMe: session().hiddenFromInvolvingMe,
@@ -391,6 +351,7 @@ export function renderSidebarSessionMenuForController(
               sharedCategory() !== null &&
               rows().every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
           }}
+          prop:involvingMeContext={host.sessionInvolvingMeFilterActive}
           prop:selectionCount={rows().length}
           prop:compact={isMobileNavLayout()}
           prop:lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
@@ -455,12 +416,9 @@ export function renderSidebarSessionMenuForController(
                 }
                 break;
               case "toggle-pin":
-                void host.sessionOrganizer.patchSession(
-                  session(),
-                  { pinned: !session().pinned },
-                  {
-                    sessionScope: true,
-                  },
+                host.sessionOrganizer.setPersonalSessionPin(
+                  session().key,
+                  !host.sessionOrganizer.isPersonalSessionPin(session().key),
                 );
                 break;
               case "toggle-involving-me":
@@ -580,33 +538,33 @@ export function renderSidebarMoreMenuForController(
   if (!position) {
     return undefined;
   }
-  return renderSidebarMoreMenu({
-    get position() {
-      return position;
-    },
-    get basePath() {
-      return host.basePath;
-    },
-    get activeRouteId() {
-      return host.activeRouteId;
-    },
-    get sidebarEntries() {
-      return host.sidebarEntries;
-    },
-    isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    ...controller.positionedMenuHandlers("more"),
-    onNavigateRoute: (routeId) => {
-      controller.closePositionedMenu("more", { restoreFocus: true });
-      host.onNavigate?.(routeId);
-    },
-    onPreloadRoute: (routeId, event) => controller.preloadRoute(routeId, event),
-    onCancelPreload: (event) => controller.cancelPreload(event),
-    onEditPinnedItems: () => {
-      const customizePosition = controller.moreMenuPosition;
-      const customizeTrigger = controller.moreMenuTrigger;
-      if (customizePosition) {
-        controller.openCustomizeMenu(customizePosition.x, customizePosition.y, customizeTrigger);
-      }
-    },
-  });
+  return (
+    <SidebarMoreMenu
+      {...{
+        position,
+        basePath: host.basePath,
+        activeRouteId: host.activeRouteId,
+        sidebarEntries: host.sidebarEntries,
+        isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
+        ...controller.positionedMenuHandlers("more"),
+        onNavigateRoute: (routeId) => {
+          controller.closePositionedMenu("more", { restoreFocus: true });
+          host.onNavigate?.(routeId);
+        },
+        onPreloadRoute: (routeId, event) => controller.preloadRoute(routeId, event),
+        onCancelPreload: (event) => controller.cancelPreload(event),
+        onEditPinnedItems: () => {
+          const customizePosition = controller.moreMenuPosition;
+          const customizeTrigger = controller.moreMenuTrigger;
+          if (customizePosition) {
+            controller.openCustomizeMenu(
+              customizePosition.x,
+              customizePosition.y,
+              customizeTrigger,
+            );
+          }
+        },
+      }}
+    />
+  );
 }

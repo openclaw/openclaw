@@ -20,13 +20,13 @@ async function mount(
   canUpdate = true,
   canHoldUpdate = true,
 ) {
-  const [props, set] = createSignal<SidebarUpdateCardProps>({
+  const [props, set] = createSignal<Partial<SidebarUpdateCardProps>>({
     updateAvailable: update,
     updateSchedule: schedule,
     canUpdate,
     canHoldUpdate,
   });
-  const element = document.createElement("openclaw-sidebar-update-card");
+  const element = document.createElement("div");
   document.body.append(element);
   const unmount = mountSolid(() => <SidebarUpdateCard {...props()} />, element);
   let disposed = false;
@@ -429,12 +429,13 @@ describe("SidebarUpdateCard", () => {
     expect(element.element.querySelector("summary time")?.textContent?.trim()).toBe("5m ago");
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(element.element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
+    const time = element.element.querySelector("summary time");
+    expect(time?.textContent?.trim()).toBe("6m ago");
 
     element.dispose();
     expect(vi.getTimerCount()).toBe(timersBefore);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(element.element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
+    expect(time?.textContent?.trim()).toBe("6m ago");
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {

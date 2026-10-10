@@ -390,8 +390,8 @@ describe("memory manager reindex recovery", () => {
                   input: { kind: "cache-clear-result", publication: workerInput.input },
                 })
               : await open(...args);
-          const run = worker.run.bind(worker);
-          vi.spyOn(worker, "run").mockImplementation(async (...runArgs) => {
+          const execute = worker.execute.bind(worker);
+          vi.spyOn(worker, "execute").mockImplementation(async (...executeArgs) => {
             try {
               if (
                 failurePoint === "publication admission" &&
@@ -401,7 +401,7 @@ describe("memory manager reindex recovery", () => {
                 admissionRefused = true;
                 throw admissionError;
               }
-              const result = await run(...runArgs);
+              const result = await execute(...executeArgs);
               if (cacheRows().some((row) => row.dims === 2)) {
                 cached.resolve();
               }

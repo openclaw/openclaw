@@ -16,6 +16,22 @@ provenance-based deletion.
 Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
 `memory-core` by default. Other memory plugins expose their own CLI namespaces.
 
+`search` and `session-backfill` route through the local Gateway when it is
+running. Search preserves its result limits, session scope, and recall recording.
+Backfill preview, apply, and rollback retain their existing output. Apply keeps
+its bounded batch loop and requires the same Gateway owner throughout; a failed
+request is never replayed locally. Update an
+older Gateway if it does not support this routing.
+
+Other commands, and session backfill with `--rem` or `--archive-files`, require
+the local Gateway to be stopped. Diagnostics and previews can initialize writable
+stores. Stop the Gateway through its service
+owner, run the command, then restart it. Commands refuse before opening those
+stores when a Gateway owns the state directory; offline execution retains
+exclusive ownership through manager and worker cleanup. The provider health
+returned by `memory.status` RPC is different from the CLI's aggregate index,
+source, embedding, and dreaming diagnostics and repair options.
+
 When another plugin owns the memory slot and `memory-core` runs only as the
 dreaming consolidation sidecar:
 

@@ -20,7 +20,7 @@ export function renderSidebarPeopleFilterMenuForController(
   if (!position) {
     return undefined;
   }
-  const people = createMemo(() => controller.host.people);
+  const people = () => controller.host.people;
   const commit = (update: () => void) => {
     if (controller.peopleFilterMenuPosition !== position) {
       return;
@@ -28,7 +28,7 @@ export function renderSidebarPeopleFilterMenuForController(
     update();
     controller.closePositionedMenu("peopleFilter", { restoreFocus: true });
   };
-  const sheet = createMemo(() => isMobileNavLayout());
+  const sheet = () => isMobileNavLayout();
   const changed = createMemo(
     () => people().statusFilter !== "all" || people().sortMode !== "presence",
   );

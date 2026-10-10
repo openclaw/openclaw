@@ -47,6 +47,19 @@ multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
 
+`pnpm db:postgres:gen --out /tmp/openclaw-postgres` derives PostgreSQL DDL and a
+portability report from the authoritative canonical SQLite `.sql` files. On an
+isolated Testbox with a disposable `postgres:17` container named `pgprep`, apply
+each generated `*.postgres.sql` file with
+`docker exec -i pgprep psql -U postgres -v ON_ERROR_STOP=1 < <file>`, then rerun
+the generator with `--verify-psql "docker exec -i pgprep psql -U postgres"` to
+compare catalogs. Review every reported omission; this proves DDL readiness,
+not runtime backend support or a choice of per-agent PostgreSQL topology.
+
+`pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
+The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
+Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
+
 ### Keep operations at the owning store
 
 Session cleanup reads entry metadata and missing-transcript classifications in one

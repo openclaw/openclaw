@@ -1,16 +1,6 @@
 import { detectControlUiBrowserCapabilities } from "./browser-capabilities.ts";
 
-type BootImportMeta = ImportMeta & {
-  readonly env?: { readonly VITE_OPENCLAW_REQUIRE_MODERN_BROWSER?: string };
-};
-
-// Dormant until the Solid cutover release enables this build-time flag.
-const REQUIRE_MODERN_BROWSER =
-  // SAFETY: Vite owns this optional build-time string; absence leaves the gate disabled.
-  (import.meta as BootImportMeta).env?.VITE_OPENCLAW_REQUIRE_MODERN_BROWSER === "true";
-
-export const unsupportedControlUiBrowser =
-  REQUIRE_MODERN_BROWSER && !detectControlUiBrowserCapabilities().supported;
+export const unsupportedControlUiBrowser = !detectControlUiBrowserCapabilities().supported;
 
 if (unsupportedControlUiBrowser) {
   // Both entry and bootstrap depend on this check, including when the bundler

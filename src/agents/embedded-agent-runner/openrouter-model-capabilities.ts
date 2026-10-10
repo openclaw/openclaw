@@ -14,6 +14,7 @@ import {
   prepareCorePluginStateReplacement,
 } from "../../plugin-state/plugin-state-store.js";
 import type { PluginStateEntry } from "../../plugin-state/plugin-state-store.types.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { registerPreparedModelRuntimeClose } from "../prepared-model-runtime.lifecycle.js";
 import { readProviderJsonArrayFieldResponse } from "../provider-http-errors.js";
@@ -289,11 +290,20 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  * triggered in case it's a newly added model not yet in the cache.
  * The cold synchronous read is retained for the v2026.9.8 provider-stream SDK contract.
  *
- * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
+ * @deprecated Await loadOpenRouterModelCapabilities, then use getLoadedOpenRouterModelCapabilities.
+ * This synchronous SQLite lookup will be removed in the next Plugin SDK major.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
+  warnPluginSdkDeprecation({
+    family: "openrouter-model-capabilities",
+    method: "getOpenRouterModelCapabilities",
+    replacement:
+      "await loadOpenRouterModelCapabilities(), then getLoadedOpenRouterModelCapabilities()",
+    compatibility:
+      "The synchronous cache lookup retains its current return value and cold-load behavior.",
+  });
   // A failed awaited load, such as an oversized catalog body, already attempted
   // a refresh. Do not let the follow-up sync lookup immediately retry it.
   const skipMissRefresh = skipNextMissRefresh.delete(modelId);
