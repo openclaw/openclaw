@@ -866,6 +866,8 @@ describe("title tooltips", () => {
       wrapper.append(link);
       document.body.append(provider, wrapper);
       dispatchMousePointer(link, "pointerover");
+      // previewForAnchor arms its hover timer after the tooltip's first commit.
+      await commitTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
       await vi.advanceTimersByTimeAsync(200);
       await expectOpenCount(1);
       provider.append(moved === "link" ? link : wrapper);
@@ -879,6 +881,7 @@ describe("title tooltips", () => {
       dispatchMousePointer(link, "pointerleave");
       expect(link.title).toBe("Pull request details");
       dispatchMousePointer(link, "pointerover");
+      await commitTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
       await vi.advanceTimersByTimeAsync(200);
       await expectOpenCount(1);
       expect(link.href).toBe("https://github.com/openclaw/openclaw/pull/99816");
