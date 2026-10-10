@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mcpRelayConfigSchema, parseMcpRelayConfig } from "./src/config.js";
-import { identityFromPrivateKey, isRecord, RelayError, safeError } from "./src/protocol.js";
+import { identityFromPrivateKey, RelayError, safeError } from "./src/protocol.js";
 import type { RelayService } from "./src/service.js";
 
 export default definePluginEntry({

@@ -4,7 +4,8 @@ import {
   createTestGatewayScheduler,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
-import { identityFromPrivateKey, isRecord } from "./protocol.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { identityFromPrivateKey } from "./protocol.js";
 import { RelayService, type RelaySocket } from "./service.js";
 import { createStateFixture } from "./state.test-helpers.js";
 

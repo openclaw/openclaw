@@ -89,6 +89,7 @@ export function createStateFixture() {
       openSyncKeyedStore: unsupported,
       openChannelIngressQueue: unsupported,
       openChannelIngressDrain: unsupported,
+      openKeyedStoreV2: unsupported,
       openKeyedStore: <T>(): PluginStateKeyedStore<T> => ({
         ...store<T>(assertCurrent),
         withCurrent: ({ assertCurrent: assertion }) => store<T>(assertion),

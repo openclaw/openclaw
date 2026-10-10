@@ -1,5 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { isRecord, RelayError } from "./protocol.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { RelayError } from "./protocol.js";
 
 export type GatewayRequest = (
   ...args: Parameters<PluginRuntime["gateway"]["request"]>

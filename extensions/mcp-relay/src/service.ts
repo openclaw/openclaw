@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import {
   capResult,
   codeHash,
   createPairingCode,
   identityFromPrivateKey,
-  isRecord,
   MAX_FRAME_BYTES,
   RelayError,
   safeError,

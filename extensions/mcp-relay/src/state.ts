@@ -1,7 +1,8 @@
 import { generateKeyPairSync } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { identityFromPrivateKey, isRecord, RelayError } from "./protocol.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { identityFromPrivateKey, RelayError } from "./protocol.js";
 
 type IssuedGrant = {
   grantId: string;
