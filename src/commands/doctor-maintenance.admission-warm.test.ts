@@ -1,13 +1,20 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
+import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { readUpdateRunDriver } from "../infra/update-run-driver.js";
+import { createUpdateRun, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as doctorSchema from "../state/openclaw-state-db-doctor-schema.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
+import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
 
 const fixture = setupDoctorAdmissionFixture();
 
@@ -17,6 +24,54 @@ function maintenanceScope(admission: () => void) {
     assertOwnerCurrent: admission,
   });
 }
+
+it("admits fast systemd inspection after slow continuation integrity validation", async () => {
+  const { env, assertIsolation } = fixture();
+  const run = createUpdateRun(
+    { trigger: "cli", origin: { driver: readUpdateRunDriver() } },
+    { env },
+  );
+  let elapsed = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const validate = integrity.assertSqliteIntegrity;
+  vi.spyOn(integrity, "assertSqliteIntegrity").mockImplementation((...args) => {
+    const result = validate(...args);
+    elapsed += 6_000;
+    return result;
+  });
+  recordUpdateRunRepairContinuation(run.runId, run.runId, { env });
+  expect(elapsed).toBeGreaterThanOrEqual(6_000);
+  await closeOpenClawStateDatabaseAsync();
+  const admitted = resolveDoctorUpdateAdmission(env, run.runId);
+  const binding = stoppedSystemdBinding(() => {});
+  const reader = await createSystemdCommandQuery(
+    env,
+    binding.unit,
+    {
+      timeoutMs: 5_000,
+      requireLoaded: true,
+      systemdReadBinding: binding,
+      loadForInspection: {
+        managerUid: binding.managerUid,
+        assertCurrent: admitted.recordContinuation,
+      },
+    },
+    () => new Error("systemd inspection unavailable"),
+  );
+  try {
+    await expect(
+      reader.query(
+        ["get-property", binding.destination, "/unit", "org.freedesktop.systemd1.Unit", "Id"],
+        ["s"],
+      ),
+    ).resolves.toEqual([binding.unit]);
+    const competing = createUpdateRun({ trigger: "cli" }, { env });
+    expect(() => admitted.recordContinuation()).toThrow(competing.runId);
+  } finally {
+    await reader.close();
+    assertIsolation();
+  }
+});
 
 it("rechecks warm Doctor maintenance without hashing or copying the complete shared store", async () => {
   const schemaAdmission = vi.spyOn(doctorSchema, "openDoctorStateSchemaReadAdmission");

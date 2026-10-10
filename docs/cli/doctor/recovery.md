@@ -67,6 +67,12 @@ If it must cancel before repair starts, it reverses its own stop while its nativ
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
 
+During service inspection, Doctor reuses already recorded update continuation
+receipts after rechecking live update ownership. This avoids repeating full
+database integrity scans for unchanged receipts within the service manager's
+inspection deadline. New continuation or takeover receipts still use the
+validated ledger writer.
+
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
 admitted repair work and service restoration before exiting. An ordinary repair
