@@ -348,6 +348,7 @@ export function renderAppSidebarPageEntry(
           ? html`<openclaw-plugin-contributions
               .kind=${"navigation"}
               .navigationKey=${entry.key}
+              .navigationChildren=${false}
               .navigationMenus=${host.sidebarMenus}
             ></openclaw-plugin-contributions>`
           : sessionRows.has(entry.key)

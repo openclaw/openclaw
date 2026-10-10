@@ -200,8 +200,50 @@ suite.define(() => {
           ).toBe(true);
           if (label === "Workboard") {
             const pages = await openSidebarPages(page);
-            await expect.poll(() => pages.locator(".nav-item--child:visible").count()).toBe(2);
+            const operationsEntry = pages.locator(
+              '[data-sidebar-entry="plugin:workboard/board-ops"]',
+            );
+            await operationsEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
+            if (captureUiProofEnabled && width === 1440) {
+              await writeFile(
+                path.join(suite.artifactDir, "workboard-pages.png"),
+                await takeControlUiElementScreenshot(page, pages, [operationsEntry]),
+              );
+            }
+            // Pages owns a flat entry for every registration, including plugin children.
+            expect(await pages.getByRole("link", { name: "Operations", exact: true }).count()).toBe(
+              1,
+            );
+            expect(
+              await pages
+                .locator('[data-sidebar-entry^="plugin:workboard/"] a')
+                .evaluateAll((links) =>
+                  links
+                    .map((link) => link.getAttribute("href"))
+                    .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+                ),
+            ).toEqual(["/workboard", "/workboard/default", "/workboard/ops"]);
+            expect(await pages.locator(".nav-item--child").count()).toBe(0);
             expect(await row.locator(".nav-item--child").count()).toBe(0);
+            if (width === 1440) {
+              const operationsPage = pages.locator(".sidebar-pages__entry").filter({
+                has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
+              });
+              await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
+              const shortcut = sidebar.locator(
+                '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
+              );
+              await shortcut.getByRole("link", { name: "Operations", exact: true }).waitFor();
+              await pages.locator('a[href="/workboard/default"]').click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
+              await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+              await pages.getByRole("link", { name: "Workboard", exact: true }).click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+              await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
+              await expect.poll(() => shortcut.count()).toBe(0);
+              expect(await operationsEntry.getByRole("link").count()).toBe(1);
+            }
           }
           await captureUiProof(page, "lead-" + label + "-" + width + ".png");
         },
