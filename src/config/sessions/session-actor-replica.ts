@@ -48,14 +48,39 @@ type ReplicaCell = {
   pending: number;
   bytes: number;
 };
+type ReplicaPool = {
+  cells: Map<string, ReplicaCell>;
+  snapshots: number;
+  bytes: number;
+  unsubscribe?: () => void;
+};
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
-const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"), () => {
-  const cells = new Map<string, ReplicaCell>();
-  sessionChanges.subscribeFacts((change) => {
+const pool = resolveGlobalSingleton<ReplicaPool>(
+  Symbol.for("openclaw.sessionActorReplicas"),
+  () => ({ cells: new Map(), snapshots: 0, bytes: 0 }),
+  (owner) => {
+    owner.unsubscribe?.();
+    owner.unsubscribe = undefined;
+    for (const cell of owner.cells.values()) {
+      cell.reservation += 1;
+      discard(cell);
+    }
+    owner.cells.clear();
+    owner.snapshots = 0;
+    owner.bytes = 0;
+  },
+);
+
+function ensureReplicaSubscription(): void {
+  if (pool.unsubscribe) {
+    return;
+  }
+  // Lifecycle cleanup also clears listeners; subscribe only when this owner resumes.
+  pool.unsubscribe = sessionChanges.subscribeFacts((change) => {
     // oxlint-disable-next-line unicorn/no-useless-spread -- Receipt installation reorders the LRU map.
-    for (const cell of [...cells.values()]) {
+    for (const cell of [...pool.cells.values()]) {
       const { database, sessionKey } = cell.target;
       if (
         database.kind !== "file" ||
@@ -123,8 +148,7 @@ const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"),
       }
     }
   });
-  return { cells, snapshots: 0, bytes: 0 };
-});
+}
 
 function targetKey(target: SessionActorTarget): string {
   const { database, sessionKey } = target;
@@ -191,6 +215,7 @@ function touch(cell: ReplicaCell): void {
 export function readSessionActorEntryFacts(
   target: FileTarget,
 ): (SessionActorEntryFacts & { incarnation: string }) | undefined {
+  ensureReplicaSubscription();
   const cell = pool.cells.get(targetKey(target));
   const state = cell?.snapshot ?? cell?.entry;
   if (!cell || !state || cell.generation === undefined) {
@@ -239,6 +264,7 @@ export function retainSessionActorEntryFacts(
   facts: Omit<SessionActorEntryFacts, "target" | "writeToken" | "dependencySessionIds">,
   incarnation: string,
 ): void {
+  ensureReplicaSubscription();
   const dependencySessionIds = facts.entry ? [facts.entry.sessionId] : [];
   const writeToken = readSqliteDatabaseScopedWriteTokenForPath(target.database.nativeLocation, [
     ...collectSessionEntryLookupKeys(target.sessionKey),
@@ -290,6 +316,7 @@ export function createSessionActorReplica(
       }
   ),
 ) {
+  ensureReplicaSubscription();
   const target = freezeJsonSnapshot(structuredClone(params.target));
   const key = targetKey(target);
   let cell = pool.cells.get(key);
