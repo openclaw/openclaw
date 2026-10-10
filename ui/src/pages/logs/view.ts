@@ -18,6 +18,7 @@ import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 type LogsProps = {
   loading: boolean;
   refreshDisabled: boolean;
+  refreshPending: boolean;
   status: PanelRefreshStatus;
   file: string | null;
   entries: LogEntry[];
@@ -86,7 +87,17 @@ export function renderLogs(props: LogsProps) {
     <div class="settings-section__header">
       <h2 class="settings-section__heading">${t("gatewayLogs.title")}</h2>
       <div class="settings-section__actions">
-        <button class="btn" ?disabled=${props.refreshDisabled} @click=${props.onRefresh}>
+        <button
+          class="btn"
+          ?disabled=${props.refreshDisabled}
+          aria-disabled=${props.refreshDisabled || props.refreshPending}
+          aria-busy=${props.refreshPending}
+          @click=${() => {
+            if (!props.refreshDisabled && !props.refreshPending) {
+              props.onRefresh();
+            }
+          }}
+        >
           ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
         <button
