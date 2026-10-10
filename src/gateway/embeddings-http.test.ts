@@ -235,11 +235,14 @@ async function expectGenericProviderEmbeddingRequest(expectedProviderCall: {
   model: string;
   dimensions: number;
   inputType: string;
+  override?: string;
 }) {
-  const res = await postEmbeddings({
-    model: "openclaw/default",
-    input: ["a", "b"],
-  });
+  const res = await postEmbeddings(
+    { model: "openclaw/default", input: ["a", "b"] },
+    expectedProviderCall.override
+      ? { "x-openclaw-model": expectedProviderCall.override }
+      : undefined,
+  );
   await expectEmbeddingData(res, [
     { object: "embedding", index: 0, embedding: [9.1, 9.2] },
     { object: "embedding", index: 1, embedding: [10.1, 9.2] },
@@ -408,27 +411,35 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     await expectDefaultEmbeddingResponse(res);
   });
 
-  it("routes explicit OpenAI-compatible embeddings through generic providers", async () => {
-    await writeEmbeddingConfig({
-      memory: {
-        search: {
-          provider: "openai-compatible",
-          model: "nomic-embed-text",
-          inputType: "default",
-          queryInputType: "query",
-          documentInputType: "document",
-          outputDimensionality: 768,
-          remote: { baseUrl: genericEmbeddingBaseUrl },
+  it.each([
+    { model: "nomic-embed-text", override: undefined },
+    { model: "library/bge-m3", override: undefined },
+    { model: "nomic-embed-text", override: "hf:org/model" },
+  ])(
+    "routes embedding model $model with override $override through the configured provider",
+    async ({ model, override }) => {
+      await writeEmbeddingConfig({
+        memory: {
+          search: {
+            provider: "openai-compatible",
+            model,
+            inputType: "default",
+            queryInputType: "query",
+            documentInputType: "document",
+            outputDimensionality: 768,
+            remote: { baseUrl: genericEmbeddingBaseUrl },
+          },
         },
-      },
-    });
+      });
 
-    await expectGenericProviderEmbeddingRequest({
-      model: "nomic-embed-text",
-      dimensions: 768,
-      inputType: "document",
-    });
-  });
+      await expectGenericProviderEmbeddingRequest({
+        model: override ?? model,
+        override,
+        dimensions: 768,
+        inputType: "document",
+      });
+    },
+  );
 
   it("rejects invalid agent targets", async () => {
     const res = await postEmbeddings({
@@ -442,6 +453,11 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("rejects disallowed x-openclaw-model provider overrides", async () => {
+    registerEmbeddingProvider({
+      id: "ollama",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
     const res = await postEmbeddings(
       {
         model: "openclaw/default",

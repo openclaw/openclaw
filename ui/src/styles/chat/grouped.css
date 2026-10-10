@@ -1500,17 +1500,26 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .agent-chat__typing-preview-text::after {
+  /* Preserve the final blank line even when the caret moves elsewhere. */
+  content: "\200b";
+}
+
+.agent-chat__typing-caret {
+  position: relative;
+}
+
+.agent-chat__typing-caret::after {
   content: "";
-  display: inline-block;
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: -0.12em;
   width: 2px;
   height: 1em;
-  margin-inline-start: 2px;
   background: currentColor;
-  vertical-align: -0.12em;
   animation: chat-typing-pulse 1s step-end infinite;
 }
 
-.agent-chat__typing-preview-text[data-paused]::after {
+.agent-chat__typing-preview-text[data-paused] .agent-chat__typing-caret::after {
   animation: none;
   opacity: 0;
 }
@@ -1556,7 +1565,7 @@ button.chat-reply-attribution__target:disabled {
     opacity: 1;
   }
 
-  .agent-chat__typing-preview-text::after,
+  .agent-chat__typing-caret::after,
   .agent-chat__typing-bubble > span {
     animation: none;
   }

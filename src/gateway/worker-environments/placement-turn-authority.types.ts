@@ -27,8 +27,8 @@ export type ClaimChange = {
       workspacePlacement?: WorkerSessionPlacementRecord;
       retired?: true;
     }
-  | { kind: "workspace-result"; facts?: WorkspaceResultPostimage }
-  | { kind: "journal"; uncertain?: true }
+  | { kind: "workspace-result"; facts?: WorkspaceResultPostimage; cleared?: true }
+  | { kind: "journal"; present?: boolean; uncertain?: true }
   | { kind: "tools"; claimId: string; authority?: ToolAuthority }
 );
 export type WorkspaceResultPostimage = {
@@ -55,6 +55,7 @@ export type RetainedPlacement = {
 };
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
+  incarnation: string;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
   observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;

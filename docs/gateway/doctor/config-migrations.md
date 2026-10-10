@@ -28,6 +28,20 @@ the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
 
+## Claude CLI model routing
+
+Claude CLI sign-in now writes `agents.defaults.models["anthropic/*"]` with the
+`claude-cli` runtime. Configs from earlier sign-ins pinned only the Claude models
+that sign-in added, so other Claude models fell back to the API route and failed
+without an Anthropic credential. The Anthropic plugin's Doctor repair adds the
+wildcard when the default model is an Anthropic model whose entry pins
+`claude-cli`, no `anthropic/*` entry exists, no provider-level Anthropic runtime
+is set, and no Anthropic credential is configured (auth profile, provider API
+key, `ANTHROPIC_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`). An API default model with
+a Claude CLI fallback is left unchanged, and an existing `anthropic/*` entry is
+never replaced. Updates run the same repair through the backed-up Doctor config
+write; `openclaw doctor` without `--fix` reports it.
+
 ## Command-owner target kinds
 
 Doctor preserves `commands.ownerAllowFrom` target kinds declared by channel plugins.
@@ -653,6 +667,19 @@ still owns plugin installation continues to defer the work.
 While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
+
+## Blocked local plugins
+
+Doctor preserves the complete configuration entry and plugin policy for a local
+plugin rejected by discovery, including ownership and writable-path safety
+checks. A blocked plugin is not an uninstalled plugin. Its runtime remains
+blocked, and Doctor reports the path problem instead of removing its enablement
+or suggesting a registry reinstall for a local path. Fix the path and rerun
+`openclaw doctor --fix` as the account that runs the Gateway.
+
+This preservation also applies when an update invokes the candidate Doctor. It
+does not change the update execution account or repair files already made owned
+by another user.
 
 ## Retired TaskFlow Webhooks plugin
 

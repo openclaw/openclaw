@@ -198,7 +198,7 @@ export type MemoryIndexIdentityState =
     }
   | ({ status: "mismatched"; reason: string } & (
       | {
-          code: "provenance_version" | "chunking_version";
+          code: "provenance_version" | "chunking_version" | "embedding_input_format";
           owner: "openclaw";
           // Older-chunking corpus marker: set only when every configuration-owned
           // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
@@ -208,6 +208,8 @@ export type MemoryIndexIdentityState =
           // retrieval availability; consumers must still check usable FTS before
           // treating the index as servable.
           chunkingVersionOnly?: boolean;
+          /** Older embedding format with the same corpus; requires usable FTS for retrieval. */
+          lexicalCompatible?: boolean;
         }
       | {
           code:
@@ -256,7 +258,9 @@ export function resolveMemoryIndexIdentityDiagnostic(
   }
   if (
     identity.owner === "openclaw" &&
-    (identity.code === "provenance_version" || identity.code === "chunking_version")
+    (identity.code === "provenance_version" ||
+      identity.code === "chunking_version" ||
+      identity.code === "embedding_input_format")
   ) {
     return {
       status: "mismatched",
@@ -267,6 +271,11 @@ export function resolveMemoryIndexIdentityDiagnostic(
       identity.chunkingVersionOnly === true &&
       identity.versionOrder !== "newer"
         ? { chunkingVersionOnly: true }
+        : {}),
+      ...(identity.code === "embedding_input_format" &&
+      identity.lexicalCompatible === true &&
+      identity.versionOrder !== "newer"
+        ? { lexicalCompatible: true }
         : {}),
     };
   }

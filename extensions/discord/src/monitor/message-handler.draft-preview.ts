@@ -125,6 +125,7 @@ export function createDiscordDraftPreviewController(params: {
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
+    toolIcons: true,
     commentaryItalics: false,
     update: async (previewText, options) => {
       if (!draftStream) {

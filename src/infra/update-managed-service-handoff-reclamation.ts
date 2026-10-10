@@ -188,70 +188,103 @@ export function readManagedHandoffAdmissionLease(
 export async function prepareManagedHandoffRepair(
   store: Pick<Rows, "read"> & {
     transact: <T>(db: DatabaseSync, operation: () => T) => T;
-    hasUnsettledChildren: (lease: ManagedHandoffLease, db?: DatabaseSync) => boolean;
+    hasUnsettledChildren: (lease: ManagedHandoffLease | string, db?: DatabaseSync) => boolean;
     processIdentity: () => ManagedHandoffLease["helper"];
     bootIdentity: ReturnType<typeof createManagedHandoffBootIdentityReader>;
     owns: (lease: ManagedHandoffLease) => boolean;
     current: (lease: ManagedHandoffLease) => boolean;
     settle: (lease: ManagedHandoffLease, phase: "closed") => ManagedHandoffLease | null;
     release: (lease: ManagedHandoffLease) => boolean;
+    releaseAll: (leases: ManagedHandoffLease[]) => boolean;
   },
   context: {
-    rows: Pick<Rows, "handle" | "updateRow">;
+    rows: Pick<Rows, "handle" | "updateRow" | "row" | "descendants">;
     withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
     processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
+    reclaimable: (lease: ManagedHandoffLease, db?: DatabaseSync) => boolean;
     cas: ManagedHandoffLeaseTransition;
   },
   root: string,
   env: NodeJS.ProcessEnv,
   timeoutMs?: number,
 ): Promise<ManagedHandoffRepair | null> {
-  const { rows, withDatabase, processState, cas } = context;
+  const { rows, withDatabase, processState, reclaimable, cas } = context;
   const found = store.read(root);
   if (found.kind === "unreadable") {
     throw new Error(
       "Handoff state is unreadable; retain managed-update-handoffs.sqlite and run openclaw doctor --fix.",
     );
   }
-  if (found.kind !== "current") {
+  const readChildren = (db: DatabaseSync) =>
+    rows.descendants(db, { key: root }).map((entry) => rows.handle(entry.install_root, entry));
+  const children = withDatabase(true, readChildren);
+  const previous = found.kind === "current" ? found.lease : children[0];
+  if (!previous) {
     return null;
   }
-  const previous = found.lease;
+  const legacyUpdate = (lease: ManagedHandoffLease) =>
+    lease.version === 2 &&
+    !lease.mutationOriginal &&
+    lease.action.kind === "update" &&
+    !lease.action.custody &&
+    !lease.action.mutationProtocol;
   if (
     previous.version !== 2 ||
     previous.mutationOriginal ||
-    previous.key.includes("/.openclaw-update-child-") ||
-    previous.action.kind !== "triage" ||
-    previous.action.lifetime.kind !== "foreground" ||
-    !["running", "uncertain"].includes(previous.action.phase)
+    (!legacyUpdate(previous) &&
+      (previous.action.kind !== "triage" ||
+        previous.action.lifetime.kind !== "foreground" ||
+        !["running", "uncertain"].includes(previous.action.phase)))
   ) {
     return null;
   }
   const assertDead = () => {
-    const pids = [previous.helper, previous.executor]
+    const pids = [previous, ...children]
+      .flatMap((lease) => [lease.helper, lease.executor])
       .filter((owner) => processState(owner) !== "dead")
       .map((owner) => owner.pid);
     if (pids.length) {
       throw new Error(
-        `Handoff owners are live or unverified: PID ${[...new Set(pids)].join(", ")}. Wait for their updater or stop it through its owning terminal, then run openclaw update repair.`,
+        `Handoff owners are live or unverified: PID ${[...new Set(pids)].join(", ")}. Wait for their updater or stop it through its owning terminal; verify process-inspection permissions using the original OS account, then run openclaw update repair.`,
       );
     }
   };
   assertDead();
+  const assertChildrenSettled = (db: DatabaseSync) => {
+    if (
+      store.hasUnsettledChildren(root, db) ||
+      children.some((child) => !legacyUpdate(child) || !reclaimable(child, db))
+    ) {
+      throw new Error(
+        "Handoff descendants remain live or unverified. Wait for their updater and verify process-inspection permissions, then run openclaw update repair.",
+      );
+    }
+  };
+  withDatabase(false, assertChildrenSettled);
   const metadata = withDatabase(true, (db) =>
     readManagedHandoffRepairMetadata(db, previous, (operation) => store.transact(db, operation)),
   );
-  if (previous.action.phase !== "uncertain" && !metadata) {
+  if (previous.action.kind === "triage" && previous.action.phase !== "uncertain" && !metadata) {
     return null;
   }
   const source = metadata?.source ?? managedHandoffLeaseRow(previous);
   const { recordUpdateRunStep } = await import("./update-run-ledger.js");
   const discovered = await readManagedHandoffRepairFacts(
-    rows.handle(root, source),
+    rows.handle(previous.key, source),
     env,
     metadata?.facts.runIds[0],
   );
-  const facts = await inspectManagedHandoffRepairFacts(previous, discovered, metadata?.facts);
+  let facts = await inspectManagedHandoffRepairFacts(previous, discovered, metadata?.facts);
+  const retainedChildren = children.filter((child) => child.key !== previous.key);
+  for (const child of retainedChildren) {
+    const childFacts = await readManagedHandoffRepairFacts(child, env);
+    facts = await inspectManagedHandoffRepairFacts(child, childFacts, facts);
+  }
+  // Keep the original child key with its existing recovery metadata after
+  // promoting an orphan to the installation's exclusive repair claim.
+  if (previous.key !== root && !facts.artifactPaths.includes(previous.key)) {
+    facts.artifactPaths.push(previous.key);
+  }
   facts.timeoutMs = Math.max(facts.timeoutMs ?? 0, timeoutMs ?? 0) || null;
   const helper = store.processIdentity();
   const action: ManagedHandoffLeaseAction = {
@@ -269,9 +302,12 @@ export async function prepareManagedHandoffRepair(
   withDatabase(true, (db) =>
     store.transact(db, () => {
       assertDead();
+      assertChildrenSettled(db);
       if (
-        store.hasUnsettledChildren(previous, db) ||
+        !isDeepStrictEqual(readChildren(db), children) ||
+        (previous.key !== root && rows.row(db, root)) ||
         !rows.updateRow(db, previous, {
+          install_root: root,
           owner: next.owner,
           payload_json: next.payload,
           updated_at: next.updatedAt,
@@ -304,7 +340,7 @@ export async function prepareManagedHandoffRepair(
         throw new Error("Handoff settlement requires its bound repair run.");
       }
       const endedAtMs = Date.now();
-      const detail = `legacy handoff lease reclaimed: owners proven dead, lease last recorded at ${new Date(previous.updatedAt).toISOString()}, no descendants. Current-installation repair completed.`;
+      const detail = `legacy handoff lease reclaimed: owners proven dead, lease last recorded at ${new Date(previous.updatedAt).toISOString()}, no live descendants. Reclaimed keys: ${[previous.key, ...retainedChildren.map((child) => child.key)].join(", ")}. Current-installation repair completed.`;
       const result = recordUpdateRunStep(
         runId,
         { step: "finalize:handoff-settlement", status: "completed", endedAtMs, detail },
@@ -315,7 +351,12 @@ export async function prepareManagedHandoffRepair(
         throw new Error("Handoff settlement was not recorded; retry openclaw update repair.");
       }
       const closed = store.settle(next, "closed");
-      if (!closed || !store.release(closed)) {
+      if (
+        !closed ||
+        !(retainedChildren.length
+          ? store.releaseAll([...retainedChildren, closed])
+          : store.release(closed))
+      ) {
         throw new Error(
           "Handoff repair completed but its lease remains; retry openclaw update repair.",
         );

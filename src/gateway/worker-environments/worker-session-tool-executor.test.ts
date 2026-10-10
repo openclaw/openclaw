@@ -23,6 +23,7 @@ import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lin
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as environmentServiceModule from "./service.js";
+import { registerWorkerDelegationPolicyTests } from "./worker-session-tool-executor.delegation.suite.js";
 import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
 const {
   workerSessionToolTestMocks,
@@ -862,29 +863,7 @@ describe("worker spawn startup composition", () => {
   );
 });
 
-describe("sender-restricted worker session creation", () => {
-  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
-    inheritedToolPolicySource: "sender",
-  });
-
-  it("refuses forced visible creation before child effects and replays the refusal", async () => {
-    const { setEntry, spawn } = getFixture();
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    const first = await spawn("restricted-worker-spawn");
-    const replay = await spawn("restricted-worker-spawn");
-
-    expect(replay.resultJson).toBe(first.resultJson);
-    expect(JSON.parse(first.resultJson)).toMatchObject({
-      details: {
-        status: "forbidden",
-        error: "This sender may only start hidden helpers of the same agent.",
-      },
-    });
-    expect(gatewayCreate).not.toHaveBeenCalled();
-    expect(dispatchChild).not.toHaveBeenCalled();
-    expect(gatewayRequest).not.toHaveBeenCalled();
-  });
-});
+registerWorkerDelegationPolicyTests(fixtureMocks);
 
 describe.each([false, true])(
   "worker spawn parent authority (audit=%s)",

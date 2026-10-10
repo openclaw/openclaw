@@ -420,6 +420,32 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
+}
+
+/** Settle a reservation acquired by the closed, multi-database worker fence. */
+export function runSqliteReservedTransactionSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options: SqliteTransactionOptions,
+): T {
+  assertTransactionUsable(db);
+  if (isMainThread || !db.isTransaction) {
+    throw new Error("SQLite reserved settlement requires a worker-owned transaction");
+  }
+  return settleSqliteTransactionSync(db, operation, "immediate", 0, undefined, options, true);
+}
+
+function settleSqliteTransactionSync<T>(
+  db: TransactionDatabase,
+  operation: () => T,
+  mode: SqliteTransactionMode,
+  beginMs: number,
+  prepareMs: number | undefined,
+  options: SqliteTransactionOptions | undefined,
+  reservedSourceFence = false,
+): T {
+  const timing = currentSqliteOperationTiming();
   const transactionStartedAt = Date.now();
   const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
   let commitMs = 0;
@@ -435,7 +461,9 @@ function runSqliteTransactionSync<T>(
   try {
     // BEGIN may wait for a foreign writer. Admit its committed schema inside
     // rollback protection, then share that snapshot's facts with all kernels.
-    const result = runSqliteReadOperationSync(db, operation, "fresh");
+    const result = reservedSourceFence
+      ? operation()
+      : runSqliteReadOperationSync(db, operation, "fresh");
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;

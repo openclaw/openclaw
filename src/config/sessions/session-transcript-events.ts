@@ -21,7 +21,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
@@ -48,6 +51,11 @@ export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<TranscriptEvent[]> {
+  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(scope);
+  if (source && "kind" in source) {
+    source.assertCurrent();
+    return [];
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({

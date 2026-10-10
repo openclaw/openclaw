@@ -167,6 +167,7 @@ export async function createFullModelCatalogAccess(
     | {
         providers: readonly string[] | undefined;
         nativeProviders: readonly string[] | undefined;
+        refresh: boolean;
         promise: Promise<ModelCatalogSnapshot>;
       }
     | undefined;
@@ -265,18 +266,21 @@ export async function createFullModelCatalogAccess(
   };
   const acquireProviderCatalog = async (
     providerIds: readonly string[] | undefined,
-    providers: readonly string[],
+    refresh: boolean,
   ): Promise<CatalogCandidate> =>
     limitFullModelCatalogBuild(async () => {
       assertCurrent();
+      const providers = providerIds ?? eligibleProviders;
       const {
         modelCatalog: workerCatalog,
         configuredRuntimeModels,
         runtimeModels,
         providerExpiries,
         hookRows,
-      } = await worker.loadCatalog(providerIds, (error) =>
-        attempt.failed(error, providerIds ?? providers, "provider"),
+      } = await worker.loadCatalog(
+        providerIds,
+        (error) => attempt.failed(error, providers, "provider"),
+        refresh,
       );
       assertCurrent();
       const scope = new Set(
@@ -577,14 +581,18 @@ export async function createFullModelCatalogAccess(
       .filter(([, { expiresAt }]) => expiresAt !== undefined && expiresAt <= now)
       .map(([provider]) => provider);
     if (providers.length) {
-      void acquireCatalog({ providerIds: providers, refresh: true }, false).catch(() => undefined);
+      void acquireCatalog({ providerIds: providers, refresh: true }, "expiry").catch(
+        () => undefined,
+      );
     }
   };
   const acquireCatalog = async (
     options: PreparedModelCatalogRefreshOptions = {},
-    acquireNative = true,
+    trigger: "request" | "expiry" = "request",
   ): Promise<ModelCatalogSnapshot> => {
     assertCurrent();
+    // Expiry renews inventory without invalidating still-fresh sibling metadata feeds.
+    const refreshResponses = options.refresh === true && trigger === "request";
     if (
       !options.refresh &&
       !options.changedOnly &&
@@ -614,10 +622,11 @@ export async function createFullModelCatalogAccess(
     const fullRefresh =
       !options.providerIds && (!options.changedOnly || !published.inventory?.providers.size);
     const includeNative =
-      acquireNative &&
+      trigger === "request" &&
       hasNativeCatalog &&
       (!options.changedOnly || !published.nativeCatalogAcquired);
-    const nativeProviders = includeNative ? options.providerIds && requestedProviders : [];
+    const nativeScope = options.providerIds ? requestedProviders : undefined;
+    const nativeProviders = includeNative ? nativeScope : [];
     if (!providers.length && !includeNative && !fullRefresh) {
       return published.catalog ?? staticCatalog;
     }
@@ -631,46 +640,45 @@ export async function createFullModelCatalogAccess(
         current.nativeProviders === undefined ||
         (nativeProviders !== undefined &&
           nativeProviders.every((provider) => current.nativeProviders!.includes(provider)));
-      if (coversProviders && coversNative) {
+      // An ordinary acquisition may consume a warm HTTP response; it cannot satisfy refresh.
+      if (coversProviders && coversNative && (!refreshResponses || current.refresh)) {
         return current.promise;
       }
       await current.promise.catch(() => undefined);
-      return acquireCatalog(options, acquireNative);
+      return acquireCatalog(options, trigger);
     }
     attempt.setPending(fullRefresh || providers.length ? providers : undefined);
+    const providerIds = fullRefresh ? undefined : providers;
     const promise = (async () => {
       await using _ = {
         [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
       };
       if (fullRefresh || providers.length) {
-        const candidate = await acquireProviderCatalog(
-          fullRefresh ? undefined : providers,
-          providers,
-        ).catch((error: unknown) => {
-          attempt.failed(error, providers, "provider");
-          throw error;
-        });
+        const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
+          (error: unknown) => {
+            attempt.failed(error, providers, "provider");
+            throw error;
+          },
+        );
         // Provider facts belong to their completed acquisition; optional native failure cannot
         // discard them. Native discovery starts from this accepted publication.
-        attempt.published(fullRefresh ? undefined : providers, "provider", () =>
-          publishCatalog(candidate, "provider"),
-        );
+        attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
       }
       if (includeNative) {
-        return await acquireNativeCatalog(options.providerIds ? requestedProviders : undefined);
+        return await acquireNativeCatalog(nativeScope);
       }
       return published.catalog ?? staticCatalog;
     })().finally(() => {
       pending = undefined;
       retryFailedDiscovery();
     });
-    pending = { providers: fullRefresh ? undefined : providers, nativeProviders, promise };
+    pending = { providers: providerIds, nativeProviders, refresh: refreshResponses, promise };
     return promise;
   };
   const retryFailedDiscovery = retry.createFailedDiscoveryRetry(
     params.retirementSignal,
     () => (pending ? undefined : published.inventory),
-    acquireCatalog,
+    (options) => acquireCatalog(options, "expiry"),
   );
   const loadNativeModelCatalog = async (selection: PreparedNativeModelSelection) =>
     await acquireNativeCatalog([normalizeProvider(selection.provider)], selection);
