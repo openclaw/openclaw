@@ -88,11 +88,7 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
         let shape = Self.contentShape(progress: progress)
         return self.detail
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // RootTabs always supplies its shared NavigationStack here. Expanding
-            // that stack paints destination backgrounds through the rounded safe
-            // areas while navigation chrome keeps destination content inset.
             .background(OpenClawProBackground())
-            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .allowsHitTesting(!self.isDrawerLayout || !self.isPresented)
             .clipShape(shape)
             .overlay {
@@ -100,6 +96,9 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
                     OpenClawSidebarPalette.hairline.opacity(Double(progress)),
                     lineWidth: 1)
             }
+            // Expand outside the clip and border so both use the full-height
+            // card bounds. Native navigation chrome still keeps content inset.
+            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .offset(x: offset)
             // Change only geometry, never the detail's structural identity, when
             // crossing the breakpoint or toggling a persistent sidebar.
