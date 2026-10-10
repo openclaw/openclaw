@@ -36,8 +36,11 @@ import {
 } from "./tool-batch-completion.js";
 import {
   createErrorToolResult,
+  createToolExecutionErrorResult,
   finalizeToolCallOutcome,
+  immediateToolCallError,
   type FinalizedToolCallOutcome,
+  type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
 import {
   type AgentToolExecutionContext,
@@ -775,13 +778,6 @@ type PreparedToolCall = {
   args: unknown;
 };
 
-type ImmediateToolCallOutcome = {
-  kind: "immediate";
-  result: AgentToolResult<unknown>;
-  isError: boolean;
-  errorKind?: "argument-validation";
-};
-
 type ValidatedToolCallOutcome = PreparedToolCall | ImmediateToolCallOutcome;
 
 type ExecutedToolCallOutcome = {
@@ -1371,17 +1367,6 @@ async function completeUnstartedToolCall(
   );
   await emitToolExecutionEnd(finalized, batch);
   return finalized;
-}
-
-function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown> {
-  const result = createErrorToolResult(coerceErrorMessage(error));
-  return typeof error === "object" && error !== null
-    ? copyInternalToolResultState(error, result)
-    : result;
-}
-
-function immediateToolCallError(message: string): ImmediateToolCallOutcome {
-  return { kind: "immediate", result: createErrorToolResult(message), isError: true };
 }
 
 function emitToolExecutionStart(
