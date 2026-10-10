@@ -176,15 +176,16 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
 
   const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
   // Eligibility keeps importance and project affinity, but never ages out.
-  const weighted = applyRetrievalRanking(merged, activeProjects).map((entry) => ({
-    ...entry,
-    eligibilityScore:
-      entry.exactPathSpecificity > 0
-        ? projectScoreMultiplier(entry.projectKey, activeProjects)
-        : entry.contentScore === 0
-          ? 0
-          : entry.score,
-  }));
+  const weighted = applyRetrievalRanking(merged, activeProjects).map((entry) =>
+    Object.assign(entry, {
+      eligibilityScore:
+        entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, activeProjects)
+          : entry.contentScore === 0
+            ? 0
+            : entry.score,
+    }),
+  );
   const decayed = await applyTemporalDecayToHybridResults({
     results: weighted,
     temporalDecay: temporalDecayConfig,
