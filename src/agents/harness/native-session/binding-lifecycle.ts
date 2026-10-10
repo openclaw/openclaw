@@ -358,7 +358,7 @@ function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionB
   };
 
   return {
-    captureLeaseAssertion: leases.captureLeaseAssertion,
+    captureLeaseAssertion: leases.captureLeaseAssertion.bind(leases),
     transact: leases.transact,
     withLease: leases.withLease,
     hasLease: leases.hasLease,
