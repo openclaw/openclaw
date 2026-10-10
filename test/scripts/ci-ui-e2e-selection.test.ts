@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
@@ -19,6 +20,7 @@ const temporary = useAutoCleanupTempDirTracker(afterAll);
 const cron = "ui/src/e2e/cron-descriptions.e2e.test.ts";
 const appearance = "ui/src/e2e/appearance-control-layout.e2e.test.ts";
 const unknown = "ui/src/e2e/new-unmapped-flow.e2e.test.ts";
+const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
 let fixtureCwd: string | undefined;
 
 function fixture() {
@@ -115,10 +117,52 @@ describe("Control UI PR owner selection", () => {
       uiE2eFiles: selection.files,
     });
     expect(groups.e2e.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      [...new Set([...selection.files, ...uiE2eRealGatewayTestFiles])].toSorted(),
+      [...new Set([...selection.files, ...uiE2eRealGatewayTestFiles])]
+        .filter((file) => file !== staleBuild)
+        .toSorted(),
     );
   });
 });
+
+it.each([
+  { event: "pull_request", edited: false, selected: false },
+  { event: "pull_request", edited: true, selected: true },
+  { event: "schedule", edited: false, selected: false },
+  { event: "workflow_dispatch", edited: false, selected: true },
+] as const)(
+  "keeps stale-build recovery in its selected UI tier: $event / edited=$edited",
+  ({ event, edited, selected }) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: event,
+      changedPaths: edited ? [staleBuild] : ["ui/src/app/stale-chunk-reload.ts"],
+      selectedTestTargets: [staleBuild, cron],
+      targetFiles: [staleBuild, cron],
+      changedPlannerSource:
+        "export const hasUiE2eAffectingChange = (_paths, {family}) => family === 'control-ui'; export const createChangedNodeTestShards = () => [];",
+      uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};`,
+      uiE2eSelectorSource: `
+        export const resolveUiE2ePrTestSelection = () => ({
+          mode: 'owners', files: ${JSON.stringify([staleBuild, cron])},
+          reasons: {${JSON.stringify(staleBuild)}: ['fixture stale-build owner'], ${JSON.stringify(cron)}: ['fixture source owner']},
+        });`,
+      scopeEnv: {
+        OPENCLAW_CI_RUN_UI_TESTS: "true",
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+        ...(event === "schedule" ? { OPENCLAW_CI_VALIDATION_TIER: "main" } : {}),
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    const files = resolveShardPlans({
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: result.outputs.ui_e2e_test_groups_gzip_base64!,
+    }).flatMap((entry) => (entry.kind === "group" ? (entry.plan.includePatterns ?? []) : []));
+    expect(files).toContain(cron);
+    expect(files.includes(staleBuild)).toBe(selected);
+    expect(result.summary).toContain(`Selected files: ${selected ? 2 : 1}`);
+    expect(result.summary.includes("fixture stale-build owner")).toBe(selected);
+  },
+);
 
 it.each([
   { event: "pull_request", kill: "", full: false, count: 0 },

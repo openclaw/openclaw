@@ -390,7 +390,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       // Keep its pane loading until startup can display the retained message again.
       loading: catalogKey
         ? this.catalogLoading
-        : state.chatLoading || (!runActive && pendingReason !== null && placementStartup === null),
+        : (!state.connected && !state.currentSessionId) ||
+          state.chatLoading ||
+          (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
         state.chatSending ||
