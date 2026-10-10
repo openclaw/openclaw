@@ -1134,6 +1134,9 @@ process.exitCode = 1;
       mocks.stopService.mockImplementation(async ({ expectedService }) => ({
         ...expectedService,
         stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: serviceRunning,
       }));
       mocks.completePluginUpdate.mockImplementation(async ({ beforeDoctor }) => {
         await beforeDoctor?.();
@@ -1177,6 +1180,8 @@ process.exitCode = 1;
             ? {
                 preManagedServiceStop: {
                   stopped: false,
+                  inspected: true,
+                  runtimeInspected: true,
                   running: serviceRunning,
                   serviceMutationAllowed: true,
                   serviceUpdateVerdict: {
