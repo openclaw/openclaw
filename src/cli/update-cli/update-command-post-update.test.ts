@@ -1143,14 +1143,17 @@ process.exitCode = 1;
         return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
       });
       const events: string[] = [];
-      mocks.restartService.mockImplementation(async () => {
+      mocks.restartService.mockImplementation(async ({ onVerified }) => {
         events.push(
           await fs.stat(lintLog).then(
             () => "restart after lint",
             () => "restart",
           ),
         );
-        return ready ? "ok" : "skipped";
+        if (ready) {
+          onVerified?.(Date.now());
+        }
+        return "ok";
       });
       const doctorStep = {
         name: "openclaw doctor",

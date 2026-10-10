@@ -7,11 +7,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
-  createDoctorPrompterFixture,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
-import * as doctorRepairFlow from "./doctor-repair-flow.js";
 
 const observed = vi.hoisted(() => ({ now: 0, events: [] as string[] }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -177,37 +175,6 @@ it.each([true, false])(
       contributions,
     );
     expect(new Set(executed)).toEqual(new Set([...retainedIds, ...deferredIds]));
-    if (!hasBudget) {
-      const repair = vi.spyOn(doctorRepairFlow, "runDoctorHealthRepairs").mockResolvedValue({
-        config: {},
-        findings: [],
-        remainingFindings: [],
-        changes: [],
-        warnings: [],
-        diffs: [],
-        effects: [],
-        checksRun: 0,
-        checksRepaired: 0,
-        checksValidated: 0,
-      });
-      const structured = resolveDoctorHealthContributions().find(
-        (contribution) => contribution.id === "doctor:structured-health-repairs",
-      );
-      if (!structured) {
-        throw new Error("Missing structured repair contribution");
-      }
-      await structured.run(
-        createDoctorHealthFlowContext({
-          env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "1" },
-          prompter: createDoctorPrompterFixture(true),
-        }),
-      );
-      const checkIds = repair.mock.calls[0]?.[1]?.checks?.map((check) => check.id);
-      expect(checkIds).toContain("core/doctor/security");
-      for (const id of ["runtime-tool-schemas", "provider-catalog-projection", "hooks-model"]) {
-        expect(checkIds).not.toContain(`core/doctor/${id}`);
-      }
-    }
   },
 );
 

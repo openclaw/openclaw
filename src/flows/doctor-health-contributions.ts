@@ -457,15 +457,7 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     ...resolveInitialDoctorHealthContributions({
       runStructuredHealthRepairs: (ctx) =>
-        runStructuredHealthRepairs(ctx, async () => {
-          const checks = await resolveDoctorContributionHealthChecks();
-          if (!shouldDeferPostActivationInspections(ctx.env ?? process.env)) {
-            return checks;
-          }
-          // The repair runner detects even checks without a repair implementation.
-          const deferred = new Set(await resolvePostActivationInspectionCheckIds());
-          return checks.filter((check) => !deferred.has(check.id));
-        }),
+        runStructuredHealthRepairs(ctx, resolveDoctorContributionHealthChecks),
       runGatewayConfigHealth,
       runAuthProfileMigration,
       runAuthProfileHealth,

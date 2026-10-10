@@ -460,7 +460,7 @@ async function finishSettledUpdate(
         params.coreAlreadyCurrent === true &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       const runsPostActivationInspections =
-        params.shouldRestart &&
+        shouldRestart &&
         (!params.coreAlreadyCurrent || deferPluginConvergence) &&
         (!candidateRuntime ||
           isTruthyEnvValue(process.env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]));
@@ -573,10 +573,12 @@ async function finishSettledUpdate(
             onPluginWarnings: (warnings) => {
               resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
             },
-            onVerified: recordVerifiedDowntime,
+            onVerified: (verifiedAtMs) => {
+              activationVerified = true;
+              recordVerifiedDowntime(verifiedAtMs);
+            },
           }),
         );
-        activationVerified = restarted === "ok";
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
         }
